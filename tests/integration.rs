@@ -4181,6 +4181,42 @@ fn iter_map_after_filter() {
     );
 }
 
+// R48 Track γ — an Iterator adapter's trait DEFAULT bodies must resolve the
+// TRAIT's type params from the `with Iterator[…]` clause, not from the equip's
+// own params that happen to share a name. `equip [Iter, T, U, F] MapIter[…]
+// with Iterator[U]` has two `T`s, and binding only the equip's shadowed the
+// trait's, so `Vector[T] collect()` allocated a source-element-sized array.
+// Axis = the trait clause's ARGUMENT SHAPE {bare param, `Vector[T]`, tuple},
+// because each re-enters the demand gate with a differently substituted return
+// type; the `int` rows are controls (11 of the 22 `with Iterator[…]` equips
+// spell the trait argument `T`, so the collision is a no-op for them, which is
+// exactly why an int-only net read as coverage). RED-verified on the pre-fix
+// self-host driver: SEGV with empty output.
+#[test]
+fn iter_trait_default_trait_args() {
+    run_gg(
+        "iter_trait_default_trait_args.gg",
+        "4\n21000\n21000\n21000\n21\n5\n5\n2\n21\n3\n3",
+    );
+}
+
+// R48 Track γ — the Vector-HOF accumulator is minted from the RESULT element
+// type. `map` is `(T) -> U ⇒ Vector[U]` and `flat_map` is `(T) -> Vector[U] ⇒
+// Vector[U]`, but the builtin protocol declared both `ret_self`, so the GIR
+// disagreed with both the typechecker and the LIR expander and a DECLARED
+// destination papered over it — the visible discriminator was `auto` vs
+// `Vector[U]`, not the callee shape. Axes: producer {map, flat_map} × callee
+// {inline closure, named fn} × element {int control, String, struct} ×
+// destination {auto, typed}. RED-verified against the pre-fix compiler: SEGV on
+// the Rust lane, abort on the self-host lane.
+#[test]
+fn vector_hof_cross_type_map() {
+    run_gg(
+        "vector_hof_cross_type_map.gg",
+        "10\n30\n100\n300\n21\n20\n30\n200\n100\n6\n10\n31\n20\n21\n300\n100\n2\n2\n2\n3",
+    );
+}
+
 #[test]
 fn iter_chain_past_one_step() {
     run_gg(
@@ -5002,23 +5038,23 @@ fn known_gap_cow_local_alias_loop_mutation_lost() {
     );
 }
 
-/// KNOWN GAP (both lanes): `.map()` with an INLINE CLOSURE that changes the
-/// element type mints its accumulator from the INPUT element type, so a String
-/// result is printed as a raw pointer at rc 0.
+/// GRADUATED (R48 Track γ) from a both-lanes known gap. `.map()` with an INLINE
+/// CLOSURE that changes the element type used to mint its accumulator from the
+/// INPUT element type on both lanes, printing a raw pointer at rc 0.
 ///
-/// The comprehension equivalent is correct, which is the point: this is the same
-/// mint class R44 Track A fixed at the comprehension producer, surviving at a
-/// sibling producer (`try_lower_vector_hof`, whose own comment admits it mints
-/// from the input element type). Core #4 — a producer-level fix that leaves a
-/// sibling producer on the wrong channel fixed one site, not the class.
+/// Both producers now read the same channel the comprehension producer already
+/// did. Self-host: `try_lower_vector_hof`'s map/filter arm goes through
+/// `comp_reserve`/`comp_note_elem`/`comp_close`, so the accumulator is minted
+/// from the MATERIALIZED element. Rust: `hof_cross_type_result`
+/// (`src/ir/lowering/exprs/methods.rs`) refines the result type from the
+/// closure's registered return type, the same signature the LIR expander
+/// already sized the result array by.
 ///
-/// Named callees are fine (cross-type `map` was gated on `fn_sigs` return types
-/// for named functions only), so the inline closure is the discriminator.
-///
-/// Pays the "No corpus fixture exercises it today" debt on the TODO entry, which
-/// had no durable repro. The entry called this latent; it reproduces active.
+/// The old Rust-lane discriminator was the DESTINATION, not the callee shape:
+/// `Vector[String] v = …` was correct and `auto v = …` was not, for named
+/// callees and inline closures alike. `known_gaps/…_destination_axis.gg`
+/// samples both destinations for both shapes.
 #[test]
-#[ignore = "known gap (R44): inline-closure cross-type `map` mints the accumulator from the INPUT element type and prints a raw pointer; un-ignore when the inline closure's return type is inferred at the map-accumulator gate"]
 fn known_gap_map_inline_closure_cross_type_input_mint() {
     run_gg(
         "known_gaps/map_inline_closure_cross_type_input_mint.gg",
@@ -5026,24 +5062,15 @@ fn known_gap_map_inline_closure_cross_type_input_mint() {
     );
 }
 
-/// KNOWN GAP: `flat_map` that changes the element type mints its accumulator
-/// from the INPUT element type and prints a raw pointer at rc 0.
+/// GRADUATED (R48 Track γ) alongside its `map` sibling — same class
+/// (accumulator minted from the input element type), different producer branch.
 ///
-/// Two false invariant-asserting comments sit on the defect
-/// (`self_host_lowerer/lower_expr.gg:6775` and `:6791`, both claiming
-/// "flat_map preserves the element type"), contradicted by the typechecker's
-/// own signature `("Vector", "flat_map") => (T) -> Vector[U]`. Core #14: they
-/// get an enforcing guard or they get deleted — a reader who trusts them will
-/// reintroduce this bug while "cleaning up".
-///
-/// On the Rust lane a TYPED destination with a named callee is correct, so the
-/// destination declaration is the discriminator there; the self-host is
-/// reported wrong on both, a lane divergence where Rust is ahead.
-///
-/// Same class as the filed `map` sibling (accumulator minted from the input
-/// element type) at a different producer branch — Core #4.
+/// Self-host: `flat_map` now desugars to the NESTED loop the comprehension
+/// `[y for x in v for y in f(x)]` already used, so the published element is the
+/// INNER loop variable and the deferred mint sees `U`. Rust: the same
+/// `hof_cross_type_result` refinement, which for `flat_map` takes the closure's
+/// `Vector[U]` return type unchanged.
 #[test]
-#[ignore = "known gap (R44): cross-type `flat_map` mints the accumulator from the INPUT element type; un-ignore when the closure's Vector[U] return type flows through to the accumulator, and delete the two false 'preserves the element type' comments"]
 fn known_gap_flat_map_cross_type_input_mint() {
     run_gg("known_gaps/flat_map_cross_type_input_mint.gg", "2\ntag");
 }
@@ -5191,6 +5218,52 @@ fn sh_forelse_else_body_dropped() {
         "known_gaps/sh_forelse_else_body_dropped.gg",
         "sh_forelse_else_body_dropped",
         "vector-else\ndict-else\nstring-else\nbytes-else\nrange-else\nset-else",
+    );
+}
+
+/// KNOWN GAP (filed R48 Track γ as `todo/t0933`), BOTH LANES — an ICE on a
+/// program `gg check` accepts. `.iter().filter_map(f)` with an `Option[U]`-
+/// returning closure registers `Vector__Option__U` and its protocol methods
+/// but never registers the `VectorIter__Option__U` / `VectorDrain__Option__U`
+/// instances those methods reference, so GIR validation fails before codegen.
+///
+/// The element type is NOT the axis — `Option[int]` reproduces identically.
+/// Verified pre-existing on a compiler built from the pre-R48 blobs, so this is
+/// a neighbour of Track γ's classes, not one of them: those produce a wrong
+/// VALUE at rc 0, this never reaches codegen.
+#[test]
+#[ignore = "known gap (R48): `Vector[Option[U]]`'s protocol methods reference VectorIter/VectorDrain instances that are never registered, so a filter_map returning Option[U] ICEs in GIR validation; un-ignore when the adapter instances are registered alongside the element's protocol"]
+fn known_gap_filter_map_option_elem_type_never_registered() {
+    run_gg(
+        "known_gaps/filter_map_option_elem_type_never_registered.gg",
+        "3\n101",
+    );
+}
+
+/// KNOWN GAP (filed R48 Track γ as `todo/t0931`), SELF-HOST lane — a method on
+/// an INHERENT generic equip (`equip SparseSet[T]:`, no `with Trait` clause) is
+/// emitted from its TEMPLATE with `T` never bound, then given the
+/// monomorphized SYMBOL name. The self-host prints its own verdict into the
+/// emitted C — `[bug] EFieldAccess: in fn 'SparseSet__T__each': unknown field
+/// 'count' on base type 'SparseSet__T'`, three times — and emits the broken
+/// body anyway, so the program prints an ASLR-moving pointer and disagrees
+/// with itself every run. Rust gg prints `100` on C and on LLVM.
+///
+/// This is the mechanism behind `ecs_advanced`'s row in
+/// `EXPECTED_NONDETERMINISTIC`, reduced to eight lines. It is NOT the
+/// trait-default param-binding class R48 fixed (`bind_trait_type_params`) —
+/// this equip has no trait clause, so there is no trait `T` to bind — and it is
+/// NOT `todo/t0219`'s `gm-inherent-generic-equip DEFERRED` arm, which covers a
+/// method-level-GENERIC method on a generic receiver while `each` has none. The
+/// two are neighbouring holes in the inherent (no-trait) half of the same wall.
+#[test]
+#[ignore = "known gap (R48): the self-host emits an INHERENT generic-equip method from its template with the equip's own `T` unbound, under the mono'd symbol name; un-ignore when the template arm binds the equip type params (or stops emitting the template)"]
+#[serial(self_host_lowerer_driver)]
+fn sh_inherent_generic_equip_template_unbound_t() {
+    sh_known_gap_expect(
+        "known_gaps/sh_inherent_generic_equip_template_unbound_t.gg",
+        "sh_inherent_generic_equip_template_unbound_t",
+        "100",
     );
 }
 
@@ -38818,16 +38891,39 @@ fn self_host_runtime_diff() {
     // Regenerate the list with the documented invocation above (release,
     // `-- --nocapture`) and read the `--- NONDETERMINISTIC ---` block.
     const EXPECTED_NONDETERMINISTIC: &[&str] = &[
-        // ALL FOUR are cause (b), one mechanism, one filed item: `todo/t0823` —
-        // the self-host stores an `int32_t` into a `void*` slot, so the emitted
-        // binary prints an ASLR-moving address or garbage bytes and disagrees
-        // with itself every run. They are MISCOMPILES, not under-declared
-        // fixtures, and they leave this list when t0823 is fixed — never by
-        // being declared `#!parity-excluded`.
-        "closure_fstring_capture",
-        "cow_lazy_w3c_arg_temp",
+        // Cause (b): a MEMORY DEFECT on the self-host lane — the emitted binary
+        // prints an ASLR-moving address and disagrees with itself every run. A
+        // miscompile, not an under-declared fixture; it leaves this list when
+        // the defect is fixed, never by being declared `#!parity-excluded`.
+        //
+        // ⚠ THE ROWS DO NOT SHARE A MECHANISM, and the four that were here used
+        // to be attributed to one — `todo/t0823`'s int32→void* emit. That
+        // attribution was DISPROVED end to end: a prototype removing 90.6% of
+        // the corpus's int→pointer emits (19,835 → 1,855, three of the four
+        // rows to ZERO) left all four still printing 7 distinct outputs over 7
+        // runs. The int→pointer emit is a real type-fidelity defect that is NOT
+        // the cause of these rows. Never re-derive a shared mechanism from the
+        // fact that rows sit on the same list; each one needs its own triage,
+        // and a row's variants (raw pointer vs garbage bytes vs a stable wrong
+        // value) do not discriminate between causes either.
+        //
+        // The other three left in R48, each to a DIFFERENT write site: a
+        // bare-Vector HOF minting its accumulator from the input element type
+        // (`closure_fstring_capture`), a generic-equip trait default resolving
+        // the TRAIT's `T` through the EQUIP's same-named `T`
+        // (`iter_map_after_filter`), and a String slice/index that never joined
+        // the lazy-CoW family it was derived from (`cow_lazy_w3c_arg_temp`).
+        //
+        // `ecs_advanced`: an INHERENT generic equip (`equip SparseSet[T]:`, no
+        // trait clause) emits its method from the template with the equip's own
+        // `T` unbound, under the monomorphized symbol name — the emitted C
+        // carries the self-host's own `[bug] EFieldAccess … unknown field
+        // 'count' on base type 'SparseSet__T'` verdict three times. FILED as
+        // `todo/t0931` (this entry's required TODO citation), reduced to eight
+        // lines at `known_gaps/sh_inherent_generic_equip_template_unbound_t.gg`
+        // and pinned `#[ignore]`d by
+        // `sh_inherent_generic_equip_template_unbound_t`.
         "ecs_advanced",
-        "iter_map_after_filter",
     ];
     if !cfg!(debug_assertions) && parity_floor_active("self_host_runtime_diff") {
         let new_nondet: Vec<&str> = nondet_rows
@@ -39366,7 +39462,29 @@ fn self_host_runtime_diff() {
     // ⚠ This raise was sanctioned ONLY because the inflow is PRE-EXISTING from
     // the raising round's point of view. Core #9 ⊕ forbids raising it for a
     // round's OWN inflow, with no exemption; the fix there is to port.
-    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 151;
+    //
+    // 2026-08-31: LOWERED 151 -> 147 by R48 Track γ, locking in the gain. Three
+    // WRONG-OUTPUT rows became MATCH when the self-host nondeterminism was
+    // fixed at three separate write sites (`closure_fstring_capture`,
+    // `iter_map_after_filter`, `cow_lazy_w3c_arg_temp`), and a fourth row went
+    // with them. Lowering needs no sign-off; this is the ratchet doing its job.
+    // Measured at HEAD with the documented release invocation: WRONG-OUTPUT 30
+    // + CC-FAIL 66 + CRASH 36 + DRIVER-FAIL 15 = 147, MATCH 1505.
+    //
+    // ⚠ The track's OWN three new corpus fixtures
+    // (`vector_hof_cross_type_map`, `iter_trait_default_trait_args`,
+    // `cow_lazy_index_slice_join`) all MATCH, so they add ZERO inflow — which
+    // is the obligation Core #9 ⊕ encodes, met rather than exempted.
+    //
+    // ⚠ UNLIKE the MATCH floor above, this bound carries NO jitter discount,
+    // and one member of the CRASH set is timing-sensitive: `async_select`'s
+    // 'timed out' row (the dropped `select:` body — the sole `EXPECTED_HANGS`
+    // member). The 147 was measured on a box running three concurrent agents,
+    // i.e. under MORE timeout pressure than a quiet one, so it is a pessimistic
+    // bound rather than an optimistic one. If this ever reds by exactly one on
+    // an otherwise-unchanged tree, check that row before believing in new
+    // inflow.
+    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 147;
     // ⛔ THIS GATE NO-OPS IN THE PROFILE PEOPLE ACTUALLY RUN, AND THAT IS A
     // COVERAGE HOLE, NOT A DESIGN. `cargo test --test integration self_host` is
     // a DEBUG build, so every executor's own gauntlet run takes the branch
@@ -50738,6 +50856,46 @@ fn cow_lazy_w3c_named_bind() {
     run_gg(
         "cow_lazy_w3c_named_bind.gg",
         "t = hello\nc = e\ns = hello\nv.len() = 3",
+    );
+}
+
+// R48 Track γ — the index/slice derivation JOIN. `s[a..b]` / `s[i]` lower
+// through the EIndex arm, not the `returns_view` method dispatch, so the single
+// String-view choke point that joins the lazy-CoW family never saw them: the
+// mutation guard rebound the MEMBER's slot and left the derived view pointing
+// into the pre-materialize buffer. Axes: derivation {slice, index} ×
+// consumption {call-argument temp, named bind} × mutation route {sig-arg `&v`,
+// method mut-receiver `v.push`}, plus a no-mutation control. RED-verified on
+// the pre-fix self-host driver at 7 distinct outputs over 7 runs; ASan sees
+// nothing here (custom allocator pool), so the emitted C is the instrument.
+#[test]
+fn cow_lazy_index_slice_join() {
+    run_gg(
+        "cow_lazy_index_slice_join.gg",
+        "arg-slice = hello\ns1 = hello\narg-index = e\ns2 = hello\nt3 = hell\nc3 = e\n\
+         s3 = hello\nv3.len() = 3\narg-slice = gor\ns4 = gorget\nplain-slice = sta\n\
+         plain-index = l\ns5 = stable",
+    );
+}
+
+/// KNOWN GAP (filed R48 Track γ), SELF-HOST lane — a view derived from a view
+/// that is itself bound to a NAME does not join the lazy-CoW family, so the
+/// source's mutation leaves it reading the pre-materialize buffer.
+///
+/// NOT the missing derivation join R48 fixed: the single-level cases are
+/// correct and pinned live by `cow_lazy_index_slice_join`. The discriminator is
+/// the intermediate NAME — a join temp is registered statement-scoped and
+/// retires before the second derivation lowers, so the mechanism is member
+/// LIFETIME, not a missing hook. A promotion at the declaration site was built
+/// and measured during R48 and does not fix it.
+#[test]
+#[ignore = "known gap (R48): a String view derived from a NAMED view temp never joins the lazy-CoW family, so a later mutation of the root leaves it reading the pre-materialize buffer; un-ignore when the named bind keeps the joined slot in the family"]
+#[serial(self_host_lowerer_driver)]
+fn sh_cow_lazy_nested_named_view() {
+    sh_known_gap_expect(
+        "known_gaps/sh_cow_lazy_nested_named_view.gg",
+        "sh_cow_lazy_nested_named_view",
+        "a = gor\nc = r\ns = gorget",
     );
 }
 

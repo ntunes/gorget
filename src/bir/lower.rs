@@ -560,10 +560,15 @@ fn expand_func(
                                     &mut next,
                                     structs,
                                     coll,
-                                    element_ty,
+                                    element_ty.clone(),
                                     closure,
                                     closure_arg_abis,
                                     closure_ret_ty,
+                                    // `value_ty` carries the RESULT element
+                                    // type for flat_map; fall back to the
+                                    // source element only if the LIR layer
+                                    // could not resolve it (same-type case).
+                                    value_ty_inner.clone().unwrap_or(element_ty),
                                     dst.expect("flat_map must carry a dst ValueId"),
                                     remaining,
                                     remaining_spans,
@@ -2304,6 +2309,7 @@ fn expand_flat_map(
     closure: ValueId,
     closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
     closure_ret_ty: LirType,
+    result_elem_ty: LirType,
     dst: ValueId,
     remaining: Vec<Inst>,
     remaining_spans: Vec<Option<crate::span::Span>>,
@@ -2314,12 +2320,17 @@ fn expand_flat_map(
     let garray_ty = LirType::Struct(garray_sid);
     let cur = BlockId(current_bb as u32);
 
-    // current_bb: allocate result slot + init via gorget_array_new.
-    // Result elem_size = source elem_size (flat_map preserves element
-    // type; the closure returns a Vector of the SAME element type).
+    // current_bb: allocate result slot + init via gorget_array_new, sized by
+    // the RESULT element type. `flat_map` is `(T) -> Vector[U]`, so the
+    // accumulator holds `U`; sizing it by the SOURCE element `T` is only right
+    // when `U == T`, and when it is not, `gorget_array_extend` copies `U`-wide
+    // elements into `T`-wide slots. `result_elem_ty` is read off the GIR result
+    // type (`value_ty` on `HofExpand`) rather than re-derived here, because
+    // `closure_ret_ty` is a bare `Struct(GorgetArray)` at this layer and has
+    // already lost `U`.
     let result_slot = func.add_slot(garray_ty.clone(), None);
     let elem_size_val = alloc_value(next);
-    let elem_size = c_sizeof_lir_type(&element_ty, structs) as i64;
+    let elem_size = c_sizeof_lir_type(&result_elem_ty, structs) as i64;
     func.block_mut(cur).push_synthetic(Inst::IConst {
         dst: elem_size_val,
         ty: LirType::I64,

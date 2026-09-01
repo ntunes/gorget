@@ -1062,6 +1062,37 @@ fn infer_closure_return_type(ctx: &mut LoweringContext, body: &Spanned<Expr>) ->
         Expr::FloatLiteral(_) => F64_TYPE,
         Expr::BoolLiteral(_) => BOOL_TYPE,
         Expr::StringLiteral(_, _) => ctx.type_mapper.owned_string_type,
+        // Struct construction: `(int n): Boxed(n * 100)`. Sibling of the
+        // enum-variant arms in the `Call` case below — the parser gives struct
+        // construction its own node, so it never reached them and fell through
+        // to the I64 default. That default is not private to this function:
+        // `__Closure_N__call` is registered with it, and every consumer that
+        // reads the closure's signature — the Vector-HOF result type, the LIR
+        // expander's element size — then agrees on the wrong type. `auto v =
+        // nums.map((int n): Boxed(n))` read `.val` back as 0, while the same
+        // map with a DECLARED destination was correct, because the declaration
+        // supplied the type this channel could not.
+        Expr::StructLiteral { name, generic_args, .. } => {
+            let mangled = match generic_args {
+                Some(gargs) if !gargs.is_empty() => {
+                    let mut m = name.node.clone();
+                    for g in gargs {
+                        let tid = ctx.type_mapper.map_ast_type_mut(&g.node, &mut ctx.type_registry);
+                        m.push_str("__");
+                        m.push_str(&crate::ir::types::format_type_for_mangle(tid, &ctx.type_registry));
+                    }
+                    m
+                }
+                _ => name.node.clone(),
+            };
+            match ctx.type_mapper.lookup_named(&mangled) {
+                Some(tid) => tid,
+                // Not registered yet (the closure is the first mention of this
+                // instance) — the I64 default is no worse than before, and the
+                // typed destination still carries it.
+                None => I64_TYPE,
+            }
+        }
         Expr::BinaryOp { op, left, right } => {
             use crate::parser::ast::BinaryOp;
             match op {

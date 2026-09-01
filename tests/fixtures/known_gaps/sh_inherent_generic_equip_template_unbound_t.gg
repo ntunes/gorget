@@ -1,0 +1,47 @@
+# KNOWN GAP — SELF-HOST lane. A method on an INHERENT generic equip
+# (`equip SparseSet[T]:`, no `with Trait` clause) is emitted from its
+# TEMPLATE with `T` never bound, then given the monomorphized SYMBOL name.
+# The body is lowered against the unsubstituted receiver `SparseSet__T`, so
+# every field read misses and the emitted C prints an ASLR-moving pointer.
+#
+#     health.each((Entity e, int hp): print(f"{hp}"))   # 187650507818568
+#
+# ⚠ THE DIAGNOSTIC IS IN THE EMITTED C ITSELF — the self-host prints its own
+# verdict and then emits the broken body anyway:
+#
+#     /* [bug] EFieldAccess: in fn 'SparseSet__T__each': unknown field 'count'
+#        on base type 'SparseSet__T' — returning I64(0) placeholder (WRONG) */
+#
+# three times (`count`, `entity_ids`, `data`), while the declaration and the
+# call site both spell the mono'd `SparseSet__int64_t__each`. Reproduce with:
+#
+#     tests/fixtures/self_host_lowerer/driver <this file> lib --emit-c \
+#       --runtime-dir=src/backend/c/runtime | grep "SparseSet__T__each"
+#
+# ⚠ NOT the trait-default param-binding class fixed in R48 (the generic-equip
+# TRAIT-default sites now bind the trait's own params through
+# `bind_trait_type_params`). This equip has NO trait clause, so there is no
+# trait `T` to bind and nothing for that fix to reach: the unbound name is the
+# EQUIP's own `T`, and the emitter is the template arm, not the trait-default
+# arm. The R48 fix leaves this fixture 7-distinct-over-7-runs, unchanged.
+#
+# ⚠ NOT `todo/t0219`'s `gm-inherent-generic-equip DEFERRED` arm either
+# (`self_host_lowerer/lower.gg`, the `case None: pass` after the `gm_` loop's
+# trait arm) — that arm covers a method-level-GENERIC method on a generic
+# receiver, and `each` has NO method type params. It is the neighbouring hole
+# in the same wall: both are the inherent (no-trait) half of a generic-equip
+# emit path, and a fix should look at them together.
+#
+# ⚠ Rust gg prints `100` on C and on LLVM — a lane divergence with a known
+# direction, so the self-host is what gets fixed (never the fixture).
+#
+# INTENDED (asserted below): prints 100.
+
+from xtd.ecs import EntityPool, SparseSet
+
+void main():
+    EntityPool pool = EntityPool.new()
+    Entity e1 = pool.create()
+    SparseSet[int] health = SparseSet[int].new()
+    health.insert(e1, 100)
+    health.each((Entity e, int hp): print(f"{hp}"))

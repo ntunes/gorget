@@ -770,7 +770,14 @@ pub enum Inst {
         /// Element type carried in the collection (for `Vector[T]`) or key
         /// type (for `Dict[K,V]`/`Set[T]`).
         element_ty: LirType,
-        /// Value type for `Dict[K,V]` HOFs; ignored otherwise.
+        /// A second type the expander needs and cannot derive from
+        /// `element_ty`/`closure_ret_ty`, read off the GIR so the layers agree
+        /// rather than each re-deriving it. Per op: `Dict[K,V]` HOFs → V;
+        /// `find` → the `Option[T]` result layout; `flat_map` → the RESULT
+        /// ELEMENT type (`(T) -> Vector[U]` accumulates `U`, and neither the
+        /// source element `T` nor the closure's `Vector[U]` — which is just
+        /// `Struct(GorgetArray)` at this layer — can produce it). Ignored by
+        /// every other op.
         value_ty: Option<LirType>,
         /// The closure being invoked per element/pair.
         closure: ValueId,

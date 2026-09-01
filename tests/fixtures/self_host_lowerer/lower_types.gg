@@ -187,6 +187,33 @@ void setup_concrete_trait_subs(GirModule &gmod, SpannedType target, Vector[Strin
         gmod.type_subs.put(pname, atid)
         ci += 1
 
+# Lazy-iterator Phase 1a — bind the TRAIT's own generic params on top of an
+# already-established GENERIC-equip substitution. `setup_type_subs` binds the
+# EQUIP's params (`[Iter, T, U, F]`); a trait default body speaks the TRAIT's
+# params (`Vector[T] collect()` on `trait Iterator[T]`). For
+# `equip [Iter, T, U, F] MapIter[…] with Iterator[U]` those two `T`s are
+# DIFFERENT types, and leaving the trait's `T` unbound lets the equip's `T`
+# shadow it — `collect` then allocates an 8-byte element array for a 32-byte
+# `Str`. The concrete-equip sibling is `setup_concrete_trait_subs` above; this
+# is the generic-equip half, so every generic-equip trait-default site
+# (fn_sigs pre-pass, body emit, method-generic emits in lower.gg) binds
+# identically. `equip_trait_binds_trait_params` in tests/lints.rs pins that.
+#
+# TWO-PHASE deliberately: each `trait_args[i]` is written in the EQUIP's
+# vocabulary, so every arg is mapped BEFORE any trait param is written — a
+# trait param that shares a name with an equip param (the `T`/`T` collision
+# this exists for) must not shadow the equip's binding mid-loop.
+void bind_trait_type_params(GirModule &gmod, Vector[String] trait_params, Vector[SpannedType] trait_args):
+    Vector[int] bt_tids = []
+    int bi = 0
+    while bi < trait_params.len() and bi < trait_args.len():
+        bt_tids.push(map_ast_type(trait_args.get(bi).unwrap(), &gmod))
+        bi += 1
+    int bj = 0
+    while bj < bt_tids.len():
+        gmod.type_subs.put(trait_params.get(bj).unwrap(), bt_tids.get(bj).unwrap())
+        bj += 1
+
 String prim_to_c_name(String name):
     match name:
         case "int":

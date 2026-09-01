@@ -1,0 +1,84 @@
+# Regression: an Iterator adapter's trait DEFAULT bodies resolve the TRAIT's
+# type params from the `with Iterator[…]` clause, not from the equip's own
+# params that happen to share a name.
+#
+# `equip [Iter, T, U, F] MapIter[Iter, T, U, F] with Iterator[U]` has TWO `T`s:
+# the equip's (the SOURCE element) and the trait's (`trait Iterator[T]`, the
+# YIELDED element, here bound to `U`). The generic-equip trait-default emit
+# bound only the equip's params, so the trait's `T` was shadowed and
+# `Vector[T] collect()` allocated a source-element-sized array — `1000` fitting
+# in an int slot, a 32-byte `Str` not. Only the trait clause says which `T` a
+# default body means, so binding it is what makes the two agree.
+#
+# AXIS — the trait clause's ARGUMENT SHAPE, because each shape re-enters the
+# demand gate with a differently substituted return type:
+#   * BARE PARAM      `with Iterator[U]`          — MapIter, below.
+#   * `Vector[T]`     `with Iterator[Vector[T]]`  — WindowsIter/ChunksIter, below.
+#   * TUPLE           `with Iterator[(K, V)]`     — DictIter, below (count).
+# OMITTED CELL, named per Core #12: `EnumerateIter`/`ZipIter`
+# (`with Iterator[(int, T)]` / `[(A, B)]`) reached through `.enumerate()` /
+# `.zip()` are `undefined reference to
+# 'EnumerateIter__VectorIter__int64_t__int64_t__count'` on the self-host lane
+# and `VectorIter__int64_t__zip` on the Rust lane — CC-FAIL before AND after
+# this change, already filed under `todo/t0167` S-B(a). They are omitted
+# because they do not link, not because the shape is uninteresting; the
+# `Vector[T]` and DictIter rows below hold the non-bare-param end of the axis
+# until that link gap closes.
+#
+# ALSO OMITTED, named per Core #12 — not expanded this round:
+#   * DictIter `.collect()` — the actual `Vector[(K,V)]` demand-gate re-entry;
+#     `.count()` below is `int` and does not contain the tuple.
+#   * DictKeysIter `Iterator[K]`
+#   * DictValuesIter `Iterator[V]`
+#   * DictDrain `Iterator[(K,V)]`
+#
+# The `int` rows are CONTROLS. Eleven of the twenty-two `with Iterator[…]`
+# equips spell the trait argument `T`, so the collision is a NO-OP for them and
+# they were green before and after — which is exactly why a net that sampled
+# only `int` read as coverage while `String` and struct elements were garbage.
+#
+# RED-VERIFIED on the pre-fix self-host driver (`/tmp/driver_base`, built from
+# the base blobs): the String and struct rows printed ASLR-moving pointers,
+# 7 distinct outputs over 7 runs.
+
+from std.collections import Vector, Dict
+from std.conv import int_to_str
+
+struct Boxed:
+    int val
+
+void main():
+    Vector[int] nums = [0, 1, 7, 8, 14, 21]
+
+    # BARE PARAM shape, U = int — the CONTROL (equip `T` and trait `T` agree).
+    Vector[int] a = nums.iter().filter((int x): x % 7 == 0).map((int x): x * 1000).collect()
+    print(f"{a.len()}")
+    print(f"{a.get(3).unwrap()}")
+
+    # BARE PARAM shape, U = String — collect must size 32-byte elements.
+    Vector[String] b = nums.iter().filter((int x): x % 7 == 0).map((int x): int_to_str(x * 1000)).collect()
+    print(b.get(3).unwrap())
+
+    # BARE PARAM shape, U = a struct — neither the source width nor a pointer
+    # width, so a mis-sized store reads back as a wrong FIELD, not a pointer.
+    Vector[Boxed] c = nums.iter().filter((int x): x % 7 == 0).map((int x): Boxed(x * 1000)).collect()
+    print(f"{c.get(3).unwrap().val}")
+
+    # BARE PARAM shape without an upstream filter — `.map()` alone was always
+    # correct and must stay correct.
+    Vector[String] d = nums.iter().map((int x): int_to_str(x)).collect()
+    print(d.get(5).unwrap())
+
+    # `Vector[T]` shape — the trait argument is a CONTAINER of the equip's `T`.
+    # `count` does not read the element; `collect` does, so both are here.
+    print(f"{nums.iter().lazy_windows(2).count()}")
+    Vector[Vector[int]] w = nums.iter().lazy_windows(2).collect()
+    print(f"{w.len()}")
+    print(f"{w.get(0).unwrap().len()}")
+    print(f"{w.get(4).unwrap().get(1).unwrap()}")
+    print(f"{nums.iter().lazy_chunks(2).count()}")
+
+    # TUPLE shape — `equip [K, V] DictIter[K, V] with Iterator[(K, V)]` has no
+    # equip `T` at all, so the trait's `T` is UNBOUND rather than mis-bound.
+    Dict[String, int] m = {"x": 1, "y": 2, "z": 3}
+    print(f"{m.iter().count()}")

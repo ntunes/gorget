@@ -49,7 +49,7 @@ from gir import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
 from lower_cow import compute_cow_scan, cow_pristine_after, cow_source_root_name
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, empty_liveness
-from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, try_register_sync_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, bind_trait_type_params, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, try_register_sync_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
 from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call, process_pending_shared_async
 from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
 from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
@@ -2513,9 +2513,11 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx ctx, GirModule &gmod, int val
 #                                                           SLOT at read time (provenance by
 #                                                           slot-aliasing)
 #                                                           cow_lazy_d1_alias*
-#  d index/slice `s[i]`/`s[a..b]` DEFERRED behind F2 (string index/slice
-#                                miscompiles before CoW matters; cow_lazy_w3c_*
-#                                stay expected-wrong until F2)
+#  d index/slice `s[i]`/`s[a..b]` lower_index_access EIndex arm  JOIN with own flag
+#                                (the syntax route — it does   cow_lazy_w3c_*
+#                                NOT go through returns_view
+#                                dispatch, so (a)'s single
+#                                choke point never sees it)
 #
 # Flag-guarded in-place materialize of ONE lazy family member, emitted
 # BEFORE the mutation executes: `if not flag: slot = <clone_fn>(&slot);
@@ -5037,9 +5039,11 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
     # types the binding via `infer_method_return_type` (a name heuristic
     # that doesn't know `take`) → the local is mis-typed as the receiver
     # (`VectorIter__int64_t`) → `incompatible types ... from
-    # __gg_TakeIter...`. Same naming + Self/T binding + method-generic
-    # skip + demand-gate as the A2 emit (kept in lockstep). `trait_defs`
-    # must already be built (above).
+    # __gg_TakeIter...`. Same naming + Self/equip/trait binding +
+    # method-generic skip + demand-gate as the A2 emit (kept in lockstep
+    # — both go through `bind_trait_type_params`, so the signature
+    # registered here and the body emitted there cannot disagree on the
+    # trait's `T`). `trait_defs` must already be built (above).
     for dsi_inst in generic_instances:
         if equip_generic_names.contains(dsi_inst.base_name):
             for dsi_tmpl in equip_templates:
@@ -5062,6 +5066,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                                 setup_type_subs(&gmod, dsi_tparams, dsi_inst.type_args)
                                 int dsi_self_tid = lookup_or_register_named(&gmod, dsi_mono)
                                 gmod.type_subs.put("Self", dsi_self_tid)
+                                bind_trait_type_params(&gmod, dsi_tdef.type_params, dsi_tmpl.trait_generic_args)
                                 for dsi_meth in dsi_tdef.methods:
                                     if dsi_meth.body.len() > 0 and not dsi_overridden.contains(dsi_meth.name):
                                         if dsi_meth.type_params.len() == 0:
@@ -5253,10 +5258,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                                     setup_type_subs(&gmod, p0_eqparams, p0_eq_targs)
                                     int p0_self_tid = lookup_or_register_named(&gmod, pmi0.recv_instance)
                                     gmod.type_subs.put("Self", p0_self_tid)
-                                    int p0_tpi = 0
-                                    while p0_tpi < p0_tdef.type_params.len() and p0_tpi < p0_eqtmpl.trait_generic_args.len():
-                                        gmod.type_subs.put(p0_tdef.type_params.get(p0_tpi).unwrap(), map_ast_type(p0_eqtmpl.trait_generic_args.get(p0_tpi).unwrap(), &gmod))
-                                        p0_tpi += 1
+                                    bind_trait_type_params(&gmod, p0_tdef.type_params, p0_eqtmpl.trait_generic_args)
                                     int p0_mpi = 0
                                     while p0_mpi < p0_tmeth.type_params.len() and p0_mpi < proto_inst_targ_count(pmi0):
                                         int p0_mta_tid = proto_inst_targ_tid(pmi0, p0_mpi, &gmod)
@@ -5805,18 +5807,26 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                                 # substitution before lowering each default body.
                                 # `lower_generic_equip` above set up + CLEARED its
                                 # own type_subs, so re-establish the equip
-                                # `[T]`→`[int]` mapping AND add `"Self"` →
-                                # g_mono_name's type-id. Mirrors Rust's
+                                # `[T]`→`[int]` mapping, add `"Self"` →
+                                # g_mono_name's type-id, AND bind the TRAIT's own
+                                # params from the `with Trait[args]` clause.
+                                # Mirrors Rust's
                                 # `lower_generic_equip_methods_with_defaults`
-                                # default_subs = [Self→type, equip-subs]. The
-                                # `case TSelf()` arms in `type_to_c_name` /
-                                # `map_ast_type` read this so `Self` inside a
-                                # default sig/body (`TakeIter[Self, T]`) resolves
-                                # to the concrete instance.
+                                # default_subs = [Self→type, equip-subs,
+                                # trait-subs]. The `case TSelf()` arms in
+                                # `type_to_c_name` / `map_ast_type` read this so
+                                # `Self` inside a default sig/body
+                                # (`TakeIter[Self, T]`) resolves to the concrete
+                                # instance. The trait bind is what keeps
+                                # `Vector[T] collect()` on
+                                # `equip [Iter, T, U, F] MapIter[…] with Iterator[U]`
+                                # from resolving the TRAIT's `T` through the
+                                # EQUIP's `T` — see `bind_trait_type_params`.
                                 Vector[String] g_eq_tparams = extract_equip_type_params(equip_tmpl)
                                 setup_type_subs(&gmod, g_eq_tparams, einst.type_args)
                                 int g_self_tid = lookup_or_register_named(&gmod, g_mono_name)
                                 gmod.type_subs.put("Self", g_self_tid)
+                                bind_trait_type_params(&gmod, gtdef.type_params, equip_tmpl.trait_generic_args)
                                 # Emit each unoverridden default method
                                 for gtmeth in gtdef.methods:
                                     if gtmeth.body.len() > 0 and not g_overridden.contains(gtmeth.name):
@@ -5937,13 +5947,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                             # Bind the trait's own generic params (T) to the trait args.
                             if trait_defs.contains(gm_tname):
                                 TraitDef gm_tdef = trait_defs.get(gm_tname).unwrap()
-                                int gm_tpi = 0
-                                while gm_tpi < gm_tdef.type_params.len() and gm_tpi < gm_eqtmpl.trait_generic_args.len():
-                                    String gm_tp = gm_tdef.type_params.get(gm_tpi).unwrap()
-                                    SpannedType gm_ta = gm_eqtmpl.trait_generic_args.get(gm_tpi).unwrap()
-                                    int gm_ta_tid = map_ast_type(gm_ta, &gmod)
-                                    gmod.type_subs.put(gm_tp, gm_ta_tid)
-                                    gm_tpi += 1
+                                bind_trait_type_params(&gmod, gm_tdef.type_params, gm_eqtmpl.trait_generic_args)
                             # Method-level subs ([H->FxHasher]).
                             int gm_mpi = 0
                             while gm_mpi < gm_em.type_params.len() and gm_mpi < proto_inst_targ_count(gm_pmi):
@@ -6008,13 +6012,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                                     int p_self_tid = lookup_or_register_named(&gmod, pmi.recv_instance)
                                     gmod.type_subs.put("Self", p_self_tid)
                                     # Bind the trait's own generic params (T) to the trait args.
-                                    int p_tpi = 0
-                                    while p_tpi < p_tdef.type_params.len() and p_tpi < p_eqtmpl.trait_generic_args.len():
-                                        String p_tp = p_tdef.type_params.get(p_tpi).unwrap()
-                                        SpannedType p_ta = p_eqtmpl.trait_generic_args.get(p_tpi).unwrap()
-                                        int p_ta_tid = map_ast_type(p_ta, &gmod)
-                                        gmod.type_subs.put(p_tp, p_ta_tid)
-                                        p_tpi += 1
+                                    bind_trait_type_params(&gmod, p_tdef.type_params, p_eqtmpl.trait_generic_args)
                                     # Method-level subs (turbofish or inferred bare form).
                                     int p_mpi = 0
                                     while p_mpi < p_tmeth.type_params.len() and p_mpi < proto_inst_targ_count(pmi):

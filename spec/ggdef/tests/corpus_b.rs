@@ -234,6 +234,41 @@ const EXCLUDE: &[&str] = &[
     //   - the other six cells of the emitter x channel matrix (set / dict-key /
     //     dict-value body, plus the three filter cells).
     "cow_loop_bare_param_comprehension_matrix.gg",
+    // R48 Track D1's comprehension net (t0841, `a comprehension IS a loop`).
+    // EIGHT more `cow_comprehension_*` rows, every one of them a COMPREHENSION
+    // and therefore the SAME class and SAME citation as
+    // `cow_comprehension_amp_source.gg` above — `elaborate_expr` has no
+    // comprehension arm, so each stops at "expression `unsupported` is outside
+    // the phase-0 subset" before it can say anything about the CoW shape it
+    // exists to pin. MEASURED, not assumed: `ggdef run <each>` reports exactly
+    // that error, and `cargo test -p ggdef` STOP-and-reported on the first of
+    // them the moment the net landed. Their adjudicating lanes are C, LLVM and
+    // the self-host, where they are live `run_gg` tests. The subset gap is
+    // already filed (`todo/t0003`'s ggdef note; `todo/t0099`'s "out of the
+    // ggdef phase-0 subset (no comprehension arm)") — do NOT re-file it. All
+    // eight leave this list together when ggdef grows a comprehension arm.
+    "cow_comprehension_fresh_mint_control.gg",
+    "cow_comprehension_invariant_dict_value.gg",
+    "cow_comprehension_invariant_filter_arm.gg",
+    "cow_comprehension_invariant_in_condition.gg",
+    "cow_comprehension_invariant_nested.gg",
+    "cow_comprehension_invariant_owned_name.gg",
+    "cow_comprehension_invariant_struct_payload.gg",
+    "cow_comprehension_invariant_vector_source.gg",
+    //   - the SET-comprehension cell of the same net, same class.
+    "cow_set_comprehension_invariant_in_condition.gg",
+    //   - `.join()` — outside the phase-0 BUILTIN-METHOD set ("may need
+    //     Increment B2"), the same class as the `.push_char()` row above, not
+    //     the comprehension one.
+    "cow_loop_invariant_owned_name_push_control.gg",
+    //   - `meta for` / `meta while` — "statement `unsupported` is outside the
+    //     phase-0 subset"; phase 0 has no compile-time-evaluation arm at all,
+    //     so these two are a THIRD class, not the comprehension one.
+    "cow_meta_for_zero_trip_body_kill.gg",
+    "cow_meta_while_false_guard_body_kill.gg",
+    // ⚠ `cow_for_zero_trip_body_kill_control.gg`, the thirteenth fixture of the
+    // same net, is DELIBERATELY NOT here: ggdef elaborates it and adjudicates
+    // `ab\nab`, matching both real lanes. Measured, not assumed.
     // 2T get-chain PRECISION guard: the write target is a USER-method-call
     // rvalue's field (`h.coll.get(0).name = v`). ggdef's frontend correctly
     // ACCEPTS it (no over-reject — the get-chain descent is Vector-kind-gated, so
@@ -707,6 +742,18 @@ fn corpus_b_all_match() {
     // `.first()` elaboration error, so it had not absorbed those 8 — the
     // arithmetic here starts from 181, not from a figure this assert had
     // confirmed.
+    // R48: +14 `cow_` fixtures land, 12 of them EXCLUDEd above with citations
+    // (Track D1's comprehension / set-comprehension / `.join()` / `meta`
+    // net — three distinct out-of-subset constructs, all measured with
+    // `ggdef run`). The 2 that stay are ADJUDICATED here, not merely counted:
+    // `cow_for_zero_trip_body_kill_control` (D1) gives `ab / ab` and
+    // `cow_lazy_index_slice_join` (Track γ, the index/slice derivation JOIN)
+    // gives the full 13-line output both real lanes print — a fourth lane
+    // agreeing with C, LLVM and the self-host on the fixed answer. Count +14
+    // additions − 12 EXCLUDEs = +2 net → 190.
+    // ⚠ Like the 181 before it, the 188 was never reached: this gate was RED at
+    // R48's open on D1's comprehension net, so it had not absorbed those rows
+    // either.
     // R48 Track D1 (`t0841`, `800cfcc2`): 13 new `cow_*` fixtures landed with the
     // comprehension back-edge fix. Measured one-by-one against `ggdef run`, not
     // assumed: 12 are out-of-subset (the comprehension forms, and the
@@ -744,5 +791,11 @@ fn corpus_b_all_match() {
     // Arithmetic: 189 + 8 new `cow_*` cells − 2 that live in
     // `tests/fixtures/self_host_gaps/` and are outside this glob entirely
     // (`todo/t0922`, `todo/t0923`) − 5 EXCLUDEd above with cited gates = 190.
-    assert_eq!(fixtures.len(), 190, "B2 gate set drifted from 190 fixtures");
+    // R48: re-enumerated after merging Track γ onto main. Harvest is glob
+    // minus EXCLUDE, same filter as `gate_fixtures` (cow_/deadwrite_/
+    // combinator_ top-level). D1's 12 EXCLUDEs stay; `cow_for_zero_trip_body_kill_control`
+    // stays IN (NOT excluded); Track γ's `cow_lazy_index_slice_join` stays IN and
+    // MATCH-gated. Main's Track C cells are in the merged tree (six EXCLUDEd, two
+    // adjudicated). Count = 191.
+    assert_eq!(fixtures.len(), 191, "B2 gate set drifted from 191 fixtures");
 }

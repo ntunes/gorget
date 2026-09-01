@@ -1,38 +1,32 @@
-# KNOWN GAP — `flat_map` that CHANGES the element type mints its accumulator
-# from the INPUT element type, printing a raw pointer at rc 0.
+# GRADUATED (R48) from a both-lanes known gap. `flat_map` that CHANGES the
+# element type used to mint its accumulator from the INPUT element type,
+# printing a raw pointer at rc 0.
 #
 #     Vector[int] nums = [3, 4]
 #     auto v = nums.flat_map(tags)      # tags: (int) -> Vector[String]
-#     print(v.get(0).unwrap())          # prints e.g. 187651182920432, not "tag"
+#     print(v.get(0).unwrap())          # printed e.g. 187651182920432, not "tag"
 #
-# ⚠ TWO FALSE INVARIANT-ASSERTING COMMENTS sit on the defect and must go
-# (Core #14 — an invariant comment needs an enforcing guard or it is deleted):
-# `self_host_lowerer/lower_expr.gg:6775` and `:6791` both assert
+# `flat_map` is `(T) -> Vector[U]`, so the RESULT element is `U`. THREE layers
+# have to agree on it and none of them did:
+#   * self-host: `try_lower_vector_hof` accumulated with `acc.extend(f(x))` over
+#     an array minted from the input element. It now desugars to the NESTED loop
+#     the comprehension `[y for x in v for y in f(x)]` already used, so the
+#     deferred mint sees `U` through the inner loop variable.
+#   * Rust GIR: the builtin protocol declared `ret_self`, so an `auto`
+#     destination bound `Vector[T]`. `hof_cross_type_result`
+#     (`src/ir/lowering/exprs/methods.rs`) now reads the closure's registered
+#     return type.
+#   * Rust LIR: `expand_flat_map` (`src/bir/lower.rs`) sized the result array by
+#     the SOURCE element, under a comment ASSERTING that flat_map preserves the
+#     element type — a false invariant (Core #14) contradicted by the
+#     typechecker's own `("Vector", "flat_map") => (T) -> Vector[U]`. It now
+#     takes the result element off `HofExpand.value_ty`.
 #
-#     "flat_map preserves the element type -- the closure returns a Vector of
-#      the same element"
-#
-# which is FALSE against the typechecker's own signature at
-# `src/semantic/typecheck.rs:8212`: `("Vector", "flat_map") => (T) -> Vector[U]`,
-# whose comment even spells out the cross-type case. A reader who trusts the
-# self-host comment will "clean up" the fix straight back into this bug.
-#
-# ⚠ DISCRIMINATORS, measured:
-#   * Rust lane: `auto` destination is WRONG; a TYPED destination
-#     (`Vector[String] v = ...`) with a named callee is CORRECT (prints "tag").
-#   * Self-host lane: reported wrong on BOTH destinations, i.e. a lane
-#     divergence with a direction -- Rust is ahead here, so fix the self-host.
-#     (Rust-lane cells above are orchestrator-verified; the self-host column is
-#     the R44 Track-K pass-8 measurement across five drivers.)
-#
-# ⚠ DISTINCT from the filed `map` sibling: that entry is scoped to `map` in its
-# own text, and this is a different branch with its own mint site and its own
-# pair of false comments. Same CLASS (accumulator minted from the input element
-# type), different producer -- Core #4.
+# ⚠ THE OLD RUST-LANE DISCRIMINATOR WAS THE DESTINATION, not the callee shape:
+# `Vector[String] v = …` was correct and `auto v = …` was not, for named callees
+# and inline closures alike.
 #
 # INTENDED (asserted below): prints 2 then tag.
-# Measured 2026-08-24 by the R44 Track-K brief-review pass 8, Rust lane
-# orchestrator-verified.
 
 String mk(String a, String b):
     return a + b
