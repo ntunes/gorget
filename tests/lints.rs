@@ -25739,7 +25739,7 @@ fn parity_declared_fixtures_have_no_snapshot() {
 fn parity_untriaged_exclusions_shrink_only() {
     // Regenerate:
     //   grep -l '^#!parity-excluded untriaged:' tests/fixtures/*.gg | wc -l
-    const UNTRIAGED_CEILING: usize = 24;
+    const UNTRIAGED_CEILING: usize = 13;
     const DECL: &str = "#!parity-excluded";
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixtures = root.join("tests/fixtures");
