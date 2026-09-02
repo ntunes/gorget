@@ -30,7 +30,7 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-02, main `a9f6d4db3`)
 
 **All launched tracks INTEGRATED.** After E, the owner ruled no partial moves on main (not a gauntlet track): `t0438` then `t0437` as `E_PartialMove` (`a9f6d4db3`).
-**NEXT: the round-close battery.** No live executor. New agents still on hold. Next new todo id is **`t0936`**.
+**NEXT: the round-close battery.** ⚠ THIS LINE IS MID-SESSION STATE, NOT THE HANDOVER — the full rewrite lands at close. Tracks **P** (clone regression, INTEGRATED `3d5f34c3f`), **Q** and **R** opened 2026-09-02 after the owner lifted the agent hold. Next free todo id is **`t0946`** (t0936–t0945 filed).
 Briefs at `/tmp/r48briefs/trackE_B{1,2,3}.md` (not durable).
 Lifts spent: C, D2, F, A, β, γ, S, E. D53 unique-lock reject and the figures DB are **on main**.
 A's capture residual is `t0927`; β's are `t0928`–`t0930`; γ's are `t0931`–`t0933`; F's adoption is `t0926`; main's `t0876` remains C-emit jitter.
