@@ -416,24 +416,10 @@ const EXCLUDE: &[&str] = &[
     // SEPARATE target `--test integration` never touches) and main went red.
     // The declared-membership guard that would have caught it at add-time is
     // R48 Track E-B3's deliverable and was still in gauntlet when D1 landed.
-    "cow_comprehension_fresh_mint_control.gg",
-    // ⊕ THE OTHER ELEVEN FROM THE SAME COMMIT. Measured one-by-one against
-    // `ggdef run`, not assumed: 12 of D1's 13 new `cow_*` fixtures are
-    // out-of-subset (comprehensions, and the `meta for`/`meta while` forms);
-    // only `cow_for_zero_trip_body_kill_control.gg` elaborates, and it stays
-    // GATED. Subset gaps: comprehensions `todo/t0003`; the meta forms are the
-    // same phase-0 boundary and are covered by the same item.
-    "cow_comprehension_invariant_dict_value.gg",
-    "cow_comprehension_invariant_filter_arm.gg",
-    "cow_comprehension_invariant_in_condition.gg",
-    "cow_comprehension_invariant_nested.gg",
-    "cow_comprehension_invariant_owned_name.gg",
-    "cow_comprehension_invariant_struct_payload.gg",
-    "cow_comprehension_invariant_vector_source.gg",
-    "cow_loop_invariant_owned_name_push_control.gg",
-    "cow_meta_for_zero_trip_body_kill.gg",
-    "cow_meta_while_false_guard_body_kill.gg",
-    "cow_set_comprehension_invariant_in_condition.gg",
+    // The twelve D1 names themselves are listed ONCE, in the family-block
+    // above (`cow_comprehension_fresh_mint_control.gg` and its eleven
+    // siblings). A second copy was a duplicate-literal RED for the
+    // declared-membership guard.
 ];
 
 fn ws_root() -> PathBuf {

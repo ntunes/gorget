@@ -145,6 +145,13 @@ NCOLS = 11
 LANE_COL = {"c": COL_C, "llvm": COL_LLVM, "selfhost": COL_SELFHOST,
             "asan": COL_ASAN, "ggdef": COL_GGDEF}
 ALL_LANES = ["c", "llvm", "selfhost", "asan", "ggdef"]
+# Named hang census. A hang/spin/timeout is a ROW, never a shrinking integer
+# (`EXPECTED_HANGS` does not exist in this script). C-lane TIMEOUT must equal
+# this set on a C-lane run; a new hang is a REGRESSION, a retirement must
+# shrink this tuple in the same commit. Filed: todo/t0015, todo/t0863 sixth.
+HANG_CENSUS = frozenset({
+    "doc_lr_meta_while_type_guard",
+})
 # The lanes that answer "what does this program print". Divergence is defined
 # over THESE only -- see the module docstring.
 VALUE_LANES = ["c", "llvm", "selfhost"]
@@ -501,7 +508,9 @@ def main():
     ap.add_argument("--detail", action="store_true",
                     help="print every non-WORKS cell with the value it actually produced")
     ap.add_argument("--accept", action="store_true",
-                    help="fold PROGRESS rows into the baseline (never expectations)")
+                    help="fold PROGRESS rows into the baseline (never expectations); "
+                         "refuses to write MANIFEST.tsv if any REGRESSION or NEW "
+                         "divergence is present")
     args = ap.parse_args()
 
     lanes = ALL_LANES if args.lanes == "all" else [l.strip() for l in args.lanes.split(",") if l.strip()]
@@ -595,32 +604,35 @@ def main():
         for lane in lanes:
             bucket, actual = res[lane]
             base = row[LANE_COL[lane]]
-            # ⚠ A `_neg` cell asserts a REJECTION. The documentation says the
-            # program is a compile error, so REJECTED is its CORRECT state and
-            # WORKS is the regression -- the language got more permissive and the
-            # doc it mirrors now lies. Without this the drift scores as PROGRESS
-            # and invites someone to `--accept` a real regression into the
-            # baseline. Measured case: docs/book/12-borrowing.md:96 lists
-            # `f(x, &x)` under "These are compile errors" and it compiles today.
-            # ⚠ A NEGATIVE cell asserts a REJECTION: the documentation says the
-            # program is a compile error, so REJECTED is its CORRECT state and a
-            # drift to WORKS is the REGRESSION -- the language got more permissive
-            # and the doc it mirrors now lies. Measured case:
-            # docs/book/12-borrowing.md:96 lists `f(x, &x)` under "These are
-            # compile errors" and it compiles today.
+            # A cell whose COL_EXPECTED starts with REJECTED asserts a
+            # REJECTION: the documentation says the program is a compile error,
+            # so REJECTED is its CORRECT state and WORKS is the regression --
+            # the language got more permissive and the doc it mirrors now lies.
             #
-            # The marker is the BASELINE BUCKET, not the filename. Keying on a
-            # `_neg` suffix is name-matching to decide semantics, and it is
-            # measurably wrong here: `vars_unary_neg` is a cell about unary MINUS
-            # whose correct state is WORKS. The baseline records what correct
-            # looks like for each cell, which is precisely what a baseline is for.
-            good = "REJECTED" if row[COL_C] == "REJECTED" else "WORKS"
+            # The marker is COL_EXPECTED, never the C-lane baseline bucket and
+            # never a `_neg` filename suffix.
+            #   * Keying on COL_C made a C-lane FIX of a value-expected
+            #     REJECTED cell score as a REGRESSION (the baseline recorded
+            #     what the compiler printed -- the thing "don't redesign
+            #     around compiler gaps" forbids). Measured: `vec_pop`
+            #     (expected `30 / 2 / empty`, C=REJECTED, self-host WORKS).
+            #   * Keying on `_neg` is name-matching to decide semantics, and
+            #     it is measurably wrong: `vars_unary_neg` is a cell about
+            #     unary MINUS whose correct state is WORKS.
+            # COL_EXPECTED.startswith("REJECTED") is the column's existing
+            # encoding (16 cells, not the 14 that currently also have
+            # C=REJECTED -- `doc_b06_struct_eq_no_derive` and
+            # `doc_b12_borrow_conflict_shared_plus_mut_neg` are C=WRONG).
+            good = "REJECTED" if row[COL_EXPECTED].startswith("REJECTED") else "WORKS"
             if base:                       # never measured => nothing to regress from
                 if base == good and bucket != good:
                     regressions.append((row[COL_CELL], f"[{lane}] {base} -> {bucket}: {actual}"))
                 elif base != good and bucket == good:
                     progress.append((row[COL_CELL], f"[{lane}] {base} -> {good}"))
-            if args.accept:
+            if args.accept and bucket == good and base != good:
+                # Fold PROGRESS only. A regression stays in the in-memory row
+                # as the old baseline; the file write below is refused when
+                # any regression or new divergence is present.
                 row[LANE_COL[lane]] = bucket
             topics.setdefault(row[COL_TOPIC], {}).setdefault(lane, {})
             t = topics[row[COL_TOPIC]][lane]
@@ -628,8 +640,32 @@ def main():
         # Only a multi-VALUE-lane run can say anything about divergence; a
         # single-lane --accept (or a `c,asan` run, which has one value lane) must
         # leave the recorded verdict alone rather than erase it.
+        # Fold PROGRESS only: clear a resolved known divergence. Never write a
+        # NEW DIVERGENT flag here -- those are `new_div` and refuse the file.
         if args.accept and len(div_lanes) > 1:
-            row[COL_DIVERGE] = "DIVERGENT" if diverges else ""
+            if row[COL_DIVERGE] == "DIVERGENT" and not diverges:
+                row[COL_DIVERGE] = ""
+
+    # Hang census (C lane). EXPECTED_HANGS as a shrinking integer does not
+    # exist here: a hang is a named row. Both-asserts so a retirement shrinks
+    # HANG_CENSUS in the same commit and a new hang cannot land silent.
+    if "c" in lanes:
+        measured_hangs = {
+            row[COL_CELL]
+            for row in selected
+            if measured[row[COL_CELL]]["c"][0] == "TIMEOUT"
+        }
+        expected_hangs = HANG_CENSUS & {row[COL_CELL] for row in selected}
+        for cell in sorted(measured_hangs - expected_hangs):
+            regressions.append((cell, "[c] NEW HANG (TIMEOUT) — add a HANG_CENSUS row"))
+        for cell in sorted(expected_hangs - measured_hangs):
+            regressions.append(
+                (cell, "[c] hang retired — remove it from HANG_CENSUS in this commit")
+            )
+
+    missing_hang_rows = HANG_CENSUS - {r[COL_CELL] for r in rows}
+    if missing_hang_rows:
+        sys.exit(f"HANG_CENSUS names not in MANIFEST.tsv: {sorted(missing_hang_rows)}")
 
     for lane in lanes:
         print(f"\n=== lane: {lane} ===")
@@ -713,10 +749,14 @@ def main():
         print(f"  REGRESSION {cell}: {why}")
 
     if args.accept:
-        (MAP / "MANIFEST.tsv").write_text(
-            header + "\n" + "\n".join("\t".join(r) for r in rows) + "\n")
-        print(f"\nbaseline updated ({len(progress)} progress, {len(new_div)} new "
-              f"divergence) - review this diff")
+        if regressions or new_div:
+            print("\n--accept refused: MANIFEST.tsv NOT written "
+                  f"({len(regressions)} REGRESSION(S), {len(new_div)} NEW DIVERGENCE(S))")
+        else:
+            (MAP / "MANIFEST.tsv").write_text(
+                header + "\n" + "\n".join("\t".join(r) for r in rows) + "\n")
+            print(f"\nbaseline updated ({len(progress)} progress rows folded) - "
+                  "review this diff")
 
     if regressions or new_div:
         print(f"\n{len(regressions)} REGRESSION(S), {len(new_div)} NEW DIVERGENCE(S)")

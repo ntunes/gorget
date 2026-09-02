@@ -205,18 +205,9 @@ const EXCLUDE: &[&str] = &[
     // (`todo/t0003`, `todo/t0099`) — do NOT re-file them. ⚠ The net's
     // thirteenth fixture, `cow_for_zero_trip_body_kill_control.gg`, is
     // deliberately absent: ggdef elaborates it and adjudicates `ab / ab`.
-    "cow_comprehension_fresh_mint_control.gg",
-    "cow_comprehension_invariant_dict_value.gg",
-    "cow_comprehension_invariant_filter_arm.gg",
-    "cow_comprehension_invariant_in_condition.gg",
-    "cow_comprehension_invariant_nested.gg",
-    "cow_comprehension_invariant_owned_name.gg",
-    "cow_comprehension_invariant_struct_payload.gg",
-    "cow_comprehension_invariant_vector_source.gg",
-    "cow_set_comprehension_invariant_in_condition.gg",
-    "cow_loop_invariant_owned_name_push_control.gg",
-    "cow_meta_for_zero_trip_body_kill.gg",
-    "cow_meta_while_false_guard_body_kill.gg",
+    // The twelve D1 names themselves are listed ONCE, at the top of this
+    // EXCLUDE (the t0801 recurrence block). A second copy was a
+    // duplicate-literal RED for the declared-membership guard.
     // NOTE: the 2T get-chain fixtures (`cow_taint_getchain_*`) all carry `equip R
     // with Drop`, so `gate_fixtures`'s `equip ` filter already routes them to B2
     // (corpus_b) — they are NOT in the B1 gate set and need no B1 exclusion.

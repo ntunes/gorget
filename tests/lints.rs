@@ -26921,3 +26921,14 @@ fn done_md_round_close_shapes_are_pinned() {
          at the next round open.\n\n{text}"
     );
 }
+
+// R48 Track E-B3: ggdef corpus membership is declared, not glob-minus-EXCLUDE.
+// Census tables + lint live under `tests/lints_support/` so they are NOT cargo
+// integration-test targets (`tests/*.rs` would be). Prefixes and EXCLUDE are
+// parsed from SOURCE — do not re-list `cow_`/`deadwrite_`/`combinator_` here.
+mod ggdef_corpus_membership {
+    include!("lints_support/ggdef_corpus_membership.rs");
+}
+mod ggdef_corpus_membership_lint {
+    include!("lints_support/ggdef_corpus_membership_lint.rs");
+}
