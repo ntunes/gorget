@@ -4712,6 +4712,124 @@ fn mutex_vector_d53_class_pin_guard_push_reject() {
     check_gg_fails("d53_unique_lock/guard_named_push_reject.gg", "E_MoveWithoutOperator");
 }
 
+/// D53 SUB-PLACE AXIS — the shapes `expr_is_place` admits, crossed with the
+/// source binding and the lock family. This is the axis, not a sample: the
+/// rejection at a sub-place is FORCED by two ratified rulings composing —
+/// D53 (Mutex/RWLock have no clone path) and D10(a) (a field/index `^` is a
+/// partial move and rejects) — so at `v.push(s.lock)` there is no third option
+/// and reject is the only meaning-preserving verdict.
+///
+/// | place shape        | local | param | Mutex | RWLock |
+/// |--------------------|:-----:|:-----:|:-----:|:------:|
+/// | identifier         |  push |  bind |   x   |    x   |
+/// | field (`h.lock`)   |  push |  push |   x   |    x   |
+/// | index (`src[0]`)   |  push |  push |   x   |    x   |
+/// | `self`-rooted field|   -   |  push |   x   |    x   |
+/// | tuple (`t.0`)      |  push |  push |   x   |    x   |
+/// | generic-struct fld |  push |   -   |   x   |    x   |
+/// | generic `Index[]`  |  push |   -   |   x   |    x   |
+///
+/// OMITTED CELLS, named rather than silently dropped:
+///   - `self` x local — VACUOUS. `self` is the receiver; a BARE `self` of
+///     unique-lock type cannot exist because `equip Mutex[int]:` is unwritable.
+///   - identifier x param x PUSH — subsumed by identifier x param x BIND, which
+///     is the strictly harder cell: only the pre-block enforces it, since the
+///     later identifier arm is gated on `not param_exempt or not d.is_param`.
+///   - generic-struct-field / generic-`Index` x param — the divergence these two
+///     pin is on the OBJECT's `ResolvedType` (`RTGeneric`), which the source
+///     binding does not vary.
+///   - `t._0` (the tuple alias spelling) — the Rust lane UNDER-rejects it; it is
+///     filed as `todo/t0943` with the `#[ignore]`d
+///     `d53_tuple_alias_rust_lane_under_rejects` below. The self-host lane
+///     rejects it and the self-host battery covers it.
+///   - generic `Index[]` with a MULTI-type-arg receiver whose `Index` output is
+///     not the last type parameter — the `generic_index_impl` rows above pin
+///     only the SINGLE-type-arg cell, where `args.last()` and the impl's output
+///     type coincide. In the multi-arg cell BOTH lanes are WRONG (they reject on
+///     an unrelated type argument, with a diagnostic that is false on its face):
+///     `todo/t0945`, `#[ignore]`d `d53_generic_index_last_targ_over_rejects`.
+///     The fixture headers name this so the row's NAME does not over-claim its
+///     class (Core #12).
+///   - **POSITION is an omitted AXIS, not an omitted cell.** The matrix above is
+///     {place-shape x source x lock} at `push`, plus the one `bind` cell. The
+///     other consume positions (`put`/`set`/`insert`/`send`/`v[i] = x`/ctor/
+///     array-literal) are covered only for the named-IDENTIFIER shape, by the
+///     pre-existing `mutex_vector_d53_consume_siblings_reject`. Justification for
+///     not crossing them with the sub-place shapes: all 10 call sites route into
+///     the SAME helper (`reject_single_owner_init`), and the sub-place pre-block
+///     runs BEFORE the `param_exempt` gate that is the only thing distinguishing
+///     the positions — so position cannot discriminate a sub-place verdict. If a
+///     future position stops routing through that helper, this justification
+///     lapses and the axis has to be crossed for real.
+#[test]
+fn mutex_vector_d53_subplace_axis_reject() {
+    for f in [
+        "mutex_ident_local_push_reject.gg",
+        "mutex_ident_param_bind_reject.gg",
+        "mutex_field_local_push_reject.gg",
+        "mutex_field_param_push_reject.gg",
+        "mutex_index_local_push_reject.gg",
+        "mutex_index_param_push_reject.gg",
+        "mutex_self_field_push_reject.gg",
+        "mutex_tuple_local_push_reject.gg",
+        "mutex_tuple_param_push_reject.gg",
+        "mutex_generic_struct_field_push_reject.gg",
+        "mutex_generic_index_impl_push_reject.gg",
+    ] {
+        check_d53_unique_lock_reject(&format!("d53_unique_lock/{f}"), D53_MUTEX);
+    }
+    for f in [
+        "rwlock_ident_local_push_reject.gg",
+        "rwlock_ident_param_bind_reject.gg",
+        "rwlock_field_local_push_reject.gg",
+        "rwlock_field_param_push_reject.gg",
+        "rwlock_index_local_push_reject.gg",
+        "rwlock_index_param_push_reject.gg",
+        "rwlock_self_field_push_reject.gg",
+        "rwlock_tuple_local_push_reject.gg",
+        "rwlock_tuple_param_push_reject.gg",
+        "rwlock_generic_struct_field_push_reject.gg",
+        "rwlock_generic_index_impl_push_reject.gg",
+    ] {
+        check_d53_unique_lock_reject(&format!("d53_unique_lock/{f}"), D53_RWLOCK);
+    }
+}
+
+/// `t._0` is the ratified alias for `t.0` (language-reference §4.2/§7.8) and the
+/// Rust lane accepts it as a tuple accessor, but `src/parser/expr.rs` only builds
+/// `Expr::TupleFieldAccess` for a literal `.<int>` — `._0` becomes a plain
+/// `Expr::FieldAccess`, whose `lvalue_value_type` arm needs a struct def id a
+/// tuple does not have. D53's consume gate therefore never fires on the alias
+/// spelling while it fires on `t.0`. The SELF-HOST lane rejects both (its parser
+/// folds them into one node and both resolvers share `tuple_field_index`), so
+/// this is a "reference lags the self-host" finding — fix the Rust side.
+#[test]
+#[ignore = "known gap (todo/t0943): Rust `lvalue_value_type` misses the `._N` tuple alias, so D53 under-rejects `v.push(t._0)`; un-ignore when the FieldAccess arm resolves a tuple object"]
+fn d53_tuple_alias_rust_lane_under_rejects() {
+    check_d53_unique_lock_reject(
+        "known_gaps/d53_tuple_alias_subplace_rust_accepts.gg",
+        D53_MUTEX,
+    );
+}
+
+/// OVER-rejection, both lanes, with a diagnostic that is false on its face:
+/// `lvalue_value_type`'s `Index` arm types `c[i]` as `args.last()` of the
+/// receiver's type-argument list (`src/semantic/safety/helpers.rs:1021`), which
+/// is a builtin-shaped assumption — right for `Vector[T]`/`Dict[K,V]`, wrong for
+/// a user generic whose `Index` impl output is not its last type parameter.
+/// `Pair[K, V]` equipping `Index[int, K]` makes `p[0]` an `int`, yet the gate
+/// reads `V` and reports `p` "is a unique lock". Editing the UNRELATED `V` to
+/// `String` makes the identical program compile and run — which is the proof the
+/// heuristic is wrong rather than the program.
+///
+/// Sibling of `todo/t0392` RV-E (same fallback, RANGE-index cell). Filed as
+/// `todo/t0945` with the family table.
+#[test]
+#[ignore = "known gap (todo/t0945): `lvalue_value_type`'s Index arm types c[i] as the receiver's LAST type argument, so a user generic whose Index impl output is not its last type param is over-rejected; un-ignore when the Index impl's real output type is resolved"]
+fn d53_generic_index_last_targ_over_rejects() {
+    run_gg("known_gaps/d53_generic_index_last_targ_over_rejects.gg", "1\n7");
+}
+
 #[test]
 fn mutex_vector_d53_pos_temp_caret_nonconsuming() {
     run_gg("d53_unique_lock/mutex_temp_push.gg", "1\n0");
@@ -33940,6 +34058,162 @@ fn self_host_driver_rejects_d12_drop_purity() {
             stdout.len(),
         );
     }
+}
+
+// ── D53 unique locks, self-host half: the driver REJECTS a unique-lock place at
+// a consuming position, at EVERY place shape `expr_is_place` admits.
+//
+// Before this battery the self-host D53 pre-block (`reject_single_owner_init` in
+// self_host_typechecker/typecheck.gg) was protected by ZERO self-host assertion —
+// `check_d53_unique_lock_reject` is a Rust-lane `gg check` suite, and the two
+// existing self-host reject batteries (`self_host_driver_rejects_d12_drop_purity`,
+// `sh_cow_taint_getchain_reject`) cover D4/D12 and 2T. That absence is how a 15.6x
+// stage-0 clone regression shipped inside the pre-block, and how a tuple-place
+// under-rejection would have shipped out of it.
+//
+// The axis and its omitted cells are documented on the Rust-lane twin
+// `mutex_vector_d53_subplace_axis_reject`; the two lanes share one fixture set
+// (Core #9), plus `known_gaps/d53_tuple_alias_subplace_rust_accepts.gg` — the
+// `t._0` alias spelling, which the self-host rejects and the Rust lane does not
+// (todo/t0943).
+//
+// The contract asserted here is deliberately the DIAGNOSTIC KIND and the fact of
+// rejection, NOT the message text: the self-host currently renders the Whole
+// remedy (`^s`) with the place's ROOT name even for a field sub-place, which is
+// unfollowable under D10(a); correcting that string is a separate concern and
+// pinning it here would cement it.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_d53_unique_lock_subplace() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let mut fixtures: Vec<String> = Vec::new();
+    for lock in ["mutex", "rwlock"] {
+        for cell in [
+            "ident_local_push",
+            "ident_param_bind",
+            "field_local_push",
+            "field_param_push",
+            "index_local_push",
+            "index_param_push",
+            "self_field_push",
+            "tuple_local_push",
+            "tuple_param_push",
+            "generic_struct_field_push",
+            "generic_index_impl_push",
+        ] {
+            fixtures.push(format!("d53_unique_lock/{lock}_{cell}_reject.gg"));
+        }
+    }
+    fixtures.push("known_gaps/d53_tuple_alias_subplace_rust_accepts.gg".to_string());
+
+    for name in &fixtures {
+        let fixture = manifest_dir.join("tests/fixtures").join(name);
+        assert!(fixture.exists(), "missing D53 sub-place fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_rejects_d53_unique_lock_subplace",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !out.status.success(),
+            "self-host driver ACCEPTED a unique-lock place at a consuming position \
+             `{name}` — D53 enforcement in self_host_typechecker/typecheck.gg \
+             (`reject_single_owner_init`) regressed. A tuple cell failing here means \
+             the `RTTuple` arm of `lvalue_value_type` was dropped; a generic cell \
+             means its `RTGeneric` arm was. exit={:?}\nstderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            stderr.contains("E_MoveWithoutOperator") && stderr.contains('\u{250c}'),
+            "self-host driver rejected `{name}` but not with the D53 \
+             `E_MoveWithoutOperator` codespan diagnostic (+ the box rule) — a \
+             rejection for some OTHER reason is not coverage of this gate.\n\
+             stderr:\n{stderr}",
+        );
+        assert!(
+            !stderr.contains(".clone()"),
+            "D53 diagnostic must never offer `.clone()` for a unique lock \
+             (`{name}`) — Mutex/RWLock have no clone path by design.\nstderr:\n{stderr}",
+        );
+        assert!(
+            stdout.trim().is_empty(),
+            "self-host driver emitted C for rejected `{name}` — the gate must halt \
+             BEFORE lowering. stdout bytes={}",
+            stdout.len(),
+        );
+    }
+}
+
+/// Shared assertion for the two self-host D53/D12 under-rejection gaps below:
+/// the driver must REJECT `fixture` with a codespan diagnostic and emit no C.
+fn check_self_host_driver_rejects(fixture: &str, code: &str, what: &str) {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let path = manifest_dir.join("tests/fixtures").join(fixture);
+    assert!(path.exists(), "missing fixture: {}", path.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&path).arg(&lib_dir).arg("--lir-c"),
+        "check_self_host_driver_rejects",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "self-host driver ACCEPTED `{fixture}` — {what}. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains(code) && stderr.contains('\u{250c}'),
+        "self-host driver rejected `{fixture}` but not with `{code}` + the box \
+         rule.\nstderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for rejected `{fixture}` — the gate must halt \
+         BEFORE lowering. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+/// The self-host types a field place through `types.variant_field_types`, keyed
+/// `"{StructName}.{field}"`, and that table carries no row for a struct defined
+/// in ANOTHER module — so a `Mutex` field of an imported struct comes back
+/// NO_TYPE and D53's consume gate never fires. Rust rejects. BOTH self-host
+/// resolvers read the same table with the same key, so this is upstream of the
+/// structural swap and unaffected by it: the fix belongs at the table's
+/// producer, not at either read site.
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "known gap (todo/t0941): self-host `variant_field_types` has no rows for IMPORTED struct fields, so D53 under-rejects `v.push(h.lock)` cross-module; un-ignore when the table (or a complete field registry) covers imported defs"]
+fn self_host_d53_imported_struct_field_under_rejects() {
+    check_self_host_driver_rejects(
+        "known_gaps/d53_imported_struct_field_sh_accepts/main.gg",
+        "E_MoveWithoutOperator",
+        "an imported struct's unique-lock field escaped the D53 consume gate",
+    );
+}
+
+/// The self-host D12 gate `reject_tainted_place` types its place with
+/// `infer_expr_type`, whose `EFieldAccess` arm has no `RTGeneric` case, so a
+/// drop-tainted field of a GENERIC struct types as NO_TYPE and the taint check
+/// answers false. Rust resolves the same place structurally and rejects. Note
+/// the asymmetry this pins: the sibling D53 gate now uses the structural
+/// resolver — which DOES have the `RTGeneric` arm — so the unique-lock analogue
+/// of this shape rejects while the drop-taint one does not.
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "known gap (todo/t0944): self-host `infer_expr_type` has no RTGeneric arm for EFieldAccess, so D12 drop-taint under-rejects a generic-struct field place; un-ignore when the arm lands or the gate moves to the structural resolver"]
+fn self_host_d12_generic_struct_field_under_rejects() {
+    check_self_host_driver_rejects(
+        "known_gaps/d12_generic_struct_field_sh_accepts.gg",
+        "cannot copy",
+        "a drop-tainted field of a generic struct escaped the D12 gate — two \
+         owners of one resource, so the drop runs twice",
+    );
 }
 
 // RV-B — the SECOND dot-shorthand bug, self-host half: `.Wrap(!r)` MOVES `r`, so

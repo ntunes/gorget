@@ -1,0 +1,15 @@
+# D53 self-host axis NEG — TUPLE-index sub-place of a local tuple at a collection put
+# CELL: lock=Mutex · place-shape=tuple-field (t.0) · source=local · position=push.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+# Both lanes MUST emit E_MoveWithoutOperator: the destination must own, D53
+# forbids a clone path and D10(a) forbids a field/index partial move.
+
+
+# The self-host parser has NO tuple-index AST node: `t.0` folds into
+# `EFieldAccess(obj, "0")` (self_host_parser/parser.gg), so this cell is only
+# reached through `lvalue_value_type`'s RTTuple arm.
+void main():
+    (Mutex[int], int) t = (Mutex[int](5), 1)
+    Vector[Mutex[int]] v = Vector[Mutex[int]]()
+    v.push(t.0)
+    print(v.len())

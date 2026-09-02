@@ -1,0 +1,33 @@
+# known gap (todo/t0941) — SELF-HOST lane UNDER-rejects D53 on an IMPORTED
+# struct's unique-lock field.
+#
+# `h.lock` is a field sub-place of `Mutex[int]`. D53 gives it no clone path and
+# D10(a) forbids a bare `^` on a sub-place, so the only meaning-preserving
+# verdict is E_MoveWithoutOperator — which the Rust lane emits.
+#
+# The self-host ACCEPTS it and emits C. Both of its expression resolvers
+# (`infer_expr_type` and the structural `lvalue_value_type`) type a field place
+# through `types.variant_field_types`, keyed `"{StructName}.{field}"`, and that
+# table has no row for a struct defined in another module — so the lookup misses,
+# the type comes back NO_TYPE, and `is_unique_lock_type` answers false. The SAME
+# shape with the struct declared LOCALLY rejects correctly
+# (`d53_unique_lock/mutex_field_local_push_reject.gg`), and so does the GENERIC
+# local form (`d53_unique_lock/mutex_generic_struct_field_push_reject.gg`) — so
+# the axis that discriminates is CROSS-MODULE, not generic-vs-concrete.
+#
+# The fix is upstream of both resolvers: populate `variant_field_types` for
+# imported struct defs (or give the safety walk a complete per-struct field
+# registry, as the Rust lane has in `struct_field_names` + `DefInfo.field_types`).
+# Do NOT patch it at either read site — that would be two copies of the same
+# repair, and this is exactly the "one source of truth per axis" boundary.
+#
+# INTENDED behaviour (what the `#[ignore]`d test asserts): rejected, with
+# E_MoveWithoutOperator naming `Shared[Mutex[T]]`.
+from std.collections import Vector
+from holder import XHolder
+
+void main():
+    XHolder h = XHolder(Mutex[int](5), 1)
+    Vector[Mutex[int]] v = Vector[Mutex[int]]()
+    v.push(h.lock)
+    print(v.len())

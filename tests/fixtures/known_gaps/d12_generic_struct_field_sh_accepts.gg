@@ -1,0 +1,45 @@
+# known gap (todo/t0944) — SELF-HOST lane UNDER-rejects D4/D12 drop-taint at a
+# field sub-place of a GENERIC struct.
+#
+# `h.r` is a live drop-tainted field place at a collection put — position 3 of
+# the D12 ownership boundary set. The Rust lane rejects it with
+# E_MoveWithoutOperator; the self-host ACCEPTS it and emits C.
+#
+# Mechanism: the self-host's D12 gate `reject_tainted_place`
+# (self_host_typechecker/typecheck.gg) types the place with `infer_expr_type`,
+# whose `EFieldAccess` arm has cases for `RTDefined`, `RTPrimitive` and `RTTuple`
+# but NONE for `RTGeneric` (self_host_typechecker/infer.gg). A generic-struct
+# object therefore falls through to NO_TYPE and `is_drop_tainted_type` answers
+# false. The Rust twin resolves the same place structurally
+# (`tainted_place_name` -> `lvalue_value_type`,
+# src/semantic/safety/check_expr.rs), and the self-host's OWN structural resolver
+# does have the `RTGeneric` arm — which is why the sibling D53 gate
+# (`reject_single_owner_init`, now on the structural resolver) rejects the
+# unique-lock analogue at `d53_unique_lock/mutex_generic_struct_field_push_reject.gg`
+# while this D12 one still slips through.
+#
+# The equivalent CONCRETE-struct shape rejects correctly
+# (`d12_drop_purity/pos3_field_place_reject.gg`), so the discriminating axis is
+# the object's ResolvedType being `RTGeneric`, not the position or the taint.
+#
+# This is the under-rejection class D12 exists to close: a bare copy of a live
+# drop-tainted place gives two owners of one resource and the drop runs twice.
+#
+# INTENDED behaviour (what the `#[ignore]`d test asserts): rejected, with
+# `cannot copy` + the codespan box, and NO C on stdout.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        print("bye")
+
+struct Holder[T]:
+    R r
+    T payload
+
+void main():
+    Holder[int] h = Holder[int](R(1), 2)
+    Vector[R] v = Vector[R]()
+    v.push(h.r)
+    print(v.len())

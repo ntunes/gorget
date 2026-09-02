@@ -218,6 +218,19 @@ String prim_recv_name(int recv_type, TypeTable types):
 bool is_string_prim_name(String pname):
     return pname == "str" or pname == "String" or pname == "cstr"
 
+# The tuple-index spelling rule, in ONE place (layering rule 3: one source of
+# truth per axis). The self-host parser has NO tuple-index AST node — `t.0` AND
+# its `t._0` alias (language-reference §4.2/§7.8) both fold into
+# `EFieldAccess{name}` (self_host_parser/parser.gg) — so "is this field name a
+# tuple index?" is a decision, and BOTH expression resolvers make it here:
+# `infer_expr_type`'s EFieldAccess RTTuple arm below, and the safety walk's
+# structural `lvalue_value_type` (typecheck.gg). Returns the element index, or
+# -1 when the name is not a tuple index.
+int tuple_field_index(String field_name):
+    if field_name.starts_with("_") and field_name.len() >= 2:
+        return parse_int(field_name.byte_slice(1, field_name.len())).unwrap_or(-1)
+    return parse_int(field_name).unwrap_or(-1)
+
 int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
     Expr e = sexpr.expr
     int span_start = sexpr.span.start
@@ -432,24 +445,11 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkNoFieldFound(), "no field `" + field_name + "` found on type `" + pname + "`"))
                     case RTTuple(elems):
                         # Tuple index by field: both bare `.0`/`.1` and the
-                        # `._0`/`._1` alias (language-reference §4.2/§7.8) index
-                        # the tuple. The self-host parser folds BOTH into
-                        # EFieldAccess{name} (parser.gg — there is no separate
-                        # tuple-index node), so this arm must accept the bare
-                        # digit form too; any non-numeric name is absent.
-                        int tuple_idx = -1
-                        if field_name.starts_with("_") and field_name.len() >= 2:
-                            match parse_int(field_name.byte_slice(1, field_name.len())):
-                                case Ok(i):
-                                    tuple_idx = i
-                                else:
-                                    pass
-                        else:
-                            match parse_int(field_name):
-                                case Ok(i):
-                                    tuple_idx = i
-                                else:
-                                    pass
+                        # `._0`/`._1` alias index the tuple. The spelling rule
+                        # is `tuple_field_index` (above), shared with the safety
+                        # walk's `lvalue_value_type` so the two resolvers cannot
+                        # drift; any non-numeric name is absent.
+                        int tuple_idx = tuple_field_index(field_name)
                         if tuple_idx >= 0:
                             # Numeric tuple index. Return the element type when in
                             # range; when the index is beyond the CURRENTLY-resolved

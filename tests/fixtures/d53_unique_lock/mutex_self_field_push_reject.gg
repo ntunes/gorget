@@ -1,0 +1,22 @@
+# D53 self-host axis NEG — SELF-rooted field sub-place at a collection put
+# CELL: lock=Mutex · place-shape=self.field · source=self · position=push.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+# Both lanes MUST emit E_MoveWithoutOperator: the destination must own, D53
+# forbids a clone path and D10(a) forbids a field/index partial move.
+
+
+# `self` is the place-chain BASE here. A BARE `self` of unique-lock type is a
+# VACUOUS cell — `equip Mutex[int]:` / `equip RWLock[int]:` cannot be written,
+# so no `self` can itself be a lock.
+struct Holder:
+    Mutex[int] lock
+
+equip Holder:
+    void stash(self, Vector[Mutex[int]] &v):
+        v.push(self.lock)
+
+void main():
+    Holder h = Holder(Mutex[int](5))
+    Vector[Mutex[int]] v = Vector[Mutex[int]]()
+    h.stash(&v)
+    print(v.len())

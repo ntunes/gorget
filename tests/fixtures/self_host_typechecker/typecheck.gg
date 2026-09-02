@@ -34,7 +34,7 @@ from types import RTTuple, RTArray, RTSlice, RTError, RTVar, RTNever, RTRef, get
 from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type, default_op_carrier_inner_type, default_op_carrier_shape_equals
-from infer import prim_recv_name, is_string_prim_name
+from infer import prim_recv_name, is_string_prim_name, tuple_field_index
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name, primitive_satisfies_trait
 from traits import intrinsic_resolve, find_method_index
 from traits import registry_has_method_generic_name
@@ -1046,11 +1046,20 @@ String drop_taint_message(String name, int shape):
     return f"cannot copy `{name}`: `{name}` is {why} — write `!{name}` to move or `{name}.clone()` to copy"
 
 # D4/D12: if `e` is a PLACE whose type is drop-tainted, push a
-# `DkMoveWithoutOperator` diagnostic. The place's type is resolved
-# STRUCTURALLY via `infer_expr_type` (field/index places typed on demand —
-# no bespoke lvalue walker, no sparse-table hole). Used by positions 1
-# (bind/assign), 2 (ctor/field-init), 3 (collection put), 4 (return /
-# expr-body / closure-tail). `!x`/`.clone()` are not places → accepted.
+# `DkMoveWithoutOperator` diagnostic. Used by positions 1 (bind/assign), 2
+# (ctor/field-init), 3 (collection put), 4 (return / expr-body / closure-tail).
+# `!x`/`.clone()` are not places → accepted.
+#
+# The place's type is typed on demand by `infer_expr_type`. That DIVERGES from
+# the Rust twin, which resolves this place structurally (`tainted_place_name` →
+# `lvalue_value_type`, src/semantic/safety/check_expr.rs:164-166), and it is a
+# known faithfulness gap, NOT a cost bug: this probe takes `TypeTable &types`
+# and merely re-borrows it, so no table is materialised. Converting it is not a
+# free swap — at all 10 shared call sites this call is the ONLY one that still
+# runs full inference on the expression, so it also carries the
+# `DkNoFieldFound` diagnostics and the `types.expr_types` writes that the D53
+# probe one line later no longer performs. Any conversion therefore owes its
+# own diagnostic-delta check; filed rather than done inline.
 void reject_tainted_place(SpannedExpr e, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
     if not expr_is_place(e.expr):
         return
@@ -1148,7 +1157,15 @@ String single_owner_message(String name):
 # param IS rejected there). Unique locks (D53) never take the param exemption.
 void reject_single_owner_init(SpannedExpr e, bool param_exempt, ScopeTable scopes, TypeTable types, ResolveContext &ctx):
     if expr_is_place(e.expr):
-        int tid = infer_expr_type(e, scopes, &types, &ctx)
+        # The place's type is resolved STRUCTURALLY, exactly as the Rust twin
+        # does it (`src/semantic/safety/check_expr.rs:143` —
+        # "any PLACE of Mutex/RWLock, including field/index, resolved
+        # STRUCTURALLY via `lvalue_value_type`"). NEVER `infer_expr_type` here:
+        # the `&` of a still-live bare `TypeTable` param materialises the whole
+        # type table per invocation — the clone bomb the war story below
+        # (`── SH CoW trap ──`) records, and the `tests/lints.rs` guard
+        # `self_host_safety_place_probes_are_structural` now enforces.
+        int tid = lvalue_value_type(e, scopes, types, ctx)
         if is_unique_lock_type(tid, scopes, types):
             String wrap = unique_lock_wrap(tid, scopes, types)
             ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), unique_lock_message(place_root_name(e.expr), wrap)))
@@ -1481,6 +1498,19 @@ int lvalue_value_type(SpannedExpr target, ScopeTable scopes, TypeTable types, Re
                     String key = sname + "." + field_name
                     if types.variant_field_types.contains(key):
                         return types.variant_field_types.get(key).unwrap()
+                    return -1
+                case RTTuple(elems):
+                    # Rust splits tuple indexing into its own AST node and gives
+                    # it its own arm (`Expr::TupleFieldAccess`,
+                    # src/semantic/safety/helpers.rs:1010). The self-host parser
+                    # has no such node — `t.0` and `t._0` both fold into
+                    # EFieldAccess — so the tuple element type is resolved HERE,
+                    # through the shared `tuple_field_index` spelling rule. Drop
+                    # this arm and a unique lock at `t.0` walks straight past
+                    # D53's consume gate (`reject_single_owner_init`).
+                    int ti = tuple_field_index(field_name)
+                    if ti >= 0 and ti < elems.len():
+                        return get_int_at(elems, ti)
                     return -1
                 else:
                     return -1

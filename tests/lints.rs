@@ -1861,6 +1861,160 @@ fn self_host_d12_reject_hook_count() {
     );
 }
 
+/// Ratchet (Core #6 "convert a recurring bug class into an executable guard"):
+/// the self-host safety walk's PLACE PROBES must resolve a place's type through
+/// the STRUCTURAL `lvalue_value_type`, never through full `infer_expr_type`
+/// re-inference.
+///
+/// **Why this is a guard and not a comment.** The rule already existed as prose
+/// inside the file itself (the `── SH CoW trap ──` war story above
+/// `type_id_is_field_addressable_collection`, written at round-close 2026-07-21:
+/// *"structural `lvalue_value_type` only — NEVER `infer_expr_type`"*), and prose
+/// did not stop it being re-committed: the D53 unique-lock pre-block in
+/// `reject_single_owner_init` took the `&` of a still-live bare `TypeTable`
+/// param and handed it to `infer_expr_type`, materialising the whole type table
+/// per invocation — a 15.6x stage-0 clone regression (13.15M → 205.76M
+/// `array_clone`) that no reviewer and no ceiling-free test caught.
+///
+/// **Two assertions, because either one alone is evadable.**
+///
+/// 1. **Per-probe allowlist.** Each in-class probe (a helper that gates on
+///    `expr_is_place` and answers a TYPE question about that place) carries the
+///    exact number of `infer_expr_type(` calls its body is allowed. The D53
+///    probe's allowance is ZERO and it must call `lvalue_value_type` instead.
+///    `reject_tainted_place`'s allowance is deliberately ONE: converting it is
+///    NOT a free swap, because at all 10 shared call sites it is the only
+///    remaining full-inference call on the expression and therefore still
+///    carries the `DkNoFieldFound` diagnostics and the `types.expr_types`
+///    writes; a conversion owes its own diagnostic-delta check (todo/t0944).
+///
+/// 2. **Whole-file occurrence tripwire.** A name-scoped body scan only reaches
+///    the functions it LISTS, so a brand-new probe (`reject_<next>_place`)
+///    evades assertion 1 completely — that is the recorded lesson of
+///    `todo/t0875`, where four successive substring assertions were each evaded
+///    by respelling the thing they counted, and only a call-site COUNT held.
+///    Pinning the whole-file total forces any new call site through
+///    classification. Measured witness for the pin: 31 occurrences at
+///    `71e5e5bf2~1`, 32 at `71e5e5bf2` (the D53 land), 31 again after the
+///    structural swap — i.e. this tripwire WOULD have caught the re-commit.
+///    `infer_expr_type` has no synonym to respell into: it is the only
+///    expression-level entry point in `infer.gg` (`grep -n "^int infer_"` gives
+///    `infer_stmt_return_type`, `infer_closure_expr_type`,
+///    `infer_closure_return_type`, `infer_expr_type` — the other three are
+///    statement/closure level).
+///
+/// **Reach — do NOT read this as a class retirement.** A new `infer_expr_type`
+/// call site ANYWHERE in the file is caught. A probe that reaches inference
+/// INDIRECTLY (through a new helper that itself calls `infer_expr_type`) is NOT
+/// caught by either assertion.
+///
+/// **The two assertions have deliberately different granularity.** Assertion 2
+/// is a RAW substring count, so a comment that merely spells `infer_expr_type(`
+/// also moves it — that is intended (classify the new occurrence, then bump the
+/// pin). Assertion 1 counts only what is INSIDE a probe body, where a body is
+/// the indented block under the signature: a column-0 `#` line ends it, because
+/// in a `.gg` file that is the next definition's doc comment. So prose about
+/// this rule never trips the assertion whose message says "do NOT raise the
+/// allowance", which would be the wrong advice for a comment.
+///
+/// **If this fails:**
+///   - A probe's count went UP → you re-committed the clone bomb. Resolve the
+///     place with `lvalue_value_type` (typecheck.gg) instead; do not raise the
+///     allowance.
+///   - The whole-file total moved → classify the new/removed site as in-class
+///     (a place probe: use `lvalue_value_type`) or out-of-class (the type
+///     checker's own inference: `check_default_op_*`, `check_deref_operand`,
+///     and the `check_*` arms — these ARE reachable from the safety walk but
+///     are out of class because they do not gate on `expr_is_place`), then
+///     update `TOTAL_INFER_CALLS` with that justification.
+#[test]
+fn self_host_safety_place_probes_are_structural() {
+    /// Whole-file `infer_expr_type(` occurrences — the new-path tripwire.
+    const TOTAL_INFER_CALLS: usize = 31;
+    /// (probe signature prefix, `infer_expr_type(` calls its body may contain).
+    const IN_CLASS_PROBES: &[(&str, usize)] = &[
+        ("void reject_tainted_place(", 1),
+        // D53 unique-lock pre-block — STRUCTURAL ONLY. Zero is load-bearing.
+        ("void reject_single_owner_init(", 0),
+        ("bool arg_place_is_copy(", 1),
+        ("bool is_collection_receiver(", 1),
+        ("void reject_amp_self_mutator(", 1),
+        ("bool live_is_consume_callable(", 1),
+    ];
+    /// Probes that MUST resolve the place structurally.
+    const MUST_BE_STRUCTURAL: &[&str] = &["void reject_single_owner_init("];
+
+    let path = "tests/fixtures/self_host_typechecker/typecheck.gg";
+    let src = fs::read_to_string(path).expect("read self_host_typechecker/typecheck.gg");
+
+    assert_eq!(
+        src.matches("infer_expr_type(").count(),
+        TOTAL_INFER_CALLS,
+        "whole-file `infer_expr_type(` count in {path} changed (expected \
+         {TOTAL_INFER_CALLS}). A new call site must be classified: a safety-walk \
+         PLACE probe resolves its place with `lvalue_value_type` (never full \
+         re-inference — that is the 13.15M → 205.76M array_clone bomb); the type \
+         checker's own inference legitimately calls `infer_expr_type`. Classify, \
+         then update TOTAL_INFER_CALLS with the justification.",
+    );
+
+    // A `.gg` top-level definition starts at column 0 with a non-comment,
+    // non-blank character; the body is everything up to the next one.
+    let body_of = |sig: &str| -> String {
+        let start = src
+            .find(sig)
+            .unwrap_or_else(|| panic!("locate `{sig}` in {path} — was the probe renamed?"));
+        // Scan from the START OF THE LINE AFTER the signature line — the rest of
+        // the signature itself sits at a non-indented offset and would otherwise
+        // read as the next top-level definition.
+        let after = src[start..]
+            .find('\n')
+            .map(|i| start + i + 1)
+            .unwrap_or(src.len());
+        // A body line is INDENTED or blank. A column-0 line ends it — including a
+        // column-0 `#` comment, which in a `.gg` file is the NEXT definition's doc
+        // comment, not part of this body. Treating `#` as a continuation would
+        // make each probe swallow its successor's doc comment, so a future
+        // comment that merely MENTIONS `infer_expr_type(` would fail this lint
+        // with a message telling the author not to raise the allowance — advice
+        // that would be wrong for a comment.
+        let mut end = src.len();
+        let mut off = after;
+        for line in src[after..].split_inclusive('\n') {
+            if !line.starts_with([' ', '\t', '\n']) && !line.is_empty() {
+                end = off;
+                break;
+            }
+            off += line.len();
+        }
+        src[start..end].to_string()
+    };
+
+    for (sig, allowed) in IN_CLASS_PROBES {
+        let body = body_of(sig);
+        let found = body.matches("infer_expr_type(").count();
+        assert_eq!(
+            found, *allowed,
+            "self-host place probe `{sig}` has {found} `infer_expr_type(` call(s), \
+             expected {allowed}. A place probe must resolve the place through the \
+             STRUCTURAL `lvalue_value_type` — taking `&types` of a still-live bare \
+             `TypeTable` param materialises the whole type table per invocation \
+             (the D53 re-commit measured 13.15M → 205.76M array_clone). Do NOT \
+             raise the allowance to make this pass.",
+        );
+    }
+
+    for sig in MUST_BE_STRUCTURAL {
+        let body = body_of(sig);
+        assert!(
+            body.contains("lvalue_value_type("),
+            "self-host place probe `{sig}` no longer calls `lvalue_value_type` — \
+             its place typing regressed away from the structural resolver that the \
+             Rust twin uses (src/semantic/safety/check_expr.rs:143).",
+        );
+    }
+}
+
 /// Ratchet (Core #4 "one fix, all siblings" / Layering-discipline "Sibling-site
 /// drift — fix the class, not the instance"): every PROJECTED-mutation target
 /// arm in `lower_compound_assign` (`obj.field OP= x`, `obj[i] OP= x`) must call

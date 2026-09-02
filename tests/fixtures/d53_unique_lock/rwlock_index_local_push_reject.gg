@@ -1,0 +1,14 @@
+# D53 self-host axis NEG — INDEX sub-place of a local collection at a collection put
+# CELL: lock=RWLock · place-shape=index · source=local · position=push.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+# Both lanes MUST emit E_MoveWithoutOperator: the destination must own, D53
+# forbids a clone path and D10(a) forbids a field/index partial move.
+
+from std.sync import RWLock
+
+void main():
+    Vector[RWLock[int]] src = Vector[RWLock[int]]()
+    src.push(RWLock[int](5))
+    Vector[RWLock[int]] v = Vector[RWLock[int]]()
+    v.push(src[0])
+    print(v.len())

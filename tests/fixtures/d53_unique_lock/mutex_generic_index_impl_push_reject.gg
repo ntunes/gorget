@@ -1,0 +1,37 @@
+# D53 resolver-divergence NEG — index sub-place of a user GENERIC with an `Index` impl
+# CELL: lock=Mutex · place-shape=index · object ResolvedType=RTGeneric.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+#
+# This cell pins a MECHANICAL ARM DIFF between the self-host's two expression
+# resolvers, not a lock-family axis: `infer_expr_type`
+#   knows only the builtin indexable list (Vector/Deque/Dict/HashMap),
+# while the structural `lvalue_value_type` — and its Rust twin in
+# src/semantic/safety/helpers.rs —
+#   takes `args.last()` for ANY `RTGeneric` carrying type args.
+# Before the D53 consume gate moved onto the structural resolver the self-host
+# ACCEPTED this program while Rust gg REJECTED it: a Core #9 lane divergence
+# with a live unique-lock alias behind it (the t0908 runtime-bomb class D53
+# exists to close).
+#
+# ⚠ SCOPE OF THIS FIXTURE'S NAME (Core #12): it pins the cell where the receiver
+# is a SINGLE-type-argument generic, so `args.last()` and the `Index` impl's
+# output type coincide and the reject is correct. The class "user generic with
+# an `Index` impl" also contains a cell this fixture does NOT cover and where
+# BOTH lanes are WRONG: a MULTI-type-arg generic whose `Index` output is not the
+# last type parameter (`Pair[K, V]` equipping `Index[int, K]`) is over-rejected
+# on the unrelated `V` — filed as todo/t0945, repro
+# known_gaps/d53_generic_index_last_targ_over_rejects.gg.
+
+
+struct Rack[T]:
+    Vector[T] items
+
+equip Rack[T] with Index[int, T]:
+    T get(self, int key):
+        return self.items[key]
+
+void main():
+    Rack[Mutex[int]] r = Rack[Mutex[int]](Vector[Mutex[int]]())
+    Vector[Mutex[int]] v = Vector[Mutex[int]]()
+    v.push(r[0])
+    print(v.len())

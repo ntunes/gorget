@@ -1,0 +1,15 @@
+# D53 self-host axis NEG — TUPLE-index sub-place of a PARAM tuple at a collection put
+# CELL: lock=RWLock · place-shape=tuple-field (t.0) · source=param · position=push.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+# Both lanes MUST emit E_MoveWithoutOperator: the destination must own, D53
+# forbids a clone path and D10(a) forbids a field/index partial move.
+
+from std.sync import RWLock
+
+void stash((RWLock[int], int) t):
+    Vector[RWLock[int]] v = Vector[RWLock[int]]()
+    v.push(t.0)
+    print(v.len())
+
+void main():
+    stash((RWLock[int](5), 1))
