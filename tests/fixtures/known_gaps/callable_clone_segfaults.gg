@@ -1,13 +1,16 @@
-# t0936 — `.clone()` on a `Callable` is accepted by `gg check` and SEGVs at
-# runtime. `Callable[T]` is in the single-owner carve-out and has NO clone path
-# in the lowering (AGENTS.md "Ownership at Consuming Positions"), so this must
-# be a CHECK-TIME REJECTION (Core #10, lower-or-reject) — never a crash.
+# t0936 — `.clone()` on a `Callable` bound to a NAMED LOCAL segfaults, while the
+# byte-equivalent clone through a temp receiver works.
 #
-# Reached by following the compiler's OWN advice: E_MoveWithoutOperator prints
-# "write `^h` to move or `h.clone()` to copy" for single-owner types.
+#   Callable[int(int)] h = (int x): x + 1
+#   h.clone()                     -> SIGSEGV
+#   fns.get(0).unwrap().clone()   -> correct (prints 2)
 #
-# INTENDED: rejected at check time with a diagnostic that does not offer
-# `.clone()` for a type that has no clone path.
+# `.clone()` on a Callable is a SUPPORTED operation, not a carve-out violation:
+# `src/ir/lowering/builtins.rs:1109` registers
+# `clone_fn: Some("gorget_closure_clone_to_owned")`, and
+# `tests/fixtures/security/attack_91_callable_clone_outlives_source.gg` pins the
+# deep-clone path green. So the defect is in the clone PRODUCER for a
+# named-local receiver, and the intended behaviour is that this prints 2.
 void main():
     Callable[int(int)] h = (int x): x + 1
     Callable[int(int)] g = h.clone()

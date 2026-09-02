@@ -6123,23 +6123,23 @@ fn catch_binding_throw_in_match_arm_ice() {
     assert_gg_sanitize_clean("known_gaps/catch_binding_throw_in_match_arm_ice", "8080");
 }
 
-// `todo/t0936` — CRITICAL: `.clone()` on a `Callable` type-checks and then
-// SEGVs. `Callable[T]` is in the single-owner carve-out and has NO clone path
-// in the lowering (AGENTS.md "Ownership at Consuming Positions"), so Core #10
-// (lower-or-reject) says this is a CHECK-TIME REJECTION, not a crash. The
-// reachability is the sharp part: `src/semantic/errors.rs:1596` renders
-// "... or `{name}.clone()` to copy" for EVERY single-owner type, so a user who
-// follows the compiler's own advice segfaults. This asserts the INTENDED state
-// (a rejection naming the move sigil, never `.clone()`), so it is RED at HEAD
-// on purpose. Un-ignore + move out of known_gaps/ when graduating.
+// `todo/t0936` — CRITICAL: `.clone()` on a `Callable` bound to a NAMED LOCAL
+// type-checks and then SEGVs, while the byte-equivalent clone through a TEMP
+// receiver (`fns.get(0).unwrap().clone()`) is correct. The axis is the receiver
+// SHAPE, not the operation: `Callable` carries
+// `clone_fn: Some("gorget_closure_clone_to_owned")`
+// (`src/ir/lowering/builtins.rs:1109`) and
+// `tests/fixtures/security/attack_91_callable_clone_outlives_source.gg` pins
+// that deep-clone path green, so `.clone()` here is a SUPPORTED operation and
+// the fix belongs at the clone producer — NOT a check-time rejection, which
+// would regress a ratified feature and that security fixture. Asserts the
+// INTENDED output, so it is RED at HEAD on purpose. Un-ignore + move out of
+// known_gaps/ when graduating.
 #[test]
-#[ignore = "todo/t0936 — `.clone()` on a Callable is accepted by `gg check` and SEGVs at \
-runtime; asserts the INTENDED check-time rejection. Carve-out types have no clone path."]
+#[ignore = "todo/t0936 — `.clone()` on a Callable bound to a named local SEGVs; the same \
+clone through a temp receiver is correct. Asserts the INTENDED output (2)."]
 fn callable_clone_segfaults() {
-    check_gg_fails(
-        "known_gaps/callable_clone_segfaults.gg",
-        "E_MoveWithoutOperator",
-    );
+    run_gg("known_gaps/callable_clone_segfaults.gg", "2");
 }
 
 // SELF-HOST-LANE gap (surfaced Round R40, Track-J review): `for (i, b) in
