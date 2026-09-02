@@ -18,7 +18,10 @@ owner open-thinking that is not ratified also lands here, marked as such (§9) �
 that is how `AGENTS.md` stays lean. The `agents_md_size_ratchet` lint in
 `tests/lints.rs` caps the file's size so a lapse cannot go unnoticed; it
 measures bytes, not the split itself, and its ceiling ratchets DOWN after
-each compaction.
+each compaction. A heading-id inventory pins membership of the file's
+headings and numbered rules so a compaction cannot delete a rule to hit
+the byte target; clause-level probes are retired. A heading inventory
+does not pin clauses.
 
 ---
 
@@ -1587,15 +1590,10 @@ This lint comment carried, from 2026-08-04 to this compaction, the claim that
 refuted by landing at 46,956 with 442 of the 464 clauses still pinned. The error
 was measuring the prose the rules were wrapped in and calling it the rules.
 
-The real floor is the pinned text itself, and it is regenerable rather than
-quotable:
-
-```text
-AGENTS_MD_DUMP=1 cargo test --test lints agents_md_measurements -- --nocapture
-```
-
-Cutting materially below that does mean deleting rules, which needs the same
-owner sign-off as raising the byte ceiling — the two ratchets exist to make
+The real floor is the pinned text itself. Size caps bytes; the heading-id
+inventory pins membership of headings and numbered rules. Cutting materially
+below the current file does mean deleting rules, which needs the same
+owner sign-off as raising the byte ceiling — the two guards exist to make
 exactly that trade visible in review rather than cheap in a compaction.
 
 ### The lesson

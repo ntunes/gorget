@@ -446,12 +446,111 @@ fmt.max_width.mirror = tests/lints.rs:WIDTH_RATCHET_BUDGET
 fmt.max_width.mirror = tests/integration.rs:FILL_PACK_MAX_WIDTH
 fmt.max_width.input = none
 
+# ── exact-pin × derived, AGENTS.md heading membership + four exact ratchets ─
+# scan = none: 79 / 205 / 0 / 89 / 81 are 1–3 digits; tests/lints.rs has hundreds
+# of bare zeros and commit-hash tails collide with 79. The uniqueness scanner
+# cannot police them. Mirrors still exact-pin the literals.
+row = agents_md.heading_count
+agents_md.heading_count.value = 79
+agents_md.heading_count.unit = AGENTS.md extractor-hit headings
+agents_md.heading_count.polarity = exact-pin
+agents_md.heading_count.provenance = derived
+agents_md.heading_count.authority = tests/lints.rs:AGENTS_MD_HEADING_INVENTORY — the extractor-hit table; the count const is a hand-kept mirror
+agents_md.heading_count.regen = grep -oP 'AGENTS_MD_HEADING_COUNT: usize = \K[0-9]+' tests/lints.rs
+agents_md.heading_count.regen_extract = ^(?P<value>[0-9]+)
+agents_md.heading_count.regen_fires = ^[0-9]+$
+agents_md.heading_count.regen_env = none
+agents_md.heading_count.instrument = grep over the count const
+agents_md.heading_count.measured_at = db9ec6a13
+agents_md.heading_count.home = tests/lints.rs:AGENTS_MD_HEADING_INVENTORY
+agents_md.heading_count.scan = none
+agents_md.heading_count.caveat = a heading inventory does not pin clauses; scan cannot police a 2-digit value
+agents_md.heading_count.cost_secs = 30
+agents_md.heading_count.mirror = tests/lints.rs:AGENTS_MD_HEADING_COUNT
+agents_md.heading_count.input = none
+
+row = lint.name_prefix.sites
+lint.name_prefix.sites.value = 205
+lint.name_prefix.sites.unit = name-prefix routing sites in src/
+lint.name_prefix.sites.polarity = exact-pin
+lint.name_prefix.sites.provenance = derived
+lint.name_prefix.sites.authority = tests/lints.rs::no_growth_in_name_prefix_routing site census
+lint.name_prefix.sites.regen = grep -oP 'NAME_PREFIX_BUDGET: usize = \K[0-9]+' tests/lints.rs
+lint.name_prefix.sites.regen_extract = ^(?P<value>[0-9]+)
+lint.name_prefix.sites.regen_fires = ^[0-9]+$
+lint.name_prefix.sites.regen_env = none
+lint.name_prefix.sites.instrument = grep over the lint const
+lint.name_prefix.sites.measured_at = db9ec6a13
+lint.name_prefix.sites.home = tests/lints.rs:NAME_PREFIX_BUDGET
+lint.name_prefix.sites.scan = none
+lint.name_prefix.sites.caveat = too common to police by scanning; only figures_db_mirrors_agree guards it
+lint.name_prefix.sites.cost_secs = 30
+lint.name_prefix.sites.mirror = tests/lints.rs:NAME_PREFIX_BUDGET
+lint.name_prefix.sites.input = none
+
+row = lint.typed_metadata.sidecars
+lint.typed_metadata.sidecars.value = 0
+lint.typed_metadata.sidecars.unit = typed-metadata sidecar maps in src/
+lint.typed_metadata.sidecars.polarity = exact-pin
+lint.typed_metadata.sidecars.provenance = derived
+lint.typed_metadata.sidecars.authority = tests/lints.rs::no_typed_metadata_sidecars site census
+lint.typed_metadata.sidecars.regen = grep -oP 'TYPED_METADATA_SIDECAR_BUDGET: usize = \K[0-9]+' tests/lints.rs
+lint.typed_metadata.sidecars.regen_extract = ^(?P<value>[0-9]+)
+lint.typed_metadata.sidecars.regen_fires = ^[0-9]+$
+lint.typed_metadata.sidecars.regen_env = none
+lint.typed_metadata.sidecars.instrument = grep over the lint const
+lint.typed_metadata.sidecars.measured_at = db9ec6a13
+lint.typed_metadata.sidecars.home = tests/lints.rs:TYPED_METADATA_SIDECAR_BUDGET
+lint.typed_metadata.sidecars.scan = none
+lint.typed_metadata.sidecars.caveat = a single-digit value cannot be policed by the uniqueness scanner
+lint.typed_metadata.sidecars.cost_secs = 30
+lint.typed_metadata.sidecars.mirror = tests/lints.rs:TYPED_METADATA_SIDECAR_BUDGET
+lint.typed_metadata.sidecars.input = none
+
+row = lint.phase_d.proxy_reads
+lint.phase_d.proxy_reads.value = 89
+lint.phase_d.proxy_reads.unit = Phase-D ownership proxy reads in src/
+lint.phase_d.proxy_reads.polarity = exact-pin
+lint.phase_d.proxy_reads.provenance = derived
+lint.phase_d.proxy_reads.authority = tests/lints.rs::no_growth_in_phase_d_proxy_reads site census
+lint.phase_d.proxy_reads.regen = grep -oP 'PHASE_D_PROXY_BUDGET: usize = \K[0-9]+' tests/lints.rs
+lint.phase_d.proxy_reads.regen_extract = ^(?P<value>[0-9]+)
+lint.phase_d.proxy_reads.regen_fires = ^[0-9]+$
+lint.phase_d.proxy_reads.regen_env = none
+lint.phase_d.proxy_reads.instrument = grep over the lint const
+lint.phase_d.proxy_reads.measured_at = db9ec6a13
+lint.phase_d.proxy_reads.home = tests/lints.rs:PHASE_D_PROXY_BUDGET
+lint.phase_d.proxy_reads.scan = none
+lint.phase_d.proxy_reads.caveat = too small and too common to police by scanning; only figures_db_mirrors_agree guards it
+lint.phase_d.proxy_reads.cost_secs = 30
+lint.phase_d.proxy_reads.mirror = tests/lints.rs:PHASE_D_PROXY_BUDGET
+lint.phase_d.proxy_reads.input = none
+
+row = lint.self_host.name_prefix.sites
+lint.self_host.name_prefix.sites.value = 81
+lint.self_host.name_prefix.sites.unit = name-prefix routing sites in tests/fixtures/self_host_*
+lint.self_host.name_prefix.sites.polarity = exact-pin
+lint.self_host.name_prefix.sites.provenance = derived
+lint.self_host.name_prefix.sites.authority = tests/lints.rs::no_growth_in_self_host_name_prefix_routing site census
+lint.self_host.name_prefix.sites.regen = grep -oP 'SELF_HOST_NAME_PREFIX_BUDGET: usize = \K[0-9]+' tests/lints.rs
+lint.self_host.name_prefix.sites.regen_extract = ^(?P<value>[0-9]+)
+lint.self_host.name_prefix.sites.regen_fires = ^[0-9]+$
+lint.self_host.name_prefix.sites.regen_env = none
+lint.self_host.name_prefix.sites.instrument = grep over the lint const
+lint.self_host.name_prefix.sites.measured_at = db9ec6a13
+lint.self_host.name_prefix.sites.home = tests/lints.rs:SELF_HOST_NAME_PREFIX_BUDGET
+lint.self_host.name_prefix.sites.scan = none
+lint.self_host.name_prefix.sites.caveat = too small and too common to police by scanning; only figures_db_mirrors_agree guards it
+lint.self_host.name_prefix.sites.cost_secs = 30
+lint.self_host.name_prefix.sites.mirror = tests/lints.rs:SELF_HOST_NAME_PREFIX_BUDGET
+lint.self_host.name_prefix.sites.input = none
+
 # ── shrink-only × measured, read by a PYTHON consumer ──────────────────────
 # ⭐ THE CHEAPEST PROOF OF THE OWNER'S "reusable by other systems": every other
 # current reader of a pinned figure in this tree is Rust or awk. This one is a
 # Python module's own ratchet, and it adopts the schema with no change to it.
 row = proc_guard.no_deadline_baseline
-proc_guard.no_deadline_baseline.value = 6
+proc_guard.no_deadline_baseline.value = 4
 proc_guard.no_deadline_baseline.unit = python spawn sites with no deadline
 proc_guard.no_deadline_baseline.polarity = shrink-only
 proc_guard.no_deadline_baseline.provenance = measured
@@ -460,7 +559,7 @@ proc_guard.no_deadline_baseline.regen_extract = no-deadline: (?P<value>[0-9]+) \
 proc_guard.no_deadline_baseline.regen_fires = === python spawn census
 proc_guard.no_deadline_baseline.regen_env = none
 proc_guard.no_deadline_baseline.instrument = scripts/proc_guard.py --census (AST over `git ls-files '*.py'`)
-proc_guard.no_deadline_baseline.measured_at = 3b8a5561
+proc_guard.no_deadline_baseline.measured_at = db9ec6a13
 proc_guard.no_deadline_baseline.home = scripts/proc_guard.py:NO_DEADLINE_BASELINE
 proc_guard.no_deadline_baseline.scan = none
 proc_guard.no_deadline_baseline.caveat = a single-digit value cannot be policed by the uniqueness scanner — 66 EXPECTED_* arm pins in tests/ share this limitation, which is the schema's largest under-served population
