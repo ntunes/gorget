@@ -8751,24 +8751,35 @@ fn sanitize_allowlists_shrink_only() {
     // Raising the ceiling records debt that already existed. It is NOT a
     // licence for the next row: an addition with no `⚖ ADMITTED` block is
     // outside the ruling.
-    // ⚖ 304 -> 306 (R48 Track R, 2026-09-02). SECOND upward move, and it is a
+    // ⚖ 304 -> 306 (R48 Track R, 2026-09-02; RATIFIED by the owner the same day,
+    // after the attribution below was corrected). SECOND upward move, and it is a
     // DIFFERENT KIND from the first: the four rows above were pre-existing leaks
     // an undercounting baseline had missed; these two are fixtures the round
     // ADDED to the corpus, leaking mechanisms that are filed, repro'd and older
     // than the round. `callable_clone_value_form_axis` (the wide net for the
     // `.clone()`-on-a-closure-VALUE fix) and
     // `callable_vector_element_plain_sig_call_segv` (a `todo/t0406` cell graduated
-    // out of `known_gaps/`). Their `⚖ ADMITTED` block in the allowlist carries the
-    // attribution, which was made BY EXPERIMENT: the same programs with every
-    // `.clone()` removed leak the IDENTICAL records, and an isolated clone of a
-    // capturing closure is ASan-CLEAN — so the leaker is `todo/t0873(b)`
-    // (`Vector[Callable].push` leaves `elem_drop` NULL) and `todo/t0948` (a
-    // `Callable` in a struct FIELD is classified no-drop), not the clone path.
+    // out of `known_gaps/`). The owner's ruling — *"ADMIT THE SIX, and the R47
+    // ruling EXTENDS to this case"* — is recorded verbatim, with its reasoning
+    // and its exact scope, in the allowlist's `⚖ ADMITTED` block; the extension
+    // covers pre-existing leaks made VISIBLE by a graduation and those only, and
+    // genuinely NEW inflow remains an owner ask.
+    // ⚠ THREE items own the six records, not two. The experiment behind the
+    // attribution (the same programs with every SOURCE-LEVEL `.clone()` removed
+    // leak the IDENTICAL records; an isolated clone of a capturing closure is
+    // ASan-CLEAN) acquits the clone path this round shipped, but it cannot
+    // separate `todo/t0873(b)` (`Vector[Callable].push` leaves `elem_drop` NULL)
+    // from `todo/t0949` (a container-element INDEX READ materializes by a
+    // COMPILER-INSERTED clone into a temp nothing registers for drop) — the
+    // latter's clone survives deleting every `.clone()` in the source. Measured
+    // per record: 2 are `t0873(b)`, 1 is `todo/t0948` (a `Callable` in a struct
+    // FIELD is classified no-drop), and 2 are `t0949`.
     // The leaking cells ARE the coverage: deleting them to keep this count flat
-    // would delete regression coverage of the defect the round fixed. Both items
-    // now ship a durable `known_gaps` repro and an `#[ignore]`d ASan test
+    // would delete regression coverage of the defect the round fixed. All three
+    // items ship a durable `known_gaps` repro and an `#[ignore]`d ASan test
     // asserting the intended clean run — `t0873` had `repro = []` before.
-    // Retires to 304 when those two land.
+    // Retires to 304 when ALL THREE land; either one alone only tightens a row's
+    // record count (`LEAK_RECORDS`), it does not remove a row.
     const LEAK_CEILING: usize = 306;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

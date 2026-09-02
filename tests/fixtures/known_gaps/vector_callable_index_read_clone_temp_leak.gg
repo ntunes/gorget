@@ -1,0 +1,64 @@
+# t0949 — the THIRD `Vector[Callable]` leak mechanism: the CONTAINER-ELEMENT
+# INDEX READ materializes by CLONE into a temp that is never registered for
+# drop, so every `fs[i]` read leaks a fresh closure environment.
+#
+# `ptr_materialization_kind` (`src/ir/lowering/context.rs`) answers
+# `PtrMaterialization::Clone("gorget_closure_clone_to_owned")` for the pointer
+# `gorget_array_get_at` returns, which mints a freshly-owned heap env — and
+# nothing registers that temp for drop at its birth (Core #3). Emitted C:
+#
+#   __v18 = gorget_array_get_at(__v16, __v17, ...);
+#   __v19 = gorget_closure_clone_to_owned(__v18);   <- fresh heap env
+#   __s8  = __v19;                                  <- never `gorget_closure_free`d
+#
+# Measured with a heap-FORCED value: the closure CAPTURES `base`, so each env is
+# a real 16-byte malloc rather than the 8-byte placeholder a non-capturing
+# closure gets.
+#
+# ⭐ THE COUNT SCALES WITH THE NUMBER OF READS, NOT WITH THE NUMBER OF ELEMENTS,
+# and that is what attributes the records. One element, two index reads:
+#
+#   | index reads | `.get()` bind in the program | leaked records |
+#   |-------------|------------------------------|----------------|
+#   | 2           | no                           | 1  (the pushed element only) |
+#   | 1           | yes                          | 2  (pushed + 1 read temp)    |
+#   | 2           | yes                          | 3  (pushed + 2 read temps)   |
+#
+# The `.get(0).unwrap()` bind is a PRECONDITION, not a leaker: it is what
+# instantiates the `Named("Callable__GorgetClosure")` element type, after which
+# the index read's materialization flips from a `DerefLoad` memcpy to a Clone.
+# Its OWN clone temp is registered and freed (`gorget_closure_free(&__s17)` is
+# emitted) — which is exactly why the index-read temp's absence is a defect and
+# not a policy.
+#
+# ⭐ NO `.clone()` APPEARS ANYWHERE IN THIS PROGRAM, deliberately: the leak is
+# not `todo/t0936`'s clone route. Verified against the PRE-`t0936` compiler
+# (`git checkout 662e3a36f -- src/ir/lowering/exprs/methods.rs
+# src/ir/lowering/context.rs`): the emitted C is BYTE-IDENTICAL and the same
+# three records leak. The defect is older than the round that made it visible.
+#
+# INTENDED: prints 41, 42, 43 and is ASan-clean under `detect_leaks=1`, on C and
+# LLVM. Measured at HEAD: `48 byte(s) leaked in 3 allocation(s)` on BOTH
+# backends. (⚠ `scripts/sanitize_sweep.sh` is C-only, `todo/t0731` — the LLVM
+# lane was checked by hand.)
+#
+# DISCRIMINATED from `t0873(b)`: that one is the CONTAINER's `elem_drop` never
+# being synthesised, so the element the vector still holds is never freed at
+# array teardown — one record per ELEMENT, at `src/lir/lower/insts.rs`. This one
+# is a local temp in `main` that the container never held; synthesising
+# `elem_drop` would not free it. Record #1 below is t0873(b)'s; records #2 and
+# #3 are this item's.
+# DISCRIMINATED from `t0948`: that one is a STRUCT's own drop strategy computed
+# as `None` for a `Callable` field (`src/ir/types.rs:527`). No struct here.
+# DISCRIMINATED from `t0406`: that is the element SIGNATURE collapsing to the
+# zero-parameter fallback, a SEGV on the call. This program calls the element
+# successfully and prints the right answers — it only leaks.
+
+void main():
+    int base = 40
+    Vector[Callable[int(int)]] fs = []
+    fs.push((int x): x + base)
+    print(f"{fs[0](1)}")
+    print(f"{fs[0](2)}")
+    Callable[int(int)] g = fs.get(0).unwrap()
+    print(f"{g(3)}")

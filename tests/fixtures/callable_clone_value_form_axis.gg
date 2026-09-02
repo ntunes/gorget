@@ -1,10 +1,15 @@
 # THE WIDE NET for `.clone()` on a closure VALUE (`todo/t0936`).
 #
-# Every cell below reached the method-dispatch gate as a `GirType::FnPtr` and
-# came back with NO dispatch name, so `.clone()` fell through to
+# Every BROKEN cell below reached the method-dispatch gate as a `GirType::FnPtr`
+# and came back with NO dispatch name, so `.clone()` fell through to
 # `Constant::Unit` and the caller memcpy'd 16 bytes out of a unit slot — rc 139
-# on BOTH backends, `gg check` clean. Each line was independently RED-verified
-# against the pre-fix compiler.
+# on BOTH backends, `gg check` clean. Each of those was independently
+# RED-verified against the pre-fix compiler.
+#
+# ⚠ CELLS 10 AND 11 ARE THE EXCEPTION, DELIBERATELY: they are `Ptr(Named)`
+# CONTROLS that were green BEFORE the fix and are green AFTER, so there was no
+# RED to verify. They are pinned to show the fix moved nothing that already
+# worked — a control's value is precisely that it does not turn red.
 #
 # The axis is {position} x {Callable family} x {captures / does not capture}:
 #

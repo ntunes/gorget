@@ -6472,19 +6472,59 @@ fn known_gap_struct_callable_field_env_leak() {
 }
 
 // `todo/t0873(b)` — the durable repro that item was filed WITHOUT (`repro = []`).
-// `Vector[Callable].push` emits a plain `gorget_array_new`: the `elem_drop`
-// synthesis in `src/lir/lower/insts.rs` is bypassed because the element type
-// resolves as `Named("Callable__GorgetClosure")` rather than `FnPtr`, so every
-// pushed env leaks. Both closures CAPTURE, so the envs are heap-forced.
+// `Vector[Callable].push` emits a plain `gorget_array_new` with a NULL
+// `elem_drop`, so every pushed env leaks. Both closures CAPTURE, so the envs
+// are heap-forced.
+// ⚠ The item's FILED mechanism — "the `elem_drop` synthesis in
+// `src/lir/lower/insts.rs` is bypassed because the element type resolves as
+// `Named("Callable__GorgetClosure")` rather than `FnPtr`" — is MEASURED-SUSPECT
+// and must not be repeated here as fact: the emitted C builds the array with
+// `gorget_array_new(__v2)` and NO fn-ptr stores at all (no offset-40
+// `elem_drop`, no offset-48 `elem_clone`, no offset-56 `elem_materialize`),
+// whereas the byte-adjacent `Vector[String]` case emits all three. So the open
+// question is why the ELEMENT-TYPED ctor path emitted no stores, not which arm
+// of the `Named`-vs-`FnPtr` match ran — and a fix aimed at the filed mechanism
+// may heal nothing (Core #5). `todo/t0873.md` carries the two candidate write
+// sites; read it before acting on this comment.
 // ⭐ The clone is innocent: replace both `.clone()` calls with plain reads and
-// the SAME records leak. This is the provenance the two `callable_clone_*` rows
-// in `tests/sanitize/LEAK_ALLOWLIST.txt` are tolerating.
+// the SAME records leak. This is ONE of the provenances the two
+// `callable_clone_*` rows in `tests/sanitize/LEAK_ALLOWLIST.txt` are tolerating
+// — `todo/t0949` owns a second, and both must land before either row retires.
 // Asserts the INTENDED ASan-clean run, so it is RED at HEAD.
 #[test]
 #[ignore = "todo/t0873(b) — Vector[Callable].push leaves elem_drop NULL, so every pushed closure \
 env leaks. Asserts the intended ASan-clean run."]
 fn known_gap_vector_callable_push_env_leak() {
     assert_gg_sanitize_clean("known_gaps/vector_callable_push_env_leak", "41\n52");
+}
+
+// `todo/t0949` — the THIRD `Vector[Callable]` leak mechanism, and the one the
+// two `callable_clone_*` allowlist rows were MIS-ATTRIBUTED to `t0873(b)` /
+// `t0948` for. A container-element INDEX READ materializes by CLONE
+// (`ptr_materialization_kind` in `src/ir/lowering/context.rs` answers
+// `PtrMaterialization::Clone("gorget_closure_clone_to_owned")` for the pointer
+// `gorget_array_get_at` returns), minting a freshly-owned heap env into a temp
+// that nothing registers for drop at its birth — Core #3.
+// ⭐ The record count scales with the number of READS, not with the number of
+// elements: one element with two index reads leaks two temps on top of the
+// element's own record. The `.get(0).unwrap()` bind is a PRECONDITION (it
+// instantiates the `Named("Callable__GorgetClosure")` element type, which is
+// what flips the index read from a `DerefLoad` memcpy to a Clone) and NOT a
+// leaker — its own clone temp IS registered and freed.
+// ⭐ There is NO `.clone()` in the fixture, deliberately: verified against the
+// pre-`t0936` compiler, the emitted C is byte-identical and the same three
+// records leak, so this is older than the round that made it visible.
+// The closure CAPTURES, so the envs are heap-forced. Asserts the INTENDED
+// ASan-clean run, so it is RED at HEAD (48 bytes in 3 allocations, C and LLVM).
+#[test]
+#[ignore = "todo/t0949 — a Vector[Callable] INDEX READ materializes by clone into a temp that is \
+never registered for drop, so every fs[i] read leaks a closure env. Asserts the intended \
+ASan-clean run."]
+fn known_gap_vector_callable_index_read_clone_temp_leak() {
+    assert_gg_sanitize_clean(
+        "known_gaps/vector_callable_index_read_clone_temp_leak",
+        "41\n42\n43",
+    );
 }
 
 // SELF-HOST-LANE gap (surfaced Round R40, Track-J review): `for (i, b) in

@@ -25,6 +25,14 @@
 # the mechanism, and what retires the row. A fifth row without such a block is
 # not covered by this ruling.
 #
+# ⚖ EXTENDED ONCE (owner, 2026-09-02): the same "admit with explicit per-row
+# citations" treatment now also covers PRE-EXISTING leaks newly made VISIBLE by
+# a fixture GRADUATING out of `known_gaps/` into the swept corpus — and those
+# only. Two such rows were admitted at R48 Track R; their block is below, at
+# `callable_clone_value_form_axis`. A row whose leak is genuinely NEW INFLOW
+# remains an OWNER ASK, and a row with no `⚖ ADMITTED` block remains outside
+# both rulings.
+#
 # FORMAT:  <fixture-stem> TAB <top-frame>*<records>[,<top-frame>*<records>...]
 #
 # A trailing `+` on a count — `__gorget_spawn_worker*2+` — means "at least this
@@ -105,32 +113,83 @@ atomic_int_amp_param	gorget_atomic_int_new*1
 borrow_field_lazy_dict_iter	gorget_dict_new*3,gorget_map_clone*24
 borrow_field_method_dispatch	gorget_array_push*1,gorget_dict_new*3,str_alloc_copy*2
 box_trait_vector_lit	__gorget_box_alloc_Robot*1,str_alloc_copy*1
-# ⚖ ADMITTED (R48 Track R, 2026-09-02). TWO rows, both for fixtures this round
-# ADDED to the corpus, and both leaking a mechanism that is FILED, REPRO'd and
-# OLDER than this round — not a leak this round introduced.
+# ⚖ ADMITTED (R48 Track R, 2026-09-02; attribution CORRECTED and the pins
+# RATIFIED the same day). TWO rows, both for fixtures this round ADDED to the
+# corpus, and every one of their six records leaking a mechanism that is FILED,
+# REPRO'd and OLDER than this round — not a leak this round introduced.
+#
+# ⚖⚖ OWNER RULING (2026-09-02), recorded verbatim:
+#   *"ADMIT THE SIX, and the R47 ruling EXTENDS to this case."* `LEAK_CEILING`
+#   304->306 and `LEAK_RECORDS` 2256->2262 STAND, each row carrying a corrected
+#   `⚖ ADMITTED` block.
+# THE REASONING THE OWNER ACCEPTED, so the next reader need not reconstruct it:
+#   * All six admitted records are PRE-EXISTING — verified against a pre-fix
+#     compiler. Over 65 Callable/closure/HOF fixtures, 62 emit BYTE-IDENTICAL C
+#     before and after the round's fix; the only three that differ are Track R's
+#     own three new fixtures. None of the six is this round's inflow, so
+#     Core #9 ⊕'s "own inflow" prohibition does not bite.
+#   * The count grows ONLY because two fixtures stopped SEGV-ing and entered a
+#     corpus that can now SEE leaks they always had. A graduation out of
+#     `known_gaps/` is not new inflow.
+#   * Deleting the leaking cells would delete regression coverage of the very
+#     defect R48 fixed, and moving the fixtures under a subdirectory the sweep
+#     skips (it enumerates `find tests/fixtures -maxdepth 1`) would permanently
+#     hide a real leak. Admitting with citations is the honest version.
+# ⚠ THE SCOPE OF THE EXTENSION, EXACTLY. R47 admitted four rows *"and ONLY
+# those"*. This ruling extends the same "admit with explicit per-row citations"
+# treatment to PRE-EXISTING leaks newly made VISIBLE by a graduation, AND TO
+# THOSE ONLY. A row whose leak is genuinely NEW INFLOW is still an OWNER ASK.
+#
+# THE SIX RECORDS, ATTRIBUTED INDIVIDUALLY (allocation site read off the ASan
+# report of a `gg build --sanitize` of each fixture at HEAD, 2026-09-02):
 #   * `callable_clone_value_form_axis` — the wide net for `todo/t0936` (`.clone()`
-#     on a closure VALUE). 12 cells; 4 leaked env records. THREE are
-#     `todo/t0873(b)` (`Vector[Callable].push` leaves `elem_drop` NULL) from
-#     cells 4 and 10; ONE is `todo/t0948` (a `Callable` in a STRUCT FIELD is
-#     classified no-drop) from cell 12.
+#     on a closure VALUE). 12 cells; 4 leaked env records, THREE distinct items:
+#       - cell 4's pushed env, and cell 10's pushed env  -> `todo/t0873(b)`
+#         (`Vector[Callable].push` leaves `elem_drop` NULL)
+#       - cell 12's struct-field env                     -> `todo/t0948`
+#         (a `Callable` in a STRUCT FIELD is classified no-drop)
+#       - cell 4's INDEX-READ materialization temp, whose allocation stack runs
+#         through `gorget_closure_clone_to_owned`        -> `todo/t0949`
 #   * `callable_vector_element_plain_sig_call_segv` — one of `todo/t0406`'s six
-#     repros, graduated out of `known_gaps/` this round. Both records are
-#     `todo/t0873(b)`.
-# MECHANISM ATTRIBUTED BY EXPERIMENT, NOT BY RESEMBLANCE: the same programs with
-# EVERY `.clone()` REMOVED leak the IDENTICAL records (`fs.push((int x): x * 2)`
-# + `fs[0](21)`, no clone anywhere -> 8 bytes in 1 allocation, byte-identical to
-# the cloning version), the always-working `fs.get(0).unwrap().clone()` route
-# leaks the same 8 bytes, and an isolated `Callable[int(int)] g = c.clone()` on a
-# CAPTURING closure is ASan-CLEAN. 12 clones in the axis fixture produce ONE
-# leaked env, and it is a container element. The clone path this round shipped is
-# memory-clean; the container/struct element drop is the leaker.
+#     repros, graduated out of `known_gaps/` this round. 2 records, TWO items:
+#       - the pushed element's env                       -> `todo/t0873(b)`
+#       - the INDEX-READ materialization temp            -> `todo/t0949`
+# ⚠ THE THIRD ITEM IS WHY THIS BLOCK WAS CORRECTED. As first written it claimed
+# every record was `t0873(b)` or `t0948`, and therefore that BOTH ROWS RETIRE
+# with those two. MEASURED FALSE: two of the six are un-dropped
+# `PtrMaterialization::Clone` temps at a container-element read — a local in
+# `main` the container never held, so synthesising `elem_drop` (t0873(b)) would
+# not free them, and no struct is involved (t0948). After both of those land,
+# BOTH ROWS WOULD STILL LEAK ONE RECORD EACH. That defect is `todo/t0949`
+# (Core #3: register ownership at the value's birth; write site
+# `ptr_materialization_kind`, `src/ir/lowering/context.rs`), it is PRE-EXISTING,
+# and it was UNFILED until this correction.
+# MECHANISM ATTRIBUTED BY EXPERIMENT, NOT BY RESEMBLANCE — with the experiment's
+# REACH stated honestly: the same programs with EVERY SOURCE-LEVEL `.clone()`
+# REMOVED leak the IDENTICAL records (`fs.push((int x): x * 2)` + `fs[0](21)`,
+# no clone anywhere -> 8 bytes in 1 allocation, byte-identical to the cloning
+# version), the always-working `fs.get(0).unwrap().clone()` route leaks the same
+# 8 bytes, and an isolated `Callable[int(int)] g = c.clone()` on a CAPTURING
+# closure is ASan-CLEAN. ⚠ That control acquits the USER-WRITTEN `.clone()` —
+# the clone path this round shipped is memory-clean — but it CANNOT separate
+# `t0873(b)` from `t0949`, because `t0949`'s clone is COMPILER-INSERTED at the
+# index read and survives deleting every `.clone()` in the source. What
+# separates them is the record COUNT SCALING WITH THE NUMBER OF INDEX READS
+# rather than with the number of elements; `todo/t0949` carries that table.
 # WHY THE ROWS EXIST AT ALL: the leaking cells ARE the coverage — a Callable read
 # back out of a Vector and a Callable in a struct field are two of the twelve
 # axis cells, and dropping them to keep this count flat would delete regression
 # coverage of the exact defect the round fixed (Core #11/#12).
-# BOTH ROWS RETIRE with `todo/t0873(b)` + `todo/t0948`; each of those items now
-# ships its own durable `known_gaps` repro (t0873 had `repro = []` before this
-# round) and an `#[ignore]`d ASan test asserting the intended clean run.
+# RETIREMENT, CORRECTED AND PER ROW:
+#   * `callable_clone_value_form_axis` retires only when ALL THREE of
+#     `todo/t0873(b)`, `todo/t0948` and `todo/t0949` have landed.
+#   * `callable_vector_element_plain_sig_call_segv` retires when `todo/t0873(b)`
+#     AND `todo/t0949` have landed.
+#   Partial progress TIGHTENS a row's count; it does not remove the row, and the
+#   sweep prints a "TIGHTEN these rows" advisory when it happens.
+# Each of the three items ships its own durable `known_gaps` repro (t0873 had
+# `repro = []` before this round) and an `#[ignore]`d ASan test asserting the
+# intended clean run.
 # Same family as the `vector_callable_two_locals` / `closure_*` rows below.
 callable_clone_value_form_axis	__gorget_closure_env_alloc*4
 callable_vector_element_plain_sig_call_segv	__gorget_closure_env_alloc*2
