@@ -2,7 +2,7 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN AND MID-FLIGHT — 7 of 7 code tracks integrated (D1, C, D2, F, A, β, γ). Track S INTEGRATED. E-B1/B2/B3 brief pass 2 IN FLIGHT.
+**▶ R48 IS OPEN AND MID-FLIGHT — 7 of 7 code tracks integrated (D1, C, D2, F, A, β, γ). Track S INTEGRATED. E-B2 INTEGRATED. E-B1/B3 executors IN FLIGHT.
 ⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A, β, γ, S) and the owner's lift to launch Track E.
 ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST.**
 **D53 is implemented** (unique lock + consume-position reject; diagnostic `^source` / `Shared[Mutex[T]]`).
@@ -29,7 +29,7 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 
 ### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-02, main `5cb547e7e`)
 
-**7 of 7 code tracks INTEGRATED. E-B1/B2/B3 brief pass 2 IN FLIGHT** (pass 1 blocked → folded; addenda at `/tmp/r48briefs/trackE_B{1,2,3}.md`).
+**7 of 7 code tracks INTEGRATED. E-B2 INTEGRATED `04408c66d`. E-B1/B3 executors IN FLIGHT.** Briefs at `/tmp/r48briefs/trackE_B{1,2,3}.md`.
 Lifts spent: C, D2, F, A, β, γ (integrated). D53 unique-lock reject and the figures DB are **on main**.
 A's capture residual is `t0927`; β's are `t0928`–`t0930`; γ's are `t0931`–`t0933`; main's `t0876` remains C-emit jitter.
 Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption is `t0926`.
