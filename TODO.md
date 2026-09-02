@@ -2,8 +2,8 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN AND MID-FLIGHT — 7 of 7 code tracks integrated (D1, C, D2, F, A, β, γ). Track S first output-review in flight (`b960b4abb`). E-B still owes brief pass 2.
-⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A, β, γ) and the owner's lift to launch Track S.
+**▶ R48 IS OPEN AND MID-FLIGHT — 7 of 7 code tracks integrated (D1, C, D2, F, A, β, γ). Track S INTEGRATED. E-B1/B2/B3 brief pass 2 IN FLIGHT.
+⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A, β, γ, S) and the owner's lift to launch Track E.
 ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST.**
 **D53 is implemented** (unique lock + consume-position reject; diagnostic `^source` / `Shared[Mutex[T]]`).
 Opened 2026-08-31 (owner: *"open next round"*). Headline: **the six CRITICAL memory-safety defects** —
@@ -27,9 +27,9 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
 § Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
 
-### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `abd1d79a2`)
+### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-02, main `5cb547e7e`)
 
-**7 of 7 code tracks INTEGRATED. E-B1/B2/B3 still owe brief pass 2.**
+**7 of 7 code tracks INTEGRATED. E-B1/B2/B3 brief pass 2 IN FLIGHT** (pass 1 blocked → folded; addenda at `/tmp/r48briefs/trackE_B{1,2,3}.md`).
 Lifts spent: C, D2, F, A, β, γ (integrated). D53 unique-lock reject and the figures DB are **on main**.
 A's capture residual is `t0927`; β's are `t0928`–`t0930`; γ's are `t0931`–`t0933`; main's `t0876` remains C-emit jitter.
 Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption is `t0926`.
@@ -43,8 +43,10 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **β** | `t0825` | — | — | — | **INTEGRATED** `35037071` (residuals `t0928`–`t0930`) |
 | **γ** | nondeterminism | — | — | — | **INTEGRATED** `abd1d79a2` (residuals `t0931`–`t0933`; CEILING 147; `t0204`/`t0267` closed) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
-| **S** | guard simplification | `b960b4abb` | 1 | `tests/lints.rs` agents_md · `figures.db` · `AGENTS.md` | **first output-review in flight** |
-| **E-B1/B2/B3** | burn-down | — | — | — | **brief pass 2** each (pass 1 blocked → folded). ⚠ S owns `figures.db` + agents_md block until S integrates; E-B3 EOF-only on `lints.rs` |
+| **S** | guard simplification | — | — | — | **INTEGRATED** `5cb547e7e` (clause probes retired; heading-id inventory; AGENTS.md 35971 bytes) |
+| **E-B1** | census + 9 rows + leak | — | — | — | **brief pass 2 IN FLIGHT** (pass 1 folded as A1; A2 owner-suspended `no_dot_slice`; A3 = HEAD/`5cb547e7e` zones) |
+| **E-B2** | `t0828` 11 untriaged | — | — | — | **brief pass 2 IN FLIGHT** (pass 1 folded as A1; A2 decoupled from α; A3 = γ already lowered CEILING to 147; MATCH_FLOOR still round-close) |
+| **E-B3** | membership + robustness scorer | — | — | — | **brief pass 2 IN FLIGHT** (pass 1 folded as A1; A2 = S integrated, may append `lints.rs` EOF after 26923; M4/M5 still unlanded at `robustness_map.py:617` / `:715-723`) |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
 
 ⚠ **Briefs + all fold addenda live in `/tmp/r48briefs/*.md` and are NOT durable.** Each carries its
@@ -69,7 +71,7 @@ add/add). β's residuals landed as `t0928`–`t0930`. γ's residuals landed as `
 max and fix every citation. Never take a side on add/add todo ids.**
 
 ### ⛔ WHAT MUST HAPPEN BEFORE R48 CAN CLOSE
-1. **Three E-B brief pass-2s.** No diff integrates without a fresh pass on it.
+1. **Three E-B brief pass-2s IN FLIGHT** (owner lifted E 2026-09-02). No diff integrates without a fresh pass on it. Pass 3 follows a SIGN OFF; a DESIGN reservation folds and re-runs pass 2.
 2. **E-B3's `robustness_map` scorer fix is UNLANDED.** `scripts/robustness_map.py:617` derives "good" from
    the C-lane BASELINE bucket, never `COL_EXPECTED` ⇒ **fixing a C-lane cell scores as a REGRESSION**, and
    on the 43 self-host-WORKS cells a self-host regression scores as PROGRESS. `:715-723` makes `--accept`
