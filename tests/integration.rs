@@ -45471,15 +45471,10 @@ fn place_overlap_self_root_disjoint() {
     run_gg("place_overlap_self_root_disjoint.gg", "2\n2\n10\n20");
 }
 
-// IGNORED — pins the UNDECIDED partial-move-widening question: `f(!m.a, !m.b)`
-// moves two disjoint siblings and today over-rejects via E_UseAfterMove (the
-// move-tracker root-marks whole `m`). Whether it SHOULD accept is the
-// Rust-style destructuring widening left undecided by the 2026-07-11 D10(a)
-// ADDENDUM. D10(b) keeps (Move,Move) out of place-overlap, so this is not B1's
-// to decide; the fixture documents the question. See TODO.
+// NEG — owner 2026-09-02: no partial moves, no field unpack. Only whole-value
+// `^m`. `f(^m.a, ^m.b)` is E_UseAfterMove (the first field move kills `m`).
+// D10(b) still accepts disjoint sibling BORROWS (`f(&m.a, &m.b)`).
 #[test]
-#[ignore = "D10(b) disjoint-sibling MOVE: undecided partial-move-widening \
-            (decisions.md 2026-07-11 D10(a) ADDENDUM) — over-rejects today (filed in TODO)"]
 fn place_overlap_disjoint_sibling_move_error() {
     check_gg_fails(
         "place_overlap_disjoint_sibling_move_error.gg",

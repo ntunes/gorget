@@ -113,7 +113,9 @@ R d = b.clone()    # OK — an independent, separately-dropped copy
 Taint is transitive: a `Vector[R]`, a tuple `(R, int)`, an `Option[R]`,
 or a struct with an `R` field are all drop-tainted too. A **field or
 index place** of a tainted type (`hh.r`, `v[0]`) must use `.clone()` —
-`^hh.r` would be a partial move.
+`^hh.r` would be a partial move. Moving every field in one call
+(`f(^m.a, ^m.b)`) is the same reject — there is no unpack exception;
+move the whole value (`^m`).
 
 The by-design single-owner members follow the same `^` rule:
 

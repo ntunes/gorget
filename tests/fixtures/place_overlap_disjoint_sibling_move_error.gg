@@ -1,14 +1,8 @@
-# D10(b) disjoint-sibling MOVE (IGNORED — pins an UNDECIDED policy question):
-# `f(!m.a, !m.b)` moves two DISJOINT sibling sub-places. Today the move-tracker
-# root-marks the whole DefId `m` on the first move, so the second `!m.b` trips
-# E_UseAfterMove — an OVER-rejection relative to the D10(b) place-overlap rule
-# (which treats disjoint siblings as non-overlapping). Whether this SHOULD accept
-# is the Rust-style destructuring partial-move WIDENING, left UNDECIDED by the
-# 2026-07-11 D10(a) ADDENDUM (decisions.md). D10(b) deliberately keeps (Move,Move)
-# out of place-overlap, so this is NOT B1's to decide — the fixture documents the
-# question so the current over-rejection is not silently blessed as canonical.
-# Expected output flips to a POSITIVE (build+run) if the owner rules the widening
-# in; ignored until then. See the TODO.md entry.
+# NEG — owner 2026-09-02: no partial moves, no unpack. Only whole-value `^m`.
+# `f(^m.a, ^m.b)` (fixture still spells `!`, the pre-D27 alias) moves two
+# disjoint sibling fields; the first kills `m`, the second is E_UseAfterMove.
+# D10(b) still accepts the borrow twin `f(&m.a, &m.b)`. There is no
+# "consume every field in one call" exception.
 struct M:
     Vector[int] a
     Vector[int] b

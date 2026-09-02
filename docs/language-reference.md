@@ -2635,6 +2635,8 @@ Underneath the sigils, the ownership model itself is these ten rules:
       Drop coexist); a whole-identifier place moves with `^` or copies with
       `.clone()`, while a **field/index place** (`s.field`, `v[i]`) of a tainted
       type must use `.clone()` (`^s.field` would be a partial move).
+      Consuming every field in one call (`f(^m.a, ^m.b)`) is the same reject;
+      move the whole value (`^m`). There is no unpack exception.
     - **By-design single-owner types:** `Box[T]`, `Task`, `TaskGroup`, `Guard`,
       `Mutex[T]`, `RWLock[T]`, and closure/`Callable` values (their drops are
       pure; they are unique by construction). (`Owned[T]` exists internally but
