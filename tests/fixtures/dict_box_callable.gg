@@ -1,5 +1,7 @@
 # Prerequisite test for Phase C: verify Dict[String, Callable[...]] works.
 # Uses two-step pattern: assign to Callable local first, then put/call.
+# `put` is a consuming position and `Callable[T]` is single-owner by design
+# (no clone path in the lowering), so the named local is moved in with `^`.
 from std.collections import Dict
 
 int double_it(int x):
@@ -14,9 +16,9 @@ void main():
     Callable[int(int)] tfn = triple_it
     int factor = 10
     Callable[int(int)] afn = (x): x + factor
-    fns.put("double", dfn)
-    fns.put("triple", tfn)
-    fns.put("add10", afn)
+    fns.put("double", ^dfn)
+    fns.put("triple", ^tfn)
+    fns.put("add10", ^afn)
 
     Callable[int(int)] d = fns["double"]
     Callable[int(int)] t = fns["triple"]

@@ -762,13 +762,13 @@ equip Router:
         Callable[HttpServerResponse(HttpRequest)] h = handler
         if path.contains("*"):
             String wkey = method + "|" + path
-            self.wildcard_routes.put(wkey, h)
+            self.wildcard_routes.put(wkey, ^h)
         elif path.contains(":"):
             String pkey = method + "|" + path
-            self.param_routes.put(pkey, h)
+            self.param_routes.put(pkey, ^h)
         else:
             String key = method + " " + path
-            self.exact_routes.put(key, h)
+            self.exact_routes.put(key, ^h)
 
     void get(&self, String path, Callable[HttpServerResponse(HttpRequest)] handler):
         self.route("GET", path, handler)
@@ -789,7 +789,7 @@ equip Router:
     # Typical uses: CORS headers, security headers, logging.
     void use(&self, Callable[HttpServerResponse(HttpRequest, HttpServerResponse)] hook):
         Callable[HttpServerResponse(HttpRequest, HttpServerResponse)] h = hook
-        self.middlewares.push(h)
+        self.middlewares.push(^h)
 
     # Register a pre-dispatch middleware hook. Called before the handler.
     # Return Some(resp) to short-circuit (skip handler). Return None() to continue.
@@ -797,7 +797,7 @@ equip Router:
     # Typical uses: authentication, rate limiting, CORS preflight.
     void before(&self, Callable[Option[HttpServerResponse](HttpRequest)] hook):
         Callable[Option[HttpServerResponse](HttpRequest)] h = hook
-        self.pre_middlewares.push(h)
+        self.pre_middlewares.push(^h)
 
     # Mount all routes from a sub-router under a path prefix.
     # Routes from sub are copied into self with `prefix` prepended.
@@ -812,7 +812,7 @@ equip Router:
                 String mth = k.byte_slice(0, sp.unwrap()).clone()
                 String pth = k.byte_slice(sp.unwrap() + 1, k.byte_len()).clone()
                 Callable[HttpServerResponse(HttpRequest)] h = sub.exact_routes[k]
-                self.exact_routes.put(mth + " " + prefix + pth, h)
+                self.exact_routes.put(mth + " " + prefix + pth, ^h)
             ei = ei + 1
         Vector[String] pr_keys = sub.param_routes.keys()
         int pri = 0
@@ -823,7 +823,7 @@ equip Router:
                 String mth = k.byte_slice(0, sp2.unwrap()).clone()
                 String pth = k.byte_slice(sp2.unwrap() + 1, k.byte_len()).clone()
                 Callable[HttpServerResponse(HttpRequest)] h = sub.param_routes[k]
-                self.param_routes.put(mth + "|" + prefix + pth, h)
+                self.param_routes.put(mth + "|" + prefix + pth, ^h)
             pri = pri + 1
         Vector[String] wr_keys = sub.wildcard_routes.keys()
         int wri = 0
@@ -834,7 +834,7 @@ equip Router:
                 String mth = k.byte_slice(0, sp3.unwrap()).clone()
                 String pth = k.byte_slice(sp3.unwrap() + 1, k.byte_len()).clone()
                 Callable[HttpServerResponse(HttpRequest)] h = sub.wildcard_routes[k]
-                self.wildcard_routes.put(mth + "|" + prefix + pth, h)
+                self.wildcard_routes.put(mth + "|" + prefix + pth, ^h)
             wri = wri + 1
 
     # Collect all HTTP methods registered for a given path (exact or matching param pattern).
