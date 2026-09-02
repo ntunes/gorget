@@ -1,0 +1,14 @@
+# t0938 — COMPILER ICE. `Some(^h)` where `h` is a Callable local panics the
+# compiler at src/ir/lowering/mod.rs:2144 with
+# "Tier 2a consume-site violation ... EnumInit(Some, arg #0) — untracked source
+# consumed". `^` is the ratified move sigil (D27) and enum-init is a ratified
+# consuming position, so this is legal source answered with a crash.
+# INTENDED: prints 2 (or, if the move is to be refused, a DIAGNOSTIC — never a panic).
+void main():
+    Callable[int(int)] h = (int x): x + 1
+    Option[Callable[int(int)]] o = Some(^h)
+    match o:
+        case Some(f):
+            print(f(1))
+        else:
+            print(0)

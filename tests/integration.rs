@@ -6142,6 +6142,49 @@ fn callable_clone_segfaults() {
     run_gg("known_gaps/callable_clone_segfaults.gg", "2");
 }
 
+// `todo/t0937` — CRITICAL: a closure LITERAL at a CONSTRUCTOR / enum-init
+// argument position is never constructed. The emitted `main` carries no
+// `__gorget_closure_env_alloc` and no `.fn_ptr =` designator, and the field init
+// memcpys `sizeof(GorgetClosure)` (16 bytes) out of a 1-byte env placeholder —
+// ASan reports `stack-buffer-overflow ... READ of size 16`. Both backends, rc
+// 139, with `gg check` clean. Reproduces at `Some(...)` as well as `S(...)`,
+// i.e. at both consuming boundaries AGENTS.md names. Distinct from t0936: there
+// the closure IS constructed and fails to clone; here it is never built.
+// Asserts the INTENDED output. Un-ignore + move out of known_gaps/ when graduating.
+#[test]
+#[ignore = "todo/t0937 — a closure literal at a constructor / enum-init argument is never \
+constructed; ASan stack-buffer-overflow, rc 139 on both backends. Asserts the intended output."]
+fn callable_literal_at_ctor_arg_overflows() {
+    run_gg("known_gaps/callable_literal_at_ctor_arg_overflows.gg", "2");
+}
+
+// `todo/t0938` — COMPILER ICE on ratified syntax. `Some(^h)` for a `Callable`
+// local panics at `src/ir/lowering/mod.rs:2144` ("Tier 2a consume-site violation
+// ... EnumInit(Some, arg #0) — untracked source consumed"). `^` is D27's move
+// sigil and enum-init is a consuming position, so the user wrote the spelling the
+// language asks for. An ICE is never a valid answer to legal source: accept the
+// move, or REJECT it with a diagnostic (Core #10).
+// Asserts the INTENDED output. Un-ignore + move out of known_gaps/ when graduating.
+#[test]
+#[ignore = "todo/t0938 — `Some(^h)` on a Callable local panics the compiler (ir/lowering/mod.rs \
+Tier 2a consume-site violation) instead of accepting or rejecting the move."]
+fn some_move_callable_ice() {
+    run_gg("known_gaps/some_move_callable_ice.gg", "2");
+}
+
+// `todo/t0939` — Core #10 SILENT DROP. `s.f(1)` on a `Callable`-typed struct
+// field resolves as a METHOD call and emits a call to `S__f`, which no pass
+// defines: `gg check` is clean, the build dies at link with `undefined reference
+// to 'S__f'`. Same OUTCOME class as t0025 (check accepts, symbol vanishes, link
+// dies) but a different mechanism, so neither fix implies the other.
+// Asserts the INTENDED output. Un-ignore + move out of known_gaps/ when graduating.
+#[test]
+#[ignore = "todo/t0939 — calling a Callable-typed struct field emits a call to an \
+undefined method symbol S__f; gg check is clean and the build dies at link."]
+fn callable_field_call_link_failure() {
+    run_gg("known_gaps/callable_field_call_link_failure.gg", "2");
+}
+
 // SELF-HOST-LANE gap (surfaced Round R40, Track-J review): `for (i, b) in
 // s.bytes().enumerate()` MISCOMPILES on the self-host lane — it prints
 // `0,16961,1,66` (the i64-slot over-read) instead of the correct `0,65,1,66`.

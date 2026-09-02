@@ -1,0 +1,12 @@
+# t0939 — Core #10 SILENT DROP. Calling a Callable-typed struct FIELD resolves as
+# a METHOD call on the struct and emits a call to `S__f`, a symbol no pass ever
+# defines: `gg check` is clean and the build dies at link with
+# "undefined reference to `S__f'". Family: t0025 (same outcome class, different
+# mechanism — a mis-spelled equip header).
+# INTENDED: prints 2.
+struct S:
+    Callable[int(int)] f
+
+void main():
+    S s = S((int x): x + 1)
+    print(s.f(1))
