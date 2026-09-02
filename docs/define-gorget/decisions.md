@@ -516,6 +516,8 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-09-02 — **D10(a) ADDENDUM sharpened in place (owner): NO PARTIAL MOVES, NO UNPACK.** Closes the 2026-07-11 sentence *"Rust-style destructuring partial moves remain a possible future WIDENING, undecided."* Only whole-value moves (`^m`). Field/index moves (`^m.a`, `^v[i]`) reject; consuming every field in one call (`f(^m.a, ^m.b)`) is the same reject — not an exception. A live value has no holes. Disjoint sibling borrows stay D10(b). The 2026-07-11 body (move-binds stay legal; the criterion is aliasing, not sigils-at-binds) is unchanged. Live NEG `place_overlap_disjoint_sibling_move_error`; `todo/t0438` closed. `todo/t0437` (`take(^self.items)` still accepted) is an implementation gap vs this ruling, not a policy fork. Write-through: book ch.11, language-reference §Ownership.
+
 - 2026-09-01 — **D53 RATIFIED (owner): `Mutex` AND `RWLock` ARE UNIQUE LOCKS. SHARING IS `Shared[Mutex[T]]`.** Owner: *"Add Mutex/RWLock to the E_MoveWithoutOperator list, as you recommended."* Same-day re-examination (owner stands with the unique-lock recommendation): **Mutex is not multi-owner.** Sharpened in place — not a second dated copy.
 
   **TWO AXES, ONE COMPOSITION.** Exclusion (`Mutex[T]` / `RWLock[T]`: many tasks may mutate `T`, one at a time) and sharing (`Shared[T]`: many names own the *lock object*) are orthogonal. The book table that called `Mutex[T]` "Shared + mutable" describes the first axis (interior mutability) and was copied into the ownership chapter as if it were the second. That is how Mutex landed on the "sanctioned multi-owner escape hatch" list next to `Shared`/`Weak`/`Channel` — **aspirational, never true in the runtime.** `GorgetMutex` is a unique heap object; `gorget_mutex_free` destroys it; there is no refcount field. The resource table tagging it `CsRefCounted` with `clone_fn = None` is a lie: pointer copy looks like sharing and drop runs `free` N times. That is `t0908`. The documented concurrent counter is already `Shared[Mutex[int]]`; `shared int x` desugars to the same wrap.
@@ -1136,9 +1138,15 @@ P1-infra reviewers' recommendation.
   `R b = !h.r` (a partial move) — is ALREADY rejected by the existing machinery
   (`E_UseAfterMove`; `.clone()` is the remedy; measured by the A2-R gauntlet),
   drawing the boundary where it belongs: whole-identifier moves at binds legal,
-  field/index-place moves rejected. Rust-style destructuring partial moves remain
-  a possible future WIDENING, undecided. (A pure-rename style lint — `R b = !a`
-  with `a` otherwise unused — was noted and deliberately NOT filed.)
+  field/index-place moves rejected. **2026-09-02 (owner, sharpened in place):
+  that boundary is the WHOLE rule — no unpack exception.** `f(^m.a, ^m.b)`
+  (disjoint sibling field-moves in one call) is `E_UseAfterMove`, not a
+  Rust-style destructuring widening. Only whole-value moves (`^m`). A live
+  value has no holes; a moved-out field is not `None` and is not left as an
+  observable undefined slot. Disjoint sibling BORROWS (`f(&m.a, &m.b)`) stay
+  legal (D10(b)). Live NEG: `place_overlap_disjoint_sibling_move_error`.
+  (A pure-rename style lint — `R b = !a` with `a` otherwise unused — was
+  noted and deliberately NOT filed.)
 
 - 2026-07-11 — **DECISION BATCH 5 CLOSES: D24 + D25 + D26 RATIFIED by owner (census
   packet review, scout-wave-census (git history)) — with D27 + D28 (below), the full
