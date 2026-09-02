@@ -46,7 +46,7 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **S** | guard simplification | — | — | — | **INTEGRATED** `5cb547e7e` (clause probes retired; heading-id inventory; AGENTS.md 35971 bytes) |
 | **E-B1** | census + 4 dirty PASSers + leak | — | — | — | **EXECUTOR IN FLIGHT** (pass 3 SIGN OFF). Producer is `lower_catch_expr` err_local, not `lower_throw`. Do not fix t0907/t0382 write sites |
 | **E-B2** | `t0828` 11 untriaged | — | — | — | **INTEGRATED** `04408c66d` (11 MATCH; `UNTRIAGED_CEILING` 24→13; MATCH_FLOOR untouched; t0828 stays open for 13 httpserver rows) |
-| **E-B3** | membership + robustness scorer | — | — | — | **EXECUTOR IN FLIGHT** (pass 1 blocked; pass 2 D1; pass 3 SIGN OFF + A4). M4/M5 still unlanded. EOF append; do not edit B2's `UNTRIAGED_CEILING` |
+| **E-B3** | membership + robustness scorer | `82949fae4` | 1 | `robustness_map.py` M4/M5 · `lints.rs` EOF · `corpus_b{,1}.rs` dups · `t0934` | **output-review IN FLIGHT**. Branch predates E-B2: UNTRIAGED still 24 there; must not revert main's 13. Remaining 85-cell adjudication is `t0934` |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
 
 ⚠ **Briefs + all fold addenda live in `/tmp/r48briefs/*.md` and are NOT durable.** Each carries its
