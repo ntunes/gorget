@@ -1,0 +1,25 @@
+# Sibling of `unused_enum.gg`: the catch recovery matches on `e` and
+# takes the NotFound arm (8080) without consuming the enum. The match
+# is NOT the leak discriminator — unused recovery leaked identically —
+# but a registration that only fired on the unused path would miss it.
+#
+# `throw e` in the else arm does not run on this input.
+
+enum CE:
+    NotFound(String)
+    BadPort(int)
+
+int load(String p) throws CE:
+    throw CE.NotFound(p)
+
+int handle(String p) throws CE:
+    int c = load(p)! catch (e):
+        match e:
+            case CE.NotFound(_):
+                8080
+            else:
+                throw e
+    return c
+
+void main():
+    print(handle("payload")! catch (_): -1)

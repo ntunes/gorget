@@ -105,27 +105,78 @@ done
 enumerate() {
   for f in tests/*.rs; do
     awk -v F="$f" '
-      /^[[:space:]]*#\[ignore/          { ign = 1; next }
-      /^[[:space:]]*(pub )?fn [A-Za-z0-9_]+\(/ {
+      # Attribution: a `known_gaps/` string belongs to the fn whose BODY or
+      # own `#[ignore]` / doc-comment it appears in — never to the previous
+      # fn. The unanchored scanner used to keep `cur_fn` live across the next
+      # test'\''s `///` docs and the continuation lines of the next `#[ignore]`,
+      # so `dict_swap_remove_vector_value` inherited
+      # `dict_swap_remove_nested_resource` from the sibling'\''s ignore
+      # continuation (and 8 other roster rows carried a fixture they never
+      # exercise). Close the previous fn when a new item starts; buffer refs
+      # found in THIS item'\''s header until its `fn` line.
+      function flush(    i) {
         if (pend_n > 0) { for (i = 0; i < pend_n; i++) print pend[i]; pend_n = 0 }
-        cur_ign = ign; ign = 0
-        match($0, /fn [A-Za-z0-9_]+/); cur_fn = substr($0, RSTART + 3, RLENGTH - 3)
-        cur_line = NR; refs = ""
-        next
       }
-      {
+      function collect(into_pre,    line, r) {
         line = $0
         while (match(line, /known_gaps\/[A-Za-z0-9_]+(\/[A-Za-z0-9_.]+)?(\.gg)?/)) {
           r = substr(line, RSTART + 11, RLENGTH - 11)
           sub(/\.gg$/, "", r); sub(/\/.*$/, "", r)
-          if (cur_ign && cur_fn != "" && index(refs, "|" r "|") == 0) {
+          if (into_pre) {
+            if (index(pre_refs, "|" r "|") == 0) {
+              pre_refs = pre_refs "|" r "|"
+              pre[pre_n++] = r
+            }
+          } else if (cur_ign && cur_fn != "" && index(refs, "|" r "|") == 0) {
             refs = refs "|" r "|"
             pend[pend_n++] = cur_fn "\t" F ":" cur_line "\t" r
           }
           line = substr(line, RSTART + RLENGTH)
         }
       }
-      END { for (i = 0; i < pend_n; i++) print pend[i] }
+      function close_fn() {
+        flush()
+        cur_fn = ""; cur_ign = 0; refs = ""
+      }
+      /^[[:space:]]*#\[ignore/ {
+        close_fn()
+        ign = 1
+        collect(1)
+        next
+      }
+      /^[[:space:]]*#\[test/ {
+        if (cur_fn != "") close_fn()
+        next
+      }
+      # Doc comments (`///` / `//!`, any indent) OR a column-0 `//` start the
+      # next items commentary. Indented `//` inside a body stays with cur_fn.
+      /^[[:space:]]*\/\/[/!]/ || /^\/\// {
+        if (cur_fn != "") close_fn()
+        collect(1)
+        next
+      }
+      /^[[:space:]]*(pub )?fn [A-Za-z0-9_]+\(/ {
+        flush()
+        cur_ign = ign; ign = 0
+        match($0, /fn [A-Za-z0-9_]+/); cur_fn = substr($0, RSTART + 3, RLENGTH - 3)
+        cur_line = NR; refs = ""
+        if (cur_ign) {
+          for (i = 0; i < pre_n; i++) {
+            r = pre[i]
+            if (index(refs, "|" r "|") == 0) {
+              refs = refs "|" r "|"
+              pend[pend_n++] = cur_fn "\t" F ":" cur_line "\t" r
+            }
+          }
+        }
+        pre_n = 0; pre_refs = ""
+        next
+      }
+      {
+        if (cur_fn != "") collect(0)
+        else if (ign) collect(1)
+      }
+      END { flush() }
     ' "$f"
   done | awk -F'\t' '{ k = $1 "\t" $2; fx[k] = (k in seen ? fx[k] "," $3 : $3); seen[k] = 1 }
                      END { for (k in fx) print k "\t" fx[k] }' | sort
