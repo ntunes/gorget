@@ -6378,18 +6378,26 @@ fn callable_literal_at_ctor_arg_overflows() {
     run_gg("known_gaps/callable_literal_at_ctor_arg_overflows.gg", "2");
 }
 
-// `todo/t0938` — COMPILER ICE on ratified syntax. `Some(^h)` for a `Callable`
-// local panics at `src/ir/lowering/mod.rs:2144` ("Tier 2a consume-site violation
-// ... EnumInit(Some, arg #0) — untracked source consumed"). `^` is D27's move
-// sigil and enum-init is a consuming position, so the user wrote the spelling the
-// language asks for. An ICE is never a valid answer to legal source: accept the
-// move, or REJECT it with a diagnostic (Core #10).
+// `todo/t0938` — COMPILER ICE on ratified syntax. Moving a `Callable` local with
+// `^` into a consuming position panics at `src/ir/lowering/mod.rs:2144` ("Tier 2a
+// consume-site violation ... untracked source consumed"). `^` is D27's move sigil
+// and these are consuming positions, so the user wrote the spelling the language
+// asks for. An ICE is never a valid answer to legal source: accept the move, or
+// REJECT it with a diagnostic (Core #10).
+// TWO cells, two validator arms, both `gg check`-clean — `Some(^h)`
+// (`EnumInit(Some, arg #0)`) and `fs.push(^p)`
+// (`CollectionMutator(Vector__…__push, arg #1)`); the fixture reports 2
+// violations. ⚠ Three siblings on the same `^h` are GREEN (`Dict.put`, which is
+// a CollectionMutator TOO, struct-init and `return`), so the discriminator is
+// not the position class and a per-arm patch is the wrong fix — see the fixture
+// header for the measured table.
 // Asserts the INTENDED output. Un-ignore + move out of known_gaps/ when graduating.
 #[test]
-#[ignore = "todo/t0938 — `Some(^h)` on a Callable local panics the compiler (ir/lowering/mod.rs \
-Tier 2a consume-site violation) instead of accepting or rejecting the move."]
+#[ignore = "todo/t0938 — `^` moving a Callable local into a consuming position panics the compiler \
+(ir/lowering/mod.rs Tier 2a consume-site violation) instead of accepting or rejecting the move; \
+two cells, Some(^h) and Vector.push(^p)."]
 fn some_move_callable_ice() {
-    run_gg("known_gaps/some_move_callable_ice.gg", "2");
+    run_gg("known_gaps/some_move_callable_ice.gg", "2\n2");
 }
 
 // `todo/t0939` — Core #10 SILENT DROP. `s.f(1)` on a `Callable`-typed struct

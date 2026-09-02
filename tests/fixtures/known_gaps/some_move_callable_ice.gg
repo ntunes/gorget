@@ -1,9 +1,26 @@
-# t0938 — COMPILER ICE. `Some(^h)` where `h` is a Callable local panics the
-# compiler at src/ir/lowering/mod.rs:2144 with
-# "Tier 2a consume-site violation ... EnumInit(Some, arg #0) — untracked source
-# consumed". `^` is the ratified move sigil (D27) and enum-init is a ratified
-# consuming position, so this is legal source answered with a crash.
-# INTENDED: prints 2 (or, if the move is to be refused, a DIAGNOSTIC — never a panic).
+# t0938 — COMPILER ICE. Moving a `Callable` local with the ratified `^` sigil
+# (D27) into a consuming position panics the compiler at
+# src/ir/lowering/mod.rs:2144 with "Tier 2a consume-site violation ... untracked
+# source consumed". These are ratified consuming positions, so this is legal
+# source answered with a crash.
+#
+# TWO CELLS, both `gg check`-clean, each with its OWN validator arm — the second
+# was added 2026-09-02 after measuring that this is a CLASS, not one site:
+#   1. `Some(^h)`             -> EnumInit(Some, arg #0)
+#   2. `Vector[Callable].push(^h)` -> CollectionMutator(Vector__…__push, arg #1)
+#
+# ⚠ THE ENUMERATION IS TOTAL AND THREE SIBLINGS ARE GREEN, which is what makes a
+# fix aimed at one arm suspect. Measured 2026-09-02, same `^h` on the same local:
+#   `Dict[String, Callable].put("k", ^h)` -> builds, prints, rc 0
+#   `Holder(^h)` struct-init              -> builds, prints 41, rc 0
+#   `return ^h`                           -> builds, prints 41, rc 0
+# Dict `put` is a CollectionMutator TOO and it is accepted, so the discriminator
+# is NOT the position class — it is how the argument's ownership is tracked at
+# these two arms. Fix the class (Core #4); do not patch the arm that panicked.
+#
+# INTENDED: prints 2 then 2 (or, if the move is to be refused, a DIAGNOSTIC —
+# never a panic). The file ICEs on cell 1 today, so cell 2 is not yet observable;
+# it is wired here so the net covers both cells the moment either is fixed.
 void main():
     Callable[int(int)] h = (int x): x + 1
     Option[Callable[int(int)]] o = Some(^h)
@@ -12,3 +29,7 @@ void main():
             print(f(1))
         else:
             print(0)
+    Callable[int(int)] p = (int x): x + 1
+    Vector[Callable[int(int)]] fs = []
+    fs.push(^p)
+    print(fs[0](1))
