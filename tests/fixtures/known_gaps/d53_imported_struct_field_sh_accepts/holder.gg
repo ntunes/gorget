@@ -1,0 +1,6 @@
+# known gap (todo/t0941) — the struct lives in a SEPARATE module, which is the
+# whole point: the self-host's `variant_field_types` is populated from the
+# module being checked, so an IMPORTED struct's fields are absent from it.
+struct XHolder:
+    Mutex[int] lock
+    int tag

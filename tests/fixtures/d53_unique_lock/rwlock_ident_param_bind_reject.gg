@@ -1,0 +1,17 @@
+# D53 self-host axis NEG — identifier PARAM re-bound (no param exemption for a unique lock)
+# CELL: lock=RWLock · place-shape=identifier · source=param · position=bind.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+# Both lanes MUST emit E_MoveWithoutOperator: the destination must own, D53
+# forbids a clone path and D10(a) forbids a field/index partial move.
+
+from std.sync import RWLock
+
+# The param exemption (`param_exempt`) does NOT apply to a unique lock:
+# only the pre-block enforces this cell — the later identifier arm is gated
+# on `not param_exempt or not d.is_param`.
+void take(RWLock[int] m):
+    RWLock[int] x = m
+    print(1)
+
+void main():
+    take(RWLock[int](5))

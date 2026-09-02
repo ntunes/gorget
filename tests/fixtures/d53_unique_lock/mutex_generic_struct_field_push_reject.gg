@@ -1,0 +1,25 @@
+# D53 resolver-divergence NEG — field sub-place of a GENERIC struct
+# CELL: lock=Mutex · place-shape=field · object ResolvedType=RTGeneric.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+#
+# This cell pins a MECHANICAL ARM DIFF between the self-host's two expression
+# resolvers, not a lock-family axis: `infer_expr_type`
+#   has no `RTGeneric` case in its `EFieldAccess` arm at all,
+# while the structural `lvalue_value_type` — and its Rust twin in
+# src/semantic/safety/helpers.rs —
+#   resolves the field through the same field table.
+# Before the D53 consume gate moved onto the structural resolver the self-host
+# ACCEPTED this program while Rust gg REJECTED it: a Core #9 lane divergence
+# with a live unique-lock alias behind it (the t0908 runtime-bomb class D53
+# exists to close).
+
+
+struct Holder[T]:
+    Mutex[int] lock
+    T payload
+
+void main():
+    Holder[int] h = Holder[int](Mutex[int](5), 1)
+    Vector[Mutex[int]] v = Vector[Mutex[int]]()
+    v.push(h.lock)
+    print(v.len())

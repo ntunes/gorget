@@ -1,0 +1,23 @@
+# known gap (todo/t0943) — RUST-LANE D53 under-rejection on the `._N` tuple alias.
+# CELL: lock=Mutex · place-shape=tuple-field written `t._0` · position=push.
+#
+# `t._0` is the ratified alias for `t.0` (language-reference §4.2/§7.8) and the
+# Rust lane accepts it as a tuple accessor — `print(t._0)` compiles and runs.
+# But `src/parser/expr.rs` only builds `Expr::TupleFieldAccess` for a literal
+# `.<int>`; `._0` goes through `expect_name()` and becomes a plain
+# `Expr::FieldAccess{field: "_0"}`. `lvalue_value_type`'s FieldAccess arm
+# (src/semantic/safety/helpers.rs) then needs a `Defined | Generic` def id to
+# index `struct_field_names`, a tuple has none, so it returns `None` and D53's
+# consume gate never fires — while the SPELLING-EQUIVALENT `t.0` rejects.
+#
+# INTENDED behaviour (what the `#[ignore]`d test asserts): E_MoveWithoutOperator,
+# same as `d53_unique_lock/mutex_tuple_local_push_reject.gg`. The self-host lane
+# already rejects it — its parser folds BOTH spellings into EFieldAccess and its
+# `lvalue_value_type` resolves them through the shared `tuple_field_index` rule.
+# This is a "reference lags the self-host" finding: fix the Rust side.
+
+void main():
+    (Mutex[int], int) t = (Mutex[int](5), 1)
+    Vector[Mutex[int]] v = Vector[Mutex[int]]()
+    v.push(t._0)
+    print(v.len())

@@ -1,0 +1,13 @@
+# D53 self-host axis NEG — INDEX sub-place of a local collection at a collection put
+# CELL: lock=Mutex · place-shape=index · source=local · position=push.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+# Both lanes MUST emit E_MoveWithoutOperator: the destination must own, D53
+# forbids a clone path and D10(a) forbids a field/index partial move.
+
+
+void main():
+    Vector[Mutex[int]] src = Vector[Mutex[int]]()
+    src.push(Mutex[int](5))
+    Vector[Mutex[int]] v = Vector[Mutex[int]]()
+    v.push(src[0])
+    print(v.len())

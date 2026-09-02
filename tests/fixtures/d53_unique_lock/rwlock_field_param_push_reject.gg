@@ -1,0 +1,18 @@
+# D53 self-host axis NEG — FIELD sub-place of a PARAM struct at a collection put
+# CELL: lock=RWLock · place-shape=field · source=param · position=push.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+# Both lanes MUST emit E_MoveWithoutOperator: the destination must own, D53
+# forbids a clone path and D10(a) forbids a field/index partial move.
+
+from std.sync import RWLock
+
+struct Holder:
+    RWLock[int] lock
+
+void stash(Holder h):
+    Vector[RWLock[int]] v = Vector[RWLock[int]]()
+    v.push(h.lock)
+    print(v.len())
+
+void main():
+    stash(Holder(RWLock[int](5)))
