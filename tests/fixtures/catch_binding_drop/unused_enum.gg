@@ -1,0 +1,18 @@
+# Catch-bound droppable enum payload must be drop-registered at birth
+# (`lower_catch_expr`). Recovery does not consume `e`; CE.NotFound's
+# heap String must still be freed. Direct `throws String` is a different
+# path and is already clean. Match-arm sibling: `match_arm_enum.gg`.
+#
+# Instrument: LeakSanitizer (`gg build --sanitize` + detect_leaks=1).
+# Stdout is 8080 either way.
+
+enum CE:
+    NotFound(String)
+    BadPort(int)
+
+int load(String p) throws CE:
+    throw CE.NotFound(p)
+
+void main():
+    int c = load("payload")! catch (e): 8080
+    print(c)

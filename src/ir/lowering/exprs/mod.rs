@@ -4695,6 +4695,15 @@ fn lower_rethrow_expr(
         let err_op = FunctionBuilder::copy(err_val);
         let err_mode = mode_for(ctx, builder, &err_op, err_field_type);
         builder.assign_mode(err_mode, Place::local(err_local), err_op);
+        if matches!(err_mode, crate::ir::instructions::AssignMode::Move) {
+            ctx.set_owned(builder, err_local);
+            // Core #3: name-registration is not drop-registration. Sibling of
+            // `lower_catch_expr`'s catch-bound payload. Direct `throws String`
+            // is already enrolled; skip if the slot is already tracked.
+            if !ctx.drops.is_registered(err_local) {
+                ctx.drops.register_local(err_local, err_field_type, &ctx.type_registry);
+            }
+        }
         ctx.register_local(&error_name.node, err_local, err_field_type);
     }
 
@@ -4853,6 +4862,15 @@ fn lower_catch_expr(
     // error payload is not drop-tracked, so leaving it Untracked is correct.
     if matches!(err_mode, crate::ir::instructions::AssignMode::Move) {
         ctx.set_owned(builder, err_local);
+        // Core #3: `ctx.register_local` records the name only — it does not
+        // enroll the slot in the drop elaborator. A droppable enum payload
+        // (CE.NotFound(String)) then leaks on any recovery that does not
+        // consume `e` (`handle()` never called `CE__drop`; a same-type local
+        // CE does). Direct `throws String` is already enrolled by the
+        // resource-temp path; skip if already tracked.
+        if !ctx.drops.is_registered(err_local) {
+            ctx.drops.register_local(err_local, err_field_type, &ctx.type_registry);
+        }
     }
     ctx.register_local(&error_binding.node, err_local, err_field_type);
 

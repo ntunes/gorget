@@ -4608,10 +4608,12 @@ fn channel_clone_consuming_positions() {
 /// nested-clone cell — `gorget_map_iter_value` calls the same `val_clone`
 /// in-place hook `gorget_array_clone` calls as `elem_clone`, NULL for a
 /// refcount element — so ONE fix closes both. Filed as `todo/t0907`.
+/// Assertion is `assert_gg_sanitize_clean` (ASan/LSAN) so a stdout-green
+/// UAF cannot pass the census.
 #[test]
 #[ignore = "known gap (todo/t0907): `for (k, v) in d` over refcount VALUES over-releases — heap-use-after-free in gorget_map_free under --sanitize; the value lanes print the right answer"]
 fn known_gap_shared_dict_iteration_value_over_release() {
-    run_gg("known_gaps/shared_dict_iteration_value_over_release.gg", "4");
+    assert_gg_sanitize_clean("known_gaps/shared_dict_iteration_value_over_release", "4");
 }
 
 /// KNOWN GAP — both real backends under `--sanitize`; the VALUE lanes print the
@@ -4620,10 +4622,12 @@ fn known_gap_shared_dict_iteration_value_over_release() {
 /// `clone_fn` but no `clone_inplace_fn`, so the slot is NULL and the two arrays
 /// alias the same handles with the refcount never raised. The identical shape
 /// with `String` elements is clean. Filed as `todo/t0907`.
+/// Assertion is `assert_gg_sanitize_clean` (ASan/LSAN) so a stdout-green
+/// UAF cannot pass the census.
 #[test]
 #[ignore = "known gap (todo/t0907): cloning a Vector[Shared[T]] does not incref its elements (no clone_inplace_fn) — heap-use-after-free under --sanitize; the value lanes print the right answer"]
 fn known_gap_shared_nested_vector_clone_over_release() {
-    run_gg("known_gaps/shared_nested_vector_clone_over_release.gg", "1\n6");
+    assert_gg_sanitize_clean("known_gaps/shared_nested_vector_clone_over_release", "1\n6");
 }
 
 /// KNOWN GAP — both real backends under `--sanitize`, `gg check` accepts.
@@ -6105,21 +6109,18 @@ fn equip_exprbody_owning_param_return_uaf() {
     run_gg("known_gaps/equip_exprbody_owning_param_return_uaf.gg", "5\n28");
 }
 
-// ICE — re-throwing the `catch` error-binding from inside a `match` ARM panics
-// the Tier 2a consume-site validator at `src/ir/lowering/mod.rs:2114`
-// (`AssignIntoOwnedSlot(dst: CE) — owned-but-live source consumed without
-// preceding clone`), exit 101. The `match` arm is the discriminator: bare
-// `throw e` in the catch block, `throw e` inside an `if`, and `match e` with no
-// `throw` all lower fine. Reaches only `gg build` — `gg check` stops before IR
-// lowering, so this is invisible to check-only gates. This is the natural
-// idiom for PARTIAL error handling; the Result-capture + nested-match spelling
-// is the working workaround. Un-ignore + promote out of known_gaps/ when the
-// catch-binding ownership fix lands. TODO.md.
+// The ICE this fixture was filed for is gone (builds, prints 8080). The
+// remaining defect was a 2 B leak of the catch-bound CE.NotFound String —
+// `lower_catch_expr` tagged the binding Owned but never enrolled it in the
+// drop elaborator. Drop-registration landed at that writer; the live pins
+// are `catch_binding_droppable_enum_{unused,match_arm}_is_dropped`. This
+// row stays ignored (not graduated this round) and asserts via
+// `assert_gg_sanitize_clean` so a stdout-only green cannot re-enter the
+// census PASS set. Un-ignore + move out of known_gaps/ when graduating.
 #[test]
-#[ignore = "KNOWN GAP: `throw <catch-binding>` inside a `match` arm ICEs the \
-Tier 2a consume-site validator during IR lowering (exit 101); TODO.md."]
+#[ignore = "catch-binding ICE is gone; drop-register landed; not graduated this round — LSAN pin; un-ignore + move out of known_gaps/ when graduating"]
 fn catch_binding_throw_in_match_arm_ice() {
-    run_gg("known_gaps/catch_binding_throw_in_match_arm_ice.gg", "8080");
+    assert_gg_sanitize_clean("known_gaps/catch_binding_throw_in_match_arm_ice", "8080");
 }
 
 // SELF-HOST-LANE gap (surfaced Round R40, Track-J review): `for (i, b) in
@@ -7383,6 +7384,21 @@ fn catch_recovery_alloc() {
     // write site (move_zero+mark the Move-mode source, mirroring the Ok/Error
     // payload move-out). Covers concat-using-e, fn-call, concat-not-using-e.
     run_gg("catch_recovery_alloc.gg", "[empty]\nv:x\nwrap(empty)\n<>");
+}
+
+/// Catch-bound droppable enum payload is drop-registered at birth.
+/// Unused recovery — `e` is never consumed. LeakSanitizer is the
+/// instrument: stdout is 8080 with or without the drop.
+#[test]
+fn catch_binding_droppable_enum_unused_is_dropped() {
+    assert_gg_sanitize_clean("catch_binding_drop/unused_enum", "8080");
+}
+
+/// Match-arm sibling of `catch_binding_droppable_enum_unused_is_dropped`.
+/// The NotFound arm returns 8080 without consuming `e`.
+#[test]
+fn catch_binding_droppable_enum_match_arm_is_dropped() {
+    assert_gg_sanitize_clean("catch_binding_drop/match_arm_enum", "8080");
 }
 
 #[test]
@@ -27615,7 +27631,9 @@ handle pointer itself. Root cause is on the push arg-building layer, NOT the \
 receiver-ABI chokepoint (Round XXXII fixed that). Owner-decided fix layer is a \
 follow-up scout. Un-ignore and move out of known_gaps/ when fixed."]
 fn atomic_int_collection_elem_segv() {
-    run_gg("known_gaps/atomic_int_collection_elem_segv.gg", "2");
+    // SEGV is gone (unsanitized stdout `2`); the remaining pin is the 8 B
+    // leak under `--sanitize`. Stdout-only `run_gg` cannot see it.
+    assert_gg_sanitize_clean("known_gaps/atomic_int_collection_elem_segv", "2");
 }
 
 #[test]
@@ -45306,6 +45324,7 @@ fn primitive_trait_impl_error() {
 }
 
 #[test]
+#[serial(self_host_lowerer_driver)]
 #[ignore = "KNOWN GAP: `type X = scalar; equip X with Trait` is rejected by \
 Rust gg (alias folds to the scalar before process_impl) but NOT by the \
 self-host typechecker (collect_equip runs before ITypeAlias type_id \
@@ -45314,10 +45333,15 @@ rather than forced — reordering alias resolution has disproportionate blast \
 radius. The DIRECT-scalar SEGV is closed in BOTH compilers. Un-ignore once \
 the self-host catches aliased scalars too."]
 fn primitive_trait_impl_alias_error() {
-    // Expected (both compilers): REJECT. Documents the intended behavior for
-    // the aliased-scalar case so the wired-in expectation reflects what the
-    // language SHOULD do, not the current self-host gap.
-    check_gg_fails("primitive_trait_impl_alias_error.gg", "cannot equip scalar primitive");
+    // Pin the lagging lane. Rust gg already rejects, so `check_gg_fails`
+    // is green on arrival (BLIND-LANE — not a valid allowlist code).
+    let (accepted, exit_code) = self_host_accepts_and_emits("primitive_trait_impl_alias_error.gg");
+    assert!(
+        !accepted,
+        "self-host ACCEPTED `type X = scalar; equip X with Trait`. Rust gg rejects \
+         with `cannot equip scalar primitive`. exit={:?}",
+        exit_code,
+    );
 }
 
 #[test]
@@ -56761,19 +56785,15 @@ fn self_host_driver_rejects_d26_const_context() {
     `lower_fallible_arith_binop` in self_host_lowerer/lower_expr.gg. Un-ignore when \
     the SH Route-B lowering lands. Rust-lane test: c1_d26_capture_add_overflow."]
 fn self_host_driver_captures_d26_add_overflow() {
-    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let lib_dir = manifest_dir.join("lib");
-    let fixture = manifest_dir.join("tests/fixtures/c1_d26_capture_add_overflow.gg");
-    let out = run_with_timeout(
-        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+    // Route B: overflow constructs Result.Error(ArithError.Overflow) and the
+    // Error arm prints -99. Asserting only `status.success()` is green on
+    // arrival — SH currently emits trap-on-fault (Route A) and the compile
+    // still succeeds. Pin the Route-B output the ignore text names.
+    assert_self_host_stdout(
+        "c1_d26_capture_add_overflow.gg",
         "self_host_driver_captures_d26_add_overflow",
+        "-99",
     );
-    // When the SH lands Route-B, this should succeed and the emitted C should
-    // print "-99" (the Error arm's print). Today the SH lowering routes
-    // `a +! b` as plain `a + b` (trap on overflow) so the run WOULD abort at
-    // execution, not produce -99. The check + build stage still succeed.
-    assert!(out.status.success(), "SH failed to compile Route B fixture");
 }
 
 /// The Rust `gg` compiler's C emission MUST be byte-deterministic across
