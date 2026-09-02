@@ -27,7 +27,7 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
 § Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
 
-### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-02, main `280a0cf49`)
+### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-02, main `45c76794b`)
 
 **7 of 7 code tracks INTEGRATED. E-B1 INTEGRATED `280a0cf49`. E-B2 INTEGRATED `04408c66d`. E-B3 INTEGRATED `74622b945`.** Briefs at `/tmp/r48briefs/trackE_B{1,2,3}.md`.
 Lifts spent: C, D2, F, A, β, γ (integrated). D53 unique-lock reject and the figures DB are **on main**.
@@ -44,7 +44,7 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **γ** | nondeterminism | — | — | — | **INTEGRATED** `abd1d79a2` (residuals `t0931`–`t0933`; CEILING 147; `t0204`/`t0267` closed) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
 | **S** | guard simplification | — | — | — | **INTEGRATED** `5cb547e7e` (clause probes retired; heading-id inventory; AGENTS.md 35971 bytes) |
-| **E-B1** | census + 4 dirty PASSers + leak | — | — | — | **INTEGRATED** `280a0cf49` (awk attribution; catch/rethrow `drops.register_local`; LSAN 2B→0; `--check` still RED on catch_binding, honest; sibling item `t0935`) |
+| **E-B1** | census + 4 dirty PASSers + leak | — | — | — | **INTEGRATED** `280a0cf49` + `45c76794b` (`PHASE_D_PROXY_BUDGET` 89→91). Awk attribution; catch/rethrow drop-register; LSAN 2B→0; `--check` still RED on catch_binding (honest); sibling `t0935` |
 | **E-B2** | `t0828` 11 untriaged | — | — | — | **INTEGRATED** `04408c66d` (11 MATCH; `UNTRIAGED_CEILING` 24→13; MATCH_FLOOR untouched; t0828 stays open for 13 httpserver rows) |
 | **E-B3** | membership + robustness scorer | — | — | — | **INTEGRATED** `74622b945` (M4/M5; membership lint; `UNTRIAGED_CEILING` stayed **13**; remaining 85-cell adjudication is `t0934`) |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
