@@ -1,0 +1,127 @@
+# THE WIDE NET for `.clone()` on a closure VALUE (`todo/t0936`).
+#
+# Every cell below reached the method-dispatch gate as a `GirType::FnPtr` and
+# came back with NO dispatch name, so `.clone()` fell through to
+# `Constant::Unit` and the caller memcpy'd 16 bytes out of a unit slot — rc 139
+# on BOTH backends, `gg check` clean. Each line was independently RED-verified
+# against the pre-fix compiler.
+#
+# The axis is {position} x {Callable family} x {captures / does not capture}:
+#
+#   1  Callable        local, non-capturing        FnPtr
+#   2  Callable        local, capturing            FnPtr
+#   3  Callable        temp (call result)          FnPtr
+#   4  Callable        index read `fs[0]`          FnPtr, arity-0 fallback (*)
+#   5  Callable        captured in a closure env   FnPtr, field-load shape
+#   6  MutCallable     local, non-capturing        FnPtr
+#   7  MutCallable     local, capturing            FnPtr
+#   8  ConsumeCallable local, non-capturing        FnPtr
+#   9  ConsumeCallable local, capturing            FnPtr
+#  10  Vector element via `.get().unwrap()`        Ptr(Named) — CONTROL, always green
+#  11  Dict   element via `.get().unwrap()`        Ptr(Named) — CONTROL, always green
+#  12  Callable        STRUCT FIELD `s.f.clone()`  FnPtr, real field load
+#
+# (*) cell 4 reaches the gate as `FnPtr { params: [] }` — the container-element
+#     inferrer's zero-parameter fallback (`todo/t0406`). It is healed here, but
+#     its greenness is NOT evidence that the element signature is fixed.
+#
+# ⚠ CELL 12 CORRECTS THE FILED ATTRIBUTION. The struct-field receiver was
+#   recorded as a proper `FnPtr` that the fix does NOT reach, "co-blocked by
+#   `todo/t0939`". Measured: it IS reached — the clone arm fires and the GIR is
+#   `_7 = call @gorget_closure_clone_to_owned(copy _6)`. What kills the shape
+#   written as `Holder((int x): x + 1)` is `todo/t0937` (a closure LITERAL at a
+#   constructor argument is never constructed — its GIR is
+#   `struct_init __Closure_0 { }` with no `__gorget_closure_env_alloc`), so the
+#   clone deep-copies a closure that was never built. Initialise the field from
+#   a named local instead and the same `s.f.clone()` prints `2`. `todo/t0939` is
+#   about the no-clone control `s.f(1)`, which still fails to LINK
+#   (`undefined reference to 'Holder__f'`) — a different site again.
+#
+# NAMED OMISSIONS (Core #12) — measured RED and NOT healed by this fix:
+#   * struct field initialised from a closure LITERAL   -> `todo/t0937`
+#   * struct-field CALL `s.f(1)` (no clone at all)      -> `todo/t0939`
+#   * `Callable[..]` PARAMETER            -> GIR `unit`      -> `todo/t0942`
+#   * `Callable[..] &` PARAMETER          -> GIR `*mut unit` -> `todo/t0942`
+#   * bare fn-type spelling `int(int) f`  -> GIR `unit`      -> `todo/t0942`
+#   No `GirType::FnPtr` arm can reach the last three; adding a `GirType::Unit`
+#   arm would route EVERY unit-typed receiver through the closure clone path,
+#   a strictly worse miscompile. Since this round they are a loud lowering
+#   rejection instead of a silent SEGV (Core #10 guard at the dispatch gate).
+#
+# Cell 5's env-capture shape and the struct-field shape are structurally the
+# same field load, and they disagree — which is exactly why cell 5 is pinned
+# rather than assumed.
+
+struct Holder:
+    Callable[int(int)] f
+
+Callable[int(int)] make_adder():
+    return (int x): x + 1
+
+void main():
+    # 1 — local, non-capturing
+    Callable[int(int)] c1 = (int x): x + 1
+    Callable[int(int)] g1 = c1.clone()
+    print(f"1 {g1(1)}")
+
+    # 2 — local, capturing
+    int base = 40
+    Callable[int(int)] c2 = (int x): x + base
+    Callable[int(int)] g2 = c2.clone()
+    print(f"2 {g2(2)}")
+
+    # 3 — temp receiver (the call result is the receiver)
+    Callable[int(int)] g3 = make_adder().clone()
+    print(f"3 {g3(2)}")
+
+    # 4 — index read out of a Vector
+    Vector[Callable[int(int)]] fs = []
+    fs.push((int x): x * 2)
+    Callable[int(int)] g4 = fs[0].clone()
+    print(f"4 {g4(21)}")
+
+    # 5 — a Callable captured in a closure env, cloned inside the body
+    Callable[int(int)] c5 = (int x): x + 5
+    Callable[int(int)] outer = (int y): c5.clone()(y)
+    print(f"5 {outer(1)}")
+
+    # 6 — MutCallable, non-capturing
+    MutCallable[int(int)] c6 = (int x): x + 6
+    MutCallable[int(int)] g6 = c6.clone()
+    print(f"6 {g6(1)}")
+
+    # 7 — MutCallable, capturing
+    int seven = 7
+    MutCallable[int(int)] c7 = (int x): x + seven
+    MutCallable[int(int)] g7 = c7.clone()
+    print(f"7 {g7(1)}")
+
+    # 8 — ConsumeCallable, non-capturing
+    ConsumeCallable[int(int)] c8 = (int x): x + 8
+    ConsumeCallable[int(int)] g8 = c8.clone()
+    print(f"8 {g8(1)}")
+
+    # 9 — ConsumeCallable, capturing
+    int nine = 9
+    ConsumeCallable[int(int)] c9 = (int x): x + nine
+    ConsumeCallable[int(int)] g9 = c9.clone()
+    print(f"9 {g9(1)}")
+
+    # 10 — CONTROL: Ptr(Named) through a Vector get-chain (green before AND after)
+    Vector[Callable[int(int)]] vs = []
+    vs.push((int x): x + 10)
+    Callable[int(int)] g10 = vs.get(0).unwrap().clone()
+    print(f"10 {g10(1)}")
+
+    # 11 — CONTROL: Ptr(Named) through a Dict get-chain (green before AND after)
+    Dict[String, Callable[int(int)]] d = {}
+    d.put("a", (int x): x + 11)
+    Callable[int(int)] g11 = d.get("a").unwrap().clone()
+    print(f"11 {g11(1)}")
+
+    # 12 — STRUCT FIELD receiver: a real field load out of a struct.
+    #      Structurally the same shape as cell 5's closure-env field load.
+    Callable[int(int)] c12 = (int x): x + 12
+    Holder box = Holder(^c12)
+    Callable[int(int)] g12 = box.f.clone()
+    print(f"12 {g12(1)}")

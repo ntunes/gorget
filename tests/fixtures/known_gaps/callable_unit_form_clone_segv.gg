@@ -1,24 +1,47 @@
 # t0942 — the `unit` / `*mut unit` REPRESENTATIONS of a Callable. `.clone()` on
-# these SEGVs and NO `GirType::FnPtr` arm can reach them, so t0936's fix (which
-# heals the FnPtr cells) leaves these RED by construction.
+# these cannot resolve a dispatch name, and NO `GirType::FnPtr` arm can reach
+# them, so t0936's fix (which heals the FnPtr cells) leaves these RED by
+# construction.
 #
 #   Callable[int(int)] cb       PARAMETER        -> GIR `unit`
 #   Callable[int(int)] &cb      PARAMETER        -> GIR `*mut unit`
 #   int(int) f = dbl            bare fn-type     -> GIR `unit`
 #
 # src/ir/lowering/types.rs:190-205 states all three and gives the verification
-# command (`gg build --emit-gir`).
+# command (`gg build --emit-gir`). ALL THREE are exercised below — a fixture's
+# name is a claim about scope (Core #12), and this one claims all three.
 #
 # ⛔ DO NOT "FIX" THIS WITH A `GirType::Unit` ARM in the dispatch-name ladder:
 # that routes EVERY unit-typed receiver through the closure clone path and is a
 # strictly worse miscompile than the bug. The representation must carry the
 # type, which is an upstream (erasure) fix.
 #
-# ggdef adjudicates the param cell correctly (prints 2).
-# INTENDED: prints 2.
+# Before R48 Track R each cell was a silent rc-139 SEGV. Since that round's
+# Core #10 lower-or-reject guard at the method-dispatch gate they are a LOUD
+# lowering rejection instead — still wrong, but no longer memory-unsafe.
+#
+# ggdef adjudicates the param and `&`-param cells correctly (prints 2 for each).
+# INTENDED: prints 2 three times.
+int dbl_plus(int x):
+    return x + 1
+
 int apply_it(Callable[int(int)] cb):
     Callable[int(int)] g = cb.clone()
     return g(1)
 
+int apply_ref(Callable[int(int)] &cb):
+    Callable[int(int)] g = cb.clone()
+    return g(1)
+
 void main():
+    # cell 1 — `Callable[..]` PARAMETER, GIR `unit`
     print(apply_it((int x): x + 1))
+
+    # cell 2 — `Callable[..] &` PARAMETER, GIR `*mut unit`
+    Callable[int(int)] h = (int x): x + 1
+    print(apply_ref(&h))
+
+    # cell 3 — bare fn-type spelling, GIR `unit`
+    int(int) f = dbl_plus
+    int(int) g = f.clone()
+    print(g(1))

@@ -1,0 +1,35 @@
+# t0873(b) — the DURABLE repro that item was filed without.
+#
+# `Vector[Callable].push` emits a plain `gorget_array_new`: the `elem_drop`
+# synthesis in `src/lir/lower/insts.rs` is bypassed because the element type
+# resolves as `Named("Callable__GorgetClosure")` rather than `FnPtr`, so the
+# array is created with a NULL `elem_drop` and every pushed environment leaks.
+#
+# Measured with heap-FORCED values: both closures CAPTURE, so each env is a real
+# malloc rather than the 0-byte placeholder a non-capturing closure gets. Two
+# pushes, two leaked envs.
+#
+# ⭐ THE CLONE IS INNOCENT, and the negative control is the point: replace both
+# `.clone()` calls with plain reads and the SAME records leak. The leak belongs
+# to the container's element drop, not to `gorget_closure_clone_to_owned` — this
+# is what `tests/sanitize/LEAK_ALLOWLIST.txt`'s
+# `callable_clone_value_form_axis` and `callable_vector_element_plain_sig_call_segv`
+# rows are tolerating.
+#
+# INTENDED: prints 41 then 52, ASan-clean under `detect_leaks=1`, on C and LLVM.
+# (⚠ `scripts/sanitize_sweep.sh` is C-only — check LLVM explicitly.)
+#
+# DISCRIMINATED from `t0948`, the sibling leak: that one is a STRUCT's own drop
+# strategy computed as None for a `Callable` field. This one is a COLLECTION's
+# `elem_drop` never synthesised. Different write site, different predicate.
+
+void main():
+    int a = 40
+    int b = 50
+    Vector[Callable[int(int)]] fs = []
+    fs.push((int x): x + a)
+    fs.push((int x): x + b)
+    Callable[int(int)] g0 = fs.get(0).unwrap().clone()
+    Callable[int(int)] g1 = fs.get(1).unwrap().clone()
+    print(g0(1))
+    print(g1(2))
