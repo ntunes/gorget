@@ -2,7 +2,7 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN AND MID-FLIGHT — 7 of 7 code tracks integrated (D1, C, D2, F, A, β, γ). Track S INTEGRATED. E-B2 INTEGRATED. E-B3 INTEGRATED. E-B1 executor IN FLIGHT.
+**▶ R48 IS OPEN AND MID-FLIGHT — 7 of 7 code tracks integrated (D1, C, D2, F, A, β, γ). Track S INTEGRATED. E-B1/B2/B3 INTEGRATED.
 ⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A, β, γ, S) and the owner's lift to launch Track E.
 ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST.**
 **D53 is implemented** (unique lock + consume-position reject; diagnostic `^source` / `Shared[Mutex[T]]`).
@@ -27,9 +27,9 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
 § Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
 
-### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-02, main `5cb547e7e`)
+### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-02, main `280a0cf49`)
 
-**7 of 7 code tracks INTEGRATED. E-B2 INTEGRATED `04408c66d`. E-B3 INTEGRATED `74622b945`. E-B1 executor IN FLIGHT.** Briefs at `/tmp/r48briefs/trackE_B{1,2,3}.md`.
+**7 of 7 code tracks INTEGRATED. E-B1 INTEGRATED `280a0cf49`. E-B2 INTEGRATED `04408c66d`. E-B3 INTEGRATED `74622b945`.** Briefs at `/tmp/r48briefs/trackE_B{1,2,3}.md`.
 Lifts spent: C, D2, F, A, β, γ (integrated). D53 unique-lock reject and the figures DB are **on main**.
 A's capture residual is `t0927`; β's are `t0928`–`t0930`; γ's are `t0931`–`t0933`; main's `t0876` remains C-emit jitter.
 Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption is `t0926`.
@@ -44,7 +44,7 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **γ** | nondeterminism | — | — | — | **INTEGRATED** `abd1d79a2` (residuals `t0931`–`t0933`; CEILING 147; `t0204`/`t0267` closed) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
 | **S** | guard simplification | — | — | — | **INTEGRATED** `5cb547e7e` (clause probes retired; heading-id inventory; AGENTS.md 35971 bytes) |
-| **E-B1** | census + 4 dirty PASSers + leak | `bd9c293ea` | 2 | census.sh · `exprs/mod.rs` catch/rethrow drop-reg · integration rewires · `t0935` | **output-review IN FLIGHT**. LSAN 2B→0; `--check` still RED on catch_binding (honest). Item is `t0935` (not E-B3's `t0934`) |
+| **E-B1** | census + 4 dirty PASSers + leak | — | — | — | **INTEGRATED** `280a0cf49` (awk attribution; catch/rethrow `drops.register_local`; LSAN 2B→0; `--check` still RED on catch_binding, honest; sibling item `t0935`) |
 | **E-B2** | `t0828` 11 untriaged | — | — | — | **INTEGRATED** `04408c66d` (11 MATCH; `UNTRIAGED_CEILING` 24→13; MATCH_FLOOR untouched; t0828 stays open for 13 httpserver rows) |
 | **E-B3** | membership + robustness scorer | — | — | — | **INTEGRATED** `74622b945` (M4/M5; membership lint; `UNTRIAGED_CEILING` stayed **13**; remaining 85-cell adjudication is `t0934`) |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
@@ -71,7 +71,7 @@ add/add). β's residuals landed as `t0928`–`t0930`. γ's residuals landed as `
 max and fix every citation. Never take a side on add/add todo ids.**
 
 ### ⛔ WHAT MUST HAPPEN BEFORE R48 CAN CLOSE
-1. **E-B1 executor still IN FLIGHT** (pass 3 SIGN OFF). E-B2 and E-B3 are integrated.
+1. **E-B1/B2/B3 INTEGRATED.** Round-close battery still owed (C sweep · LLVM sweep · sanitize_sweep · full robustness_map). `t0824` stays open (`--check` RED on catch_binding, ungraduated). `t0828` stays open (13 httpserver untriaged). `t0934` is the 85-cell robustness SET. `t0935` is the lints.rs enumerator sibling.
 2. **E-B3's `robustness_map` scorer fix LANDED** `74622b945` (`good` from `COL_EXPECTED.startswith("REJECTED")`; `--accept` refuses to write on regressions/new_div). The 85 value-expected C-REJECTED cells are **`t0934`** (adjudicate, do not decrement). Round-close `robustness_map` can now be read as a gate rather than a launderer.
 3. **NOT RUN on the integrated tree:** `GG_BACKEND=llvm` whole-corpus · `scripts/sanitize_sweep.sh` ·
    `robustness_map` · the C whole-corpus sweep. (D2 ran the C sweep green on ITS branch — 2557/0 with the
@@ -1717,6 +1717,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0905`](todo/t0905.md) **MED** — 🆕🧹 [MED — guard hygiene, Core #6 ⊕; filed 2026-08-31 by R48 Track D2] Seven <= burn-down ratchets remain in tests/lints.…
 - [`t0926`](todo/t0926.md) — [MED — R48 Track F, declared phase 2 of the figures DB] EACH BURN-DOWN TRACK ADOPTS scripts/figures.db FOR ITS OWN ROWS…
 - [`t0934`](todo/t0934.md) **MED** — [MED — R48 Track E-B3 remaining robustness adjudication] After M4 (good from COL_EXPECTED.startswith("REJECTED"), never…
+- [`t0935`](todo/t0935.md) **MED** — [MED — Core #4 sibling of the awk attribution fix] tests/lints.rs known_gaps_passing_allowlist_shrink_only enumerator (t…
 ### Low
 
 - [`t0606`](todo/t0606.md) — 🧹 (G1 follow-up) lint-file-scope: widen g1_projected_materialize_sites_untrack files[] IF a projected-materialize cow_be…
