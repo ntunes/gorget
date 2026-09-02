@@ -292,21 +292,26 @@ fn assert_set_eq(label: &str, left: &BTreeSet<String>, right: &BTreeSet<String>)
     }
 }
 
-struct ProbeGuard(PathBuf);
-impl Drop for ProbeGuard {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
-fn write_probe(dir: &Path, name: &str) -> ProbeGuard {
-    let path = dir.join(name);
-    fs::write(
-        &path,
-        "void main():\n    print(1)\n",
-    )
-    .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
-    ProbeGuard(path)
+/// A THROWAWAY repo root holding `tests/fixtures/<name>` and nothing else.
+///
+/// The Core #13 self-probes used to write into the LIVE `tests/fixtures/`.
+/// That directory is shared state: `..._b_membership_is_declared` and
+/// `..._b1_membership_is_declared` run concurrently in one binary and both
+/// glob `cow_*`, so each saw the other's probe and reddened `census names vs
+/// disk` with the other's throwaway name — an intermittent red on a guard,
+/// plus a stray `.gg` left in the repo whenever the process died inside the
+/// window. What the self-probe actually claims is a property of
+/// `disk_gg_matching` + set-difference over the SOURCE-parsed prefixes, so it
+/// is exercised against a synthetic root and touches no shared state.
+fn probe_root(name: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("probe tempdir");
+    let fixtures = dir.path().join("tests/fixtures");
+    fs::create_dir_all(&fixtures)
+        .unwrap_or_else(|e| panic!("create {}: {e}", fixtures.display()));
+    let path = fixtures.join(name);
+    fs::write(&path, "void main():\n    print(1)\n")
+        .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+    dir
 }
 
 #[test]
@@ -416,22 +421,17 @@ fn ggdef_corpus_b_membership_is_declared() {
     );
 
     // Core #13: the guard must be seen to fail.
-    let fixtures = root.join("tests/fixtures");
-    let tag = std::process::id();
     {
-        let _g = write_probe(&fixtures, &format!("cow_eb3_membership_probe_{tag}.gg"));
-        let disk2 = disk_gg_matching(&root, &prefixes);
+        let probe = probe_root("cow_eb3_membership_probe.gg");
+        let disk2 = disk_gg_matching(probe.path(), &prefixes);
         assert!(
             disk2.difference(&census_names).next().is_some(),
             "throwaway cow_* without a census row did NOT redden membership"
         );
     }
     {
-        let _g = write_probe(
-            &fixtures,
-            &format!("combinator_eb3_membership_probe_{tag}.gg"),
-        );
-        let disk2 = disk_gg_matching(&root, &prefixes);
+        let probe = probe_root("combinator_eb3_membership_probe.gg");
+        let disk2 = disk_gg_matching(probe.path(), &prefixes);
         assert!(
             disk2.difference(&census_names).next().is_some(),
             "throwaway combinator_* without a census row did NOT redden membership \
@@ -673,10 +673,9 @@ fn ggdef_corpus_b1_membership_is_declared() {
         uncited.len()
     );
 
-    let tag = std::process::id();
     {
-        let _g = write_probe(&fixtures, &format!("cow_eb3_b1_membership_probe_{tag}.gg"));
-        let disk2 = disk_gg_matching(&root, &prefixes);
+        let probe = probe_root("cow_eb3_b1_membership_probe.gg");
+        let disk2 = disk_gg_matching(probe.path(), &prefixes);
         assert!(
             disk2.difference(&census_names).next().is_some(),
             "throwaway cow_* without a b1 census row did NOT redden membership"
