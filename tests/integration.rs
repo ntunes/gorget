@@ -6123,6 +6123,25 @@ fn catch_binding_throw_in_match_arm_ice() {
     assert_gg_sanitize_clean("known_gaps/catch_binding_throw_in_match_arm_ice", "8080");
 }
 
+// `todo/t0936` — CRITICAL: `.clone()` on a `Callable` type-checks and then
+// SEGVs. `Callable[T]` is in the single-owner carve-out and has NO clone path
+// in the lowering (AGENTS.md "Ownership at Consuming Positions"), so Core #10
+// (lower-or-reject) says this is a CHECK-TIME REJECTION, not a crash. The
+// reachability is the sharp part: `src/semantic/errors.rs:1596` renders
+// "... or `{name}.clone()` to copy" for EVERY single-owner type, so a user who
+// follows the compiler's own advice segfaults. This asserts the INTENDED state
+// (a rejection naming the move sigil, never `.clone()`), so it is RED at HEAD
+// on purpose. Un-ignore + move out of known_gaps/ when graduating.
+#[test]
+#[ignore = "todo/t0936 — `.clone()` on a Callable is accepted by `gg check` and SEGVs at \
+runtime; asserts the INTENDED check-time rejection. Carve-out types have no clone path."]
+fn callable_clone_segfaults() {
+    check_gg_fails(
+        "known_gaps/callable_clone_segfaults.gg",
+        "E_MoveWithoutOperator",
+    );
+}
+
 // SELF-HOST-LANE gap (surfaced Round R40, Track-J review): `for (i, b) in
 // s.bytes().enumerate()` MISCOMPILES on the self-host lane — it prints
 // `0,16961,1,66` (the i64-slot over-read) instead of the correct `0,65,1,66`.

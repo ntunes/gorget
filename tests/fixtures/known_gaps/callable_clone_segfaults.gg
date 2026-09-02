@@ -1,0 +1,14 @@
+# t0936 — `.clone()` on a `Callable` is accepted by `gg check` and SEGVs at
+# runtime. `Callable[T]` is in the single-owner carve-out and has NO clone path
+# in the lowering (AGENTS.md "Ownership at Consuming Positions"), so this must
+# be a CHECK-TIME REJECTION (Core #10, lower-or-reject) — never a crash.
+#
+# Reached by following the compiler's OWN advice: E_MoveWithoutOperator prints
+# "write `^h` to move or `h.clone()` to copy" for single-owner types.
+#
+# INTENDED: rejected at check time with a diagnostic that does not offer
+# `.clone()` for a type that has no clone path.
+void main():
+    Callable[int(int)] h = (int x): x + 1
+    Callable[int(int)] g = h.clone()
+    print(g(1))
