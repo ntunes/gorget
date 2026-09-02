@@ -44,7 +44,7 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **γ** | nondeterminism | — | — | — | **INTEGRATED** `abd1d79a2` (residuals `t0931`–`t0933`; CEILING 147; `t0204`/`t0267` closed) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
 | **S** | guard simplification | — | — | — | **INTEGRATED** `5cb547e7e` (clause probes retired; heading-id inventory; AGENTS.md 35971 bytes) |
-| **E-B1** | census + 9 rows + leak | — | — | — | **brief pass 2 IN FLIGHT** (pass 1 folded as A1; A2 owner-suspended `no_dot_slice`; A3 = HEAD/`5cb547e7e` zones) |
+| **E-B1** | census + 9 rows + leak | — | — | — | **brief pass 3 IN FLIGHT** (pass 2 SIGN OFF; D1 class is 4 sanitizer-dirty census PASSers not 1; A4 folded) |
 | **E-B2** | `t0828` 11 untriaged | — | — | — | **EXECUTOR IN FLIGHT** (pass 1 blocked; pass 2 SIGN OFF; pass 3 SIGN OFF + A5 errata). MATCH_FLOOR still round-close; CEILING already 147 |
 | **E-B3** | membership + robustness scorer | — | — | — | **brief pass 2 IN FLIGHT** (pass 1 folded as A1; A2 = S integrated, may append `lints.rs` EOF after 26923; M4/M5 still unlanded at `robustness_map.py:617` / `:715-723`) |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
