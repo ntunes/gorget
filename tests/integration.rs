@@ -4742,6 +4742,25 @@ fn mutex_vector_d53_class_pin_guard_push_reject() {
 ///     filed as `todo/t0943` with the `#[ignore]`d
 ///     `d53_tuple_alias_rust_lane_under_rejects` below. The self-host lane
 ///     rejects it and the self-host battery covers it.
+///   - generic `Index[]` with a MULTI-type-arg receiver whose `Index` output is
+///     not the last type parameter — the `generic_index_impl` rows above pin
+///     only the SINGLE-type-arg cell, where `args.last()` and the impl's output
+///     type coincide. In the multi-arg cell BOTH lanes are WRONG (they reject on
+///     an unrelated type argument, with a diagnostic that is false on its face):
+///     `todo/t0945`, `#[ignore]`d `d53_generic_index_last_targ_over_rejects`.
+///     The fixture headers name this so the row's NAME does not over-claim its
+///     class (Core #12).
+///   - **POSITION is an omitted AXIS, not an omitted cell.** The matrix above is
+///     {place-shape x source x lock} at `push`, plus the one `bind` cell. The
+///     other consume positions (`put`/`set`/`insert`/`send`/`v[i] = x`/ctor/
+///     array-literal) are covered only for the named-IDENTIFIER shape, by the
+///     pre-existing `mutex_vector_d53_consume_siblings_reject`. Justification for
+///     not crossing them with the sub-place shapes: all 10 call sites route into
+///     the SAME helper (`reject_single_owner_init`), and the sub-place pre-block
+///     runs BEFORE the `param_exempt` gate that is the only thing distinguishing
+///     the positions — so position cannot discriminate a sub-place verdict. If a
+///     future position stops routing through that helper, this justification
+///     lapses and the axis has to be crossed for real.
 #[test]
 fn mutex_vector_d53_subplace_axis_reject() {
     for f in [
@@ -4791,6 +4810,24 @@ fn d53_tuple_alias_rust_lane_under_rejects() {
         "known_gaps/d53_tuple_alias_subplace_rust_accepts.gg",
         D53_MUTEX,
     );
+}
+
+/// OVER-rejection, both lanes, with a diagnostic that is false on its face:
+/// `lvalue_value_type`'s `Index` arm types `c[i]` as `args.last()` of the
+/// receiver's type-argument list (`src/semantic/safety/helpers.rs:1021`), which
+/// is a builtin-shaped assumption — right for `Vector[T]`/`Dict[K,V]`, wrong for
+/// a user generic whose `Index` impl output is not its last type parameter.
+/// `Pair[K, V]` equipping `Index[int, K]` makes `p[0]` an `int`, yet the gate
+/// reads `V` and reports `p` "is a unique lock". Editing the UNRELATED `V` to
+/// `String` makes the identical program compile and run — which is the proof the
+/// heuristic is wrong rather than the program.
+///
+/// Sibling of `todo/t0392` RV-E (same fallback, RANGE-index cell). Filed as
+/// `todo/t0945` with the family table.
+#[test]
+#[ignore = "known gap (todo/t0945): `lvalue_value_type`'s Index arm types c[i] as the receiver's LAST type argument, so a user generic whose Index impl output is not its last type param is over-rejected; un-ignore when the Index impl's real output type is resolved"]
+fn d53_generic_index_last_targ_over_rejects() {
+    run_gg("known_gaps/d53_generic_index_last_targ_over_rejects.gg", "1\n7");
 }
 
 #[test]
@@ -34152,7 +34189,7 @@ fn self_host_d53_imported_struct_field_under_rejects() {
 /// of this shape rejects while the drop-taint one does not.
 #[test]
 #[serial(self_host_lowerer_driver)]
-#[ignore = "known gap (todo/t0942): self-host `infer_expr_type` has no RTGeneric arm for EFieldAccess, so D12 drop-taint under-rejects a generic-struct field place; un-ignore when the arm lands or the gate moves to the structural resolver"]
+#[ignore = "known gap (todo/t0944): self-host `infer_expr_type` has no RTGeneric arm for EFieldAccess, so D12 drop-taint under-rejects a generic-struct field place; un-ignore when the arm lands or the gate moves to the structural resolver"]
 fn self_host_d12_generic_struct_field_under_rejects() {
     check_self_host_driver_rejects(
         "known_gaps/d12_generic_struct_field_sh_accepts.gg",

@@ -1,4 +1,4 @@
-# known gap (todo/t0942) — SELF-HOST lane UNDER-rejects D4/D12 drop-taint at a
+# known gap (todo/t0944) — SELF-HOST lane UNDER-rejects D4/D12 drop-taint at a
 # field sub-place of a GENERIC struct.
 #
 # `h.r` is a live drop-tainted field place at a collection put — position 3 of

@@ -1,0 +1,42 @@
+# known gap (todo/t0945) — BOTH LANES OVER-reject: `p[0]` is typed as the LAST
+# type argument of the receiver, which for a user generic is not the element
+# type at all.
+#
+# `Pair[K, V]` equips `Index[int, K]`, so `p[0]` is a `K` — here an `int`. There
+# is no unique-lock VALUE anywhere in this expression. But the D53 consume gate
+# types the index place through `lvalue_value_type`, whose `Index` arm returns
+# `args.last()` for ANY `ResolvedType::Generic`
+# (src/semantic/safety/helpers.rs:1021, mirrored at
+# self_host_typechecker/typecheck.gg in the `EIndex` / `RTGeneric` arm). The last
+# type argument is `V` = `Mutex[int]`, so the gate rejects and the diagnostic
+# says `p` "is a unique lock" — a claim that is false on its face.
+#
+# THE PROOF THAT THE HEURISTIC, NOT THE PROGRAM, IS WRONG: change the UNRELATED
+# parameter `V` from `Mutex[int]` to `String` and the byte-identical rest of the
+# program compiles and runs. The verdict depends on a type that the rejected
+# expression never mentions.
+#
+# `args.last()` is a builtin-shaped assumption — true for `Vector[T]` and
+# `Dict[K, V]`, which is what it was written for — applied to every generic. See
+# todo/t0945 for the family, and todo/t0392 RV-E for its sibling cell (the same
+# fallback typing a RANGE index as the element type instead of a slice view).
+#
+# INTENDED behaviour (what the `#[ignore]`d test asserts): ACCEPTED, printing
+# `1` then `7`.
+
+struct Pair[K, V]:
+    Vector[K] keys
+    Vector[V] vals
+
+equip Pair[K, V] with Index[int, K]:
+    K get(self, int key):
+        return self.keys[key]
+
+void main():
+    Vector[int] ks = Vector[int]()
+    ks.push(7)
+    Pair[int, Mutex[int]] p = Pair[int, Mutex[int]](ks, Vector[Mutex[int]]())
+    Vector[int] v = Vector[int]()
+    v.push(p[0])
+    print(v.len())
+    print(v[0])

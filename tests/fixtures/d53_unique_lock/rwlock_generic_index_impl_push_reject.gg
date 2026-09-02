@@ -12,6 +12,15 @@
 # ACCEPTED this program while Rust gg REJECTED it: a Core #9 lane divergence
 # with a live unique-lock alias behind it (the t0908 runtime-bomb class D53
 # exists to close).
+#
+# ⚠ SCOPE OF THIS FIXTURE'S NAME (Core #12): it pins the cell where the receiver
+# is a SINGLE-type-argument generic, so `args.last()` and the `Index` impl's
+# output type coincide and the reject is correct. The class "user generic with
+# an `Index` impl" also contains a cell this fixture does NOT cover and where
+# BOTH lanes are WRONG: a MULTI-type-arg generic whose `Index` output is not the
+# last type parameter (`Pair[K, V]` equipping `Index[int, K]`) is over-rejected
+# on the unrelated `V` — filed as todo/t0945, repro
+# known_gaps/d53_generic_index_last_targ_over_rejects.gg.
 
 from std.sync import RWLock
 

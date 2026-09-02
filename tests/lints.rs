@@ -1886,7 +1886,7 @@ fn self_host_d12_reject_hook_count() {
 ///    NOT a free swap, because at all 10 shared call sites it is the only
 ///    remaining full-inference call on the expression and therefore still
 ///    carries the `DkNoFieldFound` diagnostics and the `types.expr_types`
-///    writes; a conversion owes its own diagnostic-delta check (todo/t0942).
+///    writes; a conversion owes its own diagnostic-delta check (todo/t0944).
 ///
 /// 2. **Whole-file occurrence tripwire.** A name-scoped body scan only reaches
 ///    the functions it LISTS, so a brand-new probe (`reject_<next>_place`)
@@ -1907,6 +1907,15 @@ fn self_host_d12_reject_hook_count() {
 /// call site ANYWHERE in the file is caught. A probe that reaches inference
 /// INDIRECTLY (through a new helper that itself calls `infer_expr_type`) is NOT
 /// caught by either assertion.
+///
+/// **The two assertions have deliberately different granularity.** Assertion 2
+/// is a RAW substring count, so a comment that merely spells `infer_expr_type(`
+/// also moves it — that is intended (classify the new occurrence, then bump the
+/// pin). Assertion 1 counts only what is INSIDE a probe body, where a body is
+/// the indented block under the signature: a column-0 `#` line ends it, because
+/// in a `.gg` file that is the next definition's doc comment. So prose about
+/// this rule never trips the assertion whose message says "do NOT raise the
+/// allowance", which would be the wrong advice for a comment.
 ///
 /// **If this fails:**
 ///   - A probe's count went UP → you re-committed the clone bomb. Resolve the
@@ -1962,10 +1971,17 @@ fn self_host_safety_place_probes_are_structural() {
             .find('\n')
             .map(|i| start + i + 1)
             .unwrap_or(src.len());
+        // A body line is INDENTED or blank. A column-0 line ends it — including a
+        // column-0 `#` comment, which in a `.gg` file is the NEXT definition's doc
+        // comment, not part of this body. Treating `#` as a continuation would
+        // make each probe swallow its successor's doc comment, so a future
+        // comment that merely MENTIONS `infer_expr_type(` would fail this lint
+        // with a message telling the author not to raise the allowance — advice
+        // that would be wrong for a comment.
         let mut end = src.len();
         let mut off = after;
         for line in src[after..].split_inclusive('\n') {
-            if !line.starts_with([' ', '\t', '\n', '#']) && !line.is_empty() {
+            if !line.starts_with([' ', '\t', '\n']) && !line.is_empty() {
                 end = off;
                 break;
             }
