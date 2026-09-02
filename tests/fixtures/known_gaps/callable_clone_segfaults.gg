@@ -1,16 +1,17 @@
-# t0936 — `.clone()` on a `Callable` bound to a NAMED LOCAL segfaults, while the
-# byte-equivalent clone through a temp receiver works.
+# t0936 — `.clone()` on a value-form `Callable` lowers to `Constant::Unit` and
+# the emitted C memcpys sizeof(GorgetClosure) out of that unit slot -> SIGSEGV,
+# on BOTH backends, with `gg check` clean.
 #
-#   Callable[int(int)] h = (int x): x + 1
-#   h.clone()                     -> SIGSEGV
-#   fns.get(0).unwrap().clone()   -> correct (prints 2)
+# ROOT CAUSE (fire count 0 at the clone arm): `infer_type_name_from_operand_full`
+# (src/ir/lowering/exprs/methods.rs:4903) returns None for a GirType::FnPtr
+# receiver, so the whole block gated by `if let Some(type_name)` at :1731 — which
+# contains the `.clone()` arm at :1958 — is skipped. That function already
+# documents this exact class for a previously-fixed sibling at :4954-4959.
 #
-# `.clone()` on a Callable is a SUPPORTED operation, not a carve-out violation:
-# `src/ir/lowering/builtins.rs:1109` registers
-# `clone_fn: Some("gorget_closure_clone_to_owned")`, and
-# `tests/fixtures/security/attack_91_callable_clone_outlives_source.gg` pins the
-# deep-clone path green. So the defect is in the clone PRODUCER for a
-# named-local receiver, and the intended behaviour is that this prints 2.
+# NOT a carve-out violation: Callable HAS a clone path (builtins.rs:1109), pinned
+# green by tests/fixtures/security/attack_91_callable_clone_outlives_source.gg.
+# NOT a receiver-shape issue: make().clone() is a temp receiver and also SEGVs.
+# INTENDED: prints 2.
 void main():
     Callable[int(int)] h = (int x): x + 1
     Callable[int(int)] g = h.clone()

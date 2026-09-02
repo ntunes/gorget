@@ -6136,8 +6136,9 @@ fn catch_binding_throw_in_match_arm_ice() {
 // INTENDED output, so it is RED at HEAD on purpose. Un-ignore + move out of
 // known_gaps/ when graduating.
 #[test]
-#[ignore = "todo/t0936 — `.clone()` on a Callable bound to a named local SEGVs; the same \
-clone through a temp receiver is correct. Asserts the INTENDED output (2)."]
+#[ignore = "todo/t0936 — `.clone()` on a value-form Callable lowers to Constant::Unit \
+(infer_type_name_from_operand_full returns None for FnPtr, skipping the clone arm) and SEGVs \
+on both backends. Asserts the INTENDED output (2)."]
 fn callable_clone_segfaults() {
     run_gg("known_gaps/callable_clone_segfaults.gg", "2");
 }
