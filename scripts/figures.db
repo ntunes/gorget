@@ -508,7 +508,7 @@ lint.typed_metadata.sidecars.mirror = tests/lints.rs:TYPED_METADATA_SIDECAR_BUDG
 lint.typed_metadata.sidecars.input = none
 
 row = lint.phase_d.proxy_reads
-lint.phase_d.proxy_reads.value = 89
+lint.phase_d.proxy_reads.value = 91
 lint.phase_d.proxy_reads.unit = Phase-D ownership proxy reads in src/
 lint.phase_d.proxy_reads.polarity = exact-pin
 lint.phase_d.proxy_reads.provenance = derived

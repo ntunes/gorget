@@ -656,7 +656,12 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// executor otherwise never sees fail.)
     /// EXACT count — see [`assert_exact_ratchet`]. Core #4 sibling of
     /// `no_growth_in_name_prefix_routing`'s reseed (R48 Track D2).
-    const PHASE_D_PROXY_BUDGET: usize = 89;
+    /// Bumped 89 → 91 (R48 E-B1): two registrar-site `drops.is_registered`
+    /// skips at `lower_catch_expr` / `lower_rethrow_expr` (Core #3 drop-register
+    /// of catch-bound payloads). Skip avoids double-enrolling the already-
+    /// tracked `throws String` resource-temp path. Drop-accountant state, not
+    /// `LocalOwnership` — same class as the 64→…→95 bumps.
+    const PHASE_D_PROXY_BUDGET: usize = 91;
 
     let count = count_phase_d_proxy_reads();
     assert_exact_ratchet(
