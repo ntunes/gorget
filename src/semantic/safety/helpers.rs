@@ -709,18 +709,19 @@ impl<'a> BorrowChecker<'a> {
     pub(super) fn is_buffer_owning_receiver(
         &self, recv: &Spanned<Expr>,
     ) -> bool {
-        // Resolve the receiver's type (inferred result or, for a bare binding,
-        // its declared type), then test it via the typed predicate.
-        let tid = self.expr_types.get(&recv.span).copied().or_else(|| {
-            self.find_root_def_id_with_path(recv)
-                .and_then(|(root, path)| {
-                    if path.is_empty() {
-                        self.scopes.get_def(root).type_id
-                    } else {
-                        None
-                    }
-                })
-        });
+        // Resolve the receiver's type through the ONE place-typing resolver
+        // (`lvalue_value_type`), the same shape `is_mutating_method_call` uses
+        // at check_expr.rs:72-76. D53 ranges over the consuming POSITION, not
+        // the receiver's spelling (decisions.md:532), so `self.routes.put(..)`
+        // and `fns.put(..)` must resolve identically: a root-only resolver that
+        // gave up on any non-empty place path silently exempted every field /
+        // index / tuple receiver from the gate. One source of truth per axis
+        // (Layering rule 3) — do NOT re-add a second, weaker root-only branch.
+        let tid = self
+            .expr_types
+            .get(&recv.span)
+            .copied()
+            .or_else(|| self.lvalue_value_type(recv));
         tid.map_or(false, |t| self.is_buffer_owning_type(t))
     }
 

@@ -4830,6 +4830,88 @@ fn d53_generic_index_last_targ_over_rejects() {
     run_gg("known_gaps/d53_generic_index_last_targ_over_rejects.gg", "1\n7");
 }
 
+/// D53 RECEIVER-SHAPE axis. The rule ranges over the consuming POSITION
+/// (`docs/define-gorget/decisions.md:532` names no receiver qualifier; the
+/// boundary set in `docs/devbook/11-copy-on-write.md` is a `ConsumeSiteClass`,
+/// a position class), so a `Dict` must own its element whether it was reached
+/// as `fns` or as `self.routes`. Rust gg used to be INTERNALLY inconsistent
+/// here: `is_buffer_owning_receiver` resolved the receiver through a root-only
+/// path that returned `None` for any non-empty place path, so every field /
+/// tuple-field receiver was silently exempt while the self-host rejected it.
+///
+/// The axis is `{local, field-of-local, self.field, index, tuple-field}`. The
+/// `local` cell is the whole `mutex_vector_d53_consume_siblings_reject` set
+/// above; `index` already worked (it carries an `expr_types` entry — see that
+/// fixture's header) and is pinned here as the axis's already-working cell.
+///
+/// OMITTED CELLS, per Core #12: field/index *SOURCE* places for the
+/// non-unique-lock members (`v.push(h.callable_field)`) are `todo/t0682` — the
+/// `SingleOwner` arm is identifier-gated, and widening it naively over-rejects
+/// borrow-binding collection reads. Not this fix's axis.
+#[test]
+fn mutex_vector_d53_receiver_shape_axis_reject() {
+    // Receiver shape, unique-lock element.
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_field_recv_push_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_self_field_recv_push_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_index_recv_push_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject(
+        "d53_unique_lock/mutex_tuple_field_recv_push_reject.gg",
+        D53_MUTEX,
+    );
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_field_recv_put_reject.gg", D53_RWLOCK);
+    // Element-TYPE axis at a field receiver — the rest of the carve-out set,
+    // proving the fix rides the shared `needs_explicit_move` predicate and not
+    // a unique-lock costume. `Guard` has no protocol clone_fn, `Box` has no
+    // protocol row at all, `Callable` has a real clone path — all three reject.
+    check_gg_fails("d53_unique_lock/guard_field_recv_push_reject.gg", "E_MoveWithoutOperator");
+    check_gg_fails("d53_unique_lock/box_field_recv_push_reject.gg", "E_MoveWithoutOperator");
+    check_gg_fails("d53_unique_lock/callable_field_recv_put_reject.gg", "E_MoveWithoutOperator");
+    check_gg_fails(
+        "d53_unique_lock/callable_self_field_recv_put_reject.gg",
+        "E_MoveWithoutOperator",
+    );
+}
+
+/// The ACCEPT counterpart of the receiver-shape NEG set: the same field-receiver
+/// consume site with the sanctioned `^source` spelling compiles and RUNS. A
+/// guard that rejected the POSITION rather than the implicit COPY would pass
+/// the NEG set alone and fail here.
+#[test]
+fn mutex_vector_d53_receiver_shape_caret_accept() {
+    run_gg("d53_unique_lock/mutex_field_recv_caret_push.gg", "1\n5");
+}
+
+/// D10 reconciliation, cross-lane text pin: when the SOURCE is a field
+/// sub-place the remedy must not name `^` at all — D10 rejects a bare `^` on a
+/// field/index sub-place as `E_PartialMove`, and `^root` moves a different
+/// value. The self-host lane half is
+/// `self_host_driver_rejects_d53_receiver_and_subplace`.
+#[test]
+fn mutex_d53_field_source_subplace_message() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/d53_unique_lock/mutex_field_source_push_subplace_message.gg");
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture),
+        "mutex_d53_field_source_subplace_message",
+    );
+    assert!(!output.status.success(), "expected `gg check` to reject the sub-place copy");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("wrap the sub-place in `Shared[Mutex[T]]`")
+            && stderr.contains("partial move and is rejected"),
+        "expected the D10-reconciled FieldIndex unique-lock remedy, got:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains("write `^s` to move"),
+        "the whole-shape `^root` remedy is UNFOLLOWABLE for a sub-place source (D10), got:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains(".clone()"),
+        "D53 unique locks have no clone path; the diagnostic must not offer `.clone()`, got:\n{stderr}",
+    );
+}
+
 #[test]
 fn mutex_vector_d53_pos_temp_caret_nonconsuming() {
     run_gg("d53_unique_lock/mutex_temp_push.gg", "1\n0");
@@ -34213,6 +34295,108 @@ fn self_host_d12_generic_struct_field_under_rejects() {
         "cannot copy",
         "a drop-tainted field of a generic struct escaped the D12 gate — two \
          owners of one resource, so the drop runs twice",
+    );
+}
+
+// ── D53 cross-lane pin, self-host half (Core #9). Two things at once:
+//
+//   1. RECEIVER-SHAPE axis — the self-host has always rejected a field /
+//      `self.field` / tuple-field receiver at a consuming position (it resolves
+//      the receiver with full `infer_expr_type`), and Rust gg now agrees.
+//      Keeping both lanes on ONE fixture set is what stops the divergence from
+//      re-opening in either direction.
+//   2. D10 RECONCILIATION — when the SOURCE is a field sub-place, the remedy
+//      must NOT name `^`: D10 rejects a bare `^` on a sub-place as
+//      `E_PartialMove`, and `^root` moves a different value. The self-host
+//      rendered the stale whole-shape "write `^s` to move" text until
+//      `unique_lock_message` gained the shape arm.
+//
+// The Rust halves are `mutex_vector_d53_receiver_shape_axis_reject` and
+// `mutex_d53_field_source_subplace_message`.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_d53_receiver_and_subplace() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let reject_fixtures = [
+        // receiver shape × unique lock
+        "mutex_field_recv_push_reject",
+        "mutex_self_field_recv_push_reject",
+        "mutex_index_recv_push_reject",
+        "mutex_tuple_field_recv_push_reject",
+        "rwlock_field_recv_put_reject",
+        // element type × field receiver
+        "guard_field_recv_push_reject",
+        "box_field_recv_push_reject",
+        "callable_field_recv_put_reject",
+        "callable_self_field_recv_put_reject",
+        // D10 sub-place SOURCE remedy
+        "mutex_field_source_push_subplace_message",
+    ];
+    for name in reject_fixtures {
+        let fixture = manifest_dir.join(format!("tests/fixtures/d53_unique_lock/{name}.gg"));
+        assert!(fixture.exists(), "missing D53 reject fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_rejects_d53_receiver_and_subplace",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !out.status.success(),
+            "self-host driver ACCEPTED a D53 consume-position copy `{name}` \
+             (D53 enforcement in self_host_typechecker/typecheck.gg regressed). \
+             exit={:?}\nstderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            stderr.contains("cannot copy"),
+            "self-host driver rejected `{name}` but emitted no `cannot copy` \
+             diagnostic.\nstderr:\n{stderr}",
+        );
+        assert!(
+            stdout.trim().is_empty(),
+            "self-host driver emitted C for rejected `{name}` — the gate must halt \
+             BEFORE lowering. stdout bytes={}",
+            stdout.len(),
+        );
+    }
+
+    // The D10 sub-place arm, asserted on its TEXT (the whole point of the Q3
+    // half — the old message named an operation D10 forbids).
+    let subplace = manifest_dir
+        .join("tests/fixtures/d53_unique_lock/mutex_field_source_push_subplace_message.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&subplace).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_d53_receiver_and_subplace",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("wrap the sub-place in `Shared[Mutex[T]]`")
+            && stderr.contains("partial move and is rejected"),
+        "self-host must render the D10-reconciled FieldIndex unique-lock remedy \
+         (mirroring Rust `MoveShape::FieldIndex`, src/semantic/errors.rs), got:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains("write `^s` to move"),
+        "self-host rendered the stale whole-shape remedy for a sub-place source; \
+         `^s.lock` is E_PartialMove (D10) and `^s` moves a different value.\n{stderr}",
+    );
+
+    // The ACCEPT counterpart: the sanctioned `^source` spelling at the same
+    // field receiver must still pass the self-host gate.
+    let accept = manifest_dir.join("tests/fixtures/d53_unique_lock/mutex_field_recv_caret_push.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&accept).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_d53_receiver_and_subplace",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success() && !stderr.contains("cannot copy"),
+        "self-host over-rejected the sanctioned `^m` spelling at a field receiver. \
+         exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
     );
 }
 

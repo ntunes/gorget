@@ -321,7 +321,15 @@ pub enum MoveReason {
     /// single-owner by D4. (`is_drop_tainted_type`.)
     DropTaint,
     /// A single-owner-BY-DESIGN carve-out type (closure/`Callable`, `Owned[T]`,
-    /// `Box[T]`, `Task`/`TaskGroup`/`Guard`) — no clone path in the lowering.
+    /// `Box[T]`, `Task`/`TaskGroup`/`Guard`) — no IMPLICIT-copy path in the
+    /// lowering. ⚠ That is NOT "no clone path": the set SPLITS on the explicit
+    /// `.clone()` axis. `Callable`/`MutCallable` carry a real
+    /// `clone_fn` (`src/ir/lowering/builtins.rs`), `Box`/`Task`/`Owned` have no
+    /// `BuiltinTypeProtocol` row at all yet clone correctly, and only
+    /// `TaskGroup`/`Guard` are genuinely clone-less here (`Guard.clone()` is
+    /// `todo/t0940`). So this arm's `.clone()` remedy is correct for most
+    /// members; the truly clone-less unique locks take the `UniqueLock` arm,
+    /// which returns before the `.clone()` texts render.
     SingleOwner,
     /// D53: `Mutex[T]` / `RWLock[T]` are unique locks. Sharing is
     /// `Shared[Mutex[T]]` / `Shared[RWLock[T]]`. The diagnostic names `^source`

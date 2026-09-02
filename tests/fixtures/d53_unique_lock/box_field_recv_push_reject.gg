@@ -1,0 +1,18 @@
+# D53 NEG — TYPE axis at a field receiver: `Box[T]`, the carve-out member with
+# no `BuiltinTypeProtocol` row at all. Pins that the receiver fix rides
+# `needs_explicit_move`'s by-design set, not the protocol table.
+# CELL: type=Box · position=push · receiver=field of a local · source=named place.
+# RED at 3c3ea3f0b: `gg check` ACCEPTED.
+# ggdef: ABSTAIN (Box out of subset).
+
+struct P:
+    int v
+
+struct Bag:
+    Vector[Box[P]] items
+
+void main():
+    Box[P] b = Box.new(P(7))
+    Bag bag = Bag([])
+    bag.items.push(b)
+    print(bag.items.len())

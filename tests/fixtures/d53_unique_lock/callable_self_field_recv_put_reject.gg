@@ -1,0 +1,20 @@
+# D53 NEG — the `equip` sibling of `callable_field_recv_put_reject.gg`: the
+# axis is the RECEIVER, not the function kind, so `self.routes.put(key, h)`
+# rejects for the same reason `r.routes.put(key, h)` does.
+# CELL: type=Callable · position=put · receiver=self.field · source=named place.
+# RED at 3c3ea3f0b: `gg check` ACCEPTED.
+# ggdef: Callable IS in subset; no `equip`-on-Dict-field receiver surface there.
+
+from std.collections import Dict
+
+struct Router:
+    Dict[String, Callable[int(int)]] routes
+
+equip Router:
+    void route(&self, String key, Callable[int(int)] handler):
+        Callable[int(int)] h = handler
+        self.routes.put(key, h)
+
+void main():
+    Router r = Router({})
+    print(r.routes.len())

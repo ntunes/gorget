@@ -1,4 +1,5 @@
-# RV-B single-owner counterpart: a `Callable` (single-owner, no clone path) at a
+# RV-B single-owner counterpart: a `Callable` (single-owner — no IMPLICIT-copy
+# path; an explicit `.clone()` does exist for Callable) at a
 # dot-shorthand enum-variant arg REQUIRES an explicit `!` — and with it the move
 # is ACCEPTED. Before RV-B the self-host discarded the sigil and fired a
 # SELF-CONTRADICTING "write `!callable` to move" on code that already wrote `!`

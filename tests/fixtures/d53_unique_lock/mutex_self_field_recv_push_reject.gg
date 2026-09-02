@@ -1,0 +1,21 @@
+# D53 NEG — RECEIVER-SHAPE axis: `self.<field>` receiver inside an `equip`
+# method. The sibling of the free-function field receiver; the axis is the
+# RECEIVER, not the function kind.
+# CELL: lock=Mutex · position=push · receiver=self.field · source=named local.
+# The local is bound from a fresh TEMP (`Mutex[int](7)`), which D53 keeps POS at
+# the bind — so the ONLY thing this fixture can reject on is the push, and it
+# cannot go green for the bind-position reason.
+# RED at 3c3ea3f0b: `gg check` ACCEPTED.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+struct Holder:
+    Vector[Mutex[int]] locks
+
+equip Holder:
+    void stash(&self):
+        Mutex[int] m = Mutex[int](7)
+        self.locks.push(m)
+
+void main():
+    Holder h = Holder([])
+    print(h.locks.len())

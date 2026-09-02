@@ -815,10 +815,25 @@ impl Elaborator {
     /// `!src` to move (or `src.clone()`). This is a SEPARATE axis from
     /// drop-taint (`ty_tainted` stays callable-clean, per D4/D5 pure drop), and
     /// it is IDENTIFIER-gated (a bare local of callable type), matching
-    /// production's `needs_explicit_move` identifier branch. It deliberately
-    /// does NOT fire at return, collection put/set, collection/array/tuple
-    /// literal, or capture positions — a callable moves there at last use
-    /// (measured: `return f` / `v.push(f)` / `[f]` accepted on both compilers).
+    /// production's `needs_explicit_move` identifier branch.
+    ///
+    /// POSITIONS (D53, `docs/define-gorget/decisions.md:529-532`, RATIFIED —
+    /// the rule ranges over the POSITION, never the receiver's spelling):
+    /// bare-assign / bind; constructor / struct / enum-variant init;
+    /// container-literal elements (array, set and tuple literals); and the
+    /// consuming positions `push` / `put` / `set` / `insert` / `send` /
+    /// `v[i] = x`. All of those that exist in the phase-0 subset are wired.
+    /// `return` is NOT in D53's list and is deliberately accepted (a callable
+    /// moves there at last use) — verified against production `gg check`.
+    /// `insert` and `send` have no phase-0 subset surface (no `Channel`, and
+    /// `Set` ingests via `add`), so they have no call site here.
+    ///
+    /// NOTE: this check previously fired at bind/ctor only, on a "measured:
+    /// `v.push(f)` / `[f]` accepted on both compilers" premise that D53's
+    /// consume gate retired. Both rows are now REJECTED by Rust gg and the
+    /// self-host; the ggdef tests below pin every position so the premise
+    /// cannot decay silently again (Core #14 — an invariant comment with no
+    /// enforcing guard).
     fn reject_if_single_owner_callable_init(&self, e: &ast::Expr, span: Span, position: &str, exempt_params: bool) -> ElabResult<()> {
         if let ast::Expr::Identifier(n) = e {
             // At a BIND / whole-reassign boundary a bare PARAM callable is
@@ -1035,6 +1050,12 @@ impl Elaborator {
                 // VarDecl bind, production check_stmt bare-assign `:1490`).
                 if matches!(target.node, ast::Expr::Identifier(_)) {
                     self.reject_if_single_owner_callable_init(&value.node, value.span, "bind", true)?;
+                }
+                // D53 consuming position `v[i] = x`: the collection must own the
+                // element, so a bare single-owner callable RHS is a copy. Params
+                // are NOT exempt here (this is an ownership boundary, not a bind).
+                if matches!(target.node, ast::Expr::Index { .. }) {
+                    self.reject_if_single_owner_callable_init(&value.node, value.span, "index-assign", false)?;
                 }
                 // Set-vs-vector literal disambiguation at an ASSIGNMENT
                 // destination (probe p15: `s = {3,3,4}` re-assign must dedupe
@@ -1808,6 +1829,9 @@ impl Elaborator {
                 self.in_owning_context = true;
                 let mut out = Vec::with_capacity(elems.len());
                 for e in elems {
+                    // D53: a container-literal ELEMENT is a consuming init
+                    // boundary — the sibling of the `StructLiteral` loop below.
+                    self.reject_if_single_owner_callable_init(&e.node, e.span, "container-literal", false)?;
                     self.dest_ty_hint = elem_hint.clone();
                     out.push(self.owning_source_from_expr(e)?);
                 }
@@ -1822,6 +1846,9 @@ impl Elaborator {
                 self.in_owning_context = true;
                 let mut out = Vec::with_capacity(elems.len());
                 for e in elems {
+                    // D53: tuple-literal elements are container-literal
+                    // elements too — same consuming boundary, same call.
+                    self.reject_if_single_owner_callable_init(&e.node, e.span, "container-literal", false)?;
                     out.push(self.owning_source_from_expr(e)?);
                 }
                 self.in_owning_context = prev_owning;
@@ -2818,6 +2845,25 @@ impl Elaborator {
                 | BuiltinMethod::Add
         ) {
             self.reject_materialize_on_write(&receiver.node, span)?;
+        }
+        // D53 consuming positions (`push` / `put` / `set` / `insert` / `send`):
+        // the receiver must OWN the ingested element, so a bare single-owner
+        // callable arg is an implicit copy. Gated on the ELEMENT-INGESTING
+        // subset of the mutating builtins (`Pop`/`Clear` take no args) AND on
+        // the receiver actually being a container — production's typed
+        // `is_buffer_owning_receiver` gate, expressed in the subset's own type
+        // vocabulary. Every Borrow arg is checked (production loops all args);
+        // an explicit `!f` / `&f` rides `CallArg.ownership` and is exempt.
+        if matches!(
+            bm,
+            BuiltinMethod::Push | BuiltinMethod::Set | BuiltinMethod::Add | BuiltinMethod::Fill
+        ) && matches!(
+            receiver_type,
+            Ty::Vector(_) | Ty::Set(_) | Ty::Dict(_, _)
+        ) {
+            for a in args {
+                self.reject_if_single_owner_callable_arg(&a.node, a.span, "collection put")?;
+            }
         }
         let mut out = Vec::with_capacity(args.len());
         for a in args {

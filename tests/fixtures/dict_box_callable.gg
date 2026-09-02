@@ -1,7 +1,8 @@
 # Prerequisite test for Phase C: verify Dict[String, Callable[...]] works.
 # Uses two-step pattern: assign to Callable local first, then put/call.
 # `put` is a consuming position and `Callable[T]` is single-owner by design
-# (no clone path in the lowering), so the named local is moved in with `^`.
+# (no IMPLICIT-copy path in the lowering — an explicit `.clone()` DOES exist for
+# Callable), so the named local is moved in with `^`.
 from std.collections import Dict
 
 int double_it(int x):

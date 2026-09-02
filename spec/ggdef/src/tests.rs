@@ -3178,3 +3178,189 @@ void main():
 "#;
     assert_eq!(out(src), "[P, P]");
 }
+
+// ── D53 single-owner callable — ONE test per REJECTING position, plus the
+//    accept counterparts. (`decisions.md:529-532`, RATIFIED: the rule ranges
+//    over the POSITION and the source's ownership class; the receiver's
+//    spelling is not in it.)
+//
+// These pin `reject_if_single_owner_callable_init` / `_arg`, which shipped
+// with NO tests at all — which is exactly how its "measured: `v.push(f)` /
+// `[f]` accepted on both compilers" comment rotted once D53's consume gate
+// landed on Rust gg and the self-host. Every row below was cross-checked
+// against `gg check`; a lane that drifts trips here.
+//
+// OMITTED CELLS, named per Core #12:
+//   · `Set.add(f)` — `Set[Callable[..]]` cannot be constructed in the phase-0
+//     subset ("expression `unsupported` is outside the phase-0 subset"), so
+//     the position has no subset surface. `{f}` (set LITERAL) IS covered — it
+//     shares the `ArrayLiteral` node.
+//   · `send` — no `Channel` in the phase-0 subset.
+//   · `Mutex` / `RWLock` / `Box` / `Task` / `TaskGroup` / `Guard` / `Owned` —
+//     none exist in ggdef's type vocabulary (`grep -rn 'Mutex\|RWLock'
+//     spec/ggdef/src/` → 0 hits). ggdef abstains on them by construction; the
+//     Callable family is the whole in-subset slice of the carve-out set.
+//   · FIELD / INDEX *source* places (`v.push(h.f)`) — the check is
+//     identifier-gated on BOTH production and here; that axis is `todo/t0682`.
+
+/// Assert a program is rejected as an implicit single-owner-callable copy,
+/// naming the position the diagnostic must report.
+fn d53_callable_rejects(body: &str, position: &str) {
+    match run_source(body, FUEL) {
+        Err(e) => {
+            let s = e.to_string();
+            assert!(
+                s.contains("E_MoveWithoutOperator") && s.contains("single-owner callable"),
+                "{position}: got: {s}"
+            );
+            assert!(s.contains(position), "{position}: diagnostic named a different position: {s}");
+        }
+        Ok(_) => panic!("{position}: a bare single-owner callable copy must be rejected"),
+    }
+}
+
+#[test]
+fn d53_callable_position_bind() {
+    d53_callable_rejects(
+        "void main():\n    Callable[int(int)] f = (int x): x + 1\n    Callable[int(int)] g = f\n    print(g(1))\n",
+        "bind",
+    );
+}
+
+#[test]
+fn d53_callable_position_whole_reassign() {
+    d53_callable_rejects(
+        "void main():\n    Callable[int(int)] f = (int x): x + 1\n    Callable[int(int)] g = (int y): y + 2\n    g = f\n    print(g(1))\n",
+        "bind",
+    );
+}
+
+#[test]
+fn d53_callable_position_ctor_init() {
+    d53_callable_rejects(
+        "struct W:\n    Callable[int(int)] h\nvoid main():\n    Callable[int(int)] f = (int x): x + 1\n    W w = W(f)\n    print(1)\n",
+        "ctor-init",
+    );
+}
+
+#[test]
+fn d53_callable_position_enum_variant_init() {
+    d53_callable_rejects(
+        "void main():\n    Callable[int(int)] f = (int x): x + 1\n    Option[Callable[int(int)]] o = Some(f)\n    print(1)\n",
+        "enum-variant init",
+    );
+}
+
+#[test]
+fn d53_callable_position_array_literal() {
+    // `[f]` — a container-literal ELEMENT is a consuming init boundary.
+    d53_callable_rejects(
+        "void main():\n    Callable[int(int)] f = (int x): x + 1\n    Vector[Callable[int(int)]] v = [f]\n    print(1)\n",
+        "container-literal",
+    );
+}
+
+#[test]
+fn d53_callable_position_set_literal() {
+    // `{f}` is the SAME AST node as `[f]` with a Set destination — the sibling
+    // cell of the array literal, covered by the one call in the element loop.
+    d53_callable_rejects(
+        "void main():\n    Callable[int(int)] f = (int x): x + 1\n    Set[Callable[int(int)]] s = {f}\n    print(1)\n",
+        "container-literal",
+    );
+}
+
+#[test]
+fn d53_callable_position_tuple_literal() {
+    d53_callable_rejects(
+        "void main():\n    Callable[int(int)] f = (int x): x + 1\n    (Callable[int(int)], int) t = (f, 1)\n    print(1)\n",
+        "container-literal",
+    );
+}
+
+#[test]
+fn d53_callable_position_vector_push() {
+    d53_callable_rejects(
+        "void main():\n    Callable[int(int)] f = (int x): x + 1\n    Vector[Callable[int(int)]] fns = []\n    fns.push(f)\n    print(1)\n",
+        "collection put",
+    );
+}
+
+#[test]
+fn d53_callable_position_dict_put() {
+    // The VALUE arg of a two-arg put — production loops EVERY Borrow arg, so
+    // the key position must not shadow the value position.
+    d53_callable_rejects(
+        "void main():\n    Callable[int(int)] f = (int x): x + 1\n    Dict[String, Callable[int(int)]] d = Dict[String, Callable[int(int)]]()\n    d.put(\"a\", f)\n    print(1)\n",
+        "collection put",
+    );
+}
+
+#[test]
+fn d53_callable_position_vector_set() {
+    d53_callable_rejects(
+        "void main():\n    Callable[int(int)] f = (int x): x + 1\n    Vector[Callable[int(int)]] v = [(int y): y + 2]\n    v.set(0, f)\n    print(1)\n",
+        "collection put",
+    );
+}
+
+#[test]
+fn d53_callable_position_index_assign() {
+    // `v[i] = x` — D53's sixth consuming position.
+    d53_callable_rejects(
+        "void main():\n    Callable[int(int)] f = (int x): x + 1\n    Vector[Callable[int(int)]] v = [(int y): y + 2]\n    v[0] = f\n    print(1)\n",
+        "index-assign",
+    );
+}
+
+#[test]
+fn d53_callable_return_is_accepted() {
+    // `return` is NOT one of D53's positions — a callable moves there at last
+    // use. Both production lanes accept it; ggdef must not "fix" this row.
+    let src = r#"
+Callable[int(int)] pick():
+    Callable[int(int)] f = (int x): x + 1
+    return f
+void main():
+    Callable[int(int)] g = pick()
+    print(g(1))
+"#;
+    assert_eq!(out(src), "2");
+}
+
+#[test]
+fn d53_callable_explicit_move_and_clone_accepted() {
+    // The two remedies the diagnostic names must actually work at a consuming
+    // position — otherwise the message advises an operation that does not
+    // exist (the D53 unique-lock lesson).
+    let src = r#"
+void main():
+    Callable[int(int)] f = (int x): x + 1
+    Vector[Callable[int(int)]] fns = []
+    fns.push(!f)
+    Callable[int(int)] g = (int y): y + 2
+    Vector[Callable[int(int)]] more = []
+    more.push(g.clone())
+    print(fns.len() + more.len())
+"#;
+    assert_eq!(out(src), "2");
+}
+
+#[test]
+fn d53_callable_plain_call_arg_and_param_bind_accepted() {
+    // A plain function-call arg is a BORROW, not a consuming position
+    // (CLAUDE.md § Ownership at Consuming Positions), and re-binding a PARAM
+    // copies a pointer, not the owner. Both lanes accept both.
+    let src = r#"
+void use(Callable[int(int)] p):
+    print(p(1))
+void take(Callable[int(int)] p):
+    Callable[int(int)] q = p
+    print(q(3))
+void main():
+    Callable[int(int)] f = (int x): x + 1
+    use(f)
+    take(f)
+"#;
+    assert_eq!(out(src), "2\n4");
+}

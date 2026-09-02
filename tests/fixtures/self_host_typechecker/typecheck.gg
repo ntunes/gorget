@@ -1137,7 +1137,18 @@ String unique_lock_wrap(int type_id, ScopeTable scopes, TypeTable types):
             return "Shared[Mutex[T]]"
 
 # D53 unique-lock diagnostic: `^source` or Shared[Mutex[T]], never `.clone()`.
-String unique_lock_message(String name, String wrap):
+# Shape-aware, mirroring Rust's `MoveReason::UniqueLock` arms
+# (src/semantic/errors.rs:1533-1552). `{name}` is the place's ROOT binding.
+#   shape 0 = whole identifier/self → `^name` moves the whole lock
+#   shape 1 = field/index sub-place → D10 rejects a bare `^` on a sub-place as
+#             E_PartialMove, and `^root` would move a DIFFERENT value, so
+#             wrapping is the ONLY followable remedy — never advise `^`.
+# (Rust also carries a capture arm; the self-host has no unique-lock capture
+# reject site, so a shape-2 arm here would be unreachable.)
+String unique_lock_message(String name, String wrap, int shape):
+    if shape == 1:
+        String head = f"cannot copy `{name}`: `{name}` is a unique lock — wrap the sub-place in `{wrap}`"
+        return head + " (a bare `^` on a field/index sub-place is a partial move and is rejected)"
     return f"cannot copy `{name}`: `{name}` is a unique lock — write `^{name}` to move or wrap in `{wrap}` to share"
 
 # The single-owner INIT-class reject message (mirrors Rust MoveWithoutOperator +
@@ -1168,7 +1179,10 @@ void reject_single_owner_init(SpannedExpr e, bool param_exempt, ScopeTable scope
         int tid = lvalue_value_type(e, scopes, types, ctx)
         if is_unique_lock_type(tid, scopes, types):
             String wrap = unique_lock_wrap(tid, scopes, types)
-            ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), unique_lock_message(place_root_name(e.expr), wrap)))
+            int lock_shape = 1
+            if place_is_whole(e.expr):
+                lock_shape = 0
+            ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), unique_lock_message(place_root_name(e.expr), wrap, lock_shape)))
             return
     match e.expr:
         case EIdentifier(_name):
@@ -1184,7 +1198,7 @@ void reject_single_owner_init(SpannedExpr e, bool param_exempt, ScopeTable scope
                 if is_var and (not param_exempt or not d.is_param):
                     if is_unique_lock_type(d.type_id, scopes, types):
                         String wrap = unique_lock_wrap(d.type_id, scopes, types)
-                        ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), unique_lock_message(d.name, wrap)))
+                        ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), unique_lock_message(d.name, wrap, 0)))
                     elif is_single_owner_type(d.type_id, scopes, types):
                         ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), single_owner_message(d.name)))
         else:

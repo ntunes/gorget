@@ -1,0 +1,18 @@
+# D53 NEG — RECEIVER-SHAPE axis: the collection is reached through an INDEX
+# sub-place (`buckets[0].push(m)`). Third value of the receiver axis after
+# `field` and `self.field`.
+# CELL: lock=Mutex · position=push · receiver=index sub-place · source=named place.
+# NOT RED at 3c3ea3f0b — this cell already REJECTED, and that is the point:
+# an `Index` receiver carries an `expr_types` entry, so the gate's FIRST
+# resolver hit and the root-only fallback never ran. The receiver axis broke
+# only where `expr_types` had no entry — field and tuple-field access. This
+# fixture is the axis's already-working cell, pinned so a future rewrite of the
+# receiver resolver cannot silently lose it.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Vector[Vector[Mutex[int]]] buckets = []
+    buckets.push([])
+    buckets[0].push(m)
+    print(buckets.len())

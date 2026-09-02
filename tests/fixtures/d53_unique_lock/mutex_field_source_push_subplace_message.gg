@@ -1,0 +1,18 @@
+# D53 / D10 message pin — the SOURCE is a field sub-place (`s.lock`), so the
+# remedy must NOT name `^`: D10 rejects a bare `^` on a field/index sub-place
+# as E_PartialMove, and `^s` would move a different value. The only followable
+# remedy is wrapping the sub-place.
+# CELL: lock=Mutex · position=push · source=field sub-place (shape=FieldIndex).
+# Cross-lane pin: Rust gg has rendered the reconciled text since D10 landed;
+# the SELF-HOST rendered the stale whole-shape "write `^s` to move" until this
+# round. Both lanes must now render the sub-place arm.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+struct Holder:
+    Mutex[int] lock
+
+void main():
+    Holder s = Holder(Mutex[int](1))
+    Vector[Mutex[int]] v = []
+    v.push(s.lock)
+    print(v.len())

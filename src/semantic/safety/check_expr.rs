@@ -69,6 +69,13 @@ impl BorrowChecker<'_> {
         // (collection/Channel/Heap) or the owned String — interior-mutability
         // handles (AtomicInt, WaitGroup, ...) are FFI-backed and write
         // through, not CoW.
+        // ONE resolver for the receiver-type axis (Layering rule 3). This is
+        // now byte-for-byte what `is_buffer_owning_receiver` computes, so the
+        // former `is_buffer_owning_receiver(receiver) || <this>` disjunct was
+        // `A || (A || B)`; only the owned-String disjunct `B` was ever
+        // load-bearing. The disjunct existed to compensate for a root-only
+        // resolver inside the helper that gave up on non-empty place paths;
+        // that resolver is gone, so the compensation goes with it.
         let recv_tid = self
             .expr_types
             .get(&receiver.span)
@@ -76,10 +83,9 @@ impl BorrowChecker<'_> {
             .or_else(|| self.lvalue_value_type(receiver));
         let is_builtin_mut = crate::ir::lowering::builtins::is_mutating_builtin_method(
             method.node.as_str(),
-        ) && (self.is_buffer_owning_receiver(receiver)
-            || recv_tid.map_or(false, |t| {
-                self.is_buffer_owning_type(t) || t == self.types.owned_string_id
-            }));
+        ) && recv_tid.map_or(false, |t| {
+            self.is_buffer_owning_type(t) || t == self.types.owned_string_id
+        });
         let is_user_mut = self
             .method_resolutions
             .get(&method.span.start)
@@ -1683,7 +1689,8 @@ impl<'a> BorrowChecker<'a> {
                         // keep their genuine-borrow handling in the
                         // `target_is_mut_ref` arm below. Carve-out: single-owner
                         // types (closures/`Box`/`Owned`/`Task`/...) still require
-                        // explicit `!` — they have no clone path.
+                        // an explicit sigil — the lowering has no IMPLICIT-copy
+                        // path for them (several DO have an explicit `.clone()`).
                         self.require_explicit_move_for_single_owner_init(arg, false);
                     } else if target_is_mut_ref {
                         // Identify the source local being mutably-borrowed.

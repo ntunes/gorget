@@ -1,0 +1,23 @@
+# D53 NEG — TYPE axis at a field receiver: the `Callable[T]` carve-out member,
+# at `Dict.put` through a struct field. This is the shape the router-style code
+# in `lib/xtd/httpserver.gg` writes, and the cell the self-host lane already
+# rejected while Rust gg accepted it.
+# CELL: type=Callable · position=put · receiver=field of a local · source=named place.
+# RED at 3c3ea3f0b: `gg check` ACCEPTED.
+# ggdef: Callable IS in subset — the ggdef consume-position check covers the
+# BARE-LOCAL receiver form of this cell (spec/ggdef/src/tests.rs
+# `d53_callable_position_dict_put`); ggdef has no struct-field receiver surface
+# for a Dict, so the receiver axis itself abstains there.
+
+from std.collections import Dict
+
+struct Router:
+    Dict[String, Callable[int(int)]] routes
+
+void route(Router &r, String key, Callable[int(int)] handler):
+    Callable[int(int)] h = handler
+    r.routes.put(key, h)
+
+void main():
+    Router r = Router({})
+    print(r.routes.len())
