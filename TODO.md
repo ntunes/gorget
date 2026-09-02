@@ -2,8 +2,8 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN AND MID-FLIGHT — 7 of 7 code tracks integrated (D1, C, D2, F, A, β, γ). Track S INTEGRATED. E-B1/B2/B3 INTEGRATED.
-⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A, β, γ, S) and the owner's lift to launch Track E.
+**▶ R48 IS OPEN — all launched tracks INTEGRATED. Owner-directed D10 work landed on main (`t0438`, `t0437`). NEXT is the round-close battery.
+⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A, β, γ, S, E).
 ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST.**
 **D53 is implemented** (unique lock + consume-position reject; diagnostic `^source` / `Shared[Mutex[T]]`).
 Opened 2026-08-31 (owner: *"open next round"*). Headline: **the six CRITICAL memory-safety defects** —
@@ -27,12 +27,13 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
 § Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
 
-### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-02, main `45c76794b`)
+### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-02, main `a9f6d4db3`)
 
-**7 of 7 code tracks INTEGRATED. E-B1 INTEGRATED `280a0cf49`. E-B2 INTEGRATED `04408c66d`. E-B3 INTEGRATED `74622b945`.** Briefs at `/tmp/r48briefs/trackE_B{1,2,3}.md`.
-Lifts spent: C, D2, F, A, β, γ (integrated). D53 unique-lock reject and the figures DB are **on main**.
-A's capture residual is `t0927`; β's are `t0928`–`t0930`; γ's are `t0931`–`t0933`; main's `t0876` remains C-emit jitter.
-Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption is `t0926`.
+**All launched tracks INTEGRATED.** After E, the owner ruled no partial moves on main (not a gauntlet track): `t0438` then `t0437` as `E_PartialMove` (`a9f6d4db3`).
+**NEXT: the round-close battery.** No live executor. New agents still on hold. Next new todo id is **`t0936`**.
+Briefs at `/tmp/r48briefs/trackE_B{1,2,3}.md` (not durable).
+Lifts spent: C, D2, F, A, β, γ, S, E. D53 unique-lock reject and the figures DB are **on main**.
+A's capture residual is `t0927`; β's are `t0928`–`t0930`; γ's are `t0931`–`t0933`; F's adoption is `t0926`; main's `t0876` remains C-emit jitter.
 
 | track | items | branch tip | ahead | merge | OWED STEP |
 |---|---|---|---|---|---|
@@ -47,7 +48,10 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **E-B1** | census + 4 dirty PASSers + leak | — | — | — | **INTEGRATED** `280a0cf49` + `45c76794b` (`PHASE_D_PROXY_BUDGET` 89→91). Awk attribution; catch/rethrow drop-register; LSAN 2B→0; `--check` still RED on catch_binding (honest); sibling `t0935` |
 | **E-B2** | `t0828` 11 untriaged | — | — | — | **INTEGRATED** `04408c66d` (11 MATCH; `UNTRIAGED_CEILING` 24→13; MATCH_FLOOR untouched; t0828 stays open for 13 httpserver rows) |
 | **E-B3** | membership + robustness scorer | — | — | — | **INTEGRATED** `74622b945` (M4/M5; membership lint; `UNTRIAGED_CEILING` stayed **13**; remaining 85-cell adjudication is `t0934`) |
+| **D10** | `t0438` `t0437` | — | — | — | **LANDED ON MAIN** `9ab93c997` + `87824d0bf` + `a9f6d4db3` (owner-directed, no gauntlet). `E_PartialMove`; whole-value `^m` only. Spectests `reject_partial_move_{field,self}` |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
+| **G** | `t0304` oracle hygiene | — | — | — | **SCOPED, NEVER LAUNCHED** this round |
+| **α** | `t0823` | — | — | — | **R49** by owner call |
 
 ⚠ **Briefs + all fold addenda live in `/tmp/r48briefs/*.md` and are NOT durable.** Each carries its
 review history as precedence-ordered addenda (`PRECEDENCE: A3 > A2 > A1 > BODY`). **Re-materialise before
@@ -71,14 +75,11 @@ add/add). β's residuals landed as `t0928`–`t0930`. γ's residuals landed as `
 max and fix every citation. Never take a side on add/add todo ids.**
 
 ### ⛔ WHAT MUST HAPPEN BEFORE R48 CAN CLOSE
-1. **E-B1/B2/B3 INTEGRATED.** Round-close battery still owed (C sweep · LLVM sweep · sanitize_sweep · full robustness_map). `t0824` stays open (`--check` RED on catch_binding, ungraduated). `t0828` stays open (13 httpserver untriaged). `t0934` is the 85-cell robustness SET. `t0935` is the lints.rs enumerator sibling.
-2. **E-B3's `robustness_map` scorer fix LANDED** `74622b945` (`good` from `COL_EXPECTED.startswith("REJECTED")`; `--accept` refuses to write on regressions/new_div). The 85 value-expected C-REJECTED cells are **`t0934`** (adjudicate, do not decrement). Round-close `robustness_map` can now be read as a gate rather than a launderer.
-3. **NOT RUN on the integrated tree:** `GG_BACKEND=llvm` whole-corpus · `scripts/sanitize_sweep.sh` ·
-   `robustness_map` · the C whole-corpus sweep. (D2 ran the C sweep green on ITS branch — 2557/0 with the
-   bootstrap included and scope verified — that is one branch, not the integrated tree.)
-4. **`RUNTIME_DIFF_MATCH_FLOOR` reseed is a ROUND-CLOSE action** on the post-integration number with the
-   jitter discount — **never mid-round from one worktree**. γ measured MATCH **1505** and already lowered
-   `RUNTIME_DIFF_NONMATCH_CEILING` 151 → **147** as its assert instructs (lowering needs no sign-off).
+1. **THE BATTERY.** All launched tracks + the D10 owner work are on `main`. Round-close is still owed on this tree: C sweep · LLVM sweep (sequential) · `scripts/sanitize_sweep.sh` · full `python3 scripts/robustness_map.py` · the cargo targets `--test integration` never touches (`-p ggdef` · `--test spec_conformance` · `--test security` · `--test lints` · `--lib`). Commands live in AGENTS.md § Round lifecycle step 4. (D2's C sweep green was on ITS branch, not the integrated tree.)
+2. **`RUNTIME_DIFF_MATCH_FLOOR` reseed** is a ROUND-CLOSE action on the post-integration number with the jitter discount — **never mid-round**. Const at HEAD is still 1476 (`tests/integration.rs`; `rg RUNTIME_DIFF_MATCH_FLOOR`). `RUNTIME_DIFF_NONMATCH_CEILING` is already **147** at HEAD (γ lowered it; `rg RUNTIME_DIFF_NONMATCH_CEILING`). Two new `spectests/run/reject_partial_move_*.gg` landed after the last floor reseed — `MIN_FIXTURES` is `>=` so they do not red the glob; reseed C/LLVM/SH/`MIN_FIXTURES`/`GGDEF_MATCH_FLOOR` together at close if they MATCH. Regen: `ls spectests/run/*.gg | wc -l` and `cargo test --test spec_conformance -- --test-threads=1 --nocapture`.
+3. **Filed E residuals stay filed** (not launched; they do not hold the battery): `t0824` (`known_gaps_census.sh --check` RED on catch_binding) · `t0828` (remaining untriaged httpserver; `UNTRIAGED_CEILING` 13 at `tests/lints.rs`) · `t0934` (85 robustness cells, adjudicate not decrement) · `t0935` (lints.rs enumerator sibling of the awk fix).
+4. **E-B3's `robustness_map` scorer fix LANDED** `74622b945` (`good` from `COL_EXPECTED.startswith("REJECTED")`; `--accept` refuses to write on regressions/new_div). Round-close `robustness_map` can now be read as a gate rather than a launderer.
+5. **KEEP worktrees** `agent-a619349ec03b80e93` (F3) and `agent-aa19c1e589090caae` (F2) until R49 looks at them. Do not run `scripts/round_cleanup.sh` without a keep-list.
 
 ### ⛔ TWO GATES THAT REPORT SUCCESS WITHOUT EVALUATING ANYTHING — R48's sharpest instrument finding
 - **`t0925`** — `scripts/run_integration.sh:66` puts `"$@"` BEFORE cargo's `--`, so a harness arg is eaten
@@ -191,14 +192,11 @@ C sweep 2533/0/182 · LLVM sweep 2533/0/182 · `spec_conformance` 3/0 · `securi
 
 ### ⚠ STATE A NEXT SESSION MUST NOT RE-DERIVE
 
-- **`RUNTIME_DIFF_NONMATCH_CEILING` = 151 — ⚠ CORRECTED 2026-08-31: it is a SHRINK-ONLY RATCHET, not
-  "immovable".** The owner ruling froze it against **RAISING** only. Its own text
-  (`tests/integration.rs:38629-38635`, `:38684`, `:38713`): *"Reseed DOWN in the same commit whenever the
+- **`RUNTIME_DIFF_NONMATCH_CEILING` is a SHRINK-ONLY RATCHET, not "immovable".** Const at HEAD:
+  `rg RUNTIME_DIFF_NONMATCH_CEILING tests/integration.rs` (currently **147**, lowered by γ). The owner
+  ruling froze it against **RAISING** only. Its own text: *"Reseed DOWN in the same commit whenever the
   backlog shrinks"* · *"lowering needs no sign-off; raising is the owner ask."* **Lowering it when the
-  backlog shrinks is REQUIRED, not optional** — the "immovable" framing in earlier handovers was
-  directionally wrong and would have made R48 forfeit the gain Track H is about to earn (fixing `t0823`
-  takes non-MATCH 151 → ~147, since nondeterministic rows are counted in WRONG-OUTPUT, `:38091`).
-  ⛔ Core #9 ⊕ still forbids raising it for the round's OWN inflow.
+  backlog shrinks is REQUIRED, not optional.** ⛔ Core #9 ⊕ still forbids raising it for the round's OWN inflow.
 - **⚠ `RUNTIME_DIFF_MATCH_FLOOR` (1476) IS A ROUND-CLOSE RESEED, NEVER MID-ROUND.** Its own comment
   (`tests/integration.rs:38570-38586`): raising is *"A ROUND-CLOSE ACTION, on the number the
   post-integration battery prints, with the usual jitter discount"*, because *"a mid-round ratchet from one
@@ -311,8 +309,8 @@ that contention is now gone.**
   ownership.** ⇒ **R49's B2 must re-run its §8 matrix against a tree that already contains C.**
 - ⊕ Two defects found while scouting B1 are **filed separately as `t0873`** and are NOT closed by B1/B2.
 
-⚠ **R48's headline was six CRITICAL memory-safety defects. `t0771` moves to R49; the other five remain:**
-`t0770`+`t0772` (Track A) · `t0763` (Track C) · `t0840` (Track D2) · `t0841` (Track D1, **executor running**).
+⚠ **R48's headline was six CRITICAL memory-safety defects. `t0771` moves to R49; the other five landed:**
+`t0770`+`t0772` (Track A) · `t0763` (Track C) · `t0840` (Track D2) · `t0841` (Track D1).
 
 ### ⚠ RED-VERIFY PROBE TRAP — BINDS EVERY EXECUTOR (found 2026-08-31, R48 Track D1)
 
