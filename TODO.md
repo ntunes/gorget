@@ -44,7 +44,7 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **γ** | nondeterminism | — | — | — | **INTEGRATED** `abd1d79a2` (residuals `t0931`–`t0933`; CEILING 147; `t0204`/`t0267` closed) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
 | **S** | guard simplification | — | — | — | **INTEGRATED** `5cb547e7e` (clause probes retired; heading-id inventory; AGENTS.md 35971 bytes) |
-| **E-B1** | census + 9 rows + leak | — | — | — | **brief pass 3 IN FLIGHT** (pass 2 SIGN OFF; D1 class is 4 sanitizer-dirty census PASSers not 1; A4 folded) |
+| **E-B1** | census + 4 dirty PASSers + leak | — | — | — | **EXECUTOR IN FLIGHT** (pass 3 SIGN OFF). Producer is `lower_catch_expr` err_local, not `lower_throw`. Do not fix t0907/t0382 write sites |
 | **E-B2** | `t0828` 11 untriaged | `2dde41e0d` | 1 | 11 fixtures + `UNTRIAGED_CEILING` 24→13 | **output-review IN FLIGHT**. MATCH 1524 / non-MATCH 147 / untriaged 13. MATCH_FLOOR not reseeded |
 | **E-B3** | membership + robustness scorer | — | — | — | **EXECUTOR IN FLIGHT** (pass 1 blocked; pass 2 D1; pass 3 SIGN OFF + A4). M4/M5 still unlanded. EOF append; do not edit B2's `UNTRIAGED_CEILING` |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
