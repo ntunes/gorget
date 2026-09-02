@@ -2427,6 +2427,20 @@ impl<'a> LoweringContext<'a> {
                 return self.type_registry.clone_fn_name_for_def(td);
             }
         }
+        // A closure VALUE has the same runtime representation and the same
+        // clone function as the `Callable__GorgetClosure` named type
+        // (`builtins.rs:1109/1124/1139/1154` declare
+        // `clone_fn: Some("gorget_closure_clone_to_owned")` for all four
+        // spellings), but at a LOCAL position it is a `GirType::FnPtr` with no
+        // `TypeDef` behind it — so the `Named` lookup above cannot see it.
+        // Without this arm the `.clone()` lowering emits
+        // `gorget_closure_clone_to_owned` with the wrong argument type
+        // ("incompatible type for argument 1"); with it, `Ptr(FnPtr)` also
+        // materializes by clone rather than by a 16-byte `DerefLoad` of the
+        // env handle. `todo/t0936`.
+        if matches!(self.type_registry.get(inner_type), Some(GirType::FnPtr { .. })) {
+            return Some("gorget_closure_clone_to_owned".to_string());
+        }
         None
     }
 

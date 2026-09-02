@@ -1,0 +1,41 @@
+# t0946 — a `Callable` stored in a STRUCT FIELD leaks its captured environment:
+# the struct is classified no-drop, so nothing ever frees the env.
+#
+# `field_is_transitively_droppable` (src/ir/types.rs) deliberately excludes bare
+# `GirType::FnPtr` fields, matching `upgrade_types_from_fields`. Its doc-comment
+# justifies the exclusion with an invariant:
+#
+#   "The `Callable[T()]` local case where FnPtr DOES own a heap env is a
+#    function-body local, not a struct field."
+#
+# THAT INVARIANT IS FALSE, and this fixture is the counter-example (Core #14 —
+# an invariant-asserting comment with no enforcing guard). A user-declared
+# `struct Holder: Callable[int(int)] f` puts an owning FnPtr in a struct field;
+# `gg build --emit-gir` prints `type Holder = struct { f: fn(i64) -> i64 }
+# [drop: None, copy: Copy]`, and ASan reports the captured env leaked at exit.
+#
+# Measured with a heap-FORCED value: the closure CAPTURES `base`, so the env is
+# a real malloc rather than the 0-byte placeholder a non-capturing closure gets.
+#
+# INTENDED: prints 42, ASan-clean under `detect_leaks=1`, on C and LLVM.
+# (⚠ `scripts/sanitize_sweep.sh` is C-only — check LLVM explicitly.)
+#
+# DISCRIMINATED from `t0873(b)`, the sibling leak: that one is a COLLECTION's
+# `elem_drop` never being synthesised for a `Callable` element; this one is a
+# STRUCT's own drop strategy being computed as None. Different write site,
+# different predicate, and fixing either leaves the other leaking.
+
+struct Holder:
+    Callable[int(int)] f
+
+# ⚠ The field is read through `.clone()` rather than called directly: the direct
+# call `h.f(2)` does not LINK (`undefined reference to 'Holder__f'`, `todo/t0939`),
+# which would mask this leak behind a build failure. The clone route is
+# ASan-clean in isolation, so the leak below is the FIELD's env, not the clone's.
+
+void main():
+    int base = 40
+    Callable[int(int)] c = (int x): x + base
+    Holder h = Holder(^c)
+    Callable[int(int)] g = h.f.clone()
+    print(g(2))

@@ -8597,7 +8597,25 @@ fn sanitize_allowlists_shrink_only() {
     // Raising the ceiling records debt that already existed. It is NOT a
     // licence for the next row: an addition with no `⚖ ADMITTED` block is
     // outside the ruling.
-    const LEAK_CEILING: usize = 304;
+    // ⚖ 304 -> 306 (R48 Track R, 2026-09-02). SECOND upward move, and it is a
+    // DIFFERENT KIND from the first: the four rows above were pre-existing leaks
+    // an undercounting baseline had missed; these two are fixtures the round
+    // ADDED to the corpus, leaking mechanisms that are filed, repro'd and older
+    // than the round. `callable_clone_value_form_axis` (the wide net for the
+    // `.clone()`-on-a-closure-VALUE fix) and
+    // `callable_vector_element_plain_sig_call_segv` (a `todo/t0406` cell graduated
+    // out of `known_gaps/`). Their `⚖ ADMITTED` block in the allowlist carries the
+    // attribution, which was made BY EXPERIMENT: the same programs with every
+    // `.clone()` removed leak the IDENTICAL records, and an isolated clone of a
+    // capturing closure is ASan-CLEAN — so the leaker is `todo/t0873(b)`
+    // (`Vector[Callable].push` leaves `elem_drop` NULL) and `todo/t0946` (a
+    // `Callable` in a struct FIELD is classified no-drop), not the clone path.
+    // The leaking cells ARE the coverage: deleting them to keep this count flat
+    // would delete regression coverage of the defect the round fixed. Both items
+    // now ship a durable `known_gaps` repro and an `#[ignore]`d ASan test
+    // asserting the intended clean run — `t0873` had `repro = []` before.
+    // Retires to 304 when those two land.
+    const LEAK_CEILING: usize = 306;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -8727,8 +8745,16 @@ fn sanitize_allowlists_shrink_only() {
     // on either. Note both markers land on the SAME mechanism two existing
     // rows already carry it for (`waitgroup_basic` / `waitgroup_amp_param`,
     // `__gorget_spawn_worker*2+`).
-    const LEAK_CLASS_PAIRS: usize = 509;
-    const LEAK_RECORDS: usize = 2256;
+    //
+    // ⚖ And 509 -> 511 / 2256 -> 2262 with R48 Track R's two admitted rows: 2 new
+    // (fixture, class) pairs tolerating 6 leak records, both classes
+    // `__gorget_closure_env_alloc`, both counts EXACT (no `*N+` marker — the
+    // programs are single-threaded and the counts are stable). Taken from the
+    // sweep's own `verdicts.tsv` column 4 with `FIXLIST` restricted to the two
+    // fixtures, not from a hand count. See the `LEAK_CEILING` note above and the
+    // `⚖ ADMITTED` block in the allowlist for the attribution and what retires them.
+    const LEAK_CLASS_PAIRS: usize = 511;
+    const LEAK_RECORDS: usize = 2262;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     let mut leak_stems: Vec<&str> = Vec::new();

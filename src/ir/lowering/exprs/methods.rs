@@ -1728,6 +1728,54 @@ pub(super) fn lower_method_call(
     // Determine the receiver type and mangle the method name
     let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
 
+    // ─── Core #10 lower-or-reject: a `.clone()` never becomes `Constant::Unit` ───
+    //
+    // Everything the dispatcher can do lives inside the `if let Some(type_name)`
+    // block below. When the receiver has NO dispatch name the block is skipped
+    // in its entirety and the method call falls out of `lower_method_call` as a
+    // unit constant — the caller then memcpys `sizeof(T)` out of that unit slot.
+    // For `.clone()` on a closure value that was `todo/t0936`: rc 139 on BOTH
+    // backends, with `gg check` reporting no errors. A silent drop of a write is
+    // a miscompile-class defect; a loud rejection is not.
+    //
+    // THE GUARD KEYS ON THE METHOD, NOT ON THE RECEIVER TYPE, and that is the
+    // mechanism rather than a hedge. A BROKEN `Callable[int(int)] &` parameter
+    // and a HEALTHY `derive_hashable` `write_int` receiver both arrive here as
+    // `MutPtr(TypeId(11))` — byte-identical, because `UNIT_TYPE == TypeId(11)`
+    // (`src/ir/types.rs`). Only the method name separates them. Measured with
+    // `gg build` (NOT `gg check`, which does not lower and reports a meaningless
+    // zero) over all 2204 `tests/fixtures/*.gg`: the unscoped `None` population
+    // is 4 fires (`write_int`, from the derive-generated hashers), while the
+    // `clone`-scoped population is a single source site. That is what makes a
+    // HARD guard affordable, and it is why the scope is not widened casually.
+    //
+    // WHY NOT AN ARM-COUNT / TEXTUAL RATCHET on the dispatch-name ladder: `FnPtr`
+    // was never in that ladder, so the count never moved, so such a ratchet would
+    // have stayed green through this entire SEGV — the same failure mode that
+    // disqualifies a totality guard on `clone_fn_for_ptr`, which is not even on
+    // this code path. This guard sits at the DAMAGE, so it catches every receiver
+    // representation, including ones nobody has written yet.
+    //
+    // THE HONEST CLAIM, do not widen it: "no `.clone()` the compiler is
+    // contracted to lower ever silently becomes `Constant::Unit`". It does NOT
+    // claim "no Callable clone ever SEGVs" — a struct-field Callable receiver
+    // PASSES this gate and dies downstream (`todo/t0939`).
+    if type_name.is_none() && method_name == "clone" && args.is_empty() {
+        let recv_ty = infer_operand_type_full(ctx, &recv, builder);
+        panic!(
+            "lower-or-reject (AGENTS.md Core #10): `.clone()` in `{}` has a receiver \
+             with no dispatch name (GIR type {:?}). Lowering it would silently \
+             produce `Constant::Unit` and the caller would memcpy out of a unit \
+             slot (rc 139, `gg check` clean — `todo/t0936`). Either give the \
+             receiver representation an arm in `infer_type_name_from_operand_full` \
+             (`src/ir/lowering/exprs/methods.rs`) or reject the construct in the \
+             semantic phase; never fall through. Known unreachable representations \
+             are tracked by `todo/t0942` (`unit` / `*mut unit` Callables).",
+            builder.name,
+            ctx.type_registry.get(recv_ty),
+        );
+    }
+
     if let Some(type_name) = type_name {
         // ─── Guard/ReadGuard/WriteGuard `.get()` — Track J drop-suppression ──
         //
@@ -4965,6 +5013,62 @@ pub(super) fn infer_type_name_from_operand_full(
     if effective_tid == F64_TYPE  { return Some("double".to_string()); }
     if effective_tid == F32_TYPE  { return Some("float".to_string()); }
     if effective_tid == BOOL_TYPE { return Some("bool".to_string()); }
+    // Closure VALUES. A `Callable[R(P)]` / `MutCallable` / `ConsumeCallable` at
+    // a LOCAL position lowers to `GirType::FnPtr`, deliberately bypassing the
+    // `named_types` cache (`lowering/types.rs`'s `map_ast_type_mut` special
+    // case at `:303-311`). An `FnPtr` is therefore in NO named table, so the
+    // `iter_named` tail below answers `None` — the *identical* failure the
+    // `I64_TYPE` arm above was added to fix, and with the same consequence:
+    // the whole dispatch block at `lower_method_call`'s `type_name` gate is
+    // skipped and the call falls through to `Constant::Unit`. For `.clone()`
+    // that produced a NULL-sourced `memcpy` of a `GorgetClosure` (a rc-139
+    // SEGV on both backends, `todo/t0936`).
+    //
+    // The runtime representation of every closure value is the 16-byte
+    // `Callable__GorgetClosure` struct (registered by `builtins.rs:1097-1154`,
+    // which carries the `clone_fn: Some("gorget_closure_clone_to_owned")`
+    // declaration), so that is the dispatch name for an `FnPtr` receiver.
+    //
+    // Order note (SIX QUESTIONS #5): this arm sits BEFORE the `iter_named`
+    // tail, so it would shadow a named entry whose TypeId resolves to an
+    // `FnPtr`. There is none — `register_named` is the single write funnel for
+    // `named_types` (`lowering/types.rs:636-656`) and the Callable family
+    // explicitly bypasses it for the `FnPtr` form; `Callable__GorgetClosure`
+    // itself is a distinct `Named` TypeId. Measured with `GG_SHADOW_PROBE`
+    // over the fixture corpus: zero shadowed names.
+    //
+    // ── Core #4: why this is a twelfth hand-written arm and NOT a
+    //    `TypeRegistry` accessor made TOTAL over `GirType` ──────────────────
+    //
+    // The obvious class fix is to promote this ladder to an exhaustive match,
+    // with rustc exhaustiveness as the witness that the next representation
+    // cannot be forgotten. REJECTED, for two reasons, the second decisive:
+    //
+    // 1. The ladder is not a function of `GirType` alone. Its primitive rungs
+    //    discriminate on TypeId IDENTITY (`effective_tid == I64_TYPE`), and its
+    //    tail matches the UN-dereferenced `type_id` as well as the pointee, so
+    //    a `Ptr(Named(..))` opaque handle resolves by its own id. An exhaustive
+    //    `match GirType` cannot express either, so the "total" accessor would
+    //    have to keep both discriminators anyway and would be total in name.
+    //
+    // 2. EXHAUSTIVENESS CANNOT CATCH THIS CLASS (SIX QUESTIONS #2). The three
+    //    receiver spellings this fix does NOT heal — a `Callable[..]`
+    //    parameter, a `Callable[..] &` parameter, the bare `int(int)` form —
+    //    reach here as `Unit` and `MutPtr(Unit)`, which an exhaustive match
+    //    covers with `Unit => None`: it compiles, rustc is satisfied, and the
+    //    segfault survives untouched. Worse, the cheap way to make those arms
+    //    "return something" routes EVERY unit-typed receiver through the
+    //    closure clone path — a strictly worse miscompile than the one being
+    //    fixed. Exhaustiveness proves an arm was WRITTEN, never that it is
+    //    RIGHT, and here the wrong arm is the tempting one.
+    //
+    // The class remedy that does work is the Core #10 lower-or-reject at the
+    // dispatch gate in `lower_method_call`: it guards the DAMAGE rather than
+    // the producer, so it fires for any representation the ladder has not
+    // learned — including the ones no `GirType` arm can ever answer.
+    if matches!(ctx.type_registry.get(effective_tid), Some(GirType::FnPtr { .. })) {
+        return Some("Callable__GorgetClosure".to_string());
+    }
     // Check named types (match both the original type_id and the dereferenced effective_tid,
     // since opaque pointer types like PoolAllocator are registered as Ptr(Named(...)))
     ctx.type_mapper.iter_named()

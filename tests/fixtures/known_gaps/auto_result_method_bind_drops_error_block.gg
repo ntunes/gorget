@@ -1,0 +1,53 @@
+# t0945 — `auto x = <METHOD call returning Result>` auto-propagates, binding the
+# Ok PAYLOAD, and the user's whole `if x.is_error():` block is then SILENTLY
+# DISCARDED. `gg check` is clean; the emitted code contains none of the block's
+# statements.
+#
+# MEASURED (gg build --emit-gir on this program, pre-fix): the local is typed
+# `_4: bool ; j` — the Ok payload, not the Result — and the Error basic block is
+# the compiler's SYNTHESIZED propagation (`enum_init Error { copy <payload> }`),
+# not the user's. Neither `print("handled")` nor `return Error("custom message")`
+# appears anywhere in the GIR or the emitted C.
+#
+# DISCRIMINATED from the auto-propagation family already filed:
+#   * a FREE call does NOT do this — `auto r = free_fn()` binds the Result and
+#     the block runs (measured, same program shape).
+#   * an EXPLICIT binding does NOT do this — `Result[bool, String] j = s.join(g)`
+#     runs the user's block and prints the two intended lines (measured).
+#   Only `auto` + a METHOD call reaches the discarding path.
+#
+# LIVE IN SHIPPED STDLIB: `lib/xtd/p2p.gg`'s `p2p_enable_discovery` has exactly
+# this shape. It is green ONLY BY LUCK (SIX QUESTIONS #6) — its discarded block
+# happens to be semantically identical to the compiler's substitute. That site
+# is also the sole provenance of the 13 `p2p_*` fixtures' `type_name == None`
+# fires at the method-dispatch gate (`todo/t0936`).
+#
+# INTENDED (asserted below): the user's error branch runs — `handled` then
+# `custom message`, exactly what the explicit `Result[bool, String]` binding
+# already produces today. If the owner instead rules that a var-decl `auto`
+# binding SHOULD auto-propagate, then `j.is_error()` on the resulting `bool`
+# must be a check-time REJECTION and this fixture flips to a negative. What is
+# NOT a legal outcome either way is accepting the block and discarding it
+# (Core #10, lower-or-reject).
+
+struct Sock:
+    int h
+
+equip Sock:
+    Result[bool, String] join(&self, String g):
+        if g == "bad":
+            return Error("runtime failure")
+        return Ok(true)
+
+Result[bool, String] enable(String group):
+    Sock s = Sock(1)
+    auto j = s.join(group)
+    if j.is_error():
+        print("handled")
+        return Error("custom message")
+    return Ok(true)
+
+void main():
+    auto r = enable("bad")
+    if r.is_error():
+        print(r.unwrap_error())

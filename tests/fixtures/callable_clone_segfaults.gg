@@ -1,0 +1,25 @@
+# REGRESSION PIN (graduated from known_gaps/, `todo/t0936`).
+#
+# `.clone()` on a value-form `Callable` used to lower to `Constant::Unit`, and
+# the emitted C then memcpy'd sizeof(GorgetClosure) out of that unit slot —
+# SIGSEGV (rc 139) on BOTH backends, with `gg check` clean.
+#
+# ROOT CAUSE (fire count 0 at the clone arm, 1 after the fix):
+# `infer_type_name_from_operand_full` (src/ir/lowering/exprs/methods.rs)
+# returned None for a `GirType::FnPtr` receiver, so the whole block gated by
+# `if let Some(type_name)` — which contains the `.clone()` arm — was skipped.
+# That function already documented this exact class for a previously-fixed
+# sibling (the `I64_TYPE` arm). `clone_fn_for_ptr` (context.rs) was
+# `GirType::Named`-only and is the necessary second arm: with the dispatch-name
+# arm alone the build fails on `incompatible type for argument 1 of
+# 'gorget_closure_clone_to_owned'`.
+#
+# NOT a carve-out violation: Callable is single-owner WITH a real clone path
+# (`decisions.md:114` / `:525`, `builtins.rs:1109`), pinned green by
+# tests/fixtures/security/attack_91_callable_clone_outlives_source.gg.
+#
+# The WIDE net for this axis is tests/fixtures/callable_clone_value_form_axis.gg.
+void main():
+    Callable[int(int)] h = (int x): x + 1
+    Callable[int(int)] g = h.clone()
+    print(g(1))

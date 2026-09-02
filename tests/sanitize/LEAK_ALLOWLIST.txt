@@ -105,6 +105,35 @@ atomic_int_amp_param	gorget_atomic_int_new*1
 borrow_field_lazy_dict_iter	gorget_dict_new*3,gorget_map_clone*24
 borrow_field_method_dispatch	gorget_array_push*1,gorget_dict_new*3,str_alloc_copy*2
 box_trait_vector_lit	__gorget_box_alloc_Robot*1,str_alloc_copy*1
+# ⚖ ADMITTED (R48 Track R, 2026-09-02). TWO rows, both for fixtures this round
+# ADDED to the corpus, and both leaking a mechanism that is FILED, REPRO'd and
+# OLDER than this round — not a leak this round introduced.
+#   * `callable_clone_value_form_axis` — the wide net for `todo/t0936` (`.clone()`
+#     on a closure VALUE). 12 cells; 4 leaked env records. THREE are
+#     `todo/t0873(b)` (`Vector[Callable].push` leaves `elem_drop` NULL) from
+#     cells 4 and 10; ONE is `todo/t0946` (a `Callable` in a STRUCT FIELD is
+#     classified no-drop) from cell 12.
+#   * `callable_vector_element_plain_sig_call_segv` — one of `todo/t0406`'s six
+#     repros, graduated out of `known_gaps/` this round. Both records are
+#     `todo/t0873(b)`.
+# MECHANISM ATTRIBUTED BY EXPERIMENT, NOT BY RESEMBLANCE: the same programs with
+# EVERY `.clone()` REMOVED leak the IDENTICAL records (`fs.push((int x): x * 2)`
+# + `fs[0](21)`, no clone anywhere -> 8 bytes in 1 allocation, byte-identical to
+# the cloning version), the always-working `fs.get(0).unwrap().clone()` route
+# leaks the same 8 bytes, and an isolated `Callable[int(int)] g = c.clone()` on a
+# CAPTURING closure is ASan-CLEAN. 12 clones in the axis fixture produce ONE
+# leaked env, and it is a container element. The clone path this round shipped is
+# memory-clean; the container/struct element drop is the leaker.
+# WHY THE ROWS EXIST AT ALL: the leaking cells ARE the coverage — a Callable read
+# back out of a Vector and a Callable in a struct field are two of the twelve
+# axis cells, and dropping them to keep this count flat would delete regression
+# coverage of the exact defect the round fixed (Core #11/#12).
+# BOTH ROWS RETIRE with `todo/t0873(b)` + `todo/t0946`; each of those items now
+# ships its own durable `known_gaps` repro (t0873 had `repro = []` before this
+# round) and an `#[ignore]`d ASan test asserting the intended clean run.
+# Same family as the `vector_callable_two_locals` / `closure_*` rows below.
+callable_clone_value_form_axis	__gorget_closure_env_alloc*4
+callable_vector_element_plain_sig_call_segv	__gorget_closure_env_alloc*2
 builtin_oracle_sync_deque	__gorget_closure_env_alloc*2
 builtin_oracle_sync_dict	__gorget_closure_env_alloc*6
 builtin_oracle_sync_hashmap	__gorget_closure_env_alloc*2

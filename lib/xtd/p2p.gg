@@ -353,7 +353,11 @@ Result[bool, String] p2p_enable_discovery(Node &node, DiscoveryConfig config):
         return Error(ds.unwrap_error())
     node.disc_socket = ds.unwrap()
     node.disc_socket.set_multicast_loopback(true)
-    auto join = node.disc_socket.join_multicast(config.multicast_group)
+    # The binding is EXPLICIT on purpose: `auto` here would auto-propagate the
+    # method's Result, bind `join` to the Ok payload, and silently discard this
+    # whole error branch (`todo/t0945`). The branch below is the intended
+    # behaviour, so it has to be reachable.
+    Result[bool, String] join = node.disc_socket.join_multicast(config.multicast_group)
     if join.is_error():
         return Error(join.unwrap_error().clone())
     node.disc_enabled = true

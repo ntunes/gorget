@@ -4738,17 +4738,20 @@ fn known_gap_shared_string_literal_ctor_cc_fail() {
     run_gg("known_gaps/shared_string_literal_ctor_cc_fail.gg", "hi");
 }
 
-/// KNOWN GAP — both real backends, rc 139, `gg check` accepts. Evidence for
-/// `todo/t0406`: calling a `Callable` back OUT of a container SEGVs because
-/// the element's signature collapses to the zero-parameter fallback
-/// `fn() -> i64`. What this cell adds to that item's existing repros: they all
-/// carry a `&` sigil, this one has NO sigil at all, so the defect is the
-/// erased element signature and not the borrow tagging. `push` + `len()` on
-/// the same vector is green.
+/// GRADUATED (R48 Track R) — ONE of `todo/t0406`'s six repro cells. Calling a
+/// no-sigil `Callable` back out of a `Vector` used to SEGV on both backends
+/// with `gg check` clean; it went green with `t0936`'s dispatch-name +
+/// `clone_fn_for_ptr` arms (RED-verified at the pre-fix compiler, rc 139).
+///
+/// ⚠ `todo/t0406` is RE-SCOPED, NOT CLOSED — its four `&`-sigil cells
+/// (`known_gap_callable_amp_vector_element_struct_segv`,
+/// `known_gap_callable_amp_dict_element_struct_segv`,
+/// `sound_callable_amp_returned_callee_segv`,
+/// `sound_callable_amp_shared_get_call_segv`) are all still RED, all HIGH, all
+/// `gg check`-accepting, with distinct fix sites.
 #[test]
-#[ignore = "known gap (todo/t0406): a Callable read back out of a Vector SEGVs — the element signature collapses to fn() -> i64; un-ignore when the element signature reaches callable_alias_sigs"]
-fn known_gap_callable_vector_element_plain_sig_call_segv() {
-    run_gg("known_gaps/callable_vector_element_plain_sig_call_segv.gg", "1\n42\n42");
+fn callable_vector_element_plain_sig_call() {
+    run_gg("callable_vector_element_plain_sig_call_segv.gg", "1\n42\n42");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -6123,24 +6126,40 @@ fn catch_binding_throw_in_match_arm_ice() {
     assert_gg_sanitize_clean("known_gaps/catch_binding_throw_in_match_arm_ice", "8080");
 }
 
-// `todo/t0936` — CRITICAL: `.clone()` on a `Callable` bound to a NAMED LOCAL
-// type-checks and then SEGVs, while the byte-equivalent clone through a TEMP
-// receiver (`fns.get(0).unwrap().clone()`) is correct. The axis is the receiver
-// SHAPE, not the operation: `Callable` carries
-// `clone_fn: Some("gorget_closure_clone_to_owned")`
-// (`src/ir/lowering/builtins.rs:1109`) and
-// `tests/fixtures/security/attack_91_callable_clone_outlives_source.gg` pins
-// that deep-clone path green, so `.clone()` here is a SUPPORTED operation and
-// the fix belongs at the clone producer — NOT a check-time rejection, which
-// would regress a ratified feature and that security fixture. Asserts the
-// INTENDED output, so it is RED at HEAD on purpose. Un-ignore + move out of
-// known_gaps/ when graduating.
+// `todo/t0936` — GRADUATED (R48 Track R). `.clone()` on a value-form `Callable`
+// used to lower to `Constant::Unit` and SEGV (rc 139) on BOTH backends with
+// `gg check` clean. The receiver reached the method-dispatch gate as a
+// `GirType::FnPtr`, `infer_type_name_from_operand_full` had no arm for it, and
+// the whole `if let Some(type_name)` block — the `.clone()` arm included — was
+// skipped. Fire count at that arm: 0 before, 1 after. `clone_fn_for_ptr` was
+// `GirType::Named`-only and is the necessary second arm.
+//
+// NOT a carve-out violation: `decisions.md:114`/`:525` make `Callable`
+// single-owner WITH a real clone path, pinned by
+// `tests/fixtures/security/attack_91_callable_clone_outlives_source.gg`.
+//
+// The WIDE net for this axis is `callable_clone_value_form_axis` below; this is
+// the minimal repro that shipped with the filing.
 #[test]
-#[ignore = "todo/t0936 — `.clone()` on a value-form Callable lowers to Constant::Unit \
-(infer_type_name_from_operand_full returns None for FnPtr, skipping the clone arm) and SEGVs \
-on both backends. Asserts the INTENDED output (2)."]
 fn callable_clone_segfaults() {
-    run_gg("known_gaps/callable_clone_segfaults.gg", "2");
+    run_gg("callable_clone_segfaults.gg", "2");
+}
+
+/// The WIDE net for `.clone()` on a closure VALUE (`todo/t0936`) — twelve cells
+/// over {position} x {Callable / MutCallable / ConsumeCallable} x {captures,
+/// does not capture}, ten of them RED-verified at rc 139 against the pre-fix
+/// compiler, plus the two `Ptr(Named)` collection-accessor controls that were
+/// green before AND after. The fixture header names the cells the fix does NOT
+/// reach (struct field initialised from a closure LITERAL -> `todo/t0937`;
+/// struct-field CALL -> `todo/t0939`; `unit` / `*mut unit` / bare fn-type ->
+/// `todo/t0942`) and records the measured correction to the struct-field
+/// attribution.
+#[test]
+fn callable_clone_value_form_axis() {
+    run_gg(
+        "callable_clone_value_form_axis.gg",
+        "1 2\n2 42\n3 3\n4 42\n5 6\n6 7\n7 8\n8 9\n9 10\n10 11\n11 12\n12 13",
+    );
 }
 
 // `todo/t0937` — CRITICAL: a closure LITERAL at a CONSTRUCTOR / enum-init
@@ -6210,10 +6229,62 @@ fn guard_clone_link_failure() {
 // unit-typed receiver through the closure clone path, a worse miscompile.
 // Un-ignore + move out of known_gaps/ when graduating.
 #[test]
-#[ignore = "todo/t0942 — a Callable PARAMETER is GIR `unit`, so .clone() on it falls through to \
-Constant::Unit and SEGVs; unreachable by any GirType::FnPtr arm. Asserts the intended output (2)."]
+#[ignore = "todo/t0942 — a Callable PARAMETER is GIR `unit` (and `Callable &` is `*mut unit`), so \
+.clone() on it cannot resolve a dispatch name; unreachable by any GirType::FnPtr arm. Since R48 \
+Track R's Core #10 guard this is a LOUD lowering rejection instead of a silent rc-139 SEGV. \
+Asserts the intended output (2\\n2\\n2)."]
 fn callable_unit_form_clone_segv() {
-    run_gg("known_gaps/callable_unit_form_clone_segv.gg", "2");
+    run_gg("known_gaps/callable_unit_form_clone_segv.gg", "2\n2\n2");
+}
+
+// `todo/t0945` — `auto x = <METHOD call returning Result>` auto-propagates,
+// binds the Ok PAYLOAD, and the user's whole `if x.is_error():` block is then
+// silently DISCARDED from the lowering. `gg check` is clean and neither the
+// block's `print` nor its `return` reaches the GIR. A FREE call and an explicit
+// `Result[T, E]` binding both keep the block; only `auto` + a method call
+// reaches the discarding path. Live in shipped stdlib (`lib/xtd/p2p.gg`, green
+// only by luck — its discarded block matched the compiler's substitute).
+// Asserts the INTENDED output, so it is RED at HEAD on purpose.
+// Un-ignore + move out of known_gaps/ when graduating.
+#[test]
+#[ignore = "todo/t0945 — `auto x = <method call returning Result>` auto-propagates and the user's \
+`if x.is_error():` block is silently discarded; gg check clean, both backends. Asserts the \
+INTENDED output."]
+fn auto_result_method_bind_drops_error_block() {
+    run_gg("known_gaps/auto_result_method_bind_drops_error_block.gg", "handled\ncustom message");
+}
+
+// `todo/t0946` — a `Callable` stored in a STRUCT FIELD leaks its captured env.
+// `field_is_transitively_droppable` (`src/ir/types.rs`) excludes bare
+// `GirType::FnPtr` fields, so `struct Holder: Callable[int(int)] f` is classified
+// `[drop: None, copy: Copy]` and nothing frees the env. That exclusion's
+// doc-comment justifies itself with "the `Callable[T()]` local case where FnPtr
+// DOES own a heap env is a function-body local, not a struct field" — an
+// invariant-asserting comment with no enforcing guard, and this fixture is its
+// counter-example (Core #14). The closure CAPTURES, so the env is heap-forced.
+// Asserts the INTENDED ASan-clean run, so it is RED at HEAD.
+#[test]
+#[ignore = "todo/t0946 — a Callable in a struct FIELD leaks its captured env (the struct is \
+classified no-drop because field_is_transitively_droppable excludes FnPtr fields). Asserts the \
+intended ASan-clean run."]
+fn known_gap_struct_callable_field_env_leak() {
+    assert_gg_sanitize_clean("known_gaps/struct_callable_field_env_leak", "42");
+}
+
+// `todo/t0873(b)` — the durable repro that item was filed WITHOUT (`repro = []`).
+// `Vector[Callable].push` emits a plain `gorget_array_new`: the `elem_drop`
+// synthesis in `src/lir/lower/insts.rs` is bypassed because the element type
+// resolves as `Named("Callable__GorgetClosure")` rather than `FnPtr`, so every
+// pushed env leaks. Both closures CAPTURE, so the envs are heap-forced.
+// ⭐ The clone is innocent: replace both `.clone()` calls with plain reads and
+// the SAME records leak. This is the provenance the two `callable_clone_*` rows
+// in `tests/sanitize/LEAK_ALLOWLIST.txt` are tolerating.
+// Asserts the INTENDED ASan-clean run, so it is RED at HEAD.
+#[test]
+#[ignore = "todo/t0873(b) — Vector[Callable].push leaves elem_drop NULL, so every pushed closure \
+env leaks. Asserts the intended ASan-clean run."]
+fn known_gap_vector_callable_push_env_leak() {
+    assert_gg_sanitize_clean("known_gaps/vector_callable_push_env_leak", "41\n52");
 }
 
 // SELF-HOST-LANE gap (surfaced Round R40, Track-J review): `for (i, b) in
