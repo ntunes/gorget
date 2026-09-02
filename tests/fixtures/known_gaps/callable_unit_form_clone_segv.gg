@@ -1,0 +1,24 @@
+# t0942 — the `unit` / `*mut unit` REPRESENTATIONS of a Callable. `.clone()` on
+# these SEGVs and NO `GirType::FnPtr` arm can reach them, so t0936's fix (which
+# heals the FnPtr cells) leaves these RED by construction.
+#
+#   Callable[int(int)] cb       PARAMETER        -> GIR `unit`
+#   Callable[int(int)] &cb      PARAMETER        -> GIR `*mut unit`
+#   int(int) f = dbl            bare fn-type     -> GIR `unit`
+#
+# src/ir/lowering/types.rs:190-205 states all three and gives the verification
+# command (`gg build --emit-gir`).
+#
+# ⛔ DO NOT "FIX" THIS WITH A `GirType::Unit` ARM in the dispatch-name ladder:
+# that routes EVERY unit-typed receiver through the closure clone path and is a
+# strictly worse miscompile than the bug. The representation must carry the
+# type, which is an upstream (erasure) fix.
+#
+# ggdef adjudicates the param cell correctly (prints 2).
+# INTENDED: prints 2.
+int apply_it(Callable[int(int)] cb):
+    Callable[int(int)] g = cb.clone()
+    return g(1)
+
+void main():
+    print(apply_it((int x): x + 1))

@@ -6200,6 +6200,22 @@ fn guard_clone_link_failure() {
     check_gg_fails("known_gaps/guard_clone_link_failure.gg", "clone");
 }
 
+// `todo/t0942` — the `unit` / `*mut unit` REPRESENTATIONS of a Callable. A
+// Callable PARAMETER lowers to GIR `unit` (`src/ir/lowering/types.rs:190-205`),
+// so the dispatch-name ladder returns None and `.clone()` falls through to
+// `Constant::Unit` exactly as in t0936 — but NO `GirType::FnPtr` arm can reach
+// these cells, so t0936's fix leaves them RED by construction. ggdef adjudicates
+// the param cell correctly (prints 2). Asserts the INTENDED output.
+// ⛔ Do NOT fix by adding a `GirType::Unit` ladder arm — that routes every
+// unit-typed receiver through the closure clone path, a worse miscompile.
+// Un-ignore + move out of known_gaps/ when graduating.
+#[test]
+#[ignore = "todo/t0942 — a Callable PARAMETER is GIR `unit`, so .clone() on it falls through to \
+Constant::Unit and SEGVs; unreachable by any GirType::FnPtr arm. Asserts the intended output (2)."]
+fn callable_unit_form_clone_segv() {
+    run_gg("known_gaps/callable_unit_form_clone_segv.gg", "2");
+}
+
 // SELF-HOST-LANE gap (surfaced Round R40, Track-J review): `for (i, b) in
 // s.bytes().enumerate()` MISCOMPILES on the self-host lane — it prints
 // `0,16961,1,66` (the i64-slot over-read) instead of the correct `0,65,1,66`.
