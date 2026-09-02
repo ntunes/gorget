@@ -52,6 +52,9 @@ pub enum MoveErrorKind {
     /// `E_MoveInLoop` — a move of an enclosing-scope local inside a loop body
     /// (a use-after-move on the next iteration).
     MoveInLoop,
+    /// `E_PartialMove` — a `^` on a field/index place (`^m.a`, `^v[i]`,
+    /// `^self.items`). Owner 2026-09-02: only whole-value moves.
+    PartialMove,
 }
 
 impl MoveErrorKind {
@@ -63,6 +66,7 @@ impl MoveErrorKind {
             MoveErrorKind::UseAfterMove => "E_UseAfterMove",
             MoveErrorKind::DoubleMove => "E_DoubleMove",
             MoveErrorKind::MoveInLoop => "E_MoveInLoop",
+            MoveErrorKind::PartialMove => "E_PartialMove",
         }
     }
 }
@@ -289,9 +293,24 @@ impl<'a> Live<'a> {
             return;
         }
         match source {
-            // A move reads the place then KILLS its root.
+            // A move of a WHOLE local kills its root. A `^` on a field/index
+            // place is E_PartialMove (owner 2026-09-02: no holes, no unpack).
             Source::Move(place) => {
                 self.check_place_indices(place);
+                if matches!(
+                    place,
+                    Expr::Field(_, _) | Expr::TupleField(_, _) | Expr::Index(_, _)
+                ) {
+                    let root = Live::place_root(place).unwrap_or("<place>");
+                    self.set_err(
+                        MoveErrorKind::PartialMove,
+                        format!(
+                            "cannot move a field or index of `{root}` — partial moves are rejected; \
+                             move the whole value (`^{root}`) or copy the sub-place with `.clone()`"
+                        ),
+                    );
+                    return;
+                }
                 if let Some(root) = Live::place_root(place) {
                     self.check_move(root);
                 }

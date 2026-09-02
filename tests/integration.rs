@@ -23914,7 +23914,23 @@ all lifetime checks passed",
 fn field_move_error() {
     check_gg_fails(
         "field_move_error.gg",
-        "use of moved value",
+        "error[E_PartialMove]",
+    );
+}
+
+#[test]
+fn self_field_move_error() {
+    check_gg_fails(
+        "self_field_move_error.gg",
+        "error[E_PartialMove]",
+    );
+}
+
+#[test]
+fn index_move_error() {
+    check_gg_fails(
+        "index_move_error.gg",
+        "error[E_PartialMove]",
     );
 }
 
@@ -45422,13 +45438,13 @@ fn place_overlap_mover_copy_use_after_move_error() {
 }
 
 // NEG (interaction guard): overlapping projection moves stay rejected via
-// E_DoubleMove — D10(b) keeps (Move,Move) out of place-overlap to avoid
+// E_PartialMove — D10(b) keeps (Move,Move) out of place-overlap to avoid
 // double-diagnosing.
 #[test]
 fn place_overlap_double_projection_move_error() {
     check_gg_fails(
         "place_overlap_double_projection_move_error.gg",
-        "error[E_DoubleMove]",
+        "error[E_PartialMove]",
     );
 }
 
@@ -45437,6 +45453,11 @@ fn place_overlap_double_projection_move_error() {
 #[test]
 fn place_overlap_disjoint_siblings() {
     run_gg("place_overlap_disjoint_siblings.gg", "2\n2\n10\n20");
+}
+
+#[test]
+fn self_whole_move_ok() {
+    run_gg("self_whole_move_ok.gg", "3");
 }
 
 // POS (Copy-snapshot exemption): a bare read of a Copy-typed place does not
@@ -45472,13 +45493,13 @@ fn place_overlap_self_root_disjoint() {
 }
 
 // NEG — owner 2026-09-02: no partial moves, no field unpack. Only whole-value
-// `^m`. `f(^m.a, ^m.b)` is E_UseAfterMove (the first field move kills `m`).
-// D10(b) still accepts disjoint sibling BORROWS (`f(&m.a, &m.b)`).
+// `^m`. `f(^m.a, ^m.b)` is E_PartialMove. D10(b) still accepts disjoint
+// sibling BORROWS (`f(&m.a, &m.b)`).
 #[test]
 fn place_overlap_disjoint_sibling_move_error() {
     check_gg_fails(
         "place_overlap_disjoint_sibling_move_error.gg",
-        "error[E_UseAfterMove]",
+        "error[E_PartialMove]",
     );
 }
 
@@ -55535,6 +55556,12 @@ fn advice_fixtures_have_working_remedy() {
             "lints/enumerate_on_set_before.gg",
             "lints/enumerate_on_set_after.gg",
             "0->7\n1->8",
+        ),
+        (
+            "E_PartialMove",
+            "self_field_move_error.gg",
+            "self_field_clone_ok.gg",
+            "3\n3",
         ),
     ];
 

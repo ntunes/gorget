@@ -1,0 +1,9 @@
+# NEG — owner 2026-09-02: no partial moves. `consume(^v[i])` is
+# E_PartialMove (index sibling of `^m.a` / `^self.items`).
+# Axis cell: root=local × projection=index × position=free-fn call-arg.
+void consume(Vector[int] ^v):
+    print(v.len())
+
+void main():
+    Vector[Vector[int]] v = [[1], [2]]
+    consume(^v[0])

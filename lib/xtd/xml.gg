@@ -355,7 +355,7 @@ Result[XmlNode, ParseError] xml_parse(String xml_src):
     xp.skip_ws()
     XmlNode root_node = xp.parse_node()
     if xp.failed():
-        return Error(ParseError.InvalidSyntax(xp.pos, !xp.err))
+        return Error(ParseError.InvalidSyntax(xp.pos, xp.err))
     return Ok(!root_node)
 
 # ── Serialization ──────────────────────────────────────────

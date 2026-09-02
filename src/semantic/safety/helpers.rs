@@ -76,6 +76,32 @@ fn sigil_place(own: Ownership, place: &str) -> String {
 }
 
 impl<'a> BorrowChecker<'a> {
+    /// Consume `inner` under an explicit `^` / `!` (call-arg `Ownership::Move`
+    /// or `Expr::Move`). Owner 2026-09-02: only whole-value moves (`^m` /
+    /// `^self`). A `^` on a field/index place is `E_PartialMove` — no holes,
+    /// no unpack. Temps (`^f()`, `^x.clone()`) are not places and recurse as
+    /// ordinary exprs. ONE producer (Core #4) for every move-operand site.
+    pub(super) fn check_move_operand(&mut self, inner: &Spanned<Expr>, span: Span) {
+        if expr_is_place(&inner.node) {
+            if matches!(place_shape(&inner.node), MoveShape::Whole) {
+                if let Some(def_id) = self.find_root_def_id(inner) {
+                    if self.scopes.get_def(def_id).kind == DefKind::Variable {
+                        self.check_move(def_id, span);
+                    }
+                }
+            } else {
+                let name = self
+                    .find_root_def_id(inner)
+                    .map(|d| self.scopes.get_def(d).name.clone())
+                    .unwrap_or_else(|| "<place>".to_string());
+                self.error(SemanticErrorKind::PartialMove { name }, span);
+                self.check_expr(inner);
+            }
+        } else {
+            self.check_expr(inner);
+        }
+    }
+
     /// D4/D12: if `e` is a PLACE whose type is drop-tainted, return a display
     /// name for the error PLUS its place shape (Whole vs field/index sub-place),
     /// which selects the remedy in the `E_MoveWithoutOperator` message. The

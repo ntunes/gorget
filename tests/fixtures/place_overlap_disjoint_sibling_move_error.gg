@@ -1,8 +1,7 @@
 # NEG — owner 2026-09-02: no partial moves, no unpack. Only whole-value `^m`.
-# `f(^m.a, ^m.b)` (fixture still spells `!`, the pre-D27 alias) moves two
-# disjoint sibling fields; the first kills `m`, the second is E_UseAfterMove.
-# D10(b) still accepts the borrow twin `f(&m.a, &m.b)`. There is no
-# "consume every field in one call" exception.
+# `f(^m.a, ^m.b)` (fixture still spells `!`, the pre-D27 alias) is two
+# field-moves; each is E_PartialMove. D10(b) still accepts the borrow twin
+# `f(&m.a, &m.b)`. There is no "consume every field in one call" exception.
 struct M:
     Vector[int] a
     Vector[int] b

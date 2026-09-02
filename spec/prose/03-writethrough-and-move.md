@@ -4,10 +4,13 @@
 
 **Rule (RFC §2.2, bullet 3).** **`WriteThrough`** places (the `&` sigil) **alias
 the owner**; a write lands directly on the owner with no materialize (materialize
-is a no-op for an already-owning-through binding). **`Move`** (the `!` sigil)
-**transfers** the value and **kills the source**: the source slot becomes
-logically dead, and any later read of it is `IllFormed` (RFC §2.3) — the
-statically-ill-formed "read of a moved-out slot" detected dynamically.
+is a no-op for an already-owning-through binding). **`Move`** (the `^` sigil;
+`!` is the pre-D27 alias) **transfers** the value and **kills the source**: the
+source slot becomes logically dead, and any later read of it is `IllFormed`
+(RFC §2.3) — the statically-ill-formed "read of a moved-out slot" detected
+dynamically. A `^` applies only to a **whole value** (`^m`, `^self`). A field
+or index place (`^m.a`, `^v[i]`, `^self.items`) is `E_PartialMove` — a live
+value has no holes, and consuming every field in one call is not an exception.
 
 Modes are **elaboration-resolved tags** from syntax (bare → `Borrow`, `&` →
 `WriteThrough`, `!` → `Move`); **GGC never re-infers a mode**. A `Move` emits a

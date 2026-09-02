@@ -108,6 +108,7 @@ and is cited concretely.
 | `E_BorrowConflict` | `BorrowConflict` | [`02`](02-borrow-and-materialize-on-write.md) |
 | `E_MoveInLoop` | `MoveInLoop` | [`03`](03-writethrough-and-move.md) |
 | `E_DoubleMove` | `DoubleMove` | [`03`](03-writethrough-and-move.md) |
+| `E_PartialMove` | `PartialMove` | [`03`](03-writethrough-and-move.md) |
 | `E_NonPrintableInterpolation` | `NonPrintableInterpolation` | — |
 | `E_OwnershipMismatch` | `OwnershipMismatch` | — |
 | `E_UnsatisfiedTraitBound` | `UnsatisfiedTraitBound` | — |

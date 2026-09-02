@@ -92,11 +92,9 @@ counted, the last in **seven** costumes. **A textual guard's reach is the TOKEN,
 
 ### ✅ OWNER RULINGS THIS ROUND — do not re-litigate
 - **No partial moves (2026-09-02):** only whole-value moves (`^m`). No field/index
-  moves, no unpack (`f(^m.a, ^m.b)` is `E_UseAfterMove`). Closes the D10(a)
-  addendum's "Rust-style destructuring remains undecided." `t0438` closed; the
-  NEG fixture is live. Ledger entry still owner-written (`decisions.md`).
-  `t0437` (`take(^self.items)` still accepted) is now an implementation gap vs
-  this ruling, not an open policy question.
+  moves, no unpack (`f(^m.a, ^m.b)` is `E_PartialMove`). Closes the D10(a)
+  addendum's "Rust-style destructuring remains undecided." `t0438` and `t0437`
+  (`take(^self.items)`) closed. Ledger entry still owner-written (`decisions.md`).
 - **D53 (2026-09-01, sharpened in place the same day, implemented on D2 `d5707a77`):**
   `Mutex`/`RWLock` are **unique locks**. Share via `Shared[Mutex[T]]`. `E_MoveWithoutOperator` at
   assign, init, **and consuming positions**. Diagnostic names `^source` or `Shared[Mutex[T]]` —
@@ -1348,7 +1346,6 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t0435`](todo/t0435.md) **MED** — 🆕🐛 [MED — module-loader leniency, found by the CoW-1A output-review probe 2026-07-17] Importing ANY name from a module s…
 
 - [`t0436`](todo/t0436.md) — 🆕 [D10(b) self-root follow-up, filed 2026-07-14 — OWNER QUESTION] For-loop iterator-invalidation is ROOT-granular for BO…
-- [`t0437`](todo/t0437.md) — 🆕 [D10(b) self-root follow-up — IMPLEMENTATION GAP vs owner 2026-09-02: no partial moves.] Moving a field out of a bare…
 - [`t0439`](todo/t0439.md) — 🆕 [D23/T3a follow-up, filed 2026-07-10, MEDIUM-design] General must-use on Result. D23/T3a pins ONLY that an unhandled t…
 - [`t0440`](todo/t0440.md) — ⚖️ [language-design question, from P1-A §10.3 fold 2026-07-06 — route to decisions.md open queue at the next owner batch…
 

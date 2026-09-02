@@ -770,6 +770,11 @@ pub enum SemanticErrorKind {
     /// Same variable moved twice.
     DoubleMove { name: String, first_move: Span },
 
+    /// A `^` on a field or index place (`^m.a`, `^v[i]`, `^self.items`).
+    /// Owner 2026-09-02: only whole-value moves (`^m`); a live value has no
+    /// holes and there is no unpack exception. `.clone()` copies the sub-place.
+    PartialMove { name: String },
+
     /// Non-printable type used in string interpolation.
     NonPrintableInterpolation { var_name: String, type_name: String },
 
@@ -1081,6 +1086,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::BorrowConflict { .. } => "E_BorrowConflict",
             SemanticErrorKind::MoveInLoop { .. } => "E_MoveInLoop",
             SemanticErrorKind::DoubleMove { .. } => "E_DoubleMove",
+            SemanticErrorKind::PartialMove { .. } => "E_PartialMove",
             SemanticErrorKind::NonPrintableInterpolation { .. } => "E_NonPrintableInterpolation",
             SemanticErrorKind::OwnershipMismatch { .. } => "E_OwnershipMismatch",
             SemanticErrorKind::UnsatisfiedTraitBound { .. } => "E_UnsatisfiedTraitBound",
@@ -1622,6 +1628,13 @@ impl std::fmt::Display for SemanticError {
             SemanticErrorKind::DoubleMove { name, .. } => {
                 write!(f, "value `{name}` moved more than once")
             }
+            SemanticErrorKind::PartialMove { name } => {
+                write!(
+                    f,
+                    "cannot move a field or index of `{name}` — partial moves are rejected; \
+                     move the whole value (`^{name}`) or copy the sub-place with `.clone()`"
+                )
+            }
             SemanticErrorKind::NonPrintableInterpolation {
                 var_name,
                 type_name,
@@ -2092,6 +2105,7 @@ mod code_tests {
         let cases: Vec<(SemanticErrorKind, &str)> = vec![
             (SemanticErrorKind::UseAfterMove { name: "x".into(), moved_at: sp() }, "E_UseAfterMove"),
             (SemanticErrorKind::DoubleMove { name: "x".into(), first_move: sp() }, "E_DoubleMove"),
+            (SemanticErrorKind::PartialMove { name: "self".into() }, "E_PartialMove"),
             (SemanticErrorKind::MoveInLoop { name: "x".into() }, "E_MoveInLoop"),
             (SemanticErrorKind::BorrowConflict { name: "x".into(), detail: "d".into() }, "E_BorrowConflict"),
             (SemanticErrorKind::TypeMismatch { expected: "int".into(), found: "str".into() }, "E_TypeMismatch"),

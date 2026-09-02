@@ -1574,6 +1574,66 @@ fn move_in_operand_position_reject_sites_count() {
     );
 }
 
+/// Owner 2026-09-02 class-retirement guard (Core #6): field/index `^` is
+/// `E_PartialMove`. ONE producer (`check_move_operand` in helpers.rs); every
+/// move-operand site (Expr::Move, free-fn/ctor CallArg, method CallArg) routes
+/// through it. A new walker that open-codes `SemanticErrorKind::PartialMove`
+/// (or silently accepts `^p.field`) trips this ratchet.
+#[test]
+fn partial_move_reject_sites_count() {
+    const EXPECTED: usize = 1;
+    let mut count = 0;
+    for path in walkdir_rs("src/semantic/safety") {
+        let content = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        for line in content.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            if t.contains("SemanticErrorKind::PartialMove {") {
+                count += 1;
+            }
+        }
+    }
+    assert_eq!(
+        count, EXPECTED,
+        "PartialMove reject-emit-site count in `src/semantic/safety/**/*.rs` \
+         changed: {count} vs expected {EXPECTED}.\n\n\
+         The ONE-PRODUCER chokepoint is `check_move_operand` (helpers.rs). \
+         New move-operand sites must call that helper (Core #4), not emit \
+         PartialMove themselves and not silently accept `^` on a field/index \
+         place (owner 2026-09-02). Bump EXPECTED only if a genuine second \
+         producer is unavoidable.",
+    );
+}
+
+/// SH-lane mirror of `partial_move_reject_sites_count`. ONE emit of
+/// `DkPartialMove(),` at `live_move_operand` — every OWN_MOVE arg and every
+/// EMove walks through that helper.
+#[test]
+fn sh_partial_move_reject_sites_count() {
+    let src = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("read self_host_typechecker/typecheck.gg");
+    let body: String = src
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    const EXPECTED_EMIT: usize = 1;
+    let emit_count = body.matches("DkPartialMove(),").count();
+    assert_eq!(
+        emit_count, EXPECTED_EMIT,
+        "SH `DkPartialMove()` emit-site count in \
+         `tests/fixtures/self_host_typechecker/typecheck.gg` changed: {emit_count} vs \
+         expected {EXPECTED_EMIT}.\n\n\
+         The ONE-PRODUCER chokepoint is `live_move_operand`. Do not open-code \
+         `DkPartialMove()` at call-arg arms.",
+    );
+}
+
 fn count_move_in_operand_position_rejects() -> usize {
     let mut count = 0;
     for path in walkdir_rs("src/semantic/safety") {
@@ -13386,7 +13446,7 @@ fn for_loop_fast_path_method_names_arms_count() {
 /// **Sub-case granularity note (Core #15(e) Q2):** some variants (notably
 /// `MoveWithoutOperator` with `shape: MoveShape` + `write_through_available:
 /// bool` discriminators) emit MULTIPLE distinct fix-it messages via internal
-/// branches. This pin currently tracks the KNOWN MESSAGE-level count (19);
+/// branches. This pin currently tracks the KNOWN MESSAGE-level count (20);
 /// adding a new sub-case within an existing variant WITHOUT bumping this
 /// pin is technically possible and would slip past the guard. A tighter
 /// variant+discriminator enumeration is filed in the consolidated follow-up.
@@ -13420,8 +13480,9 @@ fn advice_diagnostic_registration() {
         ("MissingFallibleMark", "MarkOnInfallible"),
         ("UnhandledThrows", ""),
         ("ThrowInNonThrowingFunction", ""),
+        ("PartialMove", ""),
     ];
-    const EXPECTED_TOTAL: usize = 19;
+    const EXPECTED_TOTAL: usize = 20;
 
     assert_eq!(
         FIX_IT_ADVICE_ROWS.len(),

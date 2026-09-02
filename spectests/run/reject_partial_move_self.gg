@@ -1,0 +1,31 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, liveness]
+# doc: |
+#   t0437 / owner 2026-09-02: `take(^self.items)` inside a borrowed-self
+#   method is E_PartialMove. This is the self-rooted sibling of
+#   reject_partial_move_field.gg. A live value has no holes; clone the
+#   field or move the whole `self`. Flipping the expected `reject:` code
+#   must make every lane MISMATCH (Core #6/#8/#9).
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_PartialMove
+#!end
+from std.collections import Vector
+
+struct Bag:
+    Vector[int] items
+
+void take(Vector[int] ^v):
+    pass
+
+equip Bag:
+    void steal(&self):
+        take(^self.items)
+
+void main():
+    Bag b = Bag(Vector[int]())
+    b.steal()

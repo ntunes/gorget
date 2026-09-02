@@ -1,0 +1,24 @@
+# NEG — t0437 / owner 2026-09-02: no partial moves. `take(^self.items)`
+# (field `^` of a method `self`, any receiver mode) is E_PartialMove.
+# Whole-value `take_bag(^self)` stays legal (self_whole_move_ok.gg).
+# Axis cell: root=self × projection=field × position=free-fn call-arg.
+# Receiver modes: `&self` (the filed hole), bare `self`, `^self`.
+struct Bag:
+    Vector[int] items
+
+void take(Vector[int] ^v):
+    print(v.len())
+
+equip Bag:
+    void steal_borrow(&self):
+        take(^self.items)
+
+    void steal_bare(self):
+        take(^self.items)
+
+    void steal_owned(^self):
+        take(^self.items)
+
+void main():
+    Bag b = Bag([1, 2, 3])
+    b.steal_borrow()

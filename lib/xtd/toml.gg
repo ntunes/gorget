@@ -1519,7 +1519,7 @@ Result[TomlValue, ParseError] parse(String input):
     TomlParser tp = TomlParser(input, 0, "", !secs, 0, !defined0)
     tp.parse_document()
     if tp.failed():
-        return Error(ParseError.InvalidSyntax(tp.pos, !tp.err))
+        return Error(ParseError.InvalidSyntax(tp.pos, tp.err))
     return Ok(assemble(tp.sections))
 
 # ── Serialization ───────────────────────────────────────────

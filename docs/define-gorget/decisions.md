@@ -516,7 +516,7 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
-- 2026-09-02 — **D10(a) ADDENDUM sharpened in place (owner): NO PARTIAL MOVES, NO UNPACK.** Closes the 2026-07-11 sentence *"Rust-style destructuring partial moves remain a possible future WIDENING, undecided."* Only whole-value moves (`^m`). Field/index moves (`^m.a`, `^v[i]`) reject; consuming every field in one call (`f(^m.a, ^m.b)`) is the same reject — not an exception. A live value has no holes. Disjoint sibling borrows stay D10(b). The 2026-07-11 body (move-binds stay legal; the criterion is aliasing, not sigils-at-binds) is unchanged. Live NEG `place_overlap_disjoint_sibling_move_error`; `todo/t0438` closed. `todo/t0437` (`take(^self.items)` still accepted) is an implementation gap vs this ruling, not a policy fork. Write-through: book ch.11, language-reference §Ownership.
+- 2026-09-02 — **D10(a) ADDENDUM sharpened in place (owner): NO PARTIAL MOVES, NO UNPACK.** Closes the 2026-07-11 sentence *"Rust-style destructuring partial moves remain a possible future WIDENING, undecided."* Only whole-value moves (`^m`). Field/index moves (`^m.a`, `^v[i]`) reject; consuming every field in one call (`f(^m.a, ^m.b)`) is the same reject — not an exception. A live value has no holes. Disjoint sibling borrows stay D10(b). The 2026-07-11 body (move-binds stay legal; the criterion is aliasing, not sigils-at-binds) is unchanged. Live NEG `place_overlap_disjoint_sibling_move_error`; `todo/t0438` closed. `todo/t0437` (`take(^self.items)`) closed as `E_PartialMove`. Write-through: book ch.11, language-reference §Ownership.
 
 - 2026-09-01 — **D53 RATIFIED (owner): `Mutex` AND `RWLock` ARE UNIQUE LOCKS. SHARING IS `Shared[Mutex[T]]`.** Owner: *"Add Mutex/RWLock to the E_MoveWithoutOperator list, as you recommended."* Same-day re-examination (owner stands with the unique-lock recommendation): **Mutex is not multi-owner.** Sharpened in place — not a second dated copy.
 
@@ -1135,16 +1135,16 @@ P1-infra reviewers' recommendation.
   Guard) REQUIRES move-binds — `E_MoveWithoutOperator` exists to force them;
   (4) the CoW contract's three move-eligible shapes treat bind- and call-position
   moves identically. The genuinely dodgy neighbor — the PROJECTION move
-  `R b = !h.r` (a partial move) — is ALREADY rejected by the existing machinery
-  (`E_UseAfterMove`; `.clone()` is the remedy; measured by the A2-R gauntlet),
-  drawing the boundary where it belongs: whole-identifier moves at binds legal,
-  field/index-place moves rejected. **2026-09-02 (owner, sharpened in place):
-  that boundary is the WHOLE rule — no unpack exception.** `f(^m.a, ^m.b)`
-  (disjoint sibling field-moves in one call) is `E_UseAfterMove`, not a
-  Rust-style destructuring widening. Only whole-value moves (`^m`). A live
+  `R b = !h.r` (a partial move) — is rejected (`E_PartialMove`; `.clone()` is
+  the remedy), drawing the boundary where it belongs: whole-identifier moves
+  at binds legal, field/index-place moves rejected. **2026-09-02 (owner,
+  sharpened in place): that boundary is the WHOLE rule — no unpack exception.**
+  `f(^m.a, ^m.b)` (disjoint sibling field-moves in one call) is `E_PartialMove`,
+  not a Rust-style destructuring widening. Only whole-value moves (`^m`). A live
   value has no holes; a moved-out field is not `None` and is not left as an
   observable undefined slot. Disjoint sibling BORROWS (`f(&m.a, &m.b)`) stay
   legal (D10(b)). Live NEG: `place_overlap_disjoint_sibling_move_error`.
+  `take(^self.items)` is the same reject (`t0437` closed).
   (A pure-rename style lint — `R b = !a` with `a` otherwise unused — was
   noted and deliberately NOT filed.)
 

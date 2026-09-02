@@ -1,0 +1,27 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, liveness]
+# doc: |
+#   Owner 2026-09-02: only whole-value moves. `sink(^p.a)` is a field-move of
+#   a named local — E_PartialMove at the `^`, all four lanes (ggdef + C + LLVM
+#   + self-host). The self-rooted sibling is reject_partial_move_self.gg
+#   (`take(^self.items)`, t0437). Flipping the expected `reject:` code must
+#   make every lane MISMATCH (Core #6/#8/#9).
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_PartialMove
+#!end
+
+struct Pair:
+    String a
+    String b
+
+void sink(String ^s):
+    pass
+
+void main():
+    Pair p = Pair("x", "y")
+    sink(^p.a)

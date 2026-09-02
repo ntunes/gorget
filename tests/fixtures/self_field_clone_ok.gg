@@ -1,0 +1,16 @@
+# POS — working remedy for t0437 / E_PartialMove: clone the field instead of
+# `take(^self.items)`. Contrasts self_field_move_error.gg.
+struct Bag:
+    Vector[int] items
+
+void take(Vector[int] ^v):
+    print(v.len())
+
+equip Bag:
+    void steal(&self):
+        take(^self.items.clone())
+
+void main():
+    Bag b = Bag([1, 2, 3])
+    b.steal()
+    print(b.items.len())

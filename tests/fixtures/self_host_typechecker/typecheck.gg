@@ -39,7 +39,7 @@ from traits import build_trait_registry, resolve_method_full, resolve_method_by_
 from traits import intrinsic_resolve, find_method_index
 from traits import registry_has_method_generic_name
 from std.conv import int_to_str
-from diagnostic import Diagnostic, DkNonExhaustiveMatch, DkDerefNonBox, DkDefaultOpNonOptional, DkDefaultOpRhsTypeMismatch, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound, DkAmpInOperandPosition, DkMoveInOperandPosition
+from diagnostic import Diagnostic, DkNonExhaustiveMatch, DkDerefNonBox, DkDefaultOpNonOptional, DkDefaultOpRhsTypeMismatch, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound, DkAmpInOperandPosition, DkMoveInOperandPosition, DkPartialMove
 from format_types import describe_type
 
 # ── Fallback def lookup by name ──────────────────────────────
@@ -2190,13 +2190,19 @@ void safety_loop_body(Vector[Stmt] body, int scope_id, SafetyState &state, Scope
         if not state.moved.contains(k):
             state.moved.set(k, before.get(k).unwrap())
 
-# A move consumes the whole place; do not also count it as a read. `!f()` (a
+# A move consumes a WHOLE place (`^x` / `^self`). A `^` on a field/index
+# place is E_PartialMove (owner 2026-09-02: no holes, no unpack). `!f()` (a
 # non-place move) has no root — walk its sub-exprs for nested uses instead.
 void live_move_operand(SpannedExpr place, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
-    if place_root_name(place.expr) == "<place>":
+    if not expr_is_place(place.expr):
         check_safety_expr(place, scope_id, &state, &scopes, &types, &ctx)
-    else:
-        live_mark_move(place, &state, scopes, &ctx)
+        return
+    if not place_is_whole(place.expr):
+        String root = place_root_name(place.expr)
+        ctx.diagnostics.push(Diagnostic.error(place.span, DkPartialMove(), f"cannot move a field or index of `{root}` — partial moves are rejected; move the whole value (`^{root}`) or copy the sub-place with `.clone()`"))
+        check_safety_expr(place, scope_id, &state, &scopes, &types, &ctx)
+        return
+    live_mark_move(place, &state, scopes, &ctx)
 
 # PART B: is `e` a ConsumeCallable-typed value? A call `f()` where `f` is
 # ConsumeCallable CONSUMES `f` (single-owner-by-design carve-out — no clone

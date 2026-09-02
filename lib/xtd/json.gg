@@ -512,7 +512,7 @@ Result[Json, ParseError] json_parse(String input):
     JsonParser p = JsonParser(input, 0, 0, "")
     Json value = p.parse_value()
     if p.failed():
-        return Error(ParseError.InvalidSyntax(p.pos, !p.err))
+        return Error(ParseError.InvalidSyntax(p.pos, p.err))
     p.skip_whitespace()
     if p.pos < p.input.byte_len():
         return Error(ParseError.InvalidSyntax(p.pos, "unexpected trailing content"))

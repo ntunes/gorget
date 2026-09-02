@@ -1,0 +1,15 @@
+# POS — whole-value `^self` is still a move (owner 2026-09-02). Contrasts
+# self_field_move_error.gg (`take(^self.items)` = E_PartialMove).
+struct Bag:
+    Vector[int] items
+
+void take_bag(Bag ^b):
+    print(b.items.len())
+
+equip Bag:
+    void give(^self):
+        take_bag(^self)
+
+void main():
+    Bag b = Bag([1, 2, 3])
+    b.give()

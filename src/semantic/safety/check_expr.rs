@@ -223,26 +223,9 @@ impl<'a> BorrowChecker<'a> {
         for arg in args {
             match arg.node.ownership {
                 Ownership::Move => {
-                    // Argument passed with `!` — check the move
-                    if let Expr::Identifier(_) = &arg.node.value.node {
-                        if let Some(&def_id) =
-                            self.resolution_map.get(&arg.node.value.span.start)
-                        {
-                            let kind = self.scopes.get_def(def_id).kind;
-                            if kind == DefKind::Variable {
-                                self.check_move(def_id, arg.span);
-                            }
-                        }
-                    } else {
-                        // Field move (e.g., f(!p.field)) — mark root as moved
-                        if let Some(root_def_id) = self.find_root_def_id(&arg.node.value) {
-                            let kind = self.scopes.get_def(root_def_id).kind;
-                            if kind == DefKind::Variable {
-                                self.check_move(root_def_id, arg.span);
-                            }
-                        }
-                        self.check_expr(&arg.node.value);
-                    }
+                    // Argument passed with `^` / `!` — whole-value move, or
+                    // E_PartialMove on a field/index place (owner 2026-09-02).
+                    self.check_move_operand(&arg.node.value, arg.span);
                 }
                 Ownership::MutableBorrow | Ownership::Borrow => {
                     // 2T formation gate (Call / DotShorthand kind): reject a
@@ -527,27 +510,10 @@ impl<'a> BorrowChecker<'a> {
                 if !self.suppress_move_in_operand_position {
                     self.error(SemanticErrorKind::MoveInOperandPosition, expr.span);
                 }
-                // The `!` operator: move the value. `check_move` itself
-                // marks the variable as used (a move IS a use), so no extra
-                // bookkeeping needed here.
-                if let Expr::Identifier(_) = &inner.node {
-                    if let Some(&def_id) = self.resolution_map.get(&inner.span.start) {
-                        let kind = self.scopes.get_def(def_id).kind;
-                        if kind == DefKind::Variable {
-                            self.check_move(def_id, expr.span);
-                        }
-                    }
-                } else {
-                    // Move of a field/index expression (e.g., !p.field) — mark
-                    // the root variable as moved since the struct is now partial.
-                    if let Some(root_def_id) = self.find_root_def_id(inner) {
-                        let kind = self.scopes.get_def(root_def_id).kind;
-                        if kind == DefKind::Variable {
-                            self.check_move(root_def_id, expr.span);
-                        }
-                    }
-                    self.check_expr(inner);
-                }
+                // Whole-value `^x` / `^self` moves; field/index `^` is
+                // E_PartialMove (owner 2026-09-02). `check_move` itself marks
+                // the variable as used (a move IS a use).
+                self.check_move_operand(inner, expr.span);
             }
 
             Expr::MutableBorrow { expr: inner } => {
@@ -1049,18 +1015,8 @@ impl<'a> BorrowChecker<'a> {
                 for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
-                            if let Expr::Identifier(_) = &arg.node.value.node {
-                                if let Some(&def_id) =
-                                    self.resolution_map.get(&arg.node.value.span.start)
-                                {
-                                    let kind = self.scopes.get_def(def_id).kind;
-                                    if kind == DefKind::Variable {
-                                        self.check_move(def_id, arg.span);
-                                    }
-                                }
-                            } else {
-                                self.check_expr(&arg.node.value);
-                            }
+                            // Same producer as free-fn / ctor args (Core #4).
+                            self.check_move_operand(&arg.node.value, arg.span);
                         }
                         Ownership::MutableBorrow | Ownership::Borrow => {
                             // 2T formation gate (MethodCall kind): reject a

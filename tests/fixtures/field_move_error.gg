@@ -1,4 +1,6 @@
-# Tests that moving a struct field marks the whole struct as moved.
+# NEG — owner 2026-09-02: no partial moves. `consume(^p.first)` is
+# E_PartialMove at the `^` (not a subsequent use-after-move). Axis cell:
+# root=named-local × projection=field × position=free-fn call-arg.
 
 struct Pair:
     Vector[int] first

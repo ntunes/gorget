@@ -1,8 +1,7 @@
-# D10(b) x E_DoubleMove interaction: `f(!n, !n.field)` — a whole-place move and
-# an overlapping projection move. Already REJECTED by E_DoubleMove (a projection
-# move root-marks the whole DefId, so the second move trips DoubleMove). D10(b)
-# keeps (Move, Move) OUT of the place-overlap check to avoid double-diagnosing;
-# this fixture guards that the interaction still rejects.
+# D10(b) x E_PartialMove: `f(!n, !n.field)` — a whole-place move and a
+# field-move of the same root. The field `^` is E_PartialMove (owner
+# 2026-09-02: no partial moves). D10(b) keeps (Move, Move) OUT of the
+# place-overlap check; this fixture guards that the interaction still rejects.
 struct N:
     Vector[int] field
     int m

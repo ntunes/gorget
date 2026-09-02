@@ -1266,14 +1266,14 @@ Result[Yaml, ParseError] parse(String yaml_input):
     YamlParser yaml_p = YamlParser(yaml_input, 0, "", Vector[String](), Vector[Yaml]())
     Yaml yaml_doc = yaml_p.parse_document()
     if yaml_p.failed():
-        return Error(ParseError.InvalidSyntax(yaml_p.yaml_pos, !yaml_p.yaml_err))
+        return Error(ParseError.InvalidSyntax(yaml_p.yaml_pos, yaml_p.yaml_err))
     return Ok(!yaml_doc)
 
 Result[Vector[Yaml], ParseError] parse_all(String yaml_input):
     YamlParser yaml_p = YamlParser(yaml_input, 0, "", Vector[String](), Vector[Yaml]())
     Vector[Yaml] yaml_docs = yaml_p.parse_all_documents()
     if yaml_p.failed():
-        return Error(ParseError.InvalidSyntax(yaml_p.yaml_pos, !yaml_p.yaml_err))
+        return Error(ParseError.InvalidSyntax(yaml_p.yaml_pos, yaml_p.yaml_err))
     return Ok(!yaml_docs)
 
 # ── Serialization (compact flow-style) ──────────────────────
