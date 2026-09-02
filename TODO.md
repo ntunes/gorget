@@ -2,7 +2,7 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN AND MID-FLIGHT — 7 of 7 code tracks integrated (D1, C, D2, F, A, β, γ). Track S INTEGRATED. E-B2 INTEGRATED. E-B1/B3 executors IN FLIGHT.
+**▶ R48 IS OPEN AND MID-FLIGHT — 7 of 7 code tracks integrated (D1, C, D2, F, A, β, γ). Track S INTEGRATED. E-B2 INTEGRATED. E-B3 INTEGRATED. E-B1 executor IN FLIGHT.
 ⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A, β, γ, S) and the owner's lift to launch Track E.
 ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST.**
 **D53 is implemented** (unique lock + consume-position reject; diagnostic `^source` / `Shared[Mutex[T]]`).
@@ -29,7 +29,7 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 
 ### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-02, main `5cb547e7e`)
 
-**7 of 7 code tracks INTEGRATED. E-B2 INTEGRATED `04408c66d`. E-B1/B3 executors IN FLIGHT.** Briefs at `/tmp/r48briefs/trackE_B{1,2,3}.md`.
+**7 of 7 code tracks INTEGRATED. E-B2 INTEGRATED `04408c66d`. E-B3 INTEGRATED `74622b945`. E-B1 executor IN FLIGHT.** Briefs at `/tmp/r48briefs/trackE_B{1,2,3}.md`.
 Lifts spent: C, D2, F, A, β, γ (integrated). D53 unique-lock reject and the figures DB are **on main**.
 A's capture residual is `t0927`; β's are `t0928`–`t0930`; γ's are `t0931`–`t0933`; main's `t0876` remains C-emit jitter.
 Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption is `t0926`.
@@ -46,7 +46,7 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **S** | guard simplification | — | — | — | **INTEGRATED** `5cb547e7e` (clause probes retired; heading-id inventory; AGENTS.md 35971 bytes) |
 | **E-B1** | census + 4 dirty PASSers + leak | — | — | — | **EXECUTOR IN FLIGHT** (pass 3 SIGN OFF). Producer is `lower_catch_expr` err_local, not `lower_throw`. Do not fix t0907/t0382 write sites |
 | **E-B2** | `t0828` 11 untriaged | — | — | — | **INTEGRATED** `04408c66d` (11 MATCH; `UNTRIAGED_CEILING` 24→13; MATCH_FLOOR untouched; t0828 stays open for 13 httpserver rows) |
-| **E-B3** | membership + robustness scorer | `82949fae4` | 1 | `robustness_map.py` M4/M5 · `lints.rs` EOF · `corpus_b{,1}.rs` dups · `t0934` | **output-review IN FLIGHT**. Branch predates E-B2: UNTRIAGED still 24 there; must not revert main's 13. Remaining 85-cell adjudication is `t0934` |
+| **E-B3** | membership + robustness scorer | — | — | — | **INTEGRATED** `74622b945` (M4/M5; membership lint; `UNTRIAGED_CEILING` stayed **13**; remaining 85-cell adjudication is `t0934`) |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
 
 ⚠ **Briefs + all fold addenda live in `/tmp/r48briefs/*.md` and are NOT durable.** Each carries its
@@ -71,12 +71,8 @@ add/add). β's residuals landed as `t0928`–`t0930`. γ's residuals landed as `
 max and fix every citation. Never take a side on add/add todo ids.**
 
 ### ⛔ WHAT MUST HAPPEN BEFORE R48 CAN CLOSE
-1. **Three E-B brief pass-2s IN FLIGHT** (owner lifted E 2026-09-02). No diff integrates without a fresh pass on it. Pass 3 follows a SIGN OFF; a DESIGN reservation folds and re-runs pass 2.
-2. **E-B3's `robustness_map` scorer fix is UNLANDED.** `scripts/robustness_map.py:617` derives "good" from
-   the C-lane BASELINE bucket, never `COL_EXPECTED` ⇒ **fixing a C-lane cell scores as a REGRESSION**, and
-   on the 43 self-host-WORKS cells a self-host regression scores as PROGRESS. `:715-723` makes `--accept`
-   a one-shot launderer (it writes before the regression check). **Until this lands the round-close
-   robustness gate cannot be read either way, and this round FIXED C-lane cells.**
+1. **E-B1 executor still IN FLIGHT** (pass 3 SIGN OFF). E-B2 and E-B3 are integrated.
+2. **E-B3's `robustness_map` scorer fix LANDED** `74622b945` (`good` from `COL_EXPECTED.startswith("REJECTED")`; `--accept` refuses to write on regressions/new_div). The 85 value-expected C-REJECTED cells are **`t0934`** (adjudicate, do not decrement). Round-close `robustness_map` can now be read as a gate rather than a launderer.
 3. **NOT RUN on the integrated tree:** `GG_BACKEND=llvm` whole-corpus · `scripts/sanitize_sweep.sh` ·
    `robustness_map` · the C whole-corpus sweep. (D2 ran the C sweep green on ITS branch — 2557/0 with the
    bootstrap included and scope verified — that is one branch, not the integrated tree.)
