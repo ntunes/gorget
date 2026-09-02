@@ -1,0 +1,14 @@
+# t0940 — Core #10 SILENT DROP. `Guard[T].clone()` passes `gg check` and then
+# dies at C compile:
+#   error: implicit declaration of function 'gorget_guard_clone'
+# `Guard` is registered with `clone_fn: None` (src/ir/lowering/builtins.rs:695),
+# i.e. it genuinely has no clone path — so `.clone()` on it must be REJECTED at
+# check time, not lowered to a call on a symbol the runtime does not define.
+# INTENDED: a check-time rejection naming the move sigil, never a build failure.
+from std.sync import Mutex
+
+void main():
+    Mutex[int] m = Mutex[int](1)
+    Guard[int] g = m.lock()
+    Guard[int] g2 = g.clone()
+    print(1)

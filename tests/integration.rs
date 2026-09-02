@@ -6185,6 +6185,20 @@ fn callable_field_call_link_failure() {
     run_gg("known_gaps/callable_field_call_link_failure.gg", "2");
 }
 
+// `todo/t0940` — Core #10 SILENT DROP. `Guard[T].clone()` passes `gg check` and
+// dies at C compile on `implicit declaration of function 'gorget_guard_clone'`.
+// `Guard` is registered `clone_fn: None` (`src/ir/lowering/builtins.rs:695`), so
+// the lowering HAD the typed metadata saying "no clone path" and manufactured a
+// runtime symbol name by convention anyway (Layering rule 2). The arm owes a
+// check-time rejection. Asserts the INTENDED rejection, so RED at HEAD.
+// Un-ignore + move out of known_gaps/ when graduating.
+#[test]
+#[ignore = "todo/t0940 — Guard[T].clone() is accepted by `gg check` and dies at C compile on a \
+nonexistent gorget_guard_clone symbol; asserts the intended check-time rejection."]
+fn guard_clone_link_failure() {
+    check_gg_fails("known_gaps/guard_clone_link_failure.gg", "clone");
+}
+
 // SELF-HOST-LANE gap (surfaced Round R40, Track-J review): `for (i, b) in
 // s.bytes().enumerate()` MISCOMPILES on the self-host lane — it prints
 // `0,16961,1,66` (the i64-slot over-read) instead of the correct `0,65,1,66`.
