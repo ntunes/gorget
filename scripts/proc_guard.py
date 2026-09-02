@@ -258,7 +258,7 @@ def census(root=None):
 # Shrink-only ratchet over the OTHER class (todo/t0842): spawns with no deadline
 # at all. It may fall freely; it may not rise. Regenerate with
 # `python3 scripts/proc_guard.py --census`.
-NO_DEADLINE_BASELINE = 6
+NO_DEADLINE_BASELINE = 4
 
 
 def print_census() -> int:
