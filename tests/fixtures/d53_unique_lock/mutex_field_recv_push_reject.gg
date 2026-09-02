@@ -1,0 +1,17 @@
+# D53 NEG — RECEIVER-SHAPE axis: the collection is reached through a struct
+# FIELD, not a bare local. D53 (decisions.md:532) ranges over the consuming
+# POSITION; the receiver's spelling is not in the rule, so this must reject
+# exactly like `all.push(m)`.
+# CELL: lock=Mutex · position=push · receiver=field of a local · source=named place.
+# RED at 3c3ea3f0b: `gg check` ACCEPTED (is_buffer_owning_receiver resolved the
+# receiver through a root-only path that gave up on any non-empty place path).
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+struct Holder:
+    Vector[Mutex[int]] locks
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Holder h = Holder([])
+    h.locks.push(m)
+    print(h.locks.len())

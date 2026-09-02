@@ -1,0 +1,11 @@
+# D53 NEG — RECEIVER-SHAPE axis: the collection is reached through a TUPLE
+# field (`pair.0.push(m)`). Fourth value of the receiver axis.
+# CELL: lock=Mutex · position=push · receiver=tuple field · source=named place.
+# RED at 3c3ea3f0b: `gg check` ACCEPTED.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    (Vector[Mutex[int]], int) pair = ([], 1)
+    pair.0.push(m)
+    print(pair.1)

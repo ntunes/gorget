@@ -1,0 +1,16 @@
+# D53 POS — the ACCEPT counterpart of the receiver-shape NEG set: the same
+# field-receiver consume site with the sanctioned `^source` spelling still
+# compiles and RUNS. Proves the receiver fix rejects the implicit COPY, not the
+# position — a guard that rejected everything would pass the NEG set alone.
+# CELL: lock=Mutex · position=push · receiver=field of a local · source=`^m`.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+struct Holder:
+    Vector[Mutex[int]] locks
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Holder h = Holder([])
+    h.locks.push(^m)
+    print(f"{h.locks.len()}")
+    print(f"{h.locks.get(0).unwrap().lock().get()}")

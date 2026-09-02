@@ -1,0 +1,16 @@
+# D53 NEG — TYPE axis at a field receiver: `Guard` is a carve-out member with
+# NO clone path (`builtins.rs` `clone_fn: None`), so the class pin proves the
+# receiver fix rides the SHARED single-owner helper, not a Mutex costume.
+# CELL: type=Guard · position=push · receiver=field of a local · source=named place.
+# RED at 3c3ea3f0b: `gg check` ACCEPTED.
+# ggdef: ABSTAIN (Guard/Mutex out of subset; owner: ggdef stays simple).
+
+struct Held:
+    Vector[Guard[int]] all
+
+void main():
+    Mutex[int] m = Mutex[int](0)
+    Guard[int] g = m.lock()
+    Held h = Held([])
+    h.all.push(g)
+    print(h.all.len())
