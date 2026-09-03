@@ -11,11 +11,14 @@ sequential brief-reviews → executor → fresh output-review before it integrat
 ### 🔢 R49 ID BLOCKS — orchestrator-allocated per AGENTS.md multi-agent rule **MA-3b** (owner 2026-09-03)
 **A TRACK NEVER PICKS ITS OWN `todo/` ID.** Each executor gets a private disjoint block in its brief and
 asks the orchestrator to extend it if exhausted. This retires the collision that forced the Track P/R
-renumber. Blocks issued for R49 — **first unissued id is `t1047`**:
+renumber. Blocks issued for R49 — **first unissued id is `t1048`** (`t1047` is the owner's, below):
 
 | A | E | F | H | B | C | D | G |
 |---|---|---|---|---|---|---|---|
 | `t0967`–`t0976` | `t0977`–`t0986` | `t0987`–`t0996` | `t0997`–`t1006` | `t1007`–`t1016` | `t1017`–`t1026` | `t1027`–`t1036` | `t1037`–`t1046` |
+
+⭐ **`t1047` IS ALLOCATED TO THE OWNER (2026-09-03, owner request).** RESERVED — ⛔ no track may use it,
+and the orchestrator must not re-issue it. **First unissued id is now `t1048`.**
 
 ⚠ A block is a CEILING on collision, not a filing quota — R49's mandate is burn-down, and an unused block
 is the good outcome. **Wave 1 in flight: A · E · F · H** (scouts launched 2026-09-03). Wave 2 launches one
