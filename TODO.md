@@ -461,6 +461,34 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **✅ F · PASS 6 SIGNED OFF — EXECUTOR LAUNCHED. Six passes; the design needed none of them, MY FOLDS did.**
+  Pass 6 built the REAL patch from ADDENDUM 6 + 7 B1, measured it, RED-verified the guard, reverted clean.
+  `cargo build` 0 · `--lib` **1186/0** · `--test lints` **218/0** · `robustness_map --lanes c` **rc 0,
+  6 PROGRESS, 0 regressions, WORKS 848/1009** (HEAD 842). Six M1 cells **6/6**; `fold("",…)` threads String;
+  `fold(0,…len())` → `5` where HEAD ICEs.
+  ⭐ **THE NEW GUARD CAUGHT ONE OF MY ERRORS ON ITS FIRST RUN.** The `ALL_PROTOCOLS`-iterating test (in
+  `collection_protocols_have_full_metadata`'s shape, `builtins.rs:1285`) is **green as written and RED on a
+  dropped Deque row** — and it revealed that **there is no protocol named `GorgetStringView`**:
+  `GORGET_STRING_VIEW.base_name` is **`"GorgetString"`** (`builtins.rs:821`), so ADDENDUM 6's *"it does not
+  collide ✓"* **verified a non-existent entry.** Core #6 working exactly as intended.
+  ⚡ **SCOPE-4 DECIDED — M1b · M2 · M4 · M5 ARE STRUCK FROM F and become TRACK F-2 IN THIS ROUND.** Since
+  ADDENDUM 3 every pass reviewed **only M1 + the scorer**; M2/M4/M5 have had **no pass since ADDENDUM 2**,
+  and M4 carries an unresolved collision with readiness #3 explicitly uncheckable. **A split is division,
+  never deferral. F ships M1 + the report-only scorer and nothing else.**
+  ⛔ **S3 · MY "`_pp_`, NOT `_vv_`" WAS A BLANKET AND IS FALSE — the symbol is PER-CELL.**
+  `vec_sort_structs_comparator` and `vec_sorted_structs_comparator` **do** emit `_vv_`. Saying it
+  unqualified is exactly the failure the fire-count correction existed to prevent.
+  ⛔ **S4 · `#[ignore]` IS A CATEGORY ERROR for robustness-map cells** — they are not cargo tests.
+  `expected` = INTENDED output · lane column = measured broken bucket · `note` = citation. **The wrong
+  reading pushes an executor toward editing `COL_EXPECTED`, which `t0934` FORBIDS.**
+  ⛔ **S2 · NEW AXIS GAP — the accumulator is sampled at ONE VALUE (Core #12).** The carrier's whole
+  justification is *"the accumulator is a CALL-SITE property"*, yet every measuring cell uses a **literal**
+  accumulator; `Vector[String].fold(<non-constant>,…)` is BUILD-FAIL at HEAD **and stays BUILD-FAIL**.
+  Unfiled ⇒ cover it or file `t0991`.
+  ⚠ **S1 · the `_full`-vs-2-arg choice has NO WITNESS** — byte-identical on every probe. Keep `_full` + the
+  TRAP comment, but **do not claim a fixture pins it.**
+  ⊕ IDs: **`t0990`** = `Deque[String].push_back` → `E_NoMethodFound`; **`t0991`** = the accumulator axis.
+
 - **⛔ K · PASS 1 — 4 BLOCKING, 5 SCOPE. Root cause, layer and direction RIGHT; the ENUMERATION, the
   "already correct" list, the COST claim and the FIGURES all fail.** Folded as ADDENDUM 1; **streak reset to
   0, pass 2 launched.** ✅ **Independently confirmed:** both-backend repro · **`ggdef run` → `abcde`**
