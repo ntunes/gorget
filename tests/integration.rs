@@ -38813,11 +38813,24 @@ fn self_host_comprehension_net() {
         .collect();
     cells.sort();
 
-    assert!(
-        cells.len() >= SELF_HOST_COMPREHENSION_CELL_FLOOR,
-        "self_host_comprehension: {} cells, floor is {}. Cells were DELETED. \
-         The floor is shrink-only in the wrong direction — raise it when the \
-         net grows, never lower it to clear a red.",
+    // ⚠ EXACT PIN, NOT A FLOOR — and the `>=` it replaced could not enforce the
+    // second half of its own instruction. The comment on the constant says
+    // "raise it when the net grows, never lower it": a `>=` guard catches only
+    // the DELETION half, because adding a cell makes `cells.len() >= FLOOR`
+    // MORE true. So "raise it when the net grows" was an invariant-asserting
+    // comment with nothing behind it (Core #14), and the net could grow without
+    // the floor ever following.
+    // This is the SIBLING of the same defect fixed in `MIN_FIXTURES`
+    // (tests/spec_conformance.rs) at R48 close, found by a T-a2 brief reviewer
+    // reading that fix and asking what stopped the next site (Core #4: one fix,
+    // all siblings). Cell count is a deterministic file count, so `==` is safe.
+    assert_eq!(
+        cells.len(),
+        SELF_HOST_COMPREHENSION_CELL_FLOOR,
+        "self_host_comprehension: {} cells, pin is {}. If cells were DELETED, \
+         restore them — a net that can be emptied without a test failing is not \
+         a net. If cells were ADDED, RAISE the pin in the same commit: that is \
+         the half the old `>=` guard could not see.",
         cells.len(),
         SELF_HOST_COMPREHENSION_CELL_FLOOR,
     );
