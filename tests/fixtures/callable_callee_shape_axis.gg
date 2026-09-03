@@ -52,12 +52,12 @@
 #     undefined `Holder__g` and the link fails. `todo/t0939` owns it.
 #   * a VARIABLE index (`fs[n](21)`) — the generic-vs-index ambiguity is
 #     genuinely undecided for a bare identifier inside the brackets, and Rust
-#     REJECTS it as `E_NotAFunction`. `todo/t0951` owns it, with a
+#     REJECTS it as `E_NotAFunction`. `todo/t0957` owns it, with a
 #     `known_gaps/` repro; putting a cell here would pin an unratified answer.
 #   * `&`/`!`-sigil arguments through an indexed callee — a different axis
 #     (per-param ownership forwarding, not callee shape). Covered by
 #     `callable_amp_arr_indexed_callee.gg` and its two siblings on the Rust
-#     lane; still RED on the self-host lane, owned by `todo/t0953`.
+#     lane; still RED on the self-host lane, owned by `todo/t0959`.
 #
 # INTENDED (asserted by the wired test): every cell prints 42, except the two
 # whose callable adds 1 rather than doubling (22).

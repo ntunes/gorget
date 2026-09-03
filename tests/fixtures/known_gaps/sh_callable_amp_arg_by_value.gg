@@ -1,0 +1,38 @@
+# KNOWN GAP (todo/t0959), SELF-HOST lane — an INDIRECT call with a `&`-sigil
+# argument passes the argument BY VALUE, and the callee dereferences it.
+#
+# `bump` wants a pointer (`fn @bump(*mut i64)`, `_2 = deref _1`). At an
+# indirect call the self-host forwards arg-0 (the closure value) by pointer
+# through the `__callable_N` carve-out and every LATER argument by value,
+# because the dispatch site has no signature to consult: the callable's type
+# is the signature-ERASED `Callable__GorgetClosure`. So `cb(&a)` hands `bump`
+# the integer 1 as an address. SIGSEGV, with `gg check` clean.
+#
+# THE CALLEE HERE IS A BARE IDENTIFIER, DELIBERATELY. That is the whole point
+# of this repro: it discriminates this defect from the non-identifier-callee
+# class (`callable_callee_shape_axis.gg`), which R48 Track U closed. No index,
+# no call result, no method result — just a `Callable` local invoked by name,
+# and it dies anyway. A fix aimed at callee SHAPE cannot reach it.
+#
+# The four live top-level fixtures for this class assert the RUST lane, where
+# it is green; their self-host redness is visible only through the aggregate
+# non-MATCH ceiling, which is not a durable repro for anything. This is.
+#
+# Reference-grade shape (unported Track B1/K work on the Rust side): give the
+# FnPtr GIR type a `param_ownerships` axis, populate the callable-alias sig
+# where the `Type::Function` inner is still in scope, teach the
+# container-element inferrer to look it up, and route each argument through
+# the standard call-arg lowering on the recovered sig — pointer-vs-value PER
+# PARAM, never one default.
+#
+# INTENDED (asserted by the #[ignore]d wired test, which runs the SELF-HOST
+# lane): prints `101`, exactly as Rust `gg` does today.
+
+void bump(int &n):
+    n = n + 100
+
+void main():
+    int a = 1
+    Callable[void(int &)] cb = bump
+    cb(&a)
+    print(a)

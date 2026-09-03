@@ -11,8 +11,8 @@
 # that filled the accumulator with unmapped, uninitialized elements: the COUNT
 # was right and only the values were garbage (SIX QUESTIONS #6 — a green cell
 # green for a reason unrelated to what it tests). The wide net for that defect
-# is `hof_implicit_it/collection_axis.gg`; this fixture carries the `map` cell
-# inside the auto-scanned corpus.
+# is `hof_implicit_it_collection_axis.gg`, which also covers the PROJECTION
+# body shapes (`it.n`, `it.n > 1`) this arithmetic one cannot reach.
 void main():
     Vector[int] xs = [1, 2, 3]
     Vector[int] doubled = xs.map(it * 2)

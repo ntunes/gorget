@@ -3014,6 +3014,29 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # compute_closure_sig's `cid` arg only names the env struct /
                     # self-ptr — the return_type derivation is cid-independent
                     # (lower_closures.gg), so a throwaway 0 is safe here.
+                    #
+                    # ⚠ ONE ORDERING HAZARD, AND THE EVIDENCE FOR IT IS THIN —
+                    # read this before trusting the refactor. Routing through the
+                    # shared producer moves `compute_closure_sig` from AFTER the
+                    # argument lowering to BEFORE it, and that call takes `&gmod`
+                    # and MUTATES it (`lookup_or_register_named`, `register_ptr`,
+                    # `map_ast_type`). Two orders can therefore assign different
+                    # type ids. That is an emission-ORDER change, not a no-op.
+                    #
+                    # The corpus check was "every top-level fixture's emitted C
+                    # byte-identical across the reorder", and the headline number
+                    # is misleading on its own: FIRE-COUNTED, this arm is reached
+                    # by exactly THREE fixtures and FIVE call sites in the whole
+                    # corpus (`closure_iife` x3, `closure_iife_tuple_param` x1,
+                    # `callable_callee_shape_axis` cell 2 x1), every one of them
+                    # with LITERAL arguments. So the check has three
+                    # discriminating cells, not 2208 — it is real evidence that
+                    # the shapes we HAVE are unaffected, and no evidence at all
+                    # about a shape whose argument lowering registers a type the
+                    # signature derivation would otherwise register first. None
+                    # is written today. If one is, and its ids shift, the fix is
+                    # to derive the return type WITHOUT touching the type table,
+                    # not to unpick the shared producer.
                     int iife_callable = lower_expr(&ctx, callee, &gmod)
                     int iife_ret = compute_closure_sig(0, iife_params, iife_body, &gmod, ctx.expected_type).return_type
                     return lower_callable_value_call(&ctx, iife_callable, args, &gmod, iife_ret)

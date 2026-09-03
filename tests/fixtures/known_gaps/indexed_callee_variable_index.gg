@@ -1,4 +1,4 @@
-# KNOWN GAP (todo/t0951) — an indexed callee with a VARIABLE index is rejected,
+# KNOWN GAP (todo/t0957) — an indexed callee with a VARIABLE index is rejected,
 # while the same program with a literal index compiles and runs.
 #
 #   fs[0](21)      -> 42        (literal index: the speculative type parse
@@ -14,7 +14,7 @@
 #
 # The two settled spellings are pinned by `callable_callee_shape_axis.gg`
 # (cells 3 and 5); this one is here because the disambiguation rule for
-# `expr[ident](args)` is not ratified — see todo/t0951 for the two candidate
+# `expr[ident](args)` is not ratified — see todo/t0957 for the two candidate
 # rules.
 #
 # INTENDED (asserted by the #[ignore]d wired test): prints `42`.

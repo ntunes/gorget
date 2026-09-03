@@ -193,13 +193,18 @@ box_trait_vector_lit	__gorget_box_alloc_Robot*1,str_alloc_copy*1
 # Same family as the `vector_callable_two_locals` / `closure_*` rows below.
 # ⚖ ADMITTED (R48 Track U, 2026-09-03) — ONE row, under the same ruling, for a
 # fixture that makes a pre-existing class VISIBLE rather than introducing it.
-#   hof_implicit_it_collection_axis   __gorget_closure_env_alloc*5  -> todo/t0954
+#   hof_implicit_it_collection_axis   __gorget_closure_env_alloc*8  -> todo/t0953
 # THE DEFECT IS THE OLDEST AND LARGEST ONE IN THIS FILE'S OWN BIG-GROUPS TABLE,
 # and until this round it had NO ITEM: *"every builtin HOF call (map/filter/fold)
-# leaks an 8-byte env, UNBOUNDED per call"*. The fixture makes five such calls
-# (map, filter, any, all, Set.any) and leaks five records — one per call, with
-# nothing captured and no container of callables anywhere in it.
-# WHY THE ROW EXISTS AT ALL: the five arms ARE the coverage. The fixture is the
+# leaks an 8-byte env, UNBOUNDED per call"*. `todo/t0953` MEASURED THAT PROSE
+# TOO NARROW — a plain user function taking a `Callable` leaks the same frame
+# with no builtin HOF in the program at all, so the write site is the
+# closure-literal ARGUMENT — and it owns the class. The fixture makes eight
+# such calls (map, filter, any, all, Set.any, plus three projection-bodied
+# cells) and leaks eight records, one per call.
+# WHY THE ROW EXISTS AT ALL: the eight cells ARE the coverage — five HOF arms
+# and three body shapes (`it.n`, `it[0]`, `it.n > 1`) that a non-exhaustive
+# `expr_has_it` never recognised as implicit-`it` bodies at all. The fixture is the
 # regression net for a self-host MISCOMPILE the round fixed — an implicit-`it`
 # body was wrapped as if it were a callable (`(it * 2)(__hofp0)`), the whole
 # call was then discarded, and the accumulator was filled with uninitialized
@@ -214,12 +219,13 @@ box_trait_vector_lit	__gorget_box_alloc_Robot*1,str_alloc_copy*1
 # DISCRIMINATED from the four neighbouring `__gorget_closure_env_alloc` rows,
 # which are the same FRAME but four different allocation SITES: `todo/t0873`
 # scales with pushed ELEMENTS, `todo/t0949` with index READS, `todo/t0948` is a
-# struct FIELD, and this one scales with HOF CALLS. `todo/t0954` carries the
-# table.
-# RETIREMENT: this row goes when `todo/t0954` lands — and so, in large part,
+# struct FIELD. `todo/t0953` carries the table, and its own measurements make
+# THIS one's characterisation the narrow one: a plain user function taking a
+# `Callable` leaks the same frame with no builtin HOF anywhere in the program,
+# so the write site is the closure-literal ARGUMENT, not the HOF expander.
+# RETIREMENT: this row goes when `todo/t0953` lands — and so, in large part,
 # does this whole group. Its repro is
-# `tests/fixtures/known_gaps/hof_implicit_it_env_leak.gg` (20 map calls, 20
-# allocations) plus an `#[ignore]`d test asserting the intended clean run.
+# `tests/fixtures/known_gaps/closure_literal_call_arg_env_leak.gg`.
 # COUNT TAKEN FROM THE SWEEP'S OWN `verdicts.tsv` COLUMN 4 with `FIXLIST`
 # restricted to this round's five touched fixtures — not from a hand count. The
 # same run confirms `callable_callee_shape_axis` (this round's other new
@@ -327,7 +333,7 @@ generic_callable	__gorget_closure_env_alloc*2
 guard_boxed_trait_dispatch	__gorget_box_alloc_Robot*1,gorget_mutex_new*2,gorget_str_cat*1
 guard_get_user_struct_no_leak	gorget_str_cat*1
 hashmap_unordered	__gorget_closure_env_alloc*1
-hof_implicit_it_collection_axis	__gorget_closure_env_alloc*5	__gorget_closure_env_alloc=t0954
+hof_implicit_it_collection_axis	__gorget_closure_env_alloc*8	__gorget_closure_env_alloc=t0953
 hot_reload_basic	gorget_hot_watch_init*1
 httpserver_before	gorget_dict_new*3,gorget_map_clone*3,str_alloc_copy*3
 httpserver_body_parsers	str_alloc_copy*4

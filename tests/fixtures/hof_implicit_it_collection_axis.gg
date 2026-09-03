@@ -14,12 +14,27 @@
 # `compute_implicit_closure_sig` types it, so the body is extracted with that
 # binding instead of being wrapped.
 #
-# AXIS / CELLS — every collection HOF that takes a single-parameter body, so a
-# partial regression at one arm trips this fixture:
+# TWO AXES, because two different things had to be true.
+#
+# AXIS 1 — the HOF ARM. Every collection higher-order method that takes a
+# single-parameter body, so a partial regression at one arm trips this fixture:
 #   map (cross-type accumulator) · filter (predicate) · any · all ·
 #   Set.any (a different iteration producer)
 # `Option.map(it * 2)` is NOT here: Option combinators lower through their own
 # arm and never reach `extract_hof_closure` (see `implicit_it.gg`).
+#
+# AXIS 2 — the BODY SHAPE, i.e. how the body reaches `it`. Whether an argument
+# IS an implicit-`it` body is decided by one predicate, `expr_has_it`, and that
+# predicate named 8 of `Expr`'s 44 variants. A body it answered `false` for was
+# treated as a CALLABLE and wrapped `(body)(__hofp0)` — so the arithmetic form
+# `it * 2` worked while every body that reaches `it` through a PROJECTION did
+# not, in a different way each time:
+#   `it * 2`       arithmetic          — the shape the eight arms covered
+#   `it.n`         FIELD projection    — SEGV (the wrap became `(it.n)(__hofp0)`)
+#   `it[0]`        INDEX projection    — SEGV, a different walker arm again
+#   `it.n > 1`     projection under a comparison — SILENTLY EMPTY vector
+# The second axis is why the predicate is now an exhaustive walk that stops
+# only at closure boundaries, rather than a working set.
 #
 # The failure was INVISIBLE to a fixture that only reads the result's LENGTH.
 # `closure_mixed_implicit_explicit_wiring.gg` was green throughout because
@@ -32,18 +47,39 @@
 # 8-byte closure environment per implicit-`it` HOF call — a pre-existing class
 # the allowlist header has characterised since the first corpus sweep ("every
 # builtin HOF call (map/filter/fold) leaks an 8-byte env, UNBOUNDED per
-# call"), now filed as `todo/t0954` with its own durable repro. Five calls,
-# five records; the row in `tests/sanitize/LEAK_ALLOWLIST.txt` cites that
-# item. Admitting the row is deliberate: a leak that is declared and counted
-# by the trend gate gets fixed, and one hidden outside the swept corpus does
-# not. Do NOT trim the axis to shrink the row — the arms are the coverage.
+# call") — and MEASURED WIDER than that by `todo/t0953`, which owns it: a plain
+# user function taking a `Callable` leaks the same frame with no builtin HOF
+# anywhere in the program, so the write site is the closure-literal ARGUMENT,
+# not the HOF expander. Eight calls here, eight records; the row in
+# `tests/sanitize/LEAK_ALLOWLIST.txt` cites that item. Admitting the row is
+# deliberate: a leak that is declared and counted by the trend gate gets
+# fixed, and one hidden outside the swept corpus does not. Do NOT trim the
+# axis to shrink the row — the arms are the coverage.
 #
-# INTENDED (asserted by the wired test): the mapped and filtered elements,
-# then three `true`s. Once `todo/t0954` is fixed, this fixture also runs
-# ASan-clean and its allowlist row is deleted.
+# INTENDED (asserted by the wired test): the projected elements, then the
+# mapped and filtered ones, then three `true`s. Once `todo/t0953` is fixed,
+# this fixture also runs ASan-clean and its allowlist row is deleted.
+
+struct Row:
+    int n
 
 void main():
     Vector[int] xs = [1, 2, 3, 4]
+
+    # AXIS 2 — a body that reaches `it` through a FIELD projection, and one
+    # that reaches it through a projection under a comparison. Neither was
+    # recognised as an implicit-`it` body at all.
+    Vector[Row] rows = [Row(1), Row(2), Row(3)]
+    Vector[int] ns = rows.map(it.n)
+    for n in ns:
+        print(f"proj {n}")
+    Vector[Row] big = rows.filter(it.n > 1)
+    for b in big:
+        print(f"projfilt {b.n}")
+    Vector[Vector[int]] grid = [[10, 11], [20, 21]]
+    Vector[int] heads = grid.map(it[0])
+    for h in heads:
+        print(f"idx {h}")
 
     Vector[int] doubled = xs.map(it * 2)
     for d in doubled:

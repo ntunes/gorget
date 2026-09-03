@@ -5394,6 +5394,35 @@ fn sh_closure_literal_ok_body_typed_int() {
     );
 }
 
+/// KNOWN GAP `t0959`, SELF-HOST lane — an INDIRECT call with a `&`-sigil
+/// argument forwards the argument BY VALUE and the callee dereferences it.
+/// SIGSEGV with `gg check` clean, on every callee shape.
+///
+/// The callee here is a BARE IDENTIFIER, deliberately: that discriminates this
+/// defect from the non-identifier-callee class R48 Track U closed
+/// (`callable_callee_shape_axis.gg`). Arg-0 gets the `__callable_N` pointer
+/// carve-out; every later argument is forwarded by value because the dispatch
+/// site has no signature to consult — the callable's type is the erased
+/// `Callable__GorgetClosure`. Rust `gg` prints 101 on both backends; this
+/// asserts the same on the SELF-HOST lane.
+///
+/// The class's four live top-level fixtures (`callable_amp_arr_indexed_callee`
+/// and siblings, `callable_amp_fntype_writethrough`) assert the RUST lane, so
+/// the self-host redness was visible only through the aggregate non-MATCH
+/// ceiling. This is the durable repro.
+#[test]
+#[ignore = "KNOWN GAP t0959: the self-host forwards a `&`-sigil argument BY VALUE at an \
+indirect call (no per-param ownership sig at the __callable_N dispatch), so the callee \
+dereferences an integer. Asserts the intended 101 on the self-host lane; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn sh_callable_amp_arg_by_value() {
+    sh_known_gap_expect(
+        "known_gaps/sh_callable_amp_arg_by_value.gg",
+        "sh_callable_amp_arg_by_value",
+        "101",
+    );
+}
+
 /// KNOWN GAP `t0879`, SELF-HOST lane — a USER-DEFINED generic method taking a
 /// callable (`U transform[U, F](self, F f)`) cannot be compiled on the
 /// self-host lane on ANY spelling of the argument: top-level fn, closure
@@ -6445,22 +6474,7 @@ fn callable_unit_form_clone_segv() {
     run_gg("known_gaps/callable_unit_form_clone_segv.gg", "2\n2\n2");
 }
 
-// `todo/t0954` — every builtin higher-order-method call leaks the closure
-// environment it allocates for its body: one record per CALL, scaling with
-// trip count (the repro's 20-iteration loop leaks 20 allocations, 160 bytes).
-// The stdout is already CORRECT, so this repro is only meaningful under the
-// sanitizer — which is how the allowlist's second-largest leak group stayed
-// unowned. Asserts the INTENDED output; the ASan-clean half is asserted by
-// the row's eventual deletion from `tests/sanitize/LEAK_ALLOWLIST.txt`.
-#[test]
-#[ignore = "todo/t0954 — a builtin HOF call leaks its synthesized closure env, unbounded per call \
-(20 allocations for 20 map calls). stdout is already correct; the gap is the leak, visible only \
-under `gg build --sanitize` + LeakSanitizer. Asserts the intended output (120)."]
-fn hof_implicit_it_env_leak() {
-    run_gg("known_gaps/hof_implicit_it_env_leak.gg", "120");
-}
-
-// `todo/t0951` — an indexed callee with a VARIABLE index (`fs[n](21)`) is
+// `todo/t0957` — an indexed callee with a VARIABLE index (`fs[n](21)`) is
 // REJECTED as `E_NotAFunction`, while `fs[0](21)` and `fs[n + 0](21)` both
 // print 42. A bare identifier inside the brackets parses as a type NAME, so
 // the generic-call reading wins and the `EIndex` is deleted from the AST
@@ -6468,7 +6482,7 @@ fn hof_implicit_it_env_leak() {
 // `callable_callee_shape_axis.gg`; this cell waits on a ratified rule for
 // `expr[ident](args)`. Asserts the INTENDED output.
 #[test]
-#[ignore = "todo/t0951 — `fs[n](21)` with a variable index is rejected as E_NotAFunction because \
+#[ignore = "todo/t0957 — `fs[n](21)` with a variable index is rejected as E_NotAFunction because \
 a bare identifier parses as a type name and the generic-call reading wins, deleting the EIndex. \
 Un-ignore when the disambiguation is resolution-aware. Asserts the intended output (42)."]
 fn indexed_callee_variable_index() {
@@ -40232,9 +40246,13 @@ fn self_host_runtime_diff() {
     // CRASH, both to MATCH; `shared_callable` moved WRONG-OUTPUT -> CC-FAIL
     // (its `Shared[Callable].get()()` invoke is now EMITTED rather than
     // discarded, and hits an unresolved inner C type — `todo/t0612`, corrected
-    // there). Track U's own two new fixtures add ZERO inflow: one MATCHes in
-    // the corpus, the other is deliberately out of the auto-scanned set with
-    // its reason in its header and its lane result verified by hand.
+    // there). Track U's own two new fixtures add ZERO inflow: BOTH are
+    // top-level, BOTH are in this auto-scanned corpus, and BOTH MATCH —
+    // measured, not asserted (`callable_callee_shape_axis`,
+    // `hof_implicit_it_collection_axis`). The second carries a declared row in
+    // `tests/sanitize/LEAK_ALLOWLIST.txt` for a PRE-EXISTING closure-env leak
+    // it makes visible (`todo/t0953`); that is a sanitizer matter and has no
+    // bearing on this count.
     const RUNTIME_DIFF_NONMATCH_CEILING: usize = 147;
     // ⛔ THIS GATE NO-OPS IN THE PROFILE PEOPLE ACTUALLY RUN, AND THAT IS A
     // COVERAGE HOLE, NOT A DESIGN. `cargo test --test integration self_host` is
@@ -48413,14 +48431,14 @@ fn callable_callee_shape_axis() {
 /// Five arms, so a partial regression at one trips it: map, filter, any, all,
 /// Set.any. It carries a `tests/sanitize/LEAK_ALLOWLIST.txt` row — Rust `gg`
 /// leaks one closure env per implicit-`it` HOF call, a PRE-EXISTING class this
-/// fixture makes VISIBLE rather than one it introduces, filed as `todo/t0954`
+/// fixture makes VISIBLE rather than one it introduces, owned by `todo/t0953`
 /// and cited on the row. `closure_mixed_implicit_explicit_wiring.gg` below
 /// carries the same defect's `map` cell and was green throughout it.
 #[test]
 fn hof_implicit_it_collection_axis() {
     run_gg(
         "hof_implicit_it_collection_axis.gg",
-        "map 2\nmap 4\nmap 6\nmap 8\nfilter 2\nfilter 4\nany true\nall true\nset_any true",
+        "proj 1\nproj 2\nproj 3\nprojfilt 2\nprojfilt 3\nidx 10\nidx 20\nmap 2\nmap 4\nmap 6\nmap 8\nfilter 2\nfilter 4\nany true\nall true\nset_any true",
     );
 }
 

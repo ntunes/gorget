@@ -924,6 +924,30 @@ int combinator_closure_ret_type(LowerCtx ctx, SpannedExpr closure_arg, GirModule
 # Check if an expression tree contains the implicit `it` parameter.
 # Unlike the parser's expr_contains_it (which only checks top-level to
 # avoid borrow issues), this traverses owned values — safe to recurse.
+#
+# ⚠ THIS PREDICATE IS THE ONLY THING THAT DECIDES WHETHER AN ARGUMENT IS AN
+# IMPLICIT-`it` CLOSURE BODY, and a `false` it should not have given is a
+# MISCOMPILE, not a missed optimisation. The parser deliberately does NOT wrap
+# these bodies in `EImplicitClosure` (`expr_contains_it` checks only the top
+# level, by design), so both consumers — `lower_expr`'s method-call argument
+# loop and `extract_hof_closure` — depend entirely on this walk. When it
+# answers `false` for a body that DOES mention `it`, the argument is treated as
+# a CALLABLE VALUE and wrapped as `(body)(__hofp0)`: a call whose callee is
+# whatever the body happens to be. `.map(it.n)` became `(it.n)(__hofp0)` and
+# SEGV'd; `.filter(it.n > 1)` produced an empty vector, silently.
+#
+# So the arms below are EXHAUSTIVE over the variants that carry a
+# subexpression, not a working set — the previous eight-arm version omitted
+# `EFieldAccess`, `EIndex` and every wrapper and container form, which is
+# exactly the family a real `it`-body reaches through.
+#
+# The ONE deliberate stop is a CLOSURE BOUNDARY: `EClosure` and
+# `EImplicitClosure` return false, because an `it` inside a nested closure
+# belongs to THAT closure, not to this one. Statement-bodied forms
+# (`EBlock`, `EDo`, the comprehensions, `EIf`'s branches, `EMatch`'s arms)
+# stop too — a `Stmt` walk is a different traversal and no implicit-`it` body
+# is spelled that way; `EIf` and `EMatch` still walk their scrutinee, which is
+# the expression position an `it` actually reaches.
 bool expr_has_it(SpannedExpr sexpr):
     match sexpr.expr:
         case EIt():
@@ -955,7 +979,86 @@ bool expr_has_it(SpannedExpr sexpr):
                 if expr_has_it(fx):
                     return true
             return false
+        # ── Projection: how an `it` body most often reads its parameter ──
+        case EFieldAccess(base, _):
+            return expr_has_it(*base)
+        case EIndex(ibase, idx):
+            return expr_has_it(*ibase) or expr_has_it(*idx)
+        # ── Single-operand wrappers ──
+        case EAs(as_inner, _):
+            return expr_has_it(*as_inner)
+        case EDeref(dr_inner):
+            return expr_has_it(*dr_inner)
+        case EMutableBorrow(mb_inner):
+            return expr_has_it(*mb_inner)
+        case EMove(mv_inner):
+            return expr_has_it(*mv_inner)
+        case ETry(try_inner):
+            return expr_has_it(*try_inner)
+        case EPropagate(pr_inner):
+            return expr_has_it(*pr_inner)
+        case EAwait(aw_inner):
+            return expr_has_it(*aw_inner)
+        case ESpawn(sp_inner):
+            return expr_has_it(*sp_inner)
+        case ESpawnBlocking(spb_inner):
+            return expr_has_it(*spb_inner)
+        case EIs(is_lhs, _, _):
+            return expr_has_it(*is_lhs)
+        case EMatch(scrut, _):
+            return expr_has_it(*scrut)
+        case EDefaultOp(do_lhs, do_rhs):
+            return expr_has_it(*do_lhs) or expr_has_it(*do_rhs)
+        case ERange(r_start, r_end, _):
+            match r_start:
+                case Some(rs):
+                    if expr_has_it(*rs):
+                        return true
+                case None:
+                    pass
+            match r_end:
+                case Some(re):
+                    if expr_has_it(*re):
+                        return true
+                case None:
+                    pass
+            return false
+        # ── Container / aggregate literals ──
+        case EArrayLiteral(al_elems):
+            for al in al_elems:
+                if expr_has_it(al):
+                    return true
+            return false
+        case ETupleLiteral(tl_elems):
+            for tl in tl_elems:
+                if expr_has_it(tl):
+                    return true
+            return false
+        case EDictLiteral(dl_keys, dl_vals):
+            for dk in dl_keys:
+                if expr_has_it(dk):
+                    return true
+            for dv in dl_vals:
+                if expr_has_it(dv):
+                    return true
+            return false
+        case EStructLiteral(_, _, sl_vals):
+            for sv in sl_vals:
+                if expr_has_it(sv):
+                    return true
+            return false
+        case EDotShorthand(_, ds_args):
+            for da in ds_args:
+                if expr_has_it(da.value):
+                    return true
+            return false
+        case ECatch(c_body, _, c_handler):
+            return expr_has_it(*c_body) or expr_has_it(*c_handler)
+        case ERethrow(rt_body, _, _, rt_handler):
+            return expr_has_it(*rt_body) or expr_has_it(*rt_handler)
         else:
+            # Literals, `self`, closure boundaries and the statement-bodied
+            # forms. Reached deliberately — see the header.
             return false
 
 # ── Phase 1 closure-body lowering: free-var (capture) guard ──
