@@ -90,6 +90,22 @@ costs seconds. A grep for another type is not evidence about abstention.**
 - **A guard whose blind spot is its own execution environment is green exactly where nothing has
   happened.** T-a1's manifest lint passed FIVE gauntlet passes because every one ran in a FRESH worktree,
   where the `tests/fixtures/.gorget` build artifact does not exist. Only integration could find it.
+- **⭐ WRITE BRIEFS WITH REGENERATION COMMANDS, NOT CACHED VALUES — THIS ROUND'S MOST EXPENSIVE
+  MISTAKE.** Track T-a2 cost **six** brief-review passes and a full rebuild for what was, in the end, a
+  sound design. **Not one of the blocking passes found a design defect.** Every one found STALENESS: the
+  brief cached values, line numbers and collision tables across ten addenda, main moved four commits
+  underneath it, and the cached facts decayed silently. The worst instance: two addenda cited
+  `MIN_FIXTURES` at a line that by then held `SELFHOST_MATCH_FLOOR`, so a line-anchored `regen_extract`
+  would have captured the WRONG CONSTANT and stayed green.
+  ⚠ **This is the same disease as `t0964` and the spec-floor drift** — a derived fact cached where
+  nothing can invalidate it — committed in the ARTIFACT that was supposed to cure it.
+  ⇒ **Default for every brief: cite constants by NAME + FILE, never by line; give the command that
+  regenerates each figure instead of the figure; and state explicitly that no number in the brief or in
+  any review report is an input.** The rebuilt brief was 130 lines against 781 across ten addenda, and
+  the next three reviewers each confirmed the NAME+FILE discipline survived further line drift.
+  ⊕ Corollary on FOLDS: a fold is exactly where a new stale fact enters. After folding, re-read the
+  enclosing section AND grep the correction (Core #15c/d) — three separate passes caught the fold itself
+  introducing what it had just been asked to remove.
 
 ### 🔁 THE ROUND-CLOSE BATTERY — COMMANDS, NOT NUMBERS (regenerate every figure; Core #5)
 ```
