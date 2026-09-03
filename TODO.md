@@ -465,6 +465,45 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **✅ E · INTEGRATED — `4ffec3b36`, THE ROUND'S FIRST LANDING. Worktree pruned.** Squash-merged (4 commits)
+  **together with the D54 ledger entry and its two spec citations**, so the ratified decision and its
+  write-through are inseparable in history. Squash rather than merge because `13793b85b` was RED IN
+  ISOLATION for `todo_index_is_current`; the tip was always green, and squashing kills the bisect hazard
+  without rewriting the track's branch. **Gates at the integrated state, bare: `--test lints` 218/0/1 ·
+  `--lib` 1181/0.**
+  ⭐ **E's EXECUTOR VERIFIED THE MECHANISM I ASKED ABOUT WHEN IT COULD NOT SEE IT.** The D54 entry was
+  uncommitted in the orchestrator worktree and invisible to E's branch, so rather than guess it
+  **synthesised a local D54 entry, measured both states, and restored the file to its exact original md5**:
+  declared-but-uncited → red at the **BUDGET** assert (not the reconciliation assert), declared+cited →
+  green. **It then flagged that its own citation was INERT until my entry landed.** ⊕ It also rewrote both
+  citation sentences out of fix-log voice into the timeless present, unprompted.
+  ⚡ **THE TENTH LINT NOW GUARDS BOTH DIRECTIONS.** The reverse assertion (every `NO_MUTABLE_PATH` name must
+  still be a live `ast.gg` variant) was **demonstrated, not asserted**: replanting `EIt`/`EImplicitClosure`
+  makes it go RED naming both — **the state the entire `--test lints` run previously reported GREEN
+  through**, which is exactly why those two names had to be found by grepping the guard.
+  ⛔ **AND TWO OF MY OWN FOLDS WERE GUARD VIOLATIONS.** `figures_db_values_have_one_spelling` caught raw
+  ratchet and floor figures I had written into this handover — twice — against the standing rule that
+  **the handover stores INVARIANTS AND COMMANDS, NOT NUMBERS.** Replaced with the constant names and the
+  commands that regenerate them.
+  ⚡ **STANDING CONSEQUENCE, recorded so it is not rediscovered:** the uncited-decisions count sits **exactly
+  at its budget with zero headroom**, so **every future ratification must ship its spec citation IN THE SAME
+  COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
+  ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
+
+- **🆕 A1-I · SCOUT LAUNCHED (the Core #2 half; A1-M's `t0937` half already shipped as `dc29f0faf`).**
+  Three carriers, each with **shipped precedent in the file it touches**: a typed field on GIR `Local`
+  (precedent `deref_of_owning_param`) · **`StructDef.closure_call_fn`**, populated exactly as `elem_drop_fn`
+  and `elem_clone_fn` already are — **both documented as "Replaces the c_lir `elem_drop_fn_for_c_type`
+  name-prefix matching", i.e. THIS EXACT FIX HAS SHIPPED TWICE IN THAT FILE FOR THIS EXACT REASON** ·
+  `LirFunction.takes_env: bool` for the two per-FUNCTION sites.
+  ⛔ **THE SCOUT'S PRIMARY JOB IS THE CENSUS, WHICH HAS BEEN A SELECTION FOUR TIMES RUNNING.**
+  `lookup_closure_info` was counted as "2 references" in every draft; it is **11 across 4 files**. Each pass
+  found one more *by reading around the previous one* — **nobody ran the total grep.** ⊕ And a whole
+  **SECOND runtime-symbol convention is absent from every draft** (`__callable_N` /
+  `__gorget_closure_call_N`, minted by `format!` at four sites and decoded by `starts_with` at eight).
+  **The scout owes a mechanically-derived TOTAL census with an independent witness, and an EXPLICIT
+  A1-I / A2 boundary.**
+
 - **✅ H · EXECUTOR RETURNED — 7 commits on `worktree-agent-af4ec5946c049e114`. OUTPUT-REVIEW LAUNCHED.**
   `t0966` fix · `t0953`/`t0620` rewire · `t0054` graduation + axis · `t0824` battery lint · convergence
   regex · `known_gaps` directory lint · `t0953` erratum. Closes **`t0966`, `t0054`, `t0824`**; files
