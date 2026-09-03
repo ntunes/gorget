@@ -9119,6 +9119,28 @@ fn sanitize_allowlists_shrink_only() {
                 }
             }
         }
+        // A citation naming a class the row does not exhibit is DEAD TEXT. It
+        // cannot lower `uncited` — that loop only asks whether each REAL pair
+        // found a citation — so it is not an evasion; it is a typo or a stale
+        // leftover after a class was retired, and either way it points a reader
+        // at an obligation that no longer exists. One assert, and it is the
+        // cheapest place to catch a citation that has rotted past its row.
+        let classes: Vec<&str> = cols[1]
+            .trim()
+            .split(',')
+            .filter_map(|sig| sig.rsplit_once('*').map(|(sym, _)| sym.trim()))
+            .collect();
+        for (class, id) in &citations {
+            assert!(
+                classes.contains(class),
+                "leak allowlist row {:?} cites `{class}={id}` but tolerates no \
+                 `{class}` — column 2 names {classes:?}. Either the class was \
+                 retired (drop the citation in the same commit) or the spelling \
+                 is wrong. A citation for a class the row does not exhibit \
+                 obliges nothing and misdirects the next reader.",
+                cols[0].trim()
+            );
+        }
         let stem = cols[0].trim();
         assert!(
             !leak_stems.contains(&stem),

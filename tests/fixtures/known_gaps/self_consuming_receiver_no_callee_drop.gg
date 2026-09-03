@@ -18,9 +18,10 @@
 #   E  `^self`, TWO heap fields, projects one LEAKS the un-projected one
 #
 # INTENDED: prints 3 3 3 3 3 and is ASan-clean under `detect_leaks=1`, on C and
-# LLVM. At HEAD it prints the right numbers and leaks 4 x 64 bytes (cells B, C,
-# E's spare, and E is one record) — a leak is stdout-invisible, which is why this
-# fixture is wired to `assert_gg_sanitize_clean` and not to `run_gg`.
+# LLVM. At HEAD it prints the right numbers and leaks 192 bytes in 3 allocations
+# — 3 x 64, one per LEAKING cell (B, C, and E's un-projected `spare`); A and D
+# are clean. A leak is stdout-invisible, which is why this fixture is wired to
+# `assert_gg_sanitize_clean` and not to `run_gg`.
 
 struct Bag:
     Vector[int] items

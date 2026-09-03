@@ -6545,6 +6545,15 @@ fn known_gap_vector_callable_index_read_clone_temp_leak() {
 // #6). Each header records the exact record signature measured at HEAD, on C
 // AND on LLVM — `scripts/sanitize_sweep.sh` is C-only (`todo/t0731`), so the
 // LLVM lane was checked by hand with `gg build --backend=llvm --sanitize`.
+//
+// ⚠ WHAT THE `expected` STRINGS ARE, AND ARE NOT, TODAY. `assert_gg_sanitize_clean`
+// asserts ASan-cleanliness BEFORE it compares stdout, so while these gaps are
+// open the leak assert fires first and the stdout half is never reached. The
+// expected strings below are therefore NOT verified by these tests at HEAD —
+// each was measured directly (`gg build --sanitize` then run the binary) when
+// the fixture landed, and each becomes load-bearing the moment its item is
+// fixed. Do not read a passing-looking `expected` here as coverage of the
+// program's OUTPUT; that is what the `run_gg` corpus is for.
 
 // `todo/t0951` — a consuming `^` PARAMETER emits the callee-side drop; a
 // consuming `^self` RECEIVER never does (`register_owning_param` is reached for
@@ -6597,15 +6606,22 @@ fn known_gap_closure_literal_call_arg_env_leak() {
 
 // `todo/t0954` — the accumulator array a builtin Vector HOF mints carries a NULL
 // `elem_drop`, so the backing array is freed and the heap elements it held are
-// not. The callee is a NAMED function so `todo/t0953`'s env leak cannot
-// contaminate the record set. 9 bytes in 3 allocations, C and LLVM.
+// not. FOUR cells over PRODUCER x ELEMENT TYPE, because neither axis is the
+// defect on its own: `map`->String and `map`->struct-owning-a-Vector both LEAK
+// and do so under DIFFERENT top frames (`str_alloc_copy` vs `gorget_array_push`),
+// so attributing this class by frame would split one defect across two items;
+// `filter` and `sorted` are ELEMENT-PRESERVING and are CLEAN, which is what
+// localises it to the accumulator an element-TRANSFORMING producer mints. Every
+// callee is a NAMED function so `todo/t0953`'s env leak cannot contaminate the
+// record set, and `flat_map` is omitted by name because its leak is
+// `todo/t0955`'s different mechanism. 201 bytes in 6 allocations, C and LLVM.
 #[test]
 #[ignore = "todo/t0954 — the Vector-HOF accumulator is minted without elem_drop, so every heap \
 element the callee produces leaks. Asserts the intended ASan-clean run."]
 fn known_gap_vector_hof_accumulator_elem_drop_missing() {
     assert_gg_sanitize_clean(
         "known_gaps/vector_hof_accumulator_elem_drop_missing",
-        "10\n30",
+        "10\n30\n2\n2\n10",
     );
 }
 
