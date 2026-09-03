@@ -158,9 +158,11 @@ use ggdef::{parse_frontmatter, Expect};
 // preserving marks, so the count is unchanged, only their build-verdict restored.)
 // R47 Track D1 (+2): `reject_no_method_on_float.gg` and
 // `reject_no_method_on_string.gg` — the primitive-receiver E_NoMethodFound
-// class. ⚠ RATCHETING THESE IS PART OF ADDING A FIXTURE, not bookkeeping: the
-// floors are `matched >= FLOOR` and the glob guard is `len() >= MIN_FIXTURES`,
-// so a new fixture that is never counted in leaves every assert passing —
+// class. ⚠ RATCHETING THESE IS PART OF ADDING A FIXTURE, not bookkeeping. (At
+// the time of this entry the floors were `matched >= FLOOR` and the glob guard
+// was `len() >= MIN_FIXTURES`; the glob guard is an EXACT PIN as of R48 close —
+// see below.) Under those `>=` guards a new fixture never counted in left every
+// assert passing —
 // including after the fix it pins is reverted. Verified for these two: with the
 // self-host reject reverted, the SH lane MISMATCHes both and drops to 221 < 222.
 // R48 Track A (+1): `combinator_callable_param.gg` — the corpus's first
@@ -200,8 +202,12 @@ use ggdef::{parse_frontmatter, Expect};
 // The paragraph above says ratcheting is PART OF ADDING A FIXTURE; that duty
 // does not attach to the track pipeline, it attaches to the fixture.
 // Nothing detected the drift for two fixtures, exactly as that paragraph warns:
-// the floors are `matched >= FLOOR` and the glob guard is `len() >= MIN_FIXTURES`,
-// both `>=`, so a corpus that grows without a ratchet leaves every assert GREEN.
+// the floors WERE `matched >= FLOOR` and the glob guard WAS `len() >= MIN_FIXTURES`,
+// both `>=`, so a corpus that grew without a ratchet left every assert GREEN.
+// ⇒ THE GLOB GUARD IS NOW AN EXACT PIN (`assert_eq!`, below); the three lane
+// floors remain `>=`, which is correct — their consumer genuinely is
+// `matched >= floor`. Past tense here is deliberate: this paragraph records why
+// the drift happened, not how the guard behaves today.
 // Measured at final HEAD `d7d899c9b` (`--test-threads=1 --nocapture`, rc=0):
 // C 237/237 · LLVM 237/237 · self-host 236/237, so both new fixtures MATCH on
 // all three lanes and the sole SH mismatch remains `d22_slice_clamp.gg` below.
