@@ -27105,10 +27105,30 @@ fn figures_db_mirrors_agree() {
             checked += 1;
         }
     }
-    assert!(
-        checked >= 12,
-        "only {checked} mirrors were checked — the pilot declares more than that, so a row \
-         lost its `mirror` field and this lint quietly stopped guarding it."
+    // ⛔ EXACT, DERIVED — NOT A PINNED FLOOR. This assert used to read
+    // `checked >= 12`, and its own message named a failure it could not detect:
+    // "a row lost its `mirror` field and this lint quietly stopped guarding it".
+    // With 32 non-`none` mirrors declared, a `>= 12` floor left TWENTY rows of
+    // headroom — twenty rows could go unguarded before it made a sound. A floor
+    // on a growing population is blind in the direction the population grows.
+    //
+    // Both halves are now closed, and neither is a number:
+    //   * `mirror` is REQUIRED-WITH-ESCAPE in `scripts/figures.py`, so a row
+    //     that omits it fails `--validate` rather than being silently skipped;
+    //   * this count is DERIVED from the DB on every run, so it cannot drift.
+    // Found by the T-a2 executor (`todo/t0966`), which correctly said the fix
+    // was the write site, not a bigger constant. Fourth instance of this class
+    // at R48 close, after `MIN_FIXTURES`, `SELF_HOST_COMPREHENSION_CELL_FLOOR`
+    // and the runtime snapshots (`todo/t0964`).
+    let declared = figures_db_rows()
+        .iter()
+        .flat_map(|row| figures_db_values(&format!("{row}.mirror")))
+        .filter(|m| m != "none")
+        .count();
+    assert_eq!(
+        checked, declared,
+        "{checked} mirrors were checked but {declared} non-`none` mirrors are declared. \
+         Every declared mirror must be resolved and compared; a gap means one was skipped."
     );
 }
 

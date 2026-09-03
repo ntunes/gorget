@@ -404,6 +404,15 @@ def validate(db, order):
                     errs.append(f"{rid}: input `{inp}` is named without `input.{inp}.{sub}`")
         if not db.get(f"{rid}.input"):
             errs.append(f"{rid}: missing mandatory field `input` (write `input = none`)")
+        # `mirror` is required WITH AN ESCAPE VALUE, for the same reason `input`
+        # is: "this row mirrors no literal" must be a claim someone MADE, not a
+        # field someone FORGOT. Until R48 close it was merely repeatable, so a
+        # row that omitted it was silently never checked by
+        # `figures_db_mirrors_agree` — and that lint's own floor was `>=`, so it
+        # could not see the omission either. Two guards, one blind spot.
+        if not db.get(f"{rid}.mirror"):
+            errs.append(f"{rid}: missing mandatory field `mirror` (write `mirror = none` "
+                        f"if this row mirrors no literal in code)")
 
         for w in db.get(f"{rid}.waiver", []):
             parts = w.split(None, 3)

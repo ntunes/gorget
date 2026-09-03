@@ -594,6 +594,7 @@ todo.pending_items.scan = none
 todo.pending_items.caveat = a COUNT, not a burden — a round that closes five and files six is not worse than one that closes none; the convergence line is the measurement, this is the level
 todo.pending_items.cost_secs = 60
 todo.pending_items.input = none
+todo.pending_items.mirror = none
 
 # ── informational × measured, the ROUND-CLOSE CLONE-WASTE AUDIT (`t0860`) ──
 # ⛔ The owner ruled slow clone accumulation UNBOUNDED and explicitly REJECTED a
@@ -625,6 +626,7 @@ clone.waste.attributed_site_hits.scan = standard
 clone.waste.attributed_site_hits.caveat = top-level clone EVENTS ranked by dynamic count, NOT leaf volume (~3.5% of aggregate array+string clone calls are attributed); C backend only; and the count is root-path sensitive on the string axis, unquantified for this aggregate, so a cross-checkout delta is not a measurement
 clone.waste.attributed_site_hits.cost_secs = 2400
 clone.waste.attributed_site_hits.input = none
+clone.waste.attributed_site_hits.mirror = none
 clone.waste.attributed_site_hits.note = the by-reason rollup and the ranked table are printed by `python3 scripts/figures.py report`; re-seed this value in the same commit that wires the report into round close
 clone.waste.attributed_site_hits.note = regenerated TWICE at 3b8a5561, bit-identical both times; the second run took 145s with a warm target/ and a cached driver, so cost_secs covers a COLD release build plus a cold driver build
 
@@ -657,6 +659,7 @@ done_md.round_close.anchor_age_matched.scan = none
 done_md.round_close.anchor_age_matched.caveat = a single-digit value the uniqueness scanner cannot police; and the number itself is EVIDENCE OF A GAP, not of health — 3 of ~38 closes, an 8% reach whose failure direction is a FALSE GREEN
 done_md.round_close.anchor_age_matched.cost_secs = 60
 done_md.round_close.anchor_age_matched.input = none
+done_md.round_close.anchor_age_matched.mirror = none
 done_md.round_close.anchor_age_matched.note = when this moves WITH roundish, a close landed in the shape the predicate sees — confirm the anchors were re-seeded, then re-pin both
 
 row = done_md.round_close.roundish_headlines
@@ -675,6 +678,7 @@ done_md.round_close.roundish_headlines.scan = none
 done_md.round_close.roundish_headlines.caveat = a SUPERSET, not an enumeration — it contains mid-round entries (R42 Phase 4b, R41 T-FMT-A, ROUND-33 rolling item 4, R43 Track C), which is exactly why the predicate is not widened to it
 done_md.round_close.roundish_headlines.cost_secs = 60
 done_md.round_close.roundish_headlines.input = none
+done_md.round_close.roundish_headlines.mirror = none
 done_md.round_close.roundish_headlines.note = when this moves and anchor_age_matched does NOT, adjudicate: a round close in an unseeable shape (re-seed the anchors AND revisit the predicate), or a mid-round round-ish entry (bump this pin only)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1062,7 +1066,7 @@ sanitize.leak.uncited_class_pairs.pin.mirror = tests/lints.rs:UNCITED_LEAK_CLASS
 sanitize.leak.uncited_class_pairs.pin.waiver = tests/lints.rs 1 declared the constant's own SEEDED-AT note, which spells the value directly above the declaration as the evidence for not seeding at the pre-edit number
 sanitize.leak.uncited_class_pairs.pin.input = none
 
-# ── grow-only × policy — THE SECOND CELL `policy` OCCUPIES ─────────────────
+# ── grow-only × policy ─────────────────────────────────────────────────────
 # ⛔ AND IT IS `policy`, NOT `measured`, THOUGH THE REGEN RUNS A SWEEP. This is
 # exactly the inference this file exists to refuse: `regen` here measures the
 # thing the choice CONSTRAINS (how much of the corpus ran), not the choice
