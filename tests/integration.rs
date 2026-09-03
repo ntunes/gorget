@@ -6474,6 +6474,21 @@ fn callable_unit_form_clone_segv() {
     run_gg("known_gaps/callable_unit_form_clone_segv.gg", "2\n2\n2");
 }
 
+// `todo/t0953` (Track T-a1's item, owned there) — the UNBOUNDEDNESS cell of
+// the closure-literal-argument env leak, which that item's own two-call repro
+// cannot show: twenty `map` calls leak twenty records (160 bytes), so the cost
+// scales with trip count rather than being a constant. Deliberately the
+// IMPLICIT-`it` spelling, which t0953's probes do not use, so the two together
+// show the class spans the explicit literal and the synthesised one. stdout is
+// already correct; the gap is visible only under the sanitizer.
+#[test]
+#[ignore = "todo/t0953 — a closure-literal argument leaks its env, UNBOUNDED per call: 20 map \
+calls leak 20 records. stdout is already correct; the gap is the leak, visible only under \
+`gg build --sanitize` + LeakSanitizer. Asserts the intended output (120)."]
+fn hof_call_env_leak_unbounded() {
+    run_gg("known_gaps/hof_call_env_leak_unbounded.gg", "120");
+}
+
 // `todo/t0957` — an indexed callee with a VARIABLE index (`fs[n](21)`) is
 // REJECTED as `E_NotAFunction`, while `fs[0](21)` and `fs[n + 0](21)` both
 // print 42. A bare identifier inside the brackets parses as a type NAME, so
@@ -48428,8 +48443,16 @@ fn callable_callee_shape_axis() {
 /// accumulator with unmapped, uninitialized elements. RED-verified: exit 139
 /// on the pre-fix self-host driver.
 ///
-/// Five arms, so a partial regression at one trips it: map, filter, any, all,
-/// Set.any. It carries a `tests/sanitize/LEAK_ALLOWLIST.txt` row — Rust `gg`
+/// TWO axes, eleven cells, so a partial regression at any one trips it. AXIS 1
+/// is the HOF ARM (map, filter, any, all, Set.any). AXIS 2 is the BODY SHAPE —
+/// how the body reaches `it`: arithmetic (`it * 2`), field and index
+/// projection (`it.n`, `it[0]`), projection under a comparison
+/// (`it.n > 1`), and three `if` forms. Axis 2 failed two different ways: a
+/// non-exhaustive `expr_has_it` never recognised the projection bodies as
+/// implicit-`it` bodies at all (SEGV, or a silently EMPTY vector), and the
+/// DECLARED destination type leaked into the `if`-bodied ones so the
+/// accumulator was minted `Vector[Vector[int]]` (silent garbage, while `auto`
+/// was correct). It carries a `tests/sanitize/LEAK_ALLOWLIST.txt` row — Rust `gg`
 /// leaks one closure env per implicit-`it` HOF call, a PRE-EXISTING class this
 /// fixture makes VISIBLE rather than one it introduces, owned by `todo/t0953`
 /// and cited on the row. `closure_mixed_implicit_explicit_wiring.gg` below
@@ -48438,7 +48461,7 @@ fn callable_callee_shape_axis() {
 fn hof_implicit_it_collection_axis() {
     run_gg(
         "hof_implicit_it_collection_axis.gg",
-        "proj 1\nproj 2\nproj 3\nprojfilt 2\nprojfilt 3\nidx 10\nidx 20\nmap 2\nmap 4\nmap 6\nmap 8\nfilter 2\nfilter 4\nany true\nall true\nset_any true",
+        "proj 1\nproj 2\nproj 3\nprojfilt 2\nprojfilt 3\nidx 10\nidx 20\ncond 0\ncond 7\ncond 7\ncond 7\nbranch 1\nbranch 2\nbranch 3\nbranch 4\nboth 0\nboth 2\nboth 3\nboth 4\nmap 2\nmap 4\nmap 6\nmap 8\nfilter 2\nfilter 4\nany true\nall true\nset_any true",
     );
 }
 

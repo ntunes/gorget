@@ -3069,7 +3069,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # call — arguments included — for every callee shape not
                     # enumerated above. That is a miscompile, and a silent one:
                     # `c.clone()(1)` printed `0` and `fs[0](21)` dispatched the
-                    # Vector itself as a function pointer. `Expr` has 40+
+                    # Vector itself as a function pointer. `Expr` has 44
                     # variants and this match names seven, so the remainder
                     # FAILS THE BUILD loudly rather than compiling to a lie.
                     # `lower_abort` does not return (stderr diagnostic +
@@ -7486,6 +7486,10 @@ struct CompSave:
     int t1
     int mint_bb
     int entry_bb
+    # The OUTER `ctx.expected_type`, parked for the duration of the body.
+    # See `comp_reserve` for why it must not be in scope while the element
+    # type is being learned.
+    int outer_expected
 
 # Reserve the accumulator local + the block its constructor will be emitted
 # into, arm the element channel, and enter a fresh block for the loop.
@@ -7493,7 +7497,7 @@ struct CompSave:
 # `ctx.comp_acc` and the synthesized element binders are `ctx.comp_w0` /
 # `ctx.comp_w1`.
 CompSave comp_reserve(LowerCtx &ctx, GirModule &gmod, String base, bool needs_value):
-    CompSave sv = CompSave(ctx.comp_acc, ctx.comp_base.clone(), ctx.comp_w0.clone(), ctx.comp_w1.clone(), ctx.comp_t0, ctx.comp_t1, ctx.comp_mint_bb, ctx.comp_entry_bb)
+    CompSave sv = CompSave(ctx.comp_acc, ctx.comp_base.clone(), ctx.comp_w0.clone(), ctx.comp_w1.clone(), ctx.comp_t0, ctx.comp_t1, ctx.comp_mint_bb, ctx.comp_entry_bb, ctx.expected_type)
     String ph_name = "GorgetArray"
     if base == "set":
         ph_name = "GorgetSet"
@@ -7516,6 +7520,24 @@ CompSave comp_reserve(LowerCtx &ctx, GirModule &gmod, String base, bool needs_va
     ctx.comp_t1 = -1
     ctx.comp_mint_bb = mint_bb
     ctx.comp_entry_bb = entry_bb
+    # ⚠ CLEAR THE OUTER EXPECTATION FOR THE DURATION OF THE BODY. The whole
+    # point of this producer is to LEARN the element type from the
+    # materialized local, so an expectation in scope while it is learned is
+    # circular — and it is the DESTINATION's type, a `Vector[U]`, not a `U`,
+    # so every consumer that adopts it adopts a container where an element
+    # belongs. That is not hypothetical: the tail-value slot of an `if`
+    # expression is typed from `expected_type`, so
+    # `Vector[int] ys = xs.map(if it > 1: 7 else: 0)` typed its body local
+    # `Vector__int64_t`, `comp_note_elem` carried that as the ELEMENT type,
+    # and `ys` was minted `Vector[Vector[int]]` and read back as pointer
+    # garbage. The same body under `auto` was correct throughout — that one
+    # keyword is the discriminator.
+    #
+    # This is the third disguise of the mistake the arm comments above already
+    # name twice: the element type may come from the MATERIALIZED local and
+    # from nowhere else — not the receiver's element type, not the argument's
+    # syntactic shape, and not the outer destination.
+    ctx.expected_type = -1
     return sv
 
 # The accumulator TYPE, derived from the MATERIALIZED element type(s) — the
@@ -7602,6 +7624,7 @@ int comp_close(LowerCtx &ctx, GirModule &gmod, CompSave sv):
     ctx.comp_t1 = sv.t1
     ctx.comp_mint_bb = sv.mint_bb
     ctx.comp_entry_bb = sv.entry_bb
+    ctx.expected_type = sv.outer_expected
     if t0 < 0 or (base == "map_ordered" and t1 < 0):
         # The source lowered no loop at all: no element, therefore no element
         # type, therefore no accumulator to mint. LOUD, never a placeholder —

@@ -921,6 +921,26 @@ int combinator_closure_ret_type(LowerCtx ctx, SpannedExpr closure_arg, GirModule
 
 # ── Closure scanning ─────────────────────────────────────
 
+# The TAIL EXPRESSION of a single-statement block, if it has one. A
+# tail-value `if`'s branch is spelled exactly this way (`[SExpr(e)]`, or
+# `[SReturn(Some(e))]` in the multi-line form), which is the same shape
+# `closure_extract` accepts as a closure body. Anything longer is a real
+# statement block and is not an implicit-`it` body.
+bool stmts_tail_has_it(Vector[Stmt] body):
+    if body.len() != 1:
+        return false
+    match body.get(0).unwrap():
+        case SExpr(tail_e):
+            return expr_has_it(tail_e)
+        case SReturn(tail_opt):
+            match tail_opt:
+                case Some(tail_r):
+                    return expr_has_it(tail_r)
+                case None:
+                    return false
+        else:
+            return false
+
 # Check if an expression tree contains the implicit `it` parameter.
 # Unlike the parser's expr_contains_it (which only checks top-level to
 # avoid borrow issues), this traverses owned values — safe to recurse.
@@ -943,11 +963,20 @@ int combinator_closure_ret_type(LowerCtx ctx, SpannedExpr closure_arg, GirModule
 #
 # The ONE deliberate stop is a CLOSURE BOUNDARY: `EClosure` and
 # `EImplicitClosure` return false, because an `it` inside a nested closure
-# belongs to THAT closure, not to this one. Statement-bodied forms
-# (`EBlock`, `EDo`, the comprehensions, `EIf`'s branches, `EMatch`'s arms)
-# stop too — a `Stmt` walk is a different traversal and no implicit-`it` body
-# is spelled that way; `EIf` and `EMatch` still walk their scrutinee, which is
-# the expression position an `it` actually reaches.
+# belongs to THAT closure, not to this one.
+#
+# ⚠ THE OTHER STOPS ARE NOT "no body is spelled that way" — AN EARLIER VERSION
+# OF THIS HEADER SAID THAT AND IT WAS FALSE. `if` IS spelled that way and is
+# walked: `EIf` takes its condition AND both branch tails, because
+# `xs.map(if flag: it else: 0)` is a real program that the reference compiler
+# runs. What genuinely stops here is a MULTI-STATEMENT block — `EBlock`,
+# `EDo`, `EMatch`'s arms, the comprehensions — and the honest reason is
+# narrower: those need a `Stmt` walk this predicate does not have, and each
+# omitted spelling was CHECKED against the reference before being left out.
+# `xs.map(it as float)` and the inline `match`/`do:` forms are REJECTED by
+# Rust `gg` (a type error and a parse error respectively), so they are not
+# cells; the comprehension-bodied form ICEs there. If any of those is ever
+# accepted by the reference, this predicate is where the fix goes.
 bool expr_has_it(SpannedExpr sexpr):
     match sexpr.expr:
         case EIt():
@@ -972,8 +1001,27 @@ bool expr_has_it(SpannedExpr sexpr):
                 if expr_has_it(a.value):
                     return true
             return false
-        case EIf(cond, _, _):
-            return expr_has_it(*cond)
+        case EIf(cond, if_then, if_elses):
+            # The CONDITION and both branch TAILS. Walking only the condition
+            # was the omission the header used to justify with "no
+            # implicit-`it` body is spelled that way" — but
+            # `xs.map(if flag: it else: 0)` puts `it` in a BRANCH and runs
+            # correctly on the reference compiler, so the claim was false and
+            # the arm is widened rather than the claim repeated.
+            if expr_has_it(*cond):
+                return true
+            if stmts_tail_has_it(if_then):
+                return true
+            for eb in if_elses:
+                match eb.condition:
+                    case Some(eb_c):
+                        if expr_has_it(eb_c):
+                            return true
+                    case None:
+                        pass
+                if stmts_tail_has_it(eb.body):
+                    return true
+            return false
         case EFString(_, fexprs, _):
             for fx in fexprs:
                 if expr_has_it(fx):

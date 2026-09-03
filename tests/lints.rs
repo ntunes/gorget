@@ -5503,7 +5503,7 @@ fn self_host_value_callee_producer_is_the_only_dispatch() {
         "The `ECall` callee dispatcher in {path} no longer REJECTS its unhandled \
          callee shapes. That `else:` arm previously `pass`ed and returned a fresh \
          UNIT local, discarding the whole call — arguments included — for every \
-         shape the match does not name. `Expr` has 40+ variants and the match \
+         shape the match does not name. `Expr` has 44 variants and the match \
          names seven. Restore the `lower_abort`, or add a real lowering arm for \
          the shape you are handling (Core #10: lower-or-reject).",
     );
@@ -9054,14 +9054,14 @@ fn sanitize_allowlists_shrink_only() {
     // sweep's own `verdicts.tsv` column 4 with `FIXLIST` restricted to the two
     // fixtures, not from a hand count. See the `LEAK_CEILING` note above and the
     // `⚖ ADMITTED` block in the allowlist for the attribution and what retires them.
-    // ⚖ And 511 -> 512 / 2262 -> 2270 with R48 Track U's ONE admitted row: 1 new
-    // (fixture, class) pair tolerating 8 leak records, class
+    // ⚖ And 511 -> 512 / 2262 -> 2273 with R48 Track U's ONE admitted row: 1 new
+    // (fixture, class) pair tolerating 11 leak records, class
     // `__gorget_closure_env_alloc`, count EXACT (single-threaded, stable — no
     // `*N+` marker, so LEAK_LOOSE_SIGNATURES is unchanged). Measured, not counted
     // by hand: the sweep's `verdicts.tsv` column 4 reads
-    // `hof_implicit_it_collection_axis  LEAK  -  __gorget_closure_env_alloc*8`.
+    // `hof_implicit_it_collection_axis  LEAK  -  __gorget_closure_env_alloc*11`.
     const LEAK_CLASS_PAIRS: usize = 512;
-    const LEAK_RECORDS: usize = 2270;
+    const LEAK_RECORDS: usize = 2273;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     let mut leak_stems: Vec<&str> = Vec::new();

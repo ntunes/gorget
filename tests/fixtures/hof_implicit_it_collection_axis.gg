@@ -33,6 +33,26 @@
 #   `it.n`         FIELD projection    — SEGV (the wrap became `(it.n)(__hofp0)`)
 #   `it[0]`        INDEX projection    — SEGV, a different walker arm again
 #   `it.n > 1`     projection under a comparison — SILENTLY EMPTY vector
+#   `if it > 1: 7 else: 0`   `it` in the CONDITION, constant branches
+#   `if flag: it else: 0`    `it` only in a BRANCH TAIL, none in the condition
+#   `if it > 1: it else: 0`  both
+# The three `if` cells fail for a SECOND reason, and it is worth stating
+# separately because it is not this predicate at all: the DECLARED type of the
+# destination used to leak into the body. `Vector[int] ys = xs.map(if …)` typed
+# the if-expression's tail slot from that `Vector[int]`, `comp_note_elem`
+# carried it as the ELEMENT type, and `ys` was minted `Vector[Vector[int]]`
+# and read back as pointer garbage — while `auto ys = …` was correct all along.
+# The comprehension producer now clears the outer expectation for the duration
+# of the body: the element type is what it exists to LEARN.
+#
+# NAMED OMISSIONS on axis 2 (Core #12) — each CHECKED against Rust `gg` before
+# being left out, because an omission is only honest if the reference agrees it
+# is not a cell:
+#   `it as float`                  Rust REJECTS (E_TypeMismatch on `?T0`)
+#   inline `match` / `do:` bodies  Rust REJECTS (parse errors)
+#   comprehension-bodied           Rust ICEs
+#   a MULTI-STATEMENT block body   needs a `Stmt` walk `expr_has_it` does not
+#                                  have; no reference program spells one here
 # The second axis is why the predicate is now an exhaustive walk that stops
 # only at closure boundaries, rather than a working set.
 #
@@ -50,7 +70,7 @@
 # call") — and MEASURED WIDER than that by `todo/t0953`, which owns it: a plain
 # user function taking a `Callable` leaks the same frame with no builtin HOF
 # anywhere in the program, so the write site is the closure-literal ARGUMENT,
-# not the HOF expander. Eight calls here, eight records; the row in
+# not the HOF expander. Eleven calls here, eleven records; the row in
 # `tests/sanitize/LEAK_ALLOWLIST.txt` cites that item. Admitting the row is
 # deliberate: a leak that is declared and counted by the trend gate gets
 # fixed, and one hidden outside the swept corpus does not. Do NOT trim the
@@ -80,6 +100,19 @@ void main():
     Vector[int] heads = grid.map(it[0])
     for h in heads:
         print(f"idx {h}")
+    # `it` in an `if` — in the condition, in a branch tail, and in both. The
+    # declared `Vector[int]` on the left is load-bearing: with `auto` these
+    # were green throughout.
+    Vector[int] pick = xs.map(if it > 1: 7 else: 0)
+    for pk in pick:
+        print(f"cond {pk}")
+    bool flag = true
+    Vector[int] branch = xs.map(if flag: it else: 0)
+    for br in branch:
+        print(f"branch {br}")
+    Vector[int] both = xs.map(if it > 1: it else: 0)
+    for bo in both:
+        print(f"both {bo}")
 
     Vector[int] doubled = xs.map(it * 2)
     for d in doubled:
