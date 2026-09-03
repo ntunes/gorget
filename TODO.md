@@ -505,6 +505,33 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **✅ C · INTEGRATED — `d419176b6`, the round's THIRD landing.** Squash-merge (4 commits, 39 files).
+  **Closes `t1017`, `t1019`; narrows `t0025`; widens `t0434`; files `t1020`–`t1023`.** Gates at the
+  integrated state, bare: build 0 · `--lib` 1181/0 · `--test lints` **220/0/1**.
+  ⚠ **Worktree NOT pruned — harness-LOCKED** (`cannot remove a locked working tree`). Do **not** force it.
+  ⭐ **ERRATUM B CHANGED THE ANSWER, AND THAT IS THE POINT OF CORE #15(b).** Told to name the third
+  "nondeterministic" row, the executor **measured it instead of asserting it** — and `test_process` is
+  **not per-run-random but COLD-START SENSITIVE**: outside the sweep's 8-way parallelism, **HEAD, the fix
+  and a deliberately WRONG variant all produce the IDENTICAL hash.** ⇒ **the conclusion survived and got
+  STRONGER** (three different compilers agreeing is better evidence than "nondeterministic"), **but the
+  blanket verdict had been doing work no measurement supported.** The same wording was live in **three
+  places**; all three now carry the identical per-row disposition **so they cannot drift.**
+  ⊕ **The `--lib` "discrepancy" was not one:** `1183 passed + 2 ignored = 1185 total` — the reviewer counted
+  the total, the executor counted passes. Recorded so nobody chases it.
+  ⊕ `figures.db`'s `roundish_headlines` **regenerated from `clone_meter_check.sh --round-close-census`
+  rather than hand-merged** → **83**, with **`anchor_age_matched` unmoved at 4 across all three R49
+  landings — which is what says none of them is a round close.**
+
+- **⚠ SHARED-`/tmp` COLLISION HAZARD, FOUND BY THE A1-I SCOUT ON ITS WAY OUT — AGENTS.md MA-9 SHARPENED.**
+  Three patches under its own `recover_a1i_*` prefix were **not its own**: a later brief-review agent on the
+  same track independently chose the same mnemonic and wrote to the same prefix, touching **exactly the two
+  sites the scout's report names.** ⭐ **No clobber occurred — the suffixes differed and all three of the
+  scout's checkpoints still `git apply --check` clean — but a collision there would have been SILENT.**
+  ⇒ **MA-9 now requires every `/tmp` artifact to be NAMESPACED BY AGENT (`recover_<agentid>_*`).**
+  ⊕ The scout's report stands unchanged, and it re-verified the load-bearing half itself: p1/p2/p3 apply
+  clean at HEAD, and **the lint ratchet is blind — 0 of 12 shapes match, confirmed empirically by lints
+  staying green while 12 name-match sites were deleted.**
+
 - **✅ C · OUTPUT-REVIEW: INTEGRATE — all three mandatory gates PASS; 2 record errata sent to the executor.**
   Gates bare at `3fb8d6276`: build clean · `--lib` **1185/0** · `--test lints` **218/0/1** · `-p ggdef`
   **187 + all 7 targets** · `spec_conformance` 3/0 · `security` 213/0 ·

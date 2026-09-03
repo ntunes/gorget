@@ -263,7 +263,7 @@ When you launch sub-agents via the `Agent` tool, the following rules are **non-n
 
 8. **NEVER `git stash` in agents — the stash stack is repo-GLOBAL across all worktrees.** Brief every agent: save/restore state with `git add <new files>` + `git diff HEAD > /tmp/<name>.patch` + `git apply` — a plain `git diff` LOSES untracked files.
 
-9. **Checkpoint scout prototypes to /tmp EARLY; run final gates FOREGROUND.** Agents are killable at any moment. Brief agents to checkpoint to `/tmp/recover_*.patch` after every meaningful step and to run FINAL validation gates as foreground commands with generous timeouts.
+9. **Checkpoint scout prototypes to /tmp EARLY; run final gates FOREGROUND.** Agents are killable at any moment. Brief agents to checkpoint to `/tmp/recover_*.patch` after every meaningful step and to run FINAL validation gates as foreground commands with generous timeouts. ⚠ **NAMESPACE EVERY `/tmp` ARTIFACT BY AGENT** (`recover_<agentid>_*`) — `/tmp` is shared across all agents on the box, and two agents on one track will pick the same mnemonic prefix; a clobber there is SILENT.
 
 ## Review with a fresh agent — the gauntlet
 
