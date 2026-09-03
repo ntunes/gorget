@@ -1,0 +1,26 @@
+# KNOWN GAP (todo/t0951) — an indexed callee with a VARIABLE index is rejected,
+# while the same program with a literal index compiles and runs.
+#
+#   fs[0](21)      -> 42        (literal index: the speculative type parse
+#                                fails on the `0`, the parser backtracks, the
+#                                EIndex survives)
+#   fs[n + 0](21)  -> 42        (the `+` breaks the type parse the same way)
+#   fs[n](21)      -> rc 1      error[E_NotAFunction]: 'fs' is not a function
+#
+# A bare identifier inside the brackets parses fine as a type NAME, so the
+# generic-call reading `fs[n](21)` succeeds and the index read is DELETED from
+# the AST before the typechecker ever sees it. The diagnostic is honest about
+# the AST it was handed; the AST is wrong.
+#
+# The two settled spellings are pinned by `callable_callee_shape_axis.gg`
+# (cells 3 and 5); this one is here because the disambiguation rule for
+# `expr[ident](args)` is not ratified — see todo/t0951 for the two candidate
+# rules.
+#
+# INTENDED (asserted by the #[ignore]d wired test): prints `42`.
+
+void main():
+    Vector[Callable[int(int)]] fs = []
+    fs.push((int x): x * 2)
+    int n = 0
+    print(f"{fs[n](21)}")

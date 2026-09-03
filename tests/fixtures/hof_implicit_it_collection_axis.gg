@@ -1,0 +1,60 @@
+# REGRESSION — an implicit-`it` body passed to a COLLECTION higher-order
+# method is a closure BODY, not a callable value.
+#
+# `extract_hof_closure` pulls the parameter names and result expression out of
+# a HOF argument. For an argument that is not a closure LITERAL it synthesizes
+# a forwarding wrapper `(p0): arg(p0)` — correct for `xs.map(double)`, where
+# `arg` names a function. An implicit-`it` body is not a callable, so the same
+# synthesis produced `(it * 2)(__hofp0)`: a call whose callee is a BinaryOp.
+# The self-host lowerer's `ECall` callee dispatcher then discarded that
+# nonsense silently, and the accumulator was filled with unmapped,
+# uninitialized elements — a SIGSEGV as soon as the result was read back.
+#
+# The implicit closure's single parameter is spelled `it`, exactly as
+# `compute_implicit_closure_sig` types it, so the body is extracted with that
+# binding instead of being wrapped.
+#
+# AXIS / CELLS — every collection HOF that takes a single-parameter body, so a
+# partial regression at one arm trips this fixture:
+#   map (cross-type accumulator) · filter (predicate) · any · all ·
+#   Set.any (a different iteration producer)
+# `Option.map(it * 2)` is NOT here: Option combinators lower through their own
+# arm and never reach `extract_hof_closure` (see `implicit_it.gg`).
+#
+# The failure was INVISIBLE to a fixture that only reads the result's LENGTH.
+# `closure_mixed_implicit_explicit_wiring.gg` was green throughout because
+# `map`'s accumulator had the right element COUNT and only the values were
+# garbage — SIX QUESTIONS #6, a green cell green for a reason unrelated to
+# what it tests. That fixture now reads its values too; this one is the wide
+# net.
+#
+# ⚠ THIS FIXTURE LEAKS, AND THE LEAK IS NOT ITS OWN. Rust `gg` leaks one
+# 8-byte closure environment per implicit-`it` HOF call — a pre-existing class
+# the allowlist header has characterised since the first corpus sweep ("every
+# builtin HOF call (map/filter/fold) leaks an 8-byte env, UNBOUNDED per
+# call"), now filed as `todo/t0954` with its own durable repro. Five calls,
+# five records; the row in `tests/sanitize/LEAK_ALLOWLIST.txt` cites that
+# item. Admitting the row is deliberate: a leak that is declared and counted
+# by the trend gate gets fixed, and one hidden outside the swept corpus does
+# not. Do NOT trim the axis to shrink the row — the arms are the coverage.
+#
+# INTENDED (asserted by the wired test): the mapped and filtered elements,
+# then three `true`s. Once `todo/t0954` is fixed, this fixture also runs
+# ASan-clean and its allowlist row is deleted.
+
+void main():
+    Vector[int] xs = [1, 2, 3, 4]
+
+    Vector[int] doubled = xs.map(it * 2)
+    for d in doubled:
+        print(f"map {d}")
+
+    Vector[int] evens = xs.filter(it % 2 == 0)
+    for e in evens:
+        print(f"filter {e}")
+
+    print(f"any {xs.any(it > 3)}")
+    print(f"all {xs.all(it > 0)}")
+
+    Set[int] s = {1, 2, 3}
+    print(f"set_any {s.any(it == 2)}")

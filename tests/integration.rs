@@ -6445,6 +6445,36 @@ fn callable_unit_form_clone_segv() {
     run_gg("known_gaps/callable_unit_form_clone_segv.gg", "2\n2\n2");
 }
 
+// `todo/t0954` — every builtin higher-order-method call leaks the closure
+// environment it allocates for its body: one record per CALL, scaling with
+// trip count (the repro's 20-iteration loop leaks 20 allocations, 160 bytes).
+// The stdout is already CORRECT, so this repro is only meaningful under the
+// sanitizer — which is how the allowlist's second-largest leak group stayed
+// unowned. Asserts the INTENDED output; the ASan-clean half is asserted by
+// the row's eventual deletion from `tests/sanitize/LEAK_ALLOWLIST.txt`.
+#[test]
+#[ignore = "todo/t0954 — a builtin HOF call leaks its synthesized closure env, unbounded per call \
+(20 allocations for 20 map calls). stdout is already correct; the gap is the leak, visible only \
+under `gg build --sanitize` + LeakSanitizer. Asserts the intended output (120)."]
+fn hof_implicit_it_env_leak() {
+    run_gg("known_gaps/hof_implicit_it_env_leak.gg", "120");
+}
+
+// `todo/t0951` — an indexed callee with a VARIABLE index (`fs[n](21)`) is
+// REJECTED as `E_NotAFunction`, while `fs[0](21)` and `fs[n + 0](21)` both
+// print 42. A bare identifier inside the brackets parses as a type NAME, so
+// the generic-call reading wins and the `EIndex` is deleted from the AST
+// before the typechecker sees it. The settled spellings are pinned by
+// `callable_callee_shape_axis.gg`; this cell waits on a ratified rule for
+// `expr[ident](args)`. Asserts the INTENDED output.
+#[test]
+#[ignore = "todo/t0951 — `fs[n](21)` with a variable index is rejected as E_NotAFunction because \
+a bare identifier parses as a type name and the generic-call reading wins, deleting the EIndex. \
+Un-ignore when the disambiguation is resolution-aware. Asserts the intended output (42)."]
+fn indexed_callee_variable_index() {
+    run_gg("known_gaps/indexed_callee_variable_index.gg", "42");
+}
+
 // `todo/t0947` — `auto x = <METHOD call returning Result>` auto-propagates,
 // binds the Ok PAYLOAD, and the user's whole `if x.is_error():` block is then
 // silently DISCARDED from the lowering. `gg check` is clean and neither the
@@ -40188,6 +40218,23 @@ fn self_host_runtime_diff() {
     // bound rather than an optimistic one. If this ever reds by exactly one on
     // an otherwise-unchanged tree, check that row before believing in new
     // inflow.
+    //
+    // 2026-09-03 (R48 Track U): the backlog had GROWN to 149 — Track R's own
+    // two new corpus rows, exactly the inflow this ceiling exists to catch.
+    // Owner ruling: *"fix the SH and the non-Match"*. Both rows are now MATCH
+    // and the count is back at 147; the ceiling is NOT lowered because it did
+    // not go below its standing value. The COMPOSITION did move, so re-read it
+    // before triaging a future +1:
+    //   WRONG-OUTPUT 29 + CC-FAIL 67 + CRASH 36 + DRIVER-FAIL 15 = 147,
+    //   MATCH 1532 of 2209 fixtures.
+    // (Was 30/66/36/15 = 147 with MATCH 1505.) `callable_clone_value_form_axis`
+    // left WRONG-OUTPUT and `callable_vector_element_plain_sig_call_segv` left
+    // CRASH, both to MATCH; `shared_callable` moved WRONG-OUTPUT -> CC-FAIL
+    // (its `Shared[Callable].get()()` invoke is now EMITTED rather than
+    // discarded, and hits an unresolved inner C type — `todo/t0612`, corrected
+    // there). Track U's own two new fixtures add ZERO inflow: one MATCHes in
+    // the corpus, the other is deliberately out of the auto-scanned set with
+    // its reason in its header and its lane result verified by hand.
     const RUNTIME_DIFF_NONMATCH_CEILING: usize = 147;
     // ⛔ THIS GATE NO-OPS IN THE PROFILE PEOPLE ACTUALLY RUN, AND THAT IS A
     // COVERAGE HOLE, NOT A DESIGN. `cargo test --test integration self_host` is
@@ -48332,6 +48379,60 @@ fn callable_amp_dict_indexed_callee() {
 #[test]
 fn callable_bang_arr_indexed_callee() {
     run_gg("callable_bang_arr_indexed_callee.gg", "hi\n101");
+}
+
+/// AXIS (R48 Track U) — the CALLEE SHAPE of an indirect call, nine cells over
+/// one `Callable[int(int)]`: bare identifier and closure-literal IIFE
+/// (controls), Vector index, Dict subscript, non-type-parseable index
+/// (`fs[n + 0]`), call result, `.clone()` result, `.unwrap()` result, and a
+/// field chain then index (`h.fs[0]`).
+///
+/// The reference lane was already green on all nine; the SELF-HOST lane was
+/// RED on seven, from two stacked defects — the generic-call-vs-index
+/// disambiguation DELETED the `[0]` before lowering saw it (three
+/// backtracking sites x three parser copies), and the `ECall` callee
+/// dispatcher discarded every unenumerated callee shape through an
+/// `else: pass`. Each cell was RED-verified against the pre-fix self-host
+/// driver: cells 3/4 exited 139, cells 5/6/7/8 printed `0`, cell 9 failed to
+/// link (`undefined reference to Holder__fs__void`).
+#[test]
+fn callable_callee_shape_axis() {
+    run_gg(
+        "callable_callee_shape_axis.gg",
+        "1 22\n2 42\n3 42\n4 42\n5 42\n6 42\n7 22\n8 42\n9 42",
+    );
+}
+
+/// REGRESSION (R48 Track U) — an implicit-`it` body handed to a COLLECTION
+/// higher-order method is a closure BODY, not a callable value. The HOF
+/// extractor wrapped it as `(it * 2)(__hofp0)` — a call whose callee is a
+/// BinaryOp — which the self-host lowerer then discarded silently, filling the
+/// accumulator with unmapped, uninitialized elements. RED-verified: exit 139
+/// on the pre-fix self-host driver.
+///
+/// Five arms, so a partial regression at one trips it: map, filter, any, all,
+/// Set.any. It carries a `tests/sanitize/LEAK_ALLOWLIST.txt` row — Rust `gg`
+/// leaks one closure env per implicit-`it` HOF call, a PRE-EXISTING class this
+/// fixture makes VISIBLE rather than one it introduces, filed as `todo/t0954`
+/// and cited on the row. `closure_mixed_implicit_explicit_wiring.gg` below
+/// carries the same defect's `map` cell and was green throughout it.
+#[test]
+fn hof_implicit_it_collection_axis() {
+    run_gg(
+        "hof_implicit_it_collection_axis.gg",
+        "map 2\nmap 4\nmap 6\nmap 8\nfilter 2\nfilter 4\nany true\nall true\nset_any true",
+    );
+}
+
+/// The `closure Phase 2 Step A` wiring proof, which had NO wired assertion at
+/// all — it was only ever exercised by the auto-scanned self-host parity
+/// corpus. It also now reads the mapped VALUES, not just the length: it stayed
+/// green right through the miscompile `hof_implicit_it_collection_axis` pins,
+/// because `map`'s accumulator had the right element COUNT and only the values
+/// were garbage.
+#[test]
+fn closure_mixed_implicit_explicit_wiring() {
+    run_gg("closure_mixed_implicit_explicit_wiring.gg", "3\n2\n4\n6\n6");
 }
 
 /// KNOWN GAP (Track K residual) — RETURNED-CALL-RESULT cell of the

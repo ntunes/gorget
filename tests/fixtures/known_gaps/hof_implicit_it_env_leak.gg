@@ -1,0 +1,33 @@
+# KNOWN GAP (todo/t0954) — every builtin higher-order-method call leaks the
+# closure environment it allocates for its body.
+#
+# `xs.map(it * 2)` allocates an 8-byte environment through
+# `__gorget_closure_env_alloc` and never frees it. One record per CALL,
+# unbounded: the loop below makes 20 of them and leaks 20. Nothing about the
+# body captures — the leak is the synthesized closure value itself, which no
+# drop is registered for.
+#
+# HEAP-FORCED: the environment IS a `malloc`, so LeakSanitizer sees it under
+# the sweep's own `LSAN_OPTIONS=use_stacks=0` root set; the loop makes the
+# count grow with trip count, which is what distinguishes an unbounded leak
+# from a one-off.
+#
+# Reproduce:
+#   gg build --sanitize tests/fixtures/known_gaps/hof_implicit_it_env_leak.gg
+#   ASAN_OPTIONS=detect_leaks=1:exitcode=0 LSAN_OPTIONS=use_stacks=0 \
+#     tests/fixtures/known_gaps/hof_implicit_it_env_leak
+#
+# INTENDED (asserted by the #[ignore]d wired test): prints `120` and runs
+# ASan-CLEAN. The stdout is already correct today; the LEAK is the gap, so
+# this repro is only meaningful under the sanitizer.
+
+void main():
+    Vector[int] xs = [1, 2]
+    int total = 0
+    int i = 0
+    while i < 20:
+        Vector[int] doubled = xs.map(it * 2)
+        for d in doubled:
+            total = total + d
+        i = i + 1
+    print(total)

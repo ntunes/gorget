@@ -1,0 +1,99 @@
+# AXIS — the CALLEE SHAPE of an indirect call.
+#
+# `f(args)` where `f` is not a bare function NAME. The self-host used to
+# handle exactly four callee shapes (`EIdentifier`, `EFieldAccess`,
+# `EClosure`, `ENoneLiteral`) and discard every other one whole — arguments
+# included — through an `else: pass` in the `ECall` callee dispatcher. Two
+# separate defects stacked on this axis:
+#
+#   1. PARSE. `fs[0](21)` had its `[0]` DELETED before lowering ever saw it:
+#      the generic-call-vs-index disambiguation speculated a type-arg parse
+#      that could not report failure, so the `0` was consumed as a "type",
+#      the `EIndex` vanished, and the Vector itself was dispatched as the
+#      closure (SIGSEGV).
+#   2. LOWER. The surviving shapes hit the silent `else: pass` and evaluated
+#      to a fresh unit local, so `bare.clone()(21)` printed `0`.
+#
+# AXIS / CELLS — one per callee shape, all against the SAME `Callable[int(int)]`
+# so the only thing that varies is the shape of the expression in callee
+# position:
+#   1  bare identifier            (control — always worked)
+#   2  closure literal / IIFE     (control — always worked)
+#   3  Vector index, LITERAL index      -> parse defect, then lower defect
+#   4  Dict subscript, literal key      -> same pair
+#   5  Vector index, NON-type-parseable index (`n + 0`) -> lower defect only
+#      (the `+` breaks the speculative type parse, so the `EIndex` survived
+#      and this cell discriminates defect 2 from defect 1)
+#   6  call result                      -> lower defect
+#   7  method result (`.clone()`)       -> lower defect
+#   8  `.unwrap()` result               -> lower defect
+#   9  FIELD chain then index (`h.fs[0]`) -> a THIRD copy of the parse defect,
+#      in the `.method[T](args)` turbofish speculation of `parse_dot_expr`
+#      (`h.fs[0](21)` was misparsed as `h.fs[void](21)` -> a link error for a
+#      method `Holder__fs__void` that does not exist)
+#
+# Each cell was RED-verified against the pre-fix self-host driver: 3 and 4
+# exited 139, 5/6/7/8 printed `0`, 9 failed to link, and the two controls were
+# green before and after — a control's value is that it does not turn red.
+#
+# THE CALLABLES ARE NAMED FUNCTIONS, not closure literals, wherever the
+# language allows it. That is not a workaround: the axis is the shape of the
+# expression in CALLEE position, and it is fully exercised either way. Closure
+# literals would drag in the pre-existing per-closure-env leak (see
+# `tests/sanitize/LEAK_ALLOWLIST.txt`, ~80 rows of it) for nothing. Cell 2 and
+# `make_doubler` keep a literal because they have to: `return doubler` is
+# rejected today with `E_UnresolvedBorrowOrigin` (see `todo/t0406`), and the
+# IIFE control IS a literal by definition. Measured: this fixture leaks
+# NOTHING under ASan.
+#
+# NOT COVERED HERE, and why:
+#   * a callable-typed struct FIELD called directly (`h.g(21)`) — that is a
+#     REFERENCE-lane gap, not a self-host one: Rust `gg` emits a call to an
+#     undefined `Holder__g` and the link fails. `todo/t0939` owns it.
+#   * a VARIABLE index (`fs[n](21)`) — the generic-vs-index ambiguity is
+#     genuinely undecided for a bare identifier inside the brackets, and Rust
+#     REJECTS it as `E_NotAFunction`. `todo/t0951` owns it, with a
+#     `known_gaps/` repro; putting a cell here would pin an unratified answer.
+#   * `&`/`!`-sigil arguments through an indexed callee — a different axis
+#     (per-param ownership forwarding, not callee shape). Covered by
+#     `callable_amp_arr_indexed_callee.gg` and its two siblings on the Rust
+#     lane; still RED on the self-host lane, owned by `todo/t0953`.
+#
+# INTENDED (asserted by the wired test): every cell prints 42, except the two
+# whose callable adds 1 rather than doubling (22).
+
+struct Holder:
+    Vector[Callable[int(int)]] fs
+
+int doubler(int x):
+    return x * 2
+
+int inc(int x):
+    return x + 1
+
+Callable[int(int)] make_doubler():
+    return (int x): x * 2
+
+void main():
+    int n = 0
+    Callable[int(int)] bare = inc
+    print(f"1 {bare(21)}")
+    print(f"2 {((int x): x * 2)(21)}")
+
+    Vector[Callable[int(int)]] fs = []
+    fs.push(doubler)
+    print(f"3 {fs[0](21)}")
+
+    Dict[String, Callable[int(int)]] d = {}
+    d.put("a", doubler)
+    print(f"4 {d["a"](21)}")
+
+    print(f"5 {fs[n + 0](21)}")
+    print(f"6 {make_doubler()(21)}")
+    print(f"7 {bare.clone()(21)}")
+    print(f"8 {d.get("a").unwrap()(21)}")
+
+    Vector[Callable[int(int)]] hv = []
+    hv.push(doubler)
+    Holder h = Holder(!hv)
+    print(f"9 {h.fs[0](21)}")

@@ -2122,6 +2122,146 @@ int lower_recv_place(LowerCtx &ctx, SpannedExpr recv_expr, GirModule &gmod):
             pass
     return lower_place_base(&ctx, recv_expr, &gmod)
 
+# ── The value-callee call producer (Core #4 class fix) ──────────────────
+#
+# `f(args)` where the CALLEE is a callable VALUE rather than a top-level
+# function name: an identifier bound to a closure/`Callable` local
+# (`auto g = …` then `g(21)`), a collection read (`fs[0](21)`, `d["f"](x)`),
+# a call result (`mk()(1)`), or a method result (`c.clone()(1)`). Every one
+# of them dispatches identically — closure value as arg-0, args borrowed,
+# `__callable_<arity>` — so they share ONE producer instead of drifting
+# copies (`docs/devbook/24-layering-discipline.md`, "fix the class, not the
+# instance"; the arm-by-arm alternative is exactly how the non-identifier
+# shapes came to be dropped in the first place).
+#
+# `callable_local` is the ALREADY-LOWERED callable; the caller lowers it, so
+# the callee is evaluated before its arguments (Rust gg's order too).
+# `ret_override >= 0` pins the return type — the immediately-invoked-closure
+# caller derives it from the closure's own signature. Otherwise the return
+# type comes off the three-step typed ladder documented inline below.
+int lower_callable_value_call(LowerCtx &ctx, int callable_local, Vector[CallArg] args, GirModule &gmod, int ret_override):
+    Vector[Operand] cl_args = []
+    # Closure/__callable_N dispatch: the callable itself is a Ptr
+    # (op_consume returns OpCopy regardless of kind for Ptr slots). Args go
+    # through dynamic dispatch — the callee signature isn't available here,
+    # so default to borrow per CLAUDE.md "Ownership at Consuming Positions".
+    cl_args.push(op_consume(ctx, &gmod, callable_local, CkCallArgBorrow()))  # closure/callable as first arg
+    for carg in args:
+        # closure Phase 2 increment 5b — pass a borrow-unique PARAM
+        # identifier THROUGH by pointer (don't deref to a value). The
+        # `__callable_N` adapter expects the param's `T*` (the same pointer
+        # the param slot holds); if we let the general `lower_expr`
+        # EIdentifier reader run, it auto-derefs a `GtMutPtr(non-resource)`
+        # slot to a by-VALUE struct → the callee derefs the value-as-address
+        # → SIGSEGV (callable_ref_param / generic_callable_ref). NARROW
+        # carve-out (mirrors Rust gg `is_param_borrow_unique` at
+        # calls.rs:1186-1196): only when the arg is an `EIdentifier` bound to
+        # a local that is a `LoParam()` whose `type_id` is `GtMutPtr(_)`. The
+        # `LoParam` gate is LOAD-BEARING for narrowness — a `&x` borrow TEMP
+        # is also `GtMutPtr` but is NOT `LoParam`, so it stays on the deref
+        # path; ONLY a borrow-unique PARAM is passed by pointer.
+        # `op_consume(..., CkCallArgBorrow())` is a non-consume kind →
+        # returns `OpBorrow(raw_pointer_local)`, forwarding the pointer bits.
+        bool carg_passed_ptr = false
+        match carg.value.expr:
+            case EIdentifier(carg_name):
+                if nl_contains(ctx, carg_name):
+                    int carg_lid = nl_get(ctx, carg_name)
+                    GirLocal carg_loc = ctx.locals.get(carg_lid).unwrap()
+                    bool carg_is_param = false
+                    match carg_loc.ownership:
+                        case LoParam():
+                            carg_is_param = true
+                        else:
+                            pass
+                    if carg_is_param and carg_loc.type_id >= PRIM_COUNT and carg_loc.type_id < gmod.type_table.len():
+                        match gmod.type_table.get(carg_loc.type_id).unwrap():
+                            case GtMutPtr(_):
+                                cl_args.push(op_consume(ctx, &gmod, carg_lid, CkCallArgBorrow()))
+                                carg_passed_ptr = true
+                            else:
+                                pass
+            else:
+                pass
+        if not carg_passed_ptr:
+            int cval = lower_expr(&ctx, carg.value, &gmod)
+            cl_args.push(op_consume(ctx, &gmod, cval, CkCallArgBorrow()))
+    # Emit as __callable_N (codegen handles this as void*[2] dispatch)
+    int arity = args.len()
+    String cl_call = "__callable_" + int_to_str(arity)
+    if ret_override >= 0:
+        int ov_dst = add_local(&ctx, ret_override, None)
+        emit(&ctx, GICallExtern(ov_dst, cl_call, cl_args))
+        return ov_dst
+    # Infer return type from the callable's type (function pointer return type)
+    int cl_ret_type = I64_TYPE
+    # Set true ONLY when an FnPtr-signature arm below reads a real return
+    # tid. When the callable's static type is the ERASED `GorgetClosure`
+    # named struct (a mono'd adapter's `F` field), NO FnPtr arm fires →
+    # `cl_ret_found` stays false → the typed `expected_type` the WRITER set
+    # is read through below. CLAUDE.md #2 (typed-metadata-read-through, NOT
+    # mangled-name reconstruction).
+    bool cl_ret_found = false
+    int callable_tid = ctx.locals.get(callable_local).unwrap().type_id
+    # Callable params are passed ByPtr — a `Callable` arg is
+    # `Ptr(FnPtr(...))`, and a double-returning callback handed in through a
+    # nested-ptr shape is `Ptr(Ptr(FnPtr(...)))`. Peel ALL Ptr/MutPtr layers
+    # recursively (a hand-unrolled single level let a `**fn` miss the FnPtr →
+    # the return defaulted to I64_TYPE → a `double()` callback mis-cast
+    # `int64_t(*)(...)` → garbage). Mirrors Rust gg's
+    # `extract_callable_return_type` recursive peel.
+    int peeled_tid = peel_ptr_tid(&gmod, callable_tid)
+    if peeled_tid >= 0 and peeled_tid < gmod.type_table.len():
+        GirType ct = gmod.type_table.get(peeled_tid).unwrap()
+        match ct:
+            case GtFnPtr(_, ret_tid):
+                # GUARD on `!= UNIT_TYPE` (mirror the closure_value_ret_type
+                # guard below): a `void()` callable's recovered UNIT return
+                # must NOT be cast over a used result — `void value not
+                # ignored as it ought to be` CC-FAIL. Drop a UNIT recovery so
+                # it falls through to the correct baseline `expected_type`
+                # path.
+                if ret_tid != UNIT_TYPE:
+                    cl_ret_type = ret_tid
+                    cl_ret_found = true
+            else:
+                pass
+    # closure Phase 2 increment 3 — the callable is the env-erased
+    # `GorgetClosure` value of a closure LOCAL (no FnPtr sig fired above).
+    # Recover the closure's return type from the typed
+    # `closure_value_ret_type` side-channel the make-site recorded (keyed
+    # `<fn>\0<callable_local>`). WITHOUT this, a non-return context
+    # (`print(greet(...))`) has no `expected_type` either → the indirect call
+    # is cast `int64_t`-return; a `String` (>16B SysV hidden-sret) result
+    # then shifts env-ptr/sret/args → corruption → SIGSEGV. GUARD on
+    # `!= UNIT_TYPE` is LOAD-BEARING: compute_closure_sig mis-infers a
+    # match/if-tail-value body as UNIT (a separate filed gap), and a
+    # `void`-return cast of a USED result is a `void value not ignored`
+    # CC-FAIL — so a UNIT recovery is dropped and falls through to the
+    # correct baseline `expected_type` path. Typed metadata-read-through,
+    # not mangled-name reconstruction (CLAUDE.md #2). Mirrors Rust gg's
+    # `callable_return_types`.
+    if not cl_ret_found:
+        String cvrt_key = ctx.current_fn_name + "\0" + int_to_str(callable_local)
+        if gmod.closure_value_ret_type.contains(cvrt_key):
+            int cvrt_ret = gmod.closure_value_ret_type.get(cvrt_key).unwrap()
+            if cvrt_ret != UNIT_TYPE:
+                cl_ret_type = cvrt_ret
+                cl_ret_found = true
+    # Fallback: the callable is the erased `GorgetClosure` struct (no FnPtr
+    # sig) — read the WRITER-set `ctx.expected_type` (the result slot's real
+    # type, e.g. `U`=GorgetString set at SReturn / a double accumulator in
+    # fold[double, F]). GUARD: `>= 0` rejects the -1 sentinel (cleared by
+    # lower_if before the cond), allows all valid type IDs including
+    # primitives (F64_TYPE=10 < PRIM_COUNT=12 but IS a valid return type for
+    # cross-type folds). The defensive `< type_table.len()` bounds-checks
+    # struct ids.
+    if not cl_ret_found and ctx.expected_type >= 0:
+        cl_ret_type = ctx.expected_type
+    int cl_dst = add_local(&ctx, cl_ret_type, None)
+    emit(&ctx, GICallExtern(cl_dst, cl_call, cl_args))
+    return cl_dst
+
 int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     # D29: `expr!` (EPropagate) is TRANSPARENT — unwrap it BEFORE the suppress
     # one-shot is consumed, so the inner call inherits the match-scrutinee /
@@ -2841,138 +2981,10 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # the function (test_if_expressions case #20). Redirects still
                     # take priority (call-redirect'd names are not shadowing locals).
                     if nl_contains(ctx, fname) and not gmod.call_redirects.contains(fname):
-                        int callable_local = nl_get(ctx, fname)
-                        # Lower args
-                        Vector[Operand] cl_args = []
-                        # Closure/__callable_N dispatch: the callable
-                        # itself is a Ptr (op_consume returns OpCopy
-                        # regardless of kind for Ptr slots). Args go
-                        # through dynamic dispatch — callee signature
-                        # isn't available here, so default to borrow
-                        # per CLAUDE.md "Ownership at Consuming Positions".
-                        cl_args.push(op_consume(ctx, &gmod, callable_local, CkCallArgBorrow()))  # closure/callable as first arg
-                        for carg in args:
-                            # closure Phase 2 increment 5b — pass a borrow-unique
-                            # PARAM identifier THROUGH by pointer (don't deref to a
-                            # value). The `__callable_N` adapter expects the param's
-                            # `T*` (the same pointer the param slot holds); if we let
-                            # the general `lower_expr` EIdentifier reader (:696-706)
-                            # run, it auto-derefs a `GtMutPtr(non-resource)` slot to a
-                            # by-VALUE struct → the callee derefs the value-as-address
-                            # → SIGSEGV (callable_ref_param / generic_callable_ref).
-                            # NARROW carve-out (mirrors Rust gg `is_param_borrow_unique`
-                            # at calls.rs:1186-1196): only when the arg is an
-                            # `EIdentifier` bound to a local that is a `LoParam()`
-                            # whose `type_id` is `GtMutPtr(_)`. The `LoParam` gate is
-                            # LOAD-BEARING for narrowness — a `&x` borrow TEMP is also
-                            # `GtMutPtr` but is NOT `LoParam`, so it stays on the deref
-                            # path; ONLY a borrow-unique PARAM is passed by pointer.
-                            # `op_consume(..., CkCallArgBorrow())` is a non-consume
-                            # kind → returns `OpBorrow(raw_pointer_local)`, forwarding
-                            # the pointer bits. The general scalar-read deref
-                            # (:696-706) is UNCHANGED (still derefs for `x + 10` etc.).
-                            bool carg_passed_ptr = false
-                            match carg.value.expr:
-                                case EIdentifier(carg_name):
-                                    if nl_contains(ctx, carg_name):
-                                        int carg_lid = nl_get(ctx, carg_name)
-                                        GirLocal carg_loc = ctx.locals.get(carg_lid).unwrap()
-                                        bool carg_is_param = false
-                                        match carg_loc.ownership:
-                                            case LoParam():
-                                                carg_is_param = true
-                                            else:
-                                                pass
-                                        if carg_is_param and carg_loc.type_id >= PRIM_COUNT and carg_loc.type_id < gmod.type_table.len():
-                                            match gmod.type_table.get(carg_loc.type_id).unwrap():
-                                                case GtMutPtr(_):
-                                                    cl_args.push(op_consume(ctx, &gmod, carg_lid, CkCallArgBorrow()))
-                                                    carg_passed_ptr = true
-                                                else:
-                                                    pass
-                                else:
-                                    pass
-                            if not carg_passed_ptr:
-                                int cval = lower_expr(&ctx, carg.value, &gmod)
-                                cl_args.push(op_consume(ctx, &gmod, cval, CkCallArgBorrow()))
-                        # Emit as __callable_N (codegen handles this as void*[2] dispatch)
-                        int arity = args.len()
-                        String cl_call = "__callable_" + int_to_str(arity)
-                        # Infer return type from the callable's type (function pointer return type)
-                        int cl_ret_type = I64_TYPE
-                        # Set true ONLY when an FnPtr-signature arm below reads a
-                        # real return tid. When the callable's static type is the
-                        # ERASED `GorgetClosure` named struct (a mono'd adapter's
-                        # `F` field), NO FnPtr arm fires → `cl_ret_found` stays
-                        # false → the typed `expected_type` the WRITER set is read
-                        # through below. CLAUDE.md #2 (typed-metadata-read-through,
-                        # NOT mangled-name reconstruction).
-                        bool cl_ret_found = false
-                        int callable_tid = ctx.locals.get(callable_local).unwrap().type_id
-                        # Callable params are passed ByPtr — a `Callable` arg is
-                        # `Ptr(FnPtr(...))`, and a double-returning callback handed
-                        # in through a nested-ptr shape is `Ptr(Ptr(FnPtr(...)))`.
-                        # Peel ALL Ptr/MutPtr layers recursively (was a single
-                        # hand-unrolled level → a `**fn` never reached the FnPtr →
-                        # the return defaulted to I64_TYPE → a `double()` callback
-                        # mis-cast `int64_t(*)(...)` → garbage). Mirrors Rust gg's
-                        # `extract_callable_return_type` recursive peel.
-                        int peeled_tid = peel_ptr_tid(&gmod, callable_tid)
-                        if peeled_tid >= 0 and peeled_tid < gmod.type_table.len():
-                            GirType ct = gmod.type_table.get(peeled_tid).unwrap()
-                            match ct:
-                                case GtFnPtr(_, ret_tid):
-                                    # GUARD on `!= UNIT_TYPE` (mirror the
-                                    # closure_value_ret_type guard below): a
-                                    # `void()` callable's recovered UNIT return must
-                                    # NOT be cast over a used result — `void value
-                                    # not ignored as it ought to be` CC-FAIL. Drop a
-                                    # UNIT recovery so it falls through to the
-                                    # correct baseline `expected_type` path.
-                                    if ret_tid != UNIT_TYPE:
-                                        cl_ret_type = ret_tid
-                                        cl_ret_found = true
-                                else:
-                                    pass
-                        # closure Phase 2 increment 3 — the callable is the
-                        # env-erased `GorgetClosure` value of a closure LOCAL (no
-                        # FnPtr sig fired above). Recover the closure's return
-                        # type from the typed `closure_value_ret_type`
-                        # side-channel the make-site recorded (keyed
-                        # `<fn>\0<callable_local>`). WITHOUT this, a non-return
-                        # context (`print(greet(...))`) has no `expected_type`
-                        # either → the indirect call is cast `int64_t`-return; a
-                        # `String` (>16B SysV hidden-sret) result then shifts
-                        # env-ptr/sret/args → corruption → SIGSEGV. GUARD on
-                        # `!= UNIT_TYPE` is LOAD-BEARING: compute_closure_sig
-                        # mis-infers a match/if-tail-value body as UNIT (a
-                        # separate filed gap), and a `void`-return cast of a USED
-                        # result is a `void value not ignored` CC-FAIL — so a
-                        # UNIT recovery is dropped and falls through to the
-                        # correct baseline `expected_type` path. Typed
-                        # metadata-read-through, not mangled-name reconstruction
-                        # (CLAUDE.md #2). Mirrors Rust gg's `callable_return_types`.
-                        if not cl_ret_found:
-                            String cvrt_key = ctx.current_fn_name + "\0" + int_to_str(callable_local)
-                            if gmod.closure_value_ret_type.contains(cvrt_key):
-                                int cvrt_ret = gmod.closure_value_ret_type.get(cvrt_key).unwrap()
-                                if cvrt_ret != UNIT_TYPE:
-                                    cl_ret_type = cvrt_ret
-                                    cl_ret_found = true
-                        # Fallback: the callable is the erased `GorgetClosure`
-                        # struct (no FnPtr sig) — read the WRITER-set
-                        # `ctx.expected_type` (the result slot's real type, e.g.
-                        # `U`=GorgetString set at SReturn / a double accumulator in
-                        # fold[double, F]). GUARD: `>= 0` rejects the -1 sentinel
-                        # (cleared by lower_if before the cond), allows all valid
-                        # type IDs including primitives (F64_TYPE=10 < PRIM_COUNT=12
-                        # but IS a valid return type for cross-type folds).
-                        # The defensive `< type_table.len()` bounds-checks struct ids.
-                        if not cl_ret_found and ctx.expected_type >= 0:
-                            cl_ret_type = ctx.expected_type
-                        int cl_dst = add_local(&ctx, cl_ret_type, None)
-                        emit(&ctx, GICallExtern(cl_dst, cl_call, cl_args))
-                        return cl_dst
+                        # A callable VALUE in a bare-name callee slot — the
+                        # same dispatch every other value-callee shape uses,
+                        # so it goes through the shared producer.
+                        return lower_callable_value_call(&ctx, nl_get(ctx, fname), args, &gmod, -1)
                     Vector[SpannedExpr] _lc_vals = callarg_values(args)
                     Vector[String] _lc_names = callarg_names(args)
                     return lower_call(&ctx, fname, _lc_vals, _lc_names, targs, &gmod)
@@ -2989,62 +3001,22 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # closure `((p…): body)(args)` (IIFE). Lower the EClosure
                     # callee to its GorgetClosure VALUE (the make-site arm mints
                     # the cid, records the LiftedClosure, and the post-pass pushes
-                    # __Closure_N__call), then dispatch it exactly like the
-                    # named-callable-value call arm above (:1196): closure value
-                    # as arg-0, call args borrowed, emit __callable_<arity>. The
-                    # codegen passes arg-0 by pointer (needs_ptr_arg) so the
-                    # GorgetClosure value's address becomes the void*[2] {fn,env}.
-                    # Previously this arm lowered for side-effects and returned
-                    # hardcoded OpConstUnit() (`0`), so every IIFE evaluated to 0.
+                    # __Closure_N__call), then dispatch it through the SAME
+                    # value-callee producer every other shape uses. Previously
+                    # this arm lowered for side-effects and returned a hardcoded
+                    # OpConstUnit() (`0`), so every IIFE evaluated to 0.
+                    #
+                    # The one axis on which it differs from its siblings is the
+                    # RETURN TYPE: a closure LITERAL carries its own signature,
+                    # so the producer's typed ladder (FnPtr peel →
+                    # closure_value_ret_type → expected_type) is not the right
+                    # instrument and the derived type is pinned instead.
+                    # compute_closure_sig's `cid` arg only names the env struct /
+                    # self-ptr — the return_type derivation is cid-independent
+                    # (lower_closures.gg), so a throwaway 0 is safe here.
                     int iife_callable = lower_expr(&ctx, callee, &gmod)
-                    Vector[Operand] iife_call_args = []
-                    iife_call_args.push(op_consume(ctx, &gmod, iife_callable, CkCallArgBorrow()))  # closure value as first arg
-                    for iife_arg in args:
-                        # closure Phase 2 increment 5b — SIBLING of the named-callable
-                        # arg loop above (:1206). Same `__callable_N` dispatch, same
-                        # hazard: a borrow-unique PARAM identifier arg must be passed
-                        # THROUGH by pointer, not auto-dereffed to a value (the general
-                        # EIdentifier reader :696-706 would deref a `GtMutPtr` slot to a
-                        # by-VALUE struct → callee derefs value-as-address → SIGSEGV).
-                        # Narrow carve-out (LoParam + GtMutPtr) — see :1206 for the full
-                        # rationale + the Rust ref (calls.rs:1186-1196). Fixing the
-                        # CLASS, not just the named-callable instance (CLAUDE.md
-                        # "Sibling-site drift — fix the class, not the instance").
-                        bool iife_passed_ptr = false
-                        match iife_arg.value.expr:
-                            case EIdentifier(iife_name):
-                                if nl_contains(ctx, iife_name):
-                                    int iife_lid = nl_get(ctx, iife_name)
-                                    GirLocal iife_loc = ctx.locals.get(iife_lid).unwrap()
-                                    bool iife_is_param = false
-                                    match iife_loc.ownership:
-                                        case LoParam():
-                                            iife_is_param = true
-                                        else:
-                                            pass
-                                    if iife_is_param and iife_loc.type_id >= PRIM_COUNT and iife_loc.type_id < gmod.type_table.len():
-                                        match gmod.type_table.get(iife_loc.type_id).unwrap():
-                                            case GtMutPtr(_):
-                                                iife_call_args.push(op_consume(ctx, &gmod, iife_lid, CkCallArgBorrow()))
-                                                iife_passed_ptr = true
-                                            else:
-                                                pass
-                            else:
-                                pass
-                        if not iife_passed_ptr:
-                            int iife_aval = lower_expr(&ctx, iife_arg.value, &gmod)
-                            iife_call_args.push(op_consume(ctx, &gmod, iife_aval, CkCallArgBorrow()))
-                    int iife_arity = args.len()
-                    String iife_call = "__callable_" + int_to_str(iife_arity)
-                    # Return type from the closure's signature (body-inferred via
-                    # guess_return_type). compute_closure_sig's `cid` arg only
-                    # names the env struct / self-ptr — the return_type derivation
-                    # is cid-independent (lower_closures.gg:1592-1623), so a
-                    # throwaway 0 is safe here.
                     int iife_ret = compute_closure_sig(0, iife_params, iife_body, &gmod, ctx.expected_type).return_type
-                    int iife_dst = add_local(&ctx, iife_ret, None)
-                    emit(&ctx, GICallExtern(iife_dst, iife_call, iife_call_args))
-                    return iife_dst
+                    return lower_callable_value_call(&ctx, iife_callable, args, &gmod, iife_ret)
                 case ENoneLiteral():
                     # `None()` call form (e.g. `Dict[String,Option[int]] d = {"b":None()}`).
                     # Route through lower_call as the bare-`None` ctor: lower_call's
@@ -3056,8 +3028,31 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     Vector[SpannedExpr] _nc_vals = callarg_values(args)
                     Vector[String] _nc_names = callarg_names(args)
                     return lower_call(&ctx, none_name, _nc_vals, _nc_names, targs, &gmod)
+                case EIndex(_, _):
+                    # `fs[0](21)`, `d["f"](&a)` — a callable read out of a
+                    # collection. Lower the read to its GorgetClosure VALUE,
+                    # then dispatch it like any other value callee.
+                    return lower_callable_value_call(&ctx, lower_expr(&ctx, callee, &gmod), args, &gmod, -1)
+                case ECall(_, _, _):
+                    # `mk()(1)` — the callee is itself a call returning a
+                    # callable.
+                    return lower_callable_value_call(&ctx, lower_expr(&ctx, callee, &gmod), args, &gmod, -1)
+                case EMethodCall(_, _, _, _):
+                    # `c.clone()(1)` — the callee is a method result.
+                    return lower_callable_value_call(&ctx, lower_expr(&ctx, callee, &gmod), args, &gmod, -1)
                 else:
-                    pass
+                    # Core #10 lower-or-REJECT. This arm used to `pass` and
+                    # fall through to a fresh UNIT local, DISCARDING the whole
+                    # call — arguments included — for every callee shape not
+                    # enumerated above. That is a miscompile, and a silent one:
+                    # `c.clone()(1)` printed `0` and `fs[0](21)` dispatched the
+                    # Vector itself as a function pointer. `Expr` has 40+
+                    # variants and this match names seven, so the remainder
+                    # FAILS THE BUILD loudly rather than compiling to a lie.
+                    # `lower_abort` does not return (stderr diagnostic +
+                    # exit 1); the `return` below keeps the function
+                    # well-formed for the reader and for GIR validation.
+                    lower_abort("cannot lower a call whose callee is a " + expr_kind(callee.expr) + " (in fn '" + ctx.current_fn_name + "') — only a named function, a callable value, a closure literal or `None()` can be called")
             return add_local(&ctx, UNIT_TYPE, None)
         case EMethodCall(recv_box, mname, margs, mtargs_proto):
             # CallArg adapter: this arm's named-arg reorder / default-fill logic
@@ -7146,6 +7141,30 @@ bool closure_extract(SpannedExpr arg, Vector[String] &out_params, SpannedExpr &o
 bool extract_hof_closure(SpannedExpr arg, int arity, Vector[String] &out_params, SpannedExpr &out_body):
     if closure_extract(arg.clone(), &out_params, &out_body):
         return true
+    # An implicit-`it` body (`.map(it * 2)`, `.filter(it > 0)`) is a closure
+    # BODY, not a callable value: its single parameter is spelled `it` —
+    # exactly the name `compute_implicit_closure_sig` types as the implicit
+    # closure's `body_param_names`. Handle it BEFORE the callable-wrapper
+    # synthesis below, which would otherwise build `(it * 2)(__hofp0)` — an
+    # `ECall` whose callee is an `EBinaryOp`, i.e. not a call at all. That
+    # nonsense AST used to be swallowed by the `ECall` callee dispatcher's
+    # `else: pass`, so `.map(it * 2)` silently produced an unmapped vector
+    # and read back garbage; the lower-or-reject arm (Core #10) surfaced it.
+    # The parser wraps some occurrences in `EImplicitClosure` and leaves
+    # others raw, so accept BOTH spellings.
+    if arity == 1:
+        match arg.expr:
+            case EImplicitClosure(ic_box):
+                SpannedExpr ic_inner = *ic_box
+                out_params.push("it")
+                out_body = ic_inner.clone()
+                return true
+            else:
+                pass
+        if expr_has_it(arg):
+            out_params.push("it")
+            out_body = arg.clone()
+            return true
     Vector[CallArg] call_args = []
     int i = 0
     while i < arity:

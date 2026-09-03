@@ -1,20 +1,30 @@
-# KNOWN GAP — BOTH REAL BACKENDS, `gg check` accepts, rc 139.
+# GRADUATED — green on Rust `gg` (both backends) AND on the self-host lane.
 #
-# Evidence for todo/t0406 (non-identifier-callee / signature-erased container
-# element). What this cell DISCRIMINATES from that item's existing repros:
+# History: this cell was `gg check`-clean and exited 139 on both real backends.
+# It was ONE of `todo/t0406`'s six repro cells (non-identifier-callee /
+# signature-erased container element). The Rust lane graduated it with the
+# dispatch-name + `clone_fn_for_ptr` arms; the self-host lane followed when the
+# generic-call-vs-index parse stopped DELETING the `[0]` and the `ECall` callee
+# dispatcher stopped discarding a non-identifier callee. `todo/t0406` stays open
+# on its four `&`-sigil cells.
+#
+# The full callee-shape axis lives in `callable_callee_shape_axis.gg`; this
+# fixture stays as the no-sigil `Vector`-element cell it was filed as.
+#
+# What this cell DISCRIMINATES from that item's remaining repros:
 # they all carry a `&` sigil, so their story is "the borrow tag never reaches
 # either ABI channel". This one has NO sigil at all — a pure by-value
 # `Callable[int(int)]` — and it dies just the same, which shows the defect is
 # the element signature collapsing to the zero-parameter fallback
 # `fn() -> i64`, not the sigil tagging.
 #
-# `push` + `len()` on the same vector is GREEN (the closure-packing wrap at
-# `AbiKind::VoidElem` handles the write); only calling the element back out
-# dies, on BOTH read shapes below.
+# `push` + `len()` on the same vector was GREEN throughout (the closure-packing
+# wrap at `AbiKind::VoidElem` handles the write); only calling the element back
+# out died, on BOTH read shapes below.
 #
 # DISCRIMINATED from todo/t0873, the other open `Vector[Callable]` item: that
 # one is a container-LITERAL SEGV and a NULL `elem_drop` (the pushed envs leak).
-# This cell pushes, so it is past the literal arm, and it dies on the CALL, not
+# This cell pushes, so it is past the literal arm, and it died on the CALL, not
 # at drop.
 #
 # INTENDED (asserted by the wired test): prints `1` then `42` then `42`.

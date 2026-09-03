@@ -5,9 +5,19 @@
 # explicit closure's `__make_closure_N` value wired to the implicit-it body
 # (`it*2`) instead of its own body (`x+1`). This fixture proves the fix —
 # the explicit closure's __make_closure points at its OWN __Closure__call.
+#
+# ⚠ IT ALSO READS THE MAPPED VALUES, and that is load-bearing. It used to read
+# only `doubled.len()`, and stayed green right through a self-host miscompile
+# that filled the accumulator with unmapped, uninitialized elements: the COUNT
+# was right and only the values were garbage (SIX QUESTIONS #6 — a green cell
+# green for a reason unrelated to what it tests). The wide net for that defect
+# is `hof_implicit_it/collection_axis.gg`; this fixture carries the `map` cell
+# inside the auto-scanned corpus.
 void main():
     Vector[int] xs = [1, 2, 3]
     Vector[int] doubled = xs.map(it * 2)
     print(doubled.len())
+    for d in doubled:
+        print(d)
     int(int) f = (int x): x + 1
     print(f(5))

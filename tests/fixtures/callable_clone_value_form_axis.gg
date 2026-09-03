@@ -17,7 +17,7 @@
 #   2  Callable        local, capturing            FnPtr
 #   3  Callable        temp (call result)          FnPtr
 #   4  Callable        index read `fs[0]`          FnPtr, arity-0 fallback (*)
-#   5  Callable        captured in a closure env   FnPtr, field-load shape
+#   5  Callable        captured in a closure env   FnPtr, field-load shape (**)
 #   6  MutCallable     local, non-capturing        FnPtr
 #   7  MutCallable     local, capturing            FnPtr
 #   8  ConsumeCallable local, non-capturing        FnPtr
@@ -56,6 +56,17 @@
 # Cell 5's env-capture shape and the struct-field shape are structurally the
 # same field load, and they disagree — which is exactly why cell 5 is pinned
 # rather than assumed.
+#
+# (**) CELL 5'S ATTRIBUTION IS ALSO CORRECTED. The cell was recorded as a
+#      closure-ENV field-load shape on both lanes. On the SELF-HOST lane the
+#      env has nothing to do with it: `c5.clone()(y)` fails identically at TOP
+#      LEVEL, with no closure and no env at all, because the axis that breaks
+#      it is the CALLEE SHAPE — the clone RESULT sits in callee position, and
+#      the `ECall` callee dispatcher handled only four shapes and silently
+#      discarded the rest. Measured: `.clone()` on a value-form `Callable` is
+#      HEALTHY on the self-host (11 of these 12 cells were already green,
+#      cell 12's struct-field `box.f.clone()` included). See
+#      `callable_callee_shape_axis.gg`.
 
 struct Holder:
     Callable[int(int)] f
@@ -85,7 +96,10 @@ void main():
     Callable[int(int)] g4 = fs[0].clone()
     print(f"4 {g4(21)}")
 
-    # 5 — a Callable captured in a closure env, cloned inside the body
+    # 5 — a Callable captured in a closure env, cloned inside the body, and
+    #     the clone RESULT is the CALLEE (see the (**) note in the header:
+    #     the callee shape, not the env, is what broke this cell on the
+    #     self-host lane)
     Callable[int(int)] c5 = (int x): x + 5
     Callable[int(int)] outer = (int y): c5.clone()(y)
     print(f"5 {outer(1)}")

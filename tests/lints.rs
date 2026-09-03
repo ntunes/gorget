@@ -5380,6 +5380,86 @@ fn self_host_param_ctor_site_count() {
     );
 }
 
+/// Sibling-site ratchet (CLAUDE.md rule 4) over the self-host VALUE-CALLEE
+/// dispatch, plus the Core #10 lower-or-reject guard at the same match.
+///
+/// `f(args)` where the callee is a callable VALUE — a bare identifier bound to
+/// a closure local, a collection read (`fs[0](21)`, `d["f"](x)`), a call
+/// result (`mk()(1)`), a method result (`c.clone()(1)`), an
+/// immediately-invoked closure literal — all dispatch identically: closure
+/// value as arg-0, args borrowed, `__callable_<arity>`. That dispatch used to
+/// be written out at TWO sites and MISSING at the rest, and the missing ones
+/// fell through an `else: pass` that discarded the whole call, arguments
+/// included: `fs[0](21)` dispatched the Vector itself as a function pointer
+/// and `c.clone()(1)` printed `0`. It is now ONE producer,
+/// `lower_callable_value_call`, with one caller per callee shape.
+///
+/// TWO assertions, because the two failure modes are different:
+///
+/// 1. The producer has exactly `EXPECTED_CONSUMERS` call sites. A new
+///    value-callee shape that open-codes the dispatch instead of calling the
+///    producer re-opens the drift — the count forces it through the shared
+///    path (or through a deliberate bump here, which is visible in review).
+///
+/// 2. The `ECall` callee match's fall-through REJECTS. Its `else:` arm must
+///    call `lower_abort`, never `pass`: `Expr` has 40+ variants and that match
+///    names seven, so a shape nobody thought about must FAIL THE BUILD rather
+///    than compile to a fresh unit local. This is the narrow, site-specific
+///    guard; the general `.gg`-aware silent-fallthrough ratchet — which needs
+///    a scope narrow enough that its allowlist cannot swallow this very arm —
+///    is `todo/t0952`.
+#[test]
+fn self_host_value_callee_producer_is_the_only_dispatch() {
+    // 1 definition + 4 calls: the identifier-bound-callable arm, the EIndex
+    // arm, the ECall-result arm, the EMethodCall-result arm, and the
+    // immediately-invoked closure literal (which pins its own return type
+    // through the producer's `ret_override`).
+    const EXPECTED_CONSUMERS: usize = 5;
+
+    let path = "tests/fixtures/self_host_lowerer/lower_expr.gg";
+    let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+
+    let mut defs = 0usize;
+    let mut calls = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            continue; // .gg comments
+        }
+        if trimmed.starts_with("int lower_callable_value_call(") {
+            defs += 1;
+            continue;
+        }
+        calls += line.matches("lower_callable_value_call(").count();
+    }
+
+    assert_eq!(defs, 1, "expected exactly ONE `lower_callable_value_call` definition in {path}, found {defs}");
+    assert_eq!(
+        calls, EXPECTED_CONSUMERS,
+        "Self-host value-callee dispatch call-site count changed: {calls} vs \
+         {EXPECTED_CONSUMERS}.\n\n\
+         Every callee shape that evaluates to a callable VALUE routes through \
+         `lower_callable_value_call` — closure value as arg-0, args borrowed, \
+         `__callable_<arity>`, and the typed return-type ladder. If you added a \
+         callee shape, CALL the producer and bump EXPECTED_CONSUMERS; do NOT \
+         open-code the dispatch, which is how the non-identifier shapes came to \
+         be silently dropped in the first place. If you removed one, lower it.",
+    );
+
+    // The `ECall` callee match must lower-or-REJECT (Core #10). Find the arm's
+    // `else:` — the one immediately followed by a `lower_abort` call naming the
+    // callee — and assert it is still there.
+    assert!(
+        content.contains("lower_abort(\"cannot lower a call whose callee is a \""),
+        "The `ECall` callee dispatcher in {path} no longer REJECTS its unhandled \
+         callee shapes. That `else:` arm previously `pass`ed and returned a fresh \
+         UNIT local, discarding the whole call — arguments included — for every \
+         shape the match does not name. `Expr` has 40+ variants and the match \
+         names seven. Restore the `lower_abort`, or add a real lowering arm for \
+         the shape you are handling (Core #10: lower-or-reject).",
+    );
+}
+
 /// Sibling-site ratchet (CLAUDE.md rule 4 / "Sibling-site drift") over the
 /// self-host param-ownership registration sites in `lower.gg`. The pre-scan
 /// builds three PARALLEL per-fn Dicts — `fn_borrow_params`, `fn_move_params`,
@@ -8780,7 +8860,14 @@ fn sanitize_allowlists_shrink_only() {
     // asserting the intended clean run — `t0873` had `repro = []` before.
     // Retires to 304 when ALL THREE land; either one alone only tightens a row's
     // record count (`LEAK_RECORDS`), it does not remove a row.
-    const LEAK_CEILING: usize = 306;
+    // ⚖ And 306 -> 307 with R48 Track U's ONE admitted row
+    // (`hof_implicit_it_collection_axis`): a pre-existing per-HOF-call closure-env
+    // leak, `todo/t0954`, made VISIBLE by the regression fixture for a self-host
+    // miscompile — not introduced by it. The track's other new fixture,
+    // `callable_callee_shape_axis`, is CLEAN and owes no row. Both counts taken
+    // from the sweep's own `verdicts.tsv` column 4 under a restricted `FIXLIST`.
+    // See the `⚖ ADMITTED (R48 Track U)` block in the allowlist.
+    const LEAK_CEILING: usize = 307;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -8918,8 +9005,14 @@ fn sanitize_allowlists_shrink_only() {
     // sweep's own `verdicts.tsv` column 4 with `FIXLIST` restricted to the two
     // fixtures, not from a hand count. See the `LEAK_CEILING` note above and the
     // `⚖ ADMITTED` block in the allowlist for the attribution and what retires them.
-    const LEAK_CLASS_PAIRS: usize = 511;
-    const LEAK_RECORDS: usize = 2262;
+    // ⚖ And 511 -> 512 / 2262 -> 2267 with R48 Track U's ONE admitted row: 1 new
+    // (fixture, class) pair tolerating 5 leak records, class
+    // `__gorget_closure_env_alloc`, count EXACT (single-threaded, stable — no
+    // `*N+` marker, so LEAK_LOOSE_SIGNATURES is unchanged). Measured, not counted
+    // by hand: the sweep's `verdicts.tsv` column 4 reads
+    // `hof_implicit_it_collection_axis  LEAK  -  __gorget_closure_env_alloc*5`.
+    const LEAK_CLASS_PAIRS: usize = 512;
+    const LEAK_RECORDS: usize = 2267;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     let mut leak_stems: Vec<&str> = Vec::new();
