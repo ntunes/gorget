@@ -1,0 +1,41 @@
+# KNOWN GAP — a method call on an UNBOUNDED generic parameter is not checked
+# for existence, and dies at link on the MONOMORPHIZED type's mangled name.
+#
+# `bool probe[T](T a): return a.is_some()` declares no bound on `T`, so nothing
+# in the signature promises `T` has an `is_some`. `gg check` accepts it anyway;
+# the build then instantiates `probe[int]` and dies on
+# `undefined reference to 'int64_t__is_some'` — a mangled internal symbol naming
+# a type the user never wrote in that spelling.
+#
+# ⚠ WHY `t1019`'s RULE DELIBERATELY DOES NOT REACH IT, and why widening it is
+# the wrong fix. That rule scopes its "this type has no such method" claim to
+# `DefKind::{Struct, Enum, Newtype}` precisely to EXCLUDE `DefKind::GenericParam`
+# — because a bound type parameter's methods live on the BOUND, never in
+# `impls_by_name`. An earlier attempt without that exclusion rejected 57 healthy
+# fixtures, `lib/std/iter.gg`'s `equip [Iter, T] TakeIter[Iter, T] with
+# Iterator[T]:` and all 26 `iter_*` cells among them. The BOUND-provided case is
+# live and correct, and is pinned green by
+# `tests/fixtures/user_four_name_method_provenance.gg`'s trait-bound cell.
+#
+# ⇒ THE RULE THIS CELL NEEDS IS A DIFFERENT ONE: for a `GenericParam` receiver,
+# reject when NO bound on that parameter provides the method. That is a separate
+# subject with its own risk surface (it must read the parameter's bounds, not an
+# impl table), which is why it is filed rather than folded in. `todo/t1023`.
+#
+# Measured 2026-09-03. Before the `t1017` dispatch fix this printed `false`: the
+# lowering gate folded `is_some` on a non-Option/Result receiver to
+# `Constant::Bool(false)`, so the missing method was invisible in a different
+# way. `probe_bogus` is the cell showing the gap is NOT about these four names —
+# it link-fails identically before and after, which makes the class pre-existing.
+#
+# INTENDED: `gg check` REJECTS both calls, naming the method and the unbounded
+# parameter. Asserted by the `#[ignore]`d test that cites this fixture.
+bool probe[T](T a):
+    return a.is_some()
+
+bool probe_bogus[T](T a):
+    return a.totally_bogus_method()
+
+void main():
+    print(probe[int](5))
+    print(probe_bogus[int](5))

@@ -1630,12 +1630,35 @@ fn lower_shared_var_decl(
 
     // Resolve inner type and lower init value
     let inner_type = ctx.resolve_var_type(type_, value);
-    let inner_c = ctx.c_type_name_for_id(inner_type);
 
     let prev_expected = ctx.func_state.expected_type;
     ctx.func_state.expected_type = Some(inner_type);
     let val_operand = lower_expr(ctx, builder, value);
     ctx.func_state.expected_type = prev_expected;
+
+    // `shared auto` — RE-INFER the carrier's inner type from the LOWERED value.
+    // `resolve_var_type` answers `auto` from a pre-lowering guess, and every one
+    // of the six `inner_c` consumers below mints a wrapper type name from it
+    // (`Shared__`, `RWLock__`, `ReadGuard__`, `WriteGuard__`, `Mutex__`,
+    // `Guard__`). A wrong guess therefore mints a wrapper around the WRONG
+    // payload: `shared auto s = b.ratio()` printed `2` for a `float` (silent
+    // wrong output), `shared auto s = m.make()` printed `0` for a struct, and
+    // the `String` cell failed the C compile outright.
+    //
+    // ⚠ THE PREDICATE IS THE TYPED `auto` MARKER, NOT A SHAPE TEST ON THE
+    // ANSWER. `resolve_var_type` already switches on `Type::Inferred`, so this
+    // reads the same typed fact at the same layer. A read-site test like
+    // `actual != UNIT_TYPE` would let an inferred type override a type the USER
+    // WROTE — the written type is the user's invariant and must win (Layering
+    // rule 1, Core #2). Gated this way the re-infer provably cannot run on a
+    // written type at all, so `shared float y = 2.5` is unchanged BY
+    // CONSTRUCTION rather than by measurement.
+    let inner_type = if matches!(type_.node, crate::parser::ast::Type::Inferred) {
+        infer_operand_type_full(ctx, &val_operand, builder)
+    } else {
+        inner_type
+    };
+    let inner_c = ctx.c_type_name_for_id(inner_type);
 
     match strategy {
         SharedStrategy::ArcAtomic => {

@@ -1,0 +1,98 @@
+# The CONTROLS that bound `todo/t0434`'s `auto`-peel class — the cells that
+# must NOT move, and the discriminator that says what the class actually is.
+#
+# `auto x = <method call returning Result[T, E]>` lowers to a PEEL only where
+# the enclosing function can AUTO-PROPAGATE. Where it does, lowering binds `x`
+# to the payload while the checker binds it to the `Result`, and a subsequent
+# `x.is_{some,none,ok,error}()` goes wrong (filed:
+# `known_gaps/auto_result_peel_missing_method_build_failure.gg`,
+# `known_gaps/auto_result_peel_string_payload_invents_runtime_symbol.gg`,
+# `known_gaps/auto_result_peel_payload_method_hijack.gg`, `todo/t0947`).
+#
+# Everything below is OUTSIDE that class and prints the same thing before and
+# after the `t1017` dispatch fix:
+#
+#   1. NON-PROPAGATING enclosing function (`void main()`) — no peel, for every
+#      payload type. This is the discriminator: it shows the class is about the
+#      PEEL, not about the payload type, which is what the filings claim.
+#   2. An EXPLICITLY WRITTEN `Result[T, E]` binding inside a propagating
+#      function — no `auto`, so no peel.
+#   3. `Option[T]` — the peel is Result-only.
+#
+# ⚠ These are GREEN ON ARRIVAL and therefore are not coverage for the defect;
+# they are the controls that make the filings' scope claim checkable. The RED
+# cells live in the three `known_gaps/` fixtures named above.
+struct Payload:
+    int v
+
+equip Payload:
+    bool is_error(self):
+        return true
+
+struct Sock:
+    int h
+
+equip Sock:
+    Result[int, String] fetch_int(self, String g):
+        if g == "bad":
+            return Error("boom")
+        return Ok(1)
+
+    Result[String, String] fetch_str(self, String g):
+        if g == "bad":
+            return Error("boom")
+        return Ok("payload")
+
+    Result[Payload, String] fetch_payload(self, String g):
+        if g == "bad":
+            return Error("boom")
+        return Ok(Payload(1))
+
+    Option[Payload] find(self, String g):
+        if g == "bad":
+            return None
+        return Some(Payload(1))
+
+# CONTROL 2 — explicit binding in a PROPAGATING function: no `auto`, no peel.
+Result[bool, String] explicit_binding(String g):
+    Sock s = Sock(1)
+    Result[Payload, String] j = s.fetch_payload(g)
+    if j.is_error():
+        return Error("handled explicit")
+    return Ok(true)
+
+void main():
+    Sock s = Sock(1)
+
+    # CONTROL 1 — `void main()` cannot propagate, so `auto` binds the Result.
+    auto a = s.fetch_int("good")
+    if a.is_error():
+        print("int wrong")
+    auto b = s.fetch_str("good")
+    if b.is_error():
+        print("str wrong")
+    auto c = s.fetch_payload("good")
+    if c.is_error():
+        print("payload wrong")
+    auto d = s.fetch_int("bad")
+    if d.is_error():
+        print("int error seen")
+
+    # CONTROL 3 — Option, not Result.
+    auto o = s.find("good")
+    if o.is_some():
+        print("present")
+    auto p = s.find("bad")
+    if p.is_none():
+        print("absent")
+
+    Result[bool, String] e = explicit_binding("good")
+    if e.is_error():
+        print(e.unwrap_error())
+    else:
+        print("explicit ok")
+    Result[bool, String] f = explicit_binding("bad")
+    if f.is_error():
+        print(f.unwrap_error())
+
+    print("done")

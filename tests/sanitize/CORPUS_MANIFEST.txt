@@ -153,3 +153,5 @@ self_host_parser	OUT	self-host compiler SOURCE, built as a package by the bootst
 self_host_resolver	OUT	self-host compiler SOURCE, built as a package by the bootstrap and parity lanes -- not standalone programs the sweep can build one at a time
 self_host_typechecker	OUT	self-host compiler SOURCE, built as a package by the bootstrap and parity lanes -- not standalone programs the sweep can build one at a time
 type_alias_struct_dir	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+shared_auto_infer	OUT	single-file `shared auto` regression for the carrier-type re-infer, parked in a directory so it stays OUT of the auto-scanned runtime_parity_corpus (the self-host binds every `shared auto` to an int64 carrier -- todo/t1021). It IS a runnable standalone program, so it is a corpus candidate, queued on todo/t0956
+user_four_name_xmod_equip	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program

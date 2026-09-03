@@ -1,0 +1,41 @@
+# KNOWN GAP (SELF-HOST lane) — a Core #9 ACCEPT/REJECT lane divergence created
+# by R49 Track C, recorded rather than left implicit.
+#
+# Rust gg now REJECTS a method the receiver type does not have, with a spanned
+# `E_NoMethodFound` (`todo/t1019`; the Rust-lane conformance fixture is the
+# top-level `no_method_on_bare_struct_error.gg`). The self-host ACCEPTS the same
+# program: its only method-existence rejection,
+# `reject_no_method_on_primitive` (`self_host_typechecker/typecheck.gg`), is
+# scoped to PRIMITIVE receivers via `prim_recv_name`, and
+# `reject_wrong_receiver_combinator` returns for any receiver that is not
+# RTDefined/RTGeneric while carrying only its 9 ratified one-sided arms. There
+# is no self-host check for a user-struct receiver with no such method at all.
+#
+# Measured 2026-09-03 with the self-host lowerer driver: `gg check` clean, then
+#     undefined reference to `Plain__some_bogus_method'
+# at link — which is exactly the pre-fix Rust behaviour.
+#
+# THE DIRECTION IS NOT IN DOUBT (Rust's reject is the correct one), so this is a
+# lane LAG, not an owner question. The port has a precedented shape and the
+# self-host source says so in as many words: a NEW FUNCTION, not a tenth arm —
+# `tests/lints.rs::sh_reject_wrong_receiver_combinator_arms_count` pins that set
+# at 9 and stays at 9. Filed as `todo/t1022`.
+#
+# ⚠ THE PORT MUST NOT REJECT what the Rust rule does not: a method reached
+# through a trait bound on a generic parameter, a trait impl, a trait default,
+# `Box[Trait]`, or an auto-derivable. `keeps_working` is the in-fixture positive
+# control for the type itself still resolving.
+#
+# INTENDED (self-host lane): `gg check` REJECTS with `E_NoMethodFound` naming
+# `some_bogus_method` and `Plain`. Asserted by the `#[ignore]`d test that cites
+# this fixture.
+struct Plain:
+    int a
+
+int keeps_working(Plain p):
+    return p.a + 1
+
+void main():
+    Plain p = Plain(1)
+    print(keeps_working(p))
+    print(p.some_bogus_method())

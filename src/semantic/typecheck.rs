@@ -3517,7 +3517,69 @@ impl<'a> TypeChecker<'a> {
                                         | Some(DerefWrapperKind::GuardAccept)
                                         | Some(DerefWrapperKind::DerefTarget)
                                     );
-                                    if (has_inherent_only || is_wrapper_reject) && !is_auto_derivable {
+                                    // `t1019` — the METHOD-EXISTENCE hole. Until
+                                    // this arm, a user type with NO `equip` block at
+                                    // all had no authoritative method surface here:
+                                    // `has_inherent_only_impls` returns `false` when
+                                    // `impls_by_name` has no entry, so
+                                    // `p.some_bogus_method()` on a bare `struct Plain`
+                                    // passed `gg check` clean and died at LINK on
+                                    // `undefined reference to 'Plain__some_bogus_method'`
+                                    // — a mangled symbol the user never wrote. Core #10
+                                    // is lower-OR-REJECT, and nothing here rejected.
+                                    //
+                                    // ⚠ THE THREE THINGS THAT MUST NOT BE REJECTED, each
+                                    // the grave of an adjacent attempt:
+                                    //  * a method reached through a TRAIT BOUND on a
+                                    //    generic parameter. `lib/std/iter.gg`'s
+                                    //    `equip [Iter, T] TakeIter[Iter, T] with
+                                    //    Iterator[T]:` calls `self.inner.next()`, and
+                                    //    `Iter` is a bound type PARAMETER whose methods
+                                    //    live on the bound, never in `impls_by_name`.
+                                    //    An earlier rule without the `DefKind` scope
+                                    //    rejected 57 healthy fixtures, all 26 `iter_*`
+                                    //    among them. `DefKind::GenericParam` is the
+                                    //    discriminator, so the claim is scoped to
+                                    //    Struct | Enum | Newtype.
+                                    //  * a method reached through a TRAIT IMPL or a
+                                    //    trait DEFAULT — `has_any_impl_by_name` sees
+                                    //    those (they ARE registered in `impls_by_name`,
+                                    //    unlike the `{Trait}_for_{Type}__{method}`
+                                    //    spelling in `fn_sigs`), so the guard abstains.
+                                    //  * a FIELD shadowing the name — a `Callable`-typed
+                                    //    field invoked as `self.cb(x)` resolves through
+                                    //    the field, not through any impl (`t0939`
+                                    //    family). `struct_fields` is the typed source.
+                                    // Auto-derivables (`clone`/`debug`/`display`/`hash`)
+                                    // are exempted by `is_auto_derivable` below, as they
+                                    // already were for the other two subjects.
+                                    //  * ⚠ A `@derive`-GENERATED instance method. This
+                                    //    subject widens that surface: before it, a type
+                                    //    with no equip block never reached the reject at
+                                    //    all. `@derive(Ordinal)` survives because it
+                                    //    REGISTERS an impl, so `has_any_impl_by_name`
+                                    //    abstains — `tests/fixtures/derive_ordinal.gg`
+                                    //    calls `.ordinal()` on a bare enum with zero
+                                    //    equip blocks and stays green. A future derive
+                                    //    that generates a method WITHOUT registering one
+                                    //    would land here, and `is_auto_derivable` is a
+                                    //    hardcoded four-name `matches!` above (itself a
+                                    //    name-match, Core #2) that would not cover it.
+                                    let shadowed_by_field = self
+                                        .struct_fields
+                                        .get(&container_did)
+                                        .is_some_and(|sfi| {
+                                            sfi.fields.iter().any(|(f, _)| *f == method.node)
+                                        });
+                                    let no_impls_at_all = !self.traits.has_any_impl_by_name(name)
+                                        && !shadowed_by_field
+                                        && matches!(
+                                            self.scopes.get_def(container_did).kind,
+                                            DefKind::Struct | DefKind::Enum | DefKind::Newtype
+                                        );
+                                    if (has_inherent_only || is_wrapper_reject || no_impls_at_all)
+                                        && !is_auto_derivable
+                                    {
                                         // If inference was attempted at this
                                         // call site and failed, emit the
                                         // typed MethodGenericInferenceFailed

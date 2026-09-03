@@ -1,0 +1,44 @@
+# KNOWN GAP — `equip Pt(Shifter):` is REJECTED now, but the diagnostic does not
+# teach the `equip Pt with Shifter:` spelling.
+#
+# The mis-spelling's whole method block is silently discarded by whatever
+# reading the grammar gives the parenthesised form. `gg check` used to ACCEPT
+# the program and the build died at LINK on `undefined reference to 'Pt__shift'`
+# — that half is closed, and the rejection is pinned by the graduated
+# `tests/fixtures/equip_paren_trait_spelling_rejected.gg`.
+#
+# What is NOT closed is the message. What the user gets is:
+#
+#     error[E_NoMethodFound]: no method `shift` found on type `Pt`
+#        ┌─ …:NN:11
+#     NN │     print(p.shift())
+#
+# — pointing at the CALL, for a mistake made on the `equip` LINE. The user wrote
+# a whole method block and is told the method does not exist, with no mention of
+# `equip Pt(Shifter):`, no span on it, and no hint that `with` is the keyword.
+# `todo/t0025`'s INTENDED says the rejection must TEACH the spelling; only the
+# accept/reject half of that has landed.
+#
+# ⚠ THIS IS A DIAGNOSTIC-QUALITY GAP, NOT A CORRECTNESS ONE, and it is filed as
+# a durable repro rather than as prose because `t0025` narrowed this round and a
+# narrowing with no repro is how a live sub-gap closes on paper. The item's
+# other surviving half is memory-unsafe and much worse:
+# `equip_paren_trait_box_vtable_segv.gg`.
+#
+# INTENDED: `gg check` rejects, and the diagnostic names the `equip Pt(Shifter):`
+# line and the `equip Pt with Shifter:` spelling. Asserted as a substring of the
+# rejection message by the `#[ignore]`d test that cites this fixture.
+trait Shifter:
+    int shift(self)
+
+struct Pt:
+    int x
+
+equip Pt(Shifter):
+    int shift(self):
+        return self.x + 1
+
+int main():
+    Pt p = Pt(1)
+    print(p.shift())
+    return 0

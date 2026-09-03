@@ -1,0 +1,45 @@
+# A user type that defines `is_ok` / `is_some` / `is_none` / `is_error` as its
+# OWN `equip` methods gets those methods CALLED (`t1017` Path 1).
+#
+# Before the fix the method-dispatch gate in `src/ir/lowering/exprs/methods.rs`
+# intercepted those four names for EVERY receiver and folded a non-Option/Result
+# one to `Constant::Bool(false)`, so the user's body never ran. `gg check`
+# reported no errors, both backends agreed, and the answer was silently wrong.
+#
+# ⚠ THIS FIXTURE SAMPLES THREE VALUES OF THE PAYLOAD AXIS ON PURPOSE. With a
+# single positive instance the class is HALF-CAMOUFLAGED: `is_none` and
+# `is_error` answer `false` for `MyOpt(7)` both before and after the fix, so a
+# one-value fixture is accidentally correct on half the names it claims to
+# cover. `MyOpt(0)` is the cell that moves `is_none`; `MyOpt(-1)` is the cell
+# that moves `is_error`.
+#
+#   value       before                        after
+#   MyOpt(7)    true|false|false|false|false   true|true|true|false|false
+#   MyOpt(0)    false|false|false|false|false  false|false|false|true|false
+#   MyOpt(-1)   false|false|false|false|false  false|false|false|false|true
+#
+# `has_value` is the NEGATIVE CONTROL: an ordinary method on the same type,
+# through the same dispatch, correct before and after. It is what makes the
+# defect provably specific to the four intercepted names rather than to `equip`
+# dispatch in general.
+struct MyOpt:
+    int v
+
+equip MyOpt:
+    bool has_value(self): return self.v > 0
+    bool is_ok(self):     return self.v > 0
+    bool is_some(self):   return self.v > 0
+    bool is_none(self):   return self.v == 0
+    bool is_error(self):  return self.v < 0
+
+void report(MyOpt m):
+    print(m.has_value())
+    print(m.is_ok())
+    print(m.is_some())
+    print(m.is_none())
+    print(m.is_error())
+
+void main():
+    report(MyOpt(7))
+    report(MyOpt(0))
+    report(MyOpt(-1))

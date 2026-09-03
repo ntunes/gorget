@@ -1642,35 +1642,64 @@ pub(super) fn lower_method_call(
     // TaskGroup, AtomicInt, AtomicBool, Barrier, WaitGroup, Semaphore, OnceFlag
     // — handled by generic dispatch via BuiltinTypeProtocol (builtins.rs)
 
-    // .is_some() / .is_none() / .is_ok() / .is_error() on Option/Result → tag check
-    // On non-Option/Result types → pass-through (return false)
+    // .is_some() / .is_none() / .is_ok() / .is_error() → the Option/Result TAG
+    // CHECK, and ONLY for a receiver the TYPED registry says is an Option or a
+    // Result. Every other receiver falls through to the normal dispatch below,
+    // so a user type that carries one of these four names as its own `equip`
+    // method gets its method CALLED.
+    //
+    // ⚠ THE GATE IS AN INVERSION, NOT A DELETION, and the difference is
+    // CORPUS-INVISIBLE — measured, not argued. Leaving the tag check ungated
+    // instead — dropping only the `return Bool(false)` — GENERALISES the
+    // defect: every struct and enum is then read as an enum tag. That variant
+    // was BUILT and swept: over the whole 2209-fixture corpus, build rc + run
+    // rc + STDOUT MD5, it differs from this code on exactly THREE rows, and none
+    // of the three has a stable hash for a FIXED compiler: `test_process_timeout`
+    // and `vector_task_mixed_await_int` give five distinct hashes on five runs of
+    // the SAME binary, and `test_process` is cold-start/load sensitive — run
+    // outside the sweep's parallelism, HEAD, this code and the wrong variant all
+    // produce the identical hash. Zero deterministic difference. No corpus fixture
+    // defines a user four-name method, so the corpus cannot see the wrong edit
+    // at all.
+    // The instruments that DO see it are the four hand-written fixtures beside
+    // this fix — `user_four_name_methods_dispatch`,
+    // `user_four_name_method_return_type_axis`,
+    // `user_option_named_struct_no_tag_check` and
+    // `user_four_name_method_provenance`. Under the wrong edit the first prints
+    // interleaved garbage, the second `false|true|false`, the third `true` for
+    // ALL THREE structs including the non-prefixed control, and the fourth
+    // stays at HEAD's `false` six times.
+    //
+    // The old code also read `n.starts_with("Option") || n.starts_with("Result")`
+    // beside the typed predicate — a NAME PREFIX deciding meaning
+    // (CLAUDE.md § "No name matching"), which routed a user `struct
+    // OptionalConfig` into `build_enum_recv_ptr` and read its FIRST FIELD as a
+    // discriminant. `type_registry.is_option_or_result` is the single typed
+    // source of truth; the prefix test is gone.
     if matches!(method_name, "is_some" | "is_none" | "is_ok" | "is_error") {
         let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
         let is_option_or_result = type_name.as_ref()
-            .map(|n| ctx.type_registry.is_option_or_result(n)
-                || n.starts_with("Option") || n.starts_with("Result"))
+            .map(|n| ctx.type_registry.is_option_or_result(n))
             .unwrap_or(false);
-        if !is_option_or_result {
-            // Not an Option/Result — return false
-            return Operand::Constant(Constant::Bool(false));
-        }
-        // Tag check: is_some/is_ok → tag == 0; is_none/is_err → tag != 0
-        if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
-            // Ptr-receiver guard: a borrowed enum element (for-loop collection-
-            // element borrow alias) is already `Ptr(enum)` — pass it through
-            // instead of re-borrowing it to `Ptr(Ptr(enum))`. Other receivers
-            // (values, `&self` params, field borrows) keep the emit_borrow path.
-            let (arg, _recv_is_collection_borrow) = build_enum_recv_ptr(ctx, builder, &recv, place);
-            let extern_name = match method_name {
-                "is_some" | "is_ok" => "__option_is_some",
-                _ => "__option_is_none",
-            };
-            let dst = builder.call_extern(
-                extern_name,
-                vec![arg],
-                BOOL_TYPE,
-            );
-            return FunctionBuilder::copy(dst);
+        if is_option_or_result {
+            // Tag check: is_some/is_ok → tag == 0; is_none/is_err → tag != 0
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+                // Ptr-receiver guard: a borrowed enum element (for-loop collection-
+                // element borrow alias) is already `Ptr(enum)` — pass it through
+                // instead of re-borrowing it to `Ptr(Ptr(enum))`. Other receivers
+                // (values, `&self` params, field borrows) keep the emit_borrow path.
+                let (arg, _recv_is_collection_borrow) = build_enum_recv_ptr(ctx, builder, &recv, place);
+                let extern_name = match method_name {
+                    "is_some" | "is_ok" => "__option_is_some",
+                    _ => "__option_is_none",
+                };
+                let dst = builder.call_extern(
+                    extern_name,
+                    vec![arg],
+                    BOOL_TYPE,
+                );
+                return FunctionBuilder::copy(dst);
+            }
         }
     }
 

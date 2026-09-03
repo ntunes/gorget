@@ -1,0 +1,59 @@
+# A user struct whose name merely BEGINS with "Option" or "Result" is not an
+# Option or a Result (`t1017` Path 2).
+#
+# The method-dispatch gate used to read `n.starts_with("Option") ||
+# n.starts_with("Result")` beside the typed `is_option_or_result` predicate — a
+# NAME PREFIX deciding meaning (CLAUDE.md § "No name matching"). A struct so
+# named was routed into the enum tag-check, which READ ITS FIRST FIELD AS A
+# DISCRIMINANT: `OptionalConfig(0, 1, 2).is_some()` answered `true` because
+# field `a` happened to be 0, not because the user's method said so. That is
+# type confusion, not merely a wrong value.
+#
+# `PlainConfig` is the NEGATIVE CONTROL — the same three fields, the same equip
+# method, a name that does not begin with "Option". It answered `false` before
+# the fix (fall-through) and answers `false` after (the user's method). Its
+# whole job is to show the two structs now agree, which is the property the
+# name prefix broke.
+#
+# `ResultBundle` samples the OTHER prefix the gate carried, so the fixture's
+# name is a claim about both spellings. Measured 2026-09-03, in source order
+# (OptionalConfig, PlainConfig, ResultBundle):
+#
+#   before:  true | false | true     ⇐ the two PREFIXED structs disagree with
+#                                       the identically-shaped control
+#   after:   false | false | false   ⇐ all three call the user's method, and
+#                                       every one of them answers correctly
+#
+# Note what the `before` row means: `a` is 0 in both prefixed structs, and the
+# tag check read that 0 as the `Some`/`Ok` discriminant. Give `a` a non-zero
+# value and the old code would have answered `false` for the same wrong reason.
+struct OptionalConfig:
+    int a
+    int b
+    int c
+
+equip OptionalConfig:
+    bool is_some(self): return self.a == 999
+
+struct PlainConfig:
+    int a
+    int b
+    int c
+
+equip PlainConfig:
+    bool is_some(self): return self.a == 999
+
+struct ResultBundle:
+    int a
+    int b
+
+equip ResultBundle:
+    bool is_ok(self): return self.a == 999
+
+void main():
+    OptionalConfig o = OptionalConfig(0, 1, 2)
+    PlainConfig p = PlainConfig(0, 1, 2)
+    ResultBundle r = ResultBundle(0, 1)
+    print(o.is_some())
+    print(p.is_some())
+    print(r.is_ok())

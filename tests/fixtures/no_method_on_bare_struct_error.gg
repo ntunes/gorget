@@ -1,0 +1,23 @@
+# Core #10 lower-or-reject at CHECK time: a method that the receiver type does
+# not have is REJECTED, with a span, naming the method and the type (`t1019`).
+#
+# A user struct with NO `equip` block at all used to have no authoritative
+# method surface at the reject site — `has_inherent_only_impls` answers `false`
+# when `impls_by_name` has no entry — so `gg check` reported "OK: no semantic
+# errors" for a one-token typo and the program died at LINK on
+# `undefined reference to 'Plain__some_bogus_method'`. A mangled internal symbol
+# is the worst available diagnostic for a misspelling.
+#
+# `keeps_working` is the POSITIVE CONTROL: an ordinary free function called on
+# the same value in the same program. The rejection must be about the ABSENT
+# METHOD, not about the type.
+struct Plain:
+    int a
+
+int keeps_working(Plain p):
+    return p.a + 1
+
+void main():
+    Plain p = Plain(1)
+    print(keeps_working(p))
+    print(p.some_bogus_method())

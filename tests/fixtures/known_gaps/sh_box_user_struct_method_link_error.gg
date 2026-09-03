@@ -1,0 +1,42 @@
+# KNOWN GAP (SELF-HOST lane) — the self-host cannot compile ANY method call on
+# a `Box[UserStruct]`. It mangles `Box__<Inner>__<method>` and emits a call to a
+# symbol nothing defines, so the link fails:
+#
+#     undefined reference to `Box__BareBox__plain_method'
+#
+# Rust gg auto-derefs the `Box` to the inner type and dispatches the inherent
+# `equip` method; the self-host does not.
+#
+# ⚠ THE GAP IS NOT ABOUT THE FOUR TAG-CHECK NAMES, and `plain_method` is the
+# cell that proves it: an ordinarily-named method fails exactly the same way.
+# The `is_ok` cell is here only because this is where the `t1017` provenance
+# audit found the gap — `Box[UserStruct]` is one of the receiver provenances
+# that fix covers on the Rust lane, and it is the ONE cell of
+# `user_four_name_method_provenance.gg`'s axis that could not join that fixture,
+# because a top-level fixture is auto-enrolled into `runtime_parity_corpus` and
+# a self-host non-MATCH there would be the round's own inflow.
+#
+# `Box[Trait]` (the trait-object form) is a DIFFERENT path and works on both
+# lanes — it dispatches through the vtable, not through a mangled inner name.
+# That cell IS in `user_four_name_method_provenance.gg` and is green.
+#
+# Filed as `todo/t1020`. Measured 2026-09-03 with the self-host lowerer driver;
+# Rust gg builds and prints `true` / `true` for the same program.
+#
+# INTENDED (self-host lane):
+#   true
+#   true
+struct BareBox:
+    int v
+
+equip BareBox:
+    bool plain_method(self):
+        return self.v > 0
+
+    bool is_ok(self):
+        return self.v > 0
+
+void main():
+    Box[BareBox] u = Box.new(BareBox(5))
+    print(u.plain_method())
+    print(u.is_ok())

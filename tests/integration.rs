@@ -1343,6 +1343,199 @@ fn fn_mut_once() {
 done");
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// R49 Track C — `t1017` (the four tag-check names never dispatched) paired
+// with `t1019` (the checker never asked whether the type HAS the method)
+// ══════════════════════════════════════════════════════════════════════════
+//
+// The two are one change. `t1017` stops the lowering gate from swallowing
+// `is_some` / `is_none` / `is_ok` / `is_error` on a non-Option/Result receiver,
+// so a user type's own method is CALLED; `t1019` rejects, at check time, a
+// receiver that genuinely has no such method, so the new fall-through cannot
+// reach a raw linker error. Core #10's lower-OR-reject, satisfied as a pair.
+//
+// ⚠ THE ROW-4 INSTRUMENTS ARE THE FOUR POSITIVES BELOW — measured, not argued,
+// and this paragraph is the MEASUREMENT. The intended edit is an INVERSION of
+// the gate (`if is_option_or_result { … }`); the tempting misreading — delete
+// the `return Bool(false)` and leave the tag check ungated — GENERALISES the
+// defect: every struct and enum is then read as an enum tag. That variant was
+// BUILT and swept over the whole 2209-fixture corpus (build rc + run rc +
+// stdout MD5); it differs from the shipped code on exactly THREE rows, and none
+// of the three has a stable hash for a FIXED compiler: `test_process_timeout`
+// and `vector_task_mixed_await_int` give five distinct hashes on five runs of
+// the SAME binary, and `test_process` is cold-start/load sensitive — run outside
+// the sweep's parallelism, HEAD, the fix and the wrong variant all produce the
+// identical hash. ZERO deterministic difference — no corpus fixture defines
+// a user four-name method, so the corpus cannot see the wrong edit at all, and
+// neither can `--lib` or `--test lints`.
+//
+// All four of these DO see it, each differently:
+//   user_four_name_methods_dispatch        interleaved garbage
+//   user_four_name_method_return_type_axis `false|true|false`
+//   user_option_named_struct_no_tag_check  `true` for ALL THREE structs,
+//                                          including the non-prefixed control
+//   user_four_name_method_provenance       stays at HEAD's `false` six times
+//
+// ⛔ AN EARLIER DRAFT OF THIS BLOCK CARRIED TWO CLAIMS THIS RUN REFUTED, and
+// they are recorded because both were inherited as predictions and neither
+// survived measurement: that the wrong edit makes these fixtures "print HEAD's
+// output byte for byte" (it does not — the dispatch fixture goes from HEAD's
+// `true` + fourteen `false` to `true,f,f,true,true,f,true,true,f,f,f,f,f,true,
+// true`, and the option-named one from HEAD's `true,false,true` to
+// `true,true,true`), and that the first two are the instrument "and nothing
+// else can be" (all FOUR go red). `src/ir/lowering/exprs/methods.rs` carries
+// the same measurement at the fix site; the two must not drift.
+
+/// `t1017` PATH 1 — a user type's own `is_ok` / `is_some` / `is_none` /
+/// `is_error` gets CALLED. Three payload values because the class is
+/// half-camouflaged: on a single positive instance `is_none` and `is_error`
+/// answer `false` before and after, so a one-value fixture is accidentally
+/// correct on half the names it claims (Core #12).
+#[test]
+fn user_four_name_methods_dispatch() {
+    run_gg("user_four_name_methods_dispatch.gg", "\
+true
+true
+true
+false
+false
+false
+false
+false
+true
+false
+false
+false
+false
+false
+true");
+}
+
+/// `t1017` PATH 2 — a struct merely NAMED `Option…` / `Result…` is not read as
+/// an enum. The gate used to name-match the prefix and route the receiver into
+/// the enum tag check, which read the struct's FIRST FIELD as a discriminant
+/// (CLAUDE.md § "No name matching"). `PlainConfig` is the identically-shaped
+/// control the two used to DISAGREE with.
+#[test]
+fn user_option_named_struct_no_tag_check() {
+    run_gg("user_option_named_struct_no_tag_check.gg", "\
+false
+false
+false");
+}
+
+/// `t1017` — the RETURN-TYPE axis, and the cell that shows the defect was TYPE
+/// CONFUSION rather than a wrong value: the gate folded to
+/// `Constant::Bool(false)` regardless of the user method's declared return
+/// type, so `String is_some(self)` delivered a Bool constant into a STRING
+/// result slot and printed `false`. The `bool` cell is the one that HID the
+/// class — `false` is a plausible answer for a predicate (SIX QUESTIONS #6).
+///
+/// ⚠ ASan is STRUCTURALLY BLIND to the String cell: measured under
+/// `--sanitize` with `detect_leaks=1`, broken and fixed are both clean, rc 0,
+/// because nothing is dereferenced. The discriminating instrument is this
+/// stdout compare (Core #13).
+#[test]
+fn user_four_name_method_return_type_axis() {
+    run_gg("user_four_name_method_return_type_axis.gg", "\
+true
+107
+payload-string-value");
+}
+
+/// `t1017` — METHOD PROVENANCE, the axis that killed three attempts at fixing
+/// this with a receiver-keyed lookup table. A table cannot see a method
+/// arriving through a trait bound, a trait impl or a trait default; each looked
+/// like "the type has no such method" and would have rejected a healthy
+/// program. All six provenances printed `false` before the fix.
+#[test]
+fn user_four_name_method_provenance() {
+    run_gg("user_four_name_method_provenance.gg", "\
+true
+true
+true
+true
+true
+true");
+}
+
+/// `t1017` — the CROSS-MODULE provenance, which resolves through
+/// `TraitRegistry::resolve_method_by_name` (keyed on the type NAME, because
+/// TypeIds do not match across modules) rather than through a TypeId match.
+#[test]
+fn user_four_name_xmod_equip() {
+    run_gg_dir("user_four_name_xmod_equip", "main.gg", "\
+true
+false
+false
+true");
+}
+
+/// `t1019` — a method the receiver type does not have is REJECTED at check
+/// time. A bare user struct had no authoritative method surface at the reject
+/// site, so a one-token typo passed `gg check` and died at link on
+/// `undefined reference to 'Plain__some_bogus_method'`.
+#[test]
+fn no_method_on_bare_struct_error() {
+    check_gg_fails(
+        "no_method_on_bare_struct_error.gg",
+        "no method `some_bogus_method` found on type `Plain`",
+    );
+}
+
+/// `t1019` — the ENUM cell, and the one that shows why the rule had to land
+/// WITH `t1017`'s dispatch fix. `Color.Red().is_ok()` used to be accepted and
+/// to print `false` — the right-LOOKING answer for a plain enum, which is
+/// exactly why the class hid (SIX QUESTIONS #6).
+#[test]
+fn no_method_on_bare_enum_error() {
+    check_gg_fails(
+        "no_method_on_bare_enum_error.gg",
+        "no method `is_ok` found on type `Color`",
+    );
+}
+
+/// The CONTROLS for `todo/t0434`'s `auto`-peel class: the cells that must NOT
+/// move. `auto x = <method call returning Result[T, E]>` lowers to a PEEL only
+/// inside a function that can AUTO-PROPAGATE; outside one, and for an
+/// explicitly written binding or an `Option`, there is no peel and the four
+/// names answer correctly. The RED cells live in three `known_gaps/` fixtures.
+#[test]
+fn auto_result_peel_context_controls() {
+    run_gg("auto_result_peel_context_controls.gg", "\
+int error seen
+present
+absent
+explicit ok
+handled explicit
+done");
+}
+
+/// `shared auto x = <expr>` mints the shared carrier around the value's REAL
+/// type. The carrier name (`Shared__<inner>`, `Mutex__<inner>`, …) came from
+/// `resolve_var_type`'s pre-lowering guess, and for `auto` initialised from a
+/// METHOD CALL the guess was wrong: a `float` printed `2`, a struct printed
+/// `0`, a `String` failed the C compile. The re-infer is gated on the typed
+/// `Type::Inferred` marker, so it provably never runs on a type the user WROTE.
+///
+/// ⚠ A DIRECTORY FIXTURE ON PURPOSE. A top-level `*.gg` is auto-enrolled into
+/// `runtime_parity_corpus`, and the SELF-HOST lane binds every `shared auto` to
+/// an `int64` carrier whatever the initializer's type is (`todo/t1021`, repro
+/// `known_gaps/sh_shared_auto_binds_int_carrier.gg`). Enrolling this would push
+/// the round's OWN inflow into `RUNTIME_DIFF_NONMATCH_CEILING`, which Core #9 ⊕
+/// forbids. Move it top-level when the self-host lane lands.
+#[test]
+fn shared_auto_infer() {
+    run_gg_dir("shared_auto_infer", "main.gg", "\
+2.500000
+hello
+9
+hello
+2.500000
+2.500000
+7");
+}
+
 // Chain C item 6 + the str() gap: check-time rejections for surface forms
 // that previously check-passed but were silent no-ops (string index-assign)
 // or link errors (unlowered builtin cast-name calls).
@@ -6959,6 +7152,232 @@ fn indexed_callee_variable_index() {
 INTENDED output."]
 fn auto_result_method_bind_drops_error_block() {
     run_gg("known_gaps/auto_result_method_bind_drops_error_block.gg", "handled\ncustom message");
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// `todo/t0434` — the `auto`-peel type DISAGREEMENT, widened R49 Track C
+// ══════════════════════════════════════════════════════════════════════════
+//
+// `auto j = <method call returning Result[T, E]>` inside a function that can
+// AUTO-PROPAGATE lowers to a PEEL: the tag is read, one block extracts `Ok_0`
+// into a `T` slot and binds `j` to it. So LOWERING binds the PAYLOAD while the
+// CHECKER binds the `Result` — and D45 pin 6's mechanism note says an unmarked
+// position never peels, so the CHECKER is right. `t0434`'s `expr_types`
+// plumbing is the closure.
+//
+// ⚠ NO METHOD-EXISTENCE RULE CAN EVER REACH THIS. On the type the checker
+// bound, `is_error` legitimately exists. That is what makes it `t0434`'s and
+// not `t1019`'s.
+//
+// ⚠ AND THE DISCRIMINATOR IS THE ENCLOSING CONTEXT, NOT THE PAYLOAD TYPE.
+// Measured 2026-09-03 over the payload axis in both contexts: inside a
+// propagating function EVERY payload without its own `is_error` becomes a build
+// failure (`int64_t__is_error`, `double__is_error`, `bool__is_error`,
+// `Payload__is_error`, and for a String the invented `gorget_str_is_error`),
+// while inside `void main()` every payload is UNCHANGED. The green half is
+// pinned by the top-level `auto_result_peel_context_controls`.
+//
+// Before the `t1017` dispatch fix all of these BUILT and printed the wrong
+// thing, because `j.is_error()` folded to `Constant::Bool(false)` and silently
+// swallowed the user's error block — which is `t0947`'s own Core #10 filing.
+// The failure mode moved DOWN the owner's severity ranking (silent wrong output
+// → build failure) for the cells below, and stayed lateral for the hijack cell.
+// Each asserts the INTENDED output, so each is RED before and after.
+
+/// `todo/t0434` — the peel makes lowering call a method the PAYLOAD does not
+/// have. Four payload types in one program; the link error names each.
+#[test]
+#[ignore = "todo/t0434 — `auto j = <method call returning Result[T,E]>` in a propagating function \
+peels to the payload in LOWERING while the CHECKER binds the Result, so `j.is_error()` emits \
+`<payload>__is_error` and the build dies at link. Asserts the INTENDED output."]
+fn auto_result_peel_missing_method_build_failure() {
+    run_gg(
+        "known_gaps/auto_result_peel_missing_method_build_failure.gg",
+        "int ok\nfloat ok\nbool ok\nstruct ok\nhandled int\nhandled float\nhandled bool\nhandled struct\ndone",
+    );
+}
+
+/// `todo/t0434` + `todo/t0987` — the STRING payload fails one stage EARLIER
+/// than its siblings: the String dispatch ladder CONCATENATES a runtime symbol
+/// name and emits `gorget_str_is_error(...)`, so the C compile fails on an
+/// implicit declaration rather than the link failing on a missing symbol.
+/// Separate fixture so neither failure mode masks the other's diagnostic.
+#[test]
+#[ignore = "todo/t0434 (+ t0987 invented-runtime-symbol family) — the String-payload cell of the \
+`auto` peel emits `gorget_str_is_error` and dies in the C compiler. Asserts the INTENDED output."]
+fn auto_result_peel_string_payload_invents_runtime_symbol() {
+    run_gg(
+        "known_gaps/auto_result_peel_string_payload_invents_runtime_symbol.gg",
+        "str ok\nhandled str\ndone",
+    );
+}
+
+/// `todo/t0434` — the cell that still BUILDS, and is therefore the worst of the
+/// three: the payload type has an `is_error` of its own, so `j.is_error()`
+/// dispatches to the PAYLOAD's method and the branch is decided by the payload
+/// rather than by the Result's error state. Silent wrong output, before and
+/// after (the wrong answer merely changes).
+#[test]
+#[ignore = "todo/t0434 — where the peeled payload HAS its own `is_error`, the `auto` peel makes \
+the user's error branch depend on the payload's method instead of the Result's tag. Silent wrong \
+output; asserts the INTENDED output."]
+fn auto_result_peel_payload_method_hijack() {
+    run_gg(
+        "known_gaps/auto_result_peel_payload_method_hijack.gg",
+        "ok-path\nhandled\ncustom message\ndone",
+    );
+}
+
+/// `todo/t0942` + `todo/t1019` — a method call on a `Callable` receiver is
+/// never checked for existence, and the outcome depends only on whether
+/// LOWERING invented a type name: a `Callable` LOCAL link-fails on
+/// `Callable__GorgetClosure__is_some`, while a `Callable` PARAMETER (GIR
+/// `unit`) folds to `Constant::Unit`, builds, runs and prints `0`.
+///
+/// ⭐ `f.totally_bogus_method()` is in the same fixture and prints `0` before
+/// AND after the `t1017`/`t1019` pair — the proof that the class is
+/// pre-existing and is NOT about these four names. A guard covering four names
+/// out of an unbounded set would reject `is_some` and silently miscompile
+/// `is_somee`. The fix is `t0942`'s and it is upstream: the representation must
+/// carry the type (Layering rule 1).
+#[test]
+#[ignore = "todo/t0942 — `gg check` accepts any method on a `Callable` receiver: a LOCAL link-fails \
+on a mangled symbol, a PARAMETER folds to Constant::Unit and prints 0. Un-ignore when the Callable \
+representation carries its type and the method-existence rule reaches it."]
+fn known_gap_callable_receiver_no_method_not_rejected() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/callable_receiver_no_method_not_rejected.gg");
+    assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
+
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture),
+        "known_gaps/callable_receiver_no_method_not_rejected.gg",
+    );
+
+    assert!(
+        !output.status.success(),
+        "`gg check` must REJECT a method that a `Callable` receiver does not \
+         have, the way it already does for a bare user struct — today it \
+         accepts, and the program either dies at link on a mangled symbol or \
+         silently prints 0 (todo/t0942).\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
+/// `todo/t1023` — a method call on an UNBOUNDED generic parameter is not
+/// checked for existence and dies at link on the monomorphized type's mangled
+/// name (`int64_t__is_some`). `t1019`'s rule deliberately does not reach it:
+/// scoping to `DefKind::{Struct,Enum,Newtype}` EXCLUDES `GenericParam`, and
+/// that exclusion is what keeps `lib/std/iter.gg`'s trait-bound `Iter` and all
+/// 26 `iter_*` fixtures accepted. The rule this needs reads the parameter's
+/// BOUNDS, not an impl table — a separate subject.
+///
+/// ⭐ `probe_bogus` link-fails identically before AND after the `t1017`/`t1019`
+/// pair, which is the proof that the class is pre-existing.
+#[test]
+#[ignore = "todo/t1023 — `bool probe[T](T a): return a.is_some()` with no bound on T is accepted by \
+`gg check` and dies at link on `int64_t__is_some`. Un-ignore when a GenericParam receiver is \
+rejected for a method no bound provides."]
+fn known_gap_no_method_on_unbounded_generic_param() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/no_method_on_unbounded_generic_param.gg");
+    assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
+
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture),
+        "known_gaps/no_method_on_unbounded_generic_param.gg",
+    );
+
+    assert!(
+        !output.status.success(),
+        "`gg check` must REJECT a method that no bound on `T` provides — today \
+         it accepts and the build dies at link on the MONOMORPHIZED mangled \
+         name, a type spelling the user never wrote (todo/t1023).\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
+/// `todo/t1020` — SELF-HOST lane: the self-host cannot compile ANY method call
+/// on a `Box[UserStruct]`. It mangles `Box__<Inner>__<method>` and link-fails;
+/// `plain_method` is the cell proving the gap is not about the four tag-check
+/// names. Rust gg auto-derefs the Box and dispatches. `Box[Trait]` is a
+/// different path and is green on both lanes
+/// (`user_four_name_method_provenance`).
+#[test]
+#[ignore = "todo/t1020 — the self-host emits `Box__<Inner>__<method>` for a method call on a \
+`Box[UserStruct]` and the link fails; Rust gg auto-derefs and dispatches. Asserts the SELF-HOST \
+lane's intended output."]
+fn known_gap_sh_box_user_struct_method_link_error() {
+    assert_self_host_stdout(
+        "known_gaps/sh_box_user_struct_method_link_error.gg",
+        "sh_box_user_struct_method_link_error",
+        "true\ntrue",
+    );
+}
+
+/// `todo/t1022` — SELF-HOST lane: the Core #9 accept/reject divergence R49
+/// Track C created. Rust gg now rejects a method the receiver type does not
+/// have (`t1019`); the self-host accepts it and dies at link, because its only
+/// method-existence rejection is scoped to PRIMITIVE receivers. The direction
+/// is not in doubt — Rust's reject is the correct one — so this is a lane LAG,
+/// and the port's shape is a NEW FUNCTION, never a tenth arm on
+/// `reject_wrong_receiver_combinator` (whose set `tests/lints.rs::
+/// sh_reject_wrong_receiver_combinator_arms_count` pins at 9).
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "todo/t1022 — the self-host has no method-existence check for a user-struct receiver \
+(its only one is scoped to PRIMITIVE receivers), so it accepts what Rust gg now rejects and dies \
+at link. Asserts the SELF-HOST lane's intended REJECT."]
+fn known_gap_sh_no_method_on_bare_struct_not_rejected() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/sh_no_method_on_bare_struct_not_rejected.gg");
+    assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "known_gap_sh_no_method_on_bare_struct_not_rejected",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "the SH driver must REJECT `p.some_bogus_method()` on a bare user \
+         struct, as Rust gg does since t1019 — today it accepts and the link \
+         fails on `Plain__some_bogus_method` (todo/t1022); exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("no method") && stderr.contains("some_bogus_method"),
+        "the SH reject must name the method and the receiver type, the way \
+         Rust gg's E_NoMethodFound does; got stderr:\n{stderr}",
+    );
+}
+
+/// `todo/t1021` — SELF-HOST lane: `shared auto x = <expr>` mints the shared
+/// carrier around `int64` whatever the initializer's type is, because
+/// `lower_stmt.gg` computes the inner type from the WRITTEN AST type and `auto`
+/// has none. The two WRITTEN-type cells in the fixture are correct, which is
+/// what makes this an `auto`-inference gap rather than a `shared` gap — and
+/// what discriminates it from `todo/t0384` (the `< PRIM_COUNT` non-scalar
+/// gate, adjacent lines, different mechanism: this one fires on a `float`).
+#[test]
+#[ignore = "todo/t1021 — the self-host binds every `shared auto` to an int64 carrier, so a float \
+prints its bit pattern and a String prints a pointer; the WRITTEN-type cells are correct. Asserts \
+the SELF-HOST lane's intended output."]
+fn known_gap_sh_shared_auto_binds_int_carrier() {
+    assert_self_host_stdout(
+        "known_gaps/sh_shared_auto_binds_int_carrier.gg",
+        "sh_shared_auto_binds_int_carrier",
+        "2.500000\nhello\n9\nhello\n2.500000\n2.500000\n7",
+    );
 }
 
 // `todo/t0948` — a `Callable` stored in a STRUCT FIELD leaks its captured env.
@@ -59281,36 +59700,76 @@ fn known_gap_equip_no_self_fn_called_on_instance() {
     );
 }
 
-/// KNOWN GAP — `equip Pt(Shifter):` is a mis-spelling of
-/// `equip Pt with Shifter:`. `gg check` accepts it, the block's methods are
-/// then silently DROPPED, and the program dies at LINK time on a mangled
-/// internal symbol the user never wrote ("undefined reference to `Pt__shift`").
-/// The correct spelling builds and runs.
+/// GRADUATED from `known_gaps/` — `equip Pt(Shifter):` is a mis-spelling of
+/// `equip Pt with Shifter:` whose method block is silently dropped. `gg check`
+/// used to ACCEPT it and the build died at LINK on a mangled internal symbol
+/// the user never wrote ("undefined reference to `Pt__shift`").
 ///
-/// Core #10 silent drop: user syntax accepted and discarded rather than lowered
-/// or rejected. A linker error naming a mangled symbol is the worst available
-/// diagnostic for what is simply a wrong keyword.
+/// It now REJECTS: `t1019` gave a user struct with no surviving `equip` block
+/// an authoritative method surface at the reject site, so the call is a
+/// spanned `E_NoMethodFound` instead of a linker error. Core #10's
+/// lower-OR-REJECT is satisfied for this shape.
+///
+/// ⚠ THIS GRADUATES ONE HALF OF `todo/t0025`. The item NARROWS rather than
+/// closes, and both survivors keep their own `known_gaps/` repro:
+/// `equip_paren_trait_spelling_no_teaching_diagnostic` (the message points at
+/// the CALL and never mentions the `with` spelling, which is what the item's
+/// INTENDED asks for) and `equip_paren_trait_box_vtable_segv` (through a
+/// `Box[Trait]` the same mis-spelling builds clean and SEGVs — no rejection
+/// reaches it, because the method DOES exist on the trait the checker
+/// resolved).
 #[test]
-#[ignore = "known gap (R43): `equip T(Trait):` is accepted by `gg check`, its methods are silently dropped, and the build dies at link on a mangled symbol; un-ignore when check rejects it and teaches the `equip T with Trait:` spelling"]
-fn known_gap_equip_paren_trait_spelling_silently_dropped() {
+fn equip_paren_trait_spelling_rejected() {
+    check_gg_fails(
+        "equip_paren_trait_spelling_rejected.gg",
+        "no method `shift` found on type `Pt`",
+    );
+}
+
+/// KNOWN GAP — `equip Pt(Shifter):` is rejected now, but the diagnostic does
+/// not TEACH the `equip Pt with Shifter:` spelling: it is an
+/// `E_NoMethodFound` spanned on the CALL, for a mistake made on the `equip`
+/// line. `todo/t0025`'s INTENDED asks for the teaching diagnostic; only the
+/// accept/reject half landed (see `equip_paren_trait_spelling_rejected`).
+#[test]
+#[ignore = "known gap (t0025, narrowed R49): `equip T(Trait):` is now rejected, but with a bare `E_NoMethodFound` on the call site — no span on the `equip` line and no mention of the `with` spelling; un-ignore when the diagnostic teaches it"]
+fn known_gap_equip_paren_trait_spelling_no_teaching_diagnostic() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture = manifest_dir
-        .join("tests/fixtures/known_gaps/equip_paren_trait_spelling_silently_dropped.gg");
+        .join("tests/fixtures/known_gaps/equip_paren_trait_spelling_no_teaching_diagnostic.gg");
     assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
 
     let output = build_with_timeout(
         gg_command("check").arg(&fixture),
-        "known_gaps/equip_paren_trait_spelling_silently_dropped.gg",
+        "known_gaps/equip_paren_trait_spelling_no_teaching_diagnostic.gg",
     );
 
     assert!(
         !output.status.success(),
-        "`gg check` must REJECT `equip T(Trait):` with a diagnostic teaching the \
-         `equip T with Trait:` spelling — today it accepts, silently drops every \
-         method in the block, and the user gets `undefined reference to \
-         `Pt__shift`` from the linker.\nstdout: {}",
+        "`gg check` must reject `equip T(Trait):`.\nstdout: {}",
         String::from_utf8_lossy(&output.stdout),
     );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("equip Pt with Shifter"),
+        "the rejection must TEACH the `equip T with Trait:` spelling — the user \
+         wrote a whole method block and is told only that the method does not \
+         exist, with no span on the `equip` line and no mention of the keyword \
+         they got wrong (todo/t0025).\nstderr:\n{stderr}",
+    );
+}
+
+/// KNOWN GAP — the `Box[Trait]` form of the same `equip Pt(Shifter):`
+/// mis-spelling BUILDS CLEAN and SEGVs (rc 139). No method-existence rejection
+/// can reach it: the method the user calls DOES exist on the trait the checker
+/// resolved, and the dropped block leaves the trait object's vtable slot
+/// filled with garbage — which removes the linker, the one thing that was
+/// catching the plain-receiver half. `todo/t0025`'s worse survivor.
+#[test]
+#[ignore = "known gap (t0025, R43 amendment): `equip T(Trait):` + `Box[Trait]` — gg check accepts, gg build succeeds with NO diagnostic, and the binary exits 139; un-ignore when it prints 2"]
+fn known_gap_equip_paren_trait_box_vtable_segv() {
+    run_gg("known_gaps/equip_paren_trait_box_vtable_segv.gg", "2");
 }
 
 /// KNOWN GAP — `Option[T].and_then(closure)` whose closure body is a METHOD

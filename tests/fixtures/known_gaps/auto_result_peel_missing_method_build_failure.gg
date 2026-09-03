@@ -1,0 +1,149 @@
+# KNOWN GAP — `auto x = <method call returning Result[T, E]>` inside a function
+# that can AUTO-PROPAGATE, followed by `x.is_error()`, now fails to BUILD when
+# `T` has no `is_error` of its own.
+#
+# ── THE MECHANISM: a check-vs-lowering type DISAGREEMENT ──────────────────
+# In a propagating context `auto j = s.fetch(g)` lowers to a PEEL — the tag is
+# read, one block extracts `Ok_0` into a `T` slot and binds `j` to it, the other
+# early-returns the propagated `Error`. So LOWERING binds `j` to the PAYLOAD
+# while the CHECKER binds it to the `Result`. D45 pin 6's mechanism note
+# (`docs/define-gorget/decisions.md`) says an unmarked position never peels, so
+# the CHECKER is the lane that is right, and `todo/t0434`'s `expr_types`
+# plumbing — give lowering the checker's per-span type — is the closure. No
+# method-existence rule can reach this: on the type the checker bound
+# (`Result[T, E]`), `is_error` legitimately exists.
+#
+# ── WHAT THE ENCLOSING CONTEXT DISCRIMINATES, and it is not the payload ───
+# Measured 2026-09-03 over the payload axis in BOTH enclosing contexts:
+#
+#   enclosing fn              payload            before        after
+#   Result-returning (PEEL)   int                done          build 1  int64_t__is_error
+#   Result-returning (PEEL)   float              done          build 1  double__is_error
+#   Result-returning (PEEL)   bool               done          build 1  bool__is_error   (todo/t0947)
+#   Result-returning (PEEL)   String             done          build 1  (see the sibling below)
+#   Result-returning (PEEL)   struct, no method  done          build 1  Payload__is_error
+#   Result-returning (PEEL)   struct WITH method done          silent wrong output (sibling)
+#   `void main()` (NO peel)   every payload      done          done — UNCHANGED
+#
+# ⚠ THE CLASS IS NOT PAYLOAD-TYPE-SHAPED. It is "the `auto` var-decl peel fired
+# AND the user then called one of the four names on the peeled local". The
+# payload type only decides HOW it fails. The `void`-context row is the control
+# that proves it, and it is pinned green by the top-level
+# `auto_result_peel_context_controls.gg`.
+#
+# ── WHY THIS IS FILED RATHER THAN BLOCKING ────────────────────────────────
+# Before the `t1017` dispatch fix these cells BUILT and printed `done` — but
+# only because `j.is_error()` folded to `Constant::Bool(false)` and silently
+# swallowed the user's whole error block, which is `t0947`'s Core #10 filing.
+# The failure mode moved DOWN the owner's severity ranking (silent wrong output
+# → build failure). It is still a build regression on programs that built
+# before, and it is recorded here as one rather than left unrecorded.
+#
+# ── THE STRING PAYLOAD IS A SIBLING FIXTURE ───────────────────────────────
+# `auto_result_peel_string_payload_invents_runtime_symbol.gg` — it fails one
+# stage EARLIER (C compile, not link) because the String dispatch ladder
+# CONCATENATES a runtime symbol name (`gorget_str_is_error`) instead of missing
+# cleanly, which is the `todo/t0987` family. Separate fixture so the two failure
+# modes can move independently, and so neither masks the other's diagnostic.
+#
+# INTENDED (D45 pin 6 — `j` binds the `Result`, `j.is_error()` is the Result's
+# own tag check, and the user's error block runs on the error path only):
+#   int ok
+#   float ok
+#   bool ok
+#   struct ok
+#   handled int
+#   handled float
+#   handled bool
+#   handled struct
+#   done
+struct Payload:
+    int v
+
+struct Sock:
+    int h
+
+equip Sock:
+    Result[int, String] fetch_int(self, String g):
+        if g == "bad":
+            return Error("boom")
+        return Ok(1)
+
+    Result[float, String] fetch_float(self, String g):
+        if g == "bad":
+            return Error("boom")
+        return Ok(1.5)
+
+    Result[bool, String] fetch_bool(self, String g):
+        if g == "bad":
+            return Error("boom")
+        return Ok(true)
+
+    Result[Payload, String] fetch_struct(self, String g):
+        if g == "bad":
+            return Error("boom")
+        return Ok(Payload(1))
+
+Result[bool, String] use_int(String g):
+    Sock s = Sock(1)
+    auto j = s.fetch_int(g)
+    if j.is_error():
+        return Error("handled int")
+    return Ok(true)
+
+Result[bool, String] use_float(String g):
+    Sock s = Sock(1)
+    auto j = s.fetch_float(g)
+    if j.is_error():
+        return Error("handled float")
+    return Ok(true)
+
+Result[bool, String] use_bool(String g):
+    Sock s = Sock(1)
+    auto j = s.fetch_bool(g)
+    if j.is_error():
+        return Error("handled bool")
+    return Ok(true)
+
+Result[bool, String] use_struct(String g):
+    Sock s = Sock(1)
+    auto j = s.fetch_struct(g)
+    if j.is_error():
+        return Error("handled struct")
+    return Ok(true)
+
+void main():
+    Result[bool, String] a = use_int("good")
+    if a.is_error():
+        print(a.unwrap_error())
+    else:
+        print("int ok")
+    Result[bool, String] b = use_float("good")
+    if b.is_error():
+        print(b.unwrap_error())
+    else:
+        print("float ok")
+    Result[bool, String] c = use_bool("good")
+    if c.is_error():
+        print(c.unwrap_error())
+    else:
+        print("bool ok")
+    Result[bool, String] d = use_struct("good")
+    if d.is_error():
+        print(d.unwrap_error())
+    else:
+        print("struct ok")
+
+    Result[bool, String] e = use_int("bad")
+    if e.is_error():
+        print(e.unwrap_error())
+    Result[bool, String] f = use_float("bad")
+    if f.is_error():
+        print(f.unwrap_error())
+    Result[bool, String] g = use_bool("bad")
+    if g.is_error():
+        print(g.unwrap_error())
+    Result[bool, String] h = use_struct("bad")
+    if h.is_error():
+        print(h.unwrap_error())
+    print("done")

@@ -1,0 +1,64 @@
+# KNOWN GAP — a method call on a `Callable` receiver is never checked for
+# existence, and what happens next depends only on whether LOWERING invented a
+# type name for the receiver.
+#
+# `todo/t1019`'s check-time method-existence rule reaches a receiver whose
+# resolved type is a `Struct` / `Enum` / `Newtype`. A `Callable` receiver is
+# none of those, and the two spellings below fail in two different ways:
+#
+#   Callable LOCAL  (`Callable[int(int)] f = dbl`)
+#       lowering knows the name `Callable__GorgetClosure`, emits
+#       `Callable__GorgetClosure__is_some`, and the build dies at LINK.
+#   CLOSURE LOCAL   (`auto f = (int x): x * 2`)
+#       same shape one name over — lowering emits `__Closure_0__is_some` and
+#       the build dies at LINK. It is here rather than in its own fixture
+#       because a closure literal IS a callable: same missing check, same
+#       receiver family, same failure.
+#   Callable PARAM  (`void probe(Callable[int(int)] f)`) and `Callable &` PARAM
+#       lowering has NO type name at all (`todo/t0942`: the parameter lowers to
+#       GIR `unit`, `Callable &` to `*mut unit`), the dispatch-name ladder
+#       returns `None`, and the call folds to `Constant::Unit` — so the program
+#       BUILDS, RUNS, and PRINTS `0`. ⛔ Silent wrong output.
+#
+# ⭐ THE CLASS IS NOT ABOUT THESE FOUR NAMES. `f.totally_bogus_method()` on a
+# `Callable` parameter also builds clean and prints `0`, before and after the
+# `t1017`/`t1019` pair. That cell is in this fixture as the proof: any method on
+# a nameless receiver silently becomes `Constant::Unit`, and a guard covering
+# four names out of an unbounded set would reject `is_some` while silently
+# miscompiling `is_somee`.
+#
+# ⚠ THE FIX IS UPSTREAM AND IS `t0942`'s, NOT `t1019`'s. `t0942`'s own header
+# says it: "the representation must carry the type (Layering rule 1)". Once a
+# `Callable` parameter's GIR carries its type, the ordinary method-existence
+# rule reaches every line here and rejects it.
+#
+# Measured 2026-09-03. Before the `t1017` dispatch fix, all four `is_some` lines
+# printed `false` — the gate folded them to `Constant::Bool(false)` — which was
+# an equally wrong answer arrived at by a different route. The bogus-name line
+# printed `0` before AND after, which is what makes the class pre-existing.
+#
+# INTENDED: `gg check` REJECTS every one of these calls with a spanned
+# `E_NoMethodFound` naming the method and the receiver type, the way it already
+# does for a bare user struct. Asserted by the `#[ignore]`d test that cites this
+# fixture.
+int dbl(int x):
+    return x * 2
+
+void probe_param(Callable[int(int)] f):
+    print(f.is_some())
+
+void probe_amp_param(Callable[int(int)] &f):
+    print(f.is_some())
+
+void probe_bogus(Callable[int(int)] f):
+    print(f.totally_bogus_method())
+
+void main():
+    Callable[int(int)] local = dbl
+    print(local.is_some())
+    auto lit = (int x): x * 2
+    print(lit.is_some())
+    probe_param(dbl)
+    Callable[int(int)] g = dbl
+    probe_amp_param(&g)
+    probe_bogus(dbl)

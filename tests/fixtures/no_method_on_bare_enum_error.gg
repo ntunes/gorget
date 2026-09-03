@@ -1,0 +1,29 @@
+# The ENUM cell of `t1019`'s check-time method-existence rule — and the cell
+# that shows why the rule had to land WITH the `t1017` dispatch fix rather than
+# after it.
+#
+# `Color.Red().is_ok()` used to be accepted and to print `false`: the dispatch
+# gate intercepted the four names `is_some` / `is_none` / `is_ok` / `is_error`
+# for every receiver and folded a non-Option/Result one to a constant. `false`
+# is even the RIGHT-LOOKING answer for a plain enum, which is exactly why the
+# whole class hid for so long. Now the four names fall through to the ordinary
+# dispatch, and an enum that has no such method is REJECTED here instead of
+# reaching the linker.
+#
+# The POSITIVE CONTROL is `match`, the way you actually ask an enum which
+# variant it is: it must keep working in the same program.
+enum Color:
+    Red()
+    Green()
+
+int rank(Color c):
+    match c:
+        case Color.Red():
+            return 1
+        else:
+            return 2
+
+void main():
+    Color c = Color.Red()
+    print(rank(c))
+    print(c.is_ok())

@@ -1,0 +1,13 @@
+# The CROSS-MODULE cell of `t1017`'s method-provenance axis. The four-name
+# `equip` method is declared HERE and called from `main.gg`, so the call site
+# resolves it through the name-keyed cross-module fallback
+# (`TraitRegistry::resolve_method_by_name`) rather than through a TypeId match.
+struct XSensor:
+    int v
+
+equip XSensor:
+    bool is_ok(self):
+        return self.v > 0
+
+    bool is_none(self):
+        return self.v == 0

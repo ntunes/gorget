@@ -1,0 +1,79 @@
+# KNOWN GAP (SELF-HOST lane) — `shared auto x = <expr>` mints the shared
+# carrier around `int64`, whatever the initializer's real type is.
+#
+# `tests/fixtures/self_host_lowerer/lower_stmt.gg:63` computes the carrier's
+# inner type as `map_ast_type(stype, &gmod)` — a mapping of the WRITTEN AST
+# type. For `auto` there is no written type, so the mapping answers a scalar and
+# the carrier is built for an `int64` payload regardless of what the RHS
+# produces. Measured 2026-09-03 with the self-host lowerer driver:
+#
+#   shared auto a = m.ratio()      # float  → 4612811918334230528  (the float's
+#                                  #          bit pattern printed as an integer)
+#   shared auto b = m.greet()      # String → a raw pointer value
+#   shared auto c = m.make()       # struct → 0
+#   shared auto d = free_greet()   # String → a raw pointer value
+#   shared auto e = free_ratio()   # float  → 4612811918334230528
+#   shared float f = 2.5           # WRITTEN type → 2.500000  ✅ correct
+#   shared int   g = 7             # WRITTEN type → 7         ✅ correct
+#
+# The two WRITTEN-type cells are the discriminator: the defect is specific to
+# `auto`, and it is an INFERENCE gap, not the `shared` machinery in general.
+#
+# ⚠ DISCRIMINATED FROM `todo/t0384`, and a citation of it is not enough. That
+# item is the `< PRIM_COUNT` gate at `lower_stmt.gg:64` — a NON-SCALAR `shared`
+# falling through to the plain var-decl path, whose fix is `op_consume` picking
+# `OpMove` for a call-returned resource. This one fires on a SCALAR (`float`),
+# which passes that gate, and it is wrong before the carrier is ever reached.
+# Same file, adjacent lines, different mechanism.
+#
+# The Rust lane answers every line correctly (see
+# `tests/fixtures/shared_auto_infer/main.gg`, which is a DIRECTORY fixture
+# precisely so this self-host non-MATCH is not enrolled into
+# `runtime_parity_corpus` as the round's own inflow). Filed as `todo/t1021`.
+#
+# INTENDED (self-host lane, matching Rust gg):
+#   2.500000
+#   hello
+#   9
+#   hello
+#   2.500000
+#   2.500000
+#   7
+struct Inner:
+    int v
+
+struct Maker:
+    int a
+
+equip Maker:
+    float ratio(self):
+        return 5.0 / 2.0
+
+    String greet(self):
+        return "hello"
+
+    Inner make(self):
+        return Inner(9)
+
+String free_greet():
+    return "hello"
+
+float free_ratio():
+    return 5.0 / 2.0
+
+void main():
+    Maker m = Maker(1)
+    shared auto a = m.ratio()
+    print(a)
+    shared auto b = m.greet()
+    print(b)
+    shared auto c = m.make()
+    print(c.v)
+    shared auto d = free_greet()
+    print(d)
+    shared auto e = free_ratio()
+    print(e)
+    shared float f = 2.5
+    print(f)
+    shared int g = 7
+    print(g)

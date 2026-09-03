@@ -1,0 +1,72 @@
+# KNOWN GAP — `auto j = <method call returning Result[Payload, E]>` where the
+# PAYLOAD type carries its own `is_error()` method: `j.is_error()` calls the
+# PAYLOAD's method, so the branch is decided by the payload rather than by the
+# Result's error state.
+#
+# THE MECHANISM IS A CHECK-vs-LOWERING TYPE DISAGREEMENT, not a missing method.
+# `auto j = s.join(g)` LOWERS to a PEEL: the tag is read, one block extracts
+# `Ok_0` into a `Payload` slot and binds `j` to it, the other early-returns the
+# propagated `Error`. So LOWERING binds the payload while the CHECKER binds the
+# `Result` — and D45 pin 6's mechanism note (`docs/define-gorget/decisions.md`)
+# says an unmarked position never peels, so the checker is the lane that is
+# right. `todo/t0434`'s `expr_types` plumbing is the closure: give lowering the
+# checker's per-span type and the disagreement cannot exist.
+#
+# Filed against `todo/t0434`, sibling of `todo/t0947` (same peel, `bool`
+# payload) and of `auto_result_peel_payload_no_method.gg` (same peel, payload
+# WITHOUT the method — a build failure instead of a wrong answer). Together the
+# three are the PAYLOAD-TYPE axis of the peel; the `int` / `String` /
+# `Option[Payload]` / explicitly-typed cells of the same axis are unaffected and
+# are pinned green by `auto_result_peel_payload_axis_controls.gg`.
+#
+# Measured 2026-09-03:
+#   before the `t1017` dispatch fix : ok-path | boom | done
+#       (`j.is_error()` folded to `Constant::Bool(false)` for the peeled
+#        `Payload` receiver, so the user's block never ran either way)
+#   after                           : handled | custom message | boom | done
+#       (`Payload__is_error` is now really called, and it answers `true`)
+# Both are wrong, in different ways, and neither is INTENDED. The fix does not
+# make this cell worse by the owner's severity ranking — it is silent wrong
+# output before and after — but it does change the wrong answer, which is why it
+# is pinned here rather than left unrecorded.
+#
+# INTENDED (D45 pin 6 — `j` binds the `Result`, `j.is_error()` is the Result's
+# own tag check, and the user's error block runs on the error path only):
+#   ok-path
+#   handled
+#   custom message
+#   done
+struct Payload:
+    int v
+
+equip Payload:
+    bool is_error(self):
+        return true
+
+struct Sock:
+    int h
+
+equip Sock:
+    Result[Payload, String] join(self, String g):
+        if g == "bad":
+            return Error("boom")
+        return Ok(Payload(1))
+
+Result[bool, String] enable(String g):
+    Sock s = Sock(1)
+    auto j = s.join(g)
+    if j.is_error():
+        print("handled")
+        return Error("custom message")
+    return Ok(true)
+
+void main():
+    auto r = enable("good")
+    if r.is_error():
+        print(r.unwrap_error())
+    else:
+        print("ok-path")
+    auto r2 = enable("bad")
+    if r2.is_error():
+        print(r2.unwrap_error())
+    print("done")

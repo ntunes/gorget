@@ -1,0 +1,105 @@
+# WHERE the user's `is_ok` comes from must not change whether it is CALLED.
+#
+# METHOD PROVENANCE is the axis that killed three successive attempts at fixing
+# `t1017` with a receiver-keyed lookup table. A table keyed on the direct
+# `{Type}__{method}` spelling cannot see a method that arrives through a trait
+# impl (registered as `{Trait}_for_{Type}__{method}`), through a trait DEFAULT,
+# or through a trait BOUND on a generic parameter — where the method lives on
+# the bound and belongs to no concrete type at all. Each of those looked like
+# "the type has no such method" and each would have REJECTED a healthy program.
+# The shipped fix has no table: the tag check is gated on the typed
+# `is_option_or_result` predicate, and every other receiver falls through to the
+# ordinary dispatch, which already knows all four provenances.
+#
+# Every cell below printed `false` before the fix — the dispatch gate folded the
+# call to `Constant::Bool(false)` before provenance was ever consulted — and
+# prints `true` after.
+#
+#   bare equip                       true
+#   self-receiver, from another
+#     method of the same equip block true
+#   trait impl                       true
+#   trait default                    true
+#   trait-bound generic parameter    true
+#   Box[Trait] (trait object)        true
+#
+# ⚠ TWO CELLS OF THIS AXIS ARE COVERED ELSEWHERE, and neither is an omission:
+#   * `Box[UserStruct]` — the RUST lane fixes it exactly like the rest (`false`
+#     → `true`), but the SELF-HOST lane cannot build ANY method call on a
+#     `Box[UserStruct]`, four-name or not: it mangles `Box__<Inner>__<method>`
+#     and link-fails. Keeping the cell here would enrol a self-host non-MATCH
+#     into `runtime_parity_corpus`, which the round's own inflow may not do, so
+#     it lives in `known_gaps/sh_box_user_struct_method_link_error.gg` with the
+#     self-host gap filed (`todo/t1020`).
+#   * CROSS-MODULE `equip` — a different resolution avenue
+#     (`resolve_method_by_name`, keyed on the type NAME because TypeIds do not
+#     match across modules), so it needs a multi-file fixture:
+#     `user_four_name_xmod_equip/`.
+#
+# ⚠ THE TRAIT-PROVENANCE BODIES ARE MULTI-LINE ON PURPOSE, and it is not style.
+# `todo/t1018` is a live, independent defect: a trait-implementing `equip`
+# method whose body is a SINGLE-LINE `return <expr>` discards its return value
+# (`_0 = const unit`), while the identical body in a BARE equip block is
+# correct. A single-line trait cell here would print `false` for t1018's reason,
+# not for this fixture's, and would read as a failure of the fix under test.
+# Restore the natural single-line spelling when t1018 lands.
+trait Checkable:
+    bool is_ok(self)
+
+trait Defaulted:
+    bool is_ok(self):
+        int marker = 1
+        return marker > 0
+
+struct BareBox:
+    int v
+
+equip BareBox:
+    bool is_ok(self): return self.v > 0
+    # The SELF-RECEIVER cell: an `is_ok` reached as `self.is_ok()` from inside
+    # another method of the same block, not from a local at the call site.
+    bool double_check(self): return self.is_ok()
+
+struct Sensor:
+    int v
+
+equip Sensor with Checkable:
+    bool is_ok(self):
+        int t = self.v
+        return t > 0
+
+struct Fallback:
+    int v
+
+equip Fallback with Defaulted:
+    pass
+
+trait Shifter:
+    bool is_ok(self)
+
+struct Boxed:
+    int v
+
+equip Boxed with Shifter:
+    bool is_ok(self):
+        int t = self.v
+        return t > 0
+
+bool probe[Checkable T](T a):
+    return a.is_ok()
+
+void main():
+    BareBox b = BareBox(5)
+    print(b.is_ok())
+    print(b.double_check())
+
+    Sensor s = Sensor(5)
+    print(s.is_ok())
+
+    Fallback f = Fallback(5)
+    print(f.is_ok())
+
+    print(probe[Sensor](s))
+
+    Box[Shifter] t = Box.new(Boxed(5))
+    print(t.is_ok())

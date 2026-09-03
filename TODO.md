@@ -2611,10 +2611,11 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 ### High
 
 
-- [`t1017`](todo/t1017.md) **HIGH** — 🆕🚨 [HIGH — TWO SILENT WRONG-ANSWER PATHS ON THE SAME TEN LINES, gg check CLEAN, BOTH BACKENDS; found
+- [`t0434`](todo/t0434.md) **HIGH** — Result→T auto-propagation — retire the residual consumer-side maybe_auto_propagate safety nets. Producer-side centraliza…
+
 - [`t1018`](todo/t1018.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT on ordinary safe syntax, gg check CLEAN, both backends; found
 - [`t0989`](todo/t0989.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT on the most ordinary syntax in the language, gg check CLEAN, rc 0, both
-- [`t1019`](todo/t1019.md) **HIGH** — 🆕🚨 [HIGH — Core #10 lower-or-reject, gg check CLEAN on a method that does not exist; both backends;
+- [`t1022`](todo/t1022.md) **MED** — 🆕🐛 [MED — Core #9 ACCEPT/REJECT LANE DIVERGENCE, created by R49 Track C and recorded rather than
 ### Medium
 
 
@@ -2674,8 +2675,6 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 
 - [`t0433`](todo/t0433.md) — caller_location() builtin + multi-frame stack walking [LOW]. (a) a #[track_caller]-like attribute / implicit caller_loca…
 
-- [`t0434`](todo/t0434.md) — Result→T auto-propagation — retire the residual consumer-side maybe_auto_propagate safety nets. Producer-side centraliza…
-
 - [`t0435`](todo/t0435.md) **MED** — 🆕🐛 [MED — module-loader leniency, found by the CoW-1A output-review probe 2026-07-17] Importing ANY name from a module s…
 
 - [`t0436`](todo/t0436.md) — 🆕 [D10(b) self-root follow-up, filed 2026-07-14 — OWNER QUESTION] For-loop iterator-invalidation is ROOT-granular for BO…
@@ -2709,6 +2708,9 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t0945`](todo/t0945.md) **MED** — 🆕🐛 [MED — Core #8 BOTH LANES AGREE ON THE WRONG ANSWER, over-rejection with a FALSE diagnostic] c[i] on a user generic i…
 - [`t0950`](todo/t0950.md) **MED** — 🆕🧹 [MED — a Core #10 guard that rejects LOUDLY but in the WRONG PHASE: an ICE where the invariant asks for a check-time…
 - [`t0957`](todo/t0957.md) **MED** — 🆕🐛 [MED — an ACCEPT/REJECT split driven by the SPELLING of the index, not by anything semantic; found 2026-09-03 in pass…
+- [`t1020`](todo/t1020.md) **MED** — 🆕🐛 [MED — Core #9 lane lag: the self-host cannot compile ANY method call on a Box[UserStruct];
+- [`t1021`](todo/t1021.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT on the self-host lane, gg check clean; found 2026-09-03 by R49
+- [`t1023`](todo/t1023.md) **MED** — 🆕🐛 [MED — Core #10 lower-or-reject, gg check CLEAN on a method no bound provides; both backends;
 ### Low
 
 - [`t0452`](todo/t0452.md) **LOW** — 🆕 [LOW — diagnostic ergonomics follow-up from Round XXIX Track A close 2026-08-03] E_NotIndexable message text should na…

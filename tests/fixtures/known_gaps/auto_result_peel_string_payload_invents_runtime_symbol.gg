@@ -1,0 +1,58 @@
+# KNOWN GAP — the STRING-payload cell of the `auto`-peel, which fails one stage
+# EARLIER than its siblings and for a second reason.
+#
+# Same root as `auto_result_peel_missing_method_build_failure.gg`: in a
+# propagating context `auto j = s.fetch(g)` lowers to a PEEL, so LOWERING binds
+# `j` to the payload while the CHECKER binds it to the `Result` (D45 pin 6 — an
+# unmarked position never peels, so the checker is right; `todo/t0434`'s
+# `expr_types` plumbing is the closure).
+#
+# WHAT MAKES THIS CELL ITS OWN FIXTURE: the payload is a `String`, and the
+# String dispatch ladder does not miss cleanly — it CONCATENATES a runtime
+# symbol name from the method name and emits `gorget_str_is_error(...)`. So the
+# build dies in the C COMPILER with
+#
+#     error: implicit declaration of function 'gorget_str_is_error';
+#            did you mean 'gorget_str_is_empty'?
+#
+# rather than at the linker. That invented-runtime-symbol behaviour is the
+# `todo/t0987` family, and it is why this cell is separated: it would MASK its
+# siblings' link diagnostics if they shared a fixture (the C compile never
+# reaches the link stage), and the two failure modes will move independently.
+#
+# Measured 2026-09-03: before the `t1017` dispatch fix this built and printed
+# `str ok | boom | done` — wrong, because `j.is_error()` folded to
+# `Constant::Bool(false)` and the user's error block was silently discarded
+# (`todo/t0947`'s Core #10 filing). After, it does not build.
+#
+# INTENDED (D45 pin 6 — `j` binds the `Result`, `j.is_error()` is the Result's
+# own tag check):
+#   str ok
+#   handled str
+#   done
+struct Sock:
+    int h
+
+equip Sock:
+    Result[String, String] fetch_str(self, String g):
+        if g == "bad":
+            return Error("boom")
+        return Ok("payload")
+
+Result[bool, String] use_str(String g):
+    Sock s = Sock(1)
+    auto j = s.fetch_str(g)
+    if j.is_error():
+        return Error("handled str")
+    return Ok(true)
+
+void main():
+    Result[bool, String] a = use_str("good")
+    if a.is_error():
+        print(a.unwrap_error())
+    else:
+        print("str ok")
+    Result[bool, String] b = use_str("bad")
+    if b.is_error():
+        print(b.unwrap_error())
+    print("done")

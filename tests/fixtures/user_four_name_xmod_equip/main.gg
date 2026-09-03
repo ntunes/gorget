@@ -1,0 +1,19 @@
+# CROSS-MODULE cell of `t1017` — a user `is_ok` / `is_none` declared in another
+# module still gets CALLED.
+#
+# Before the fix both lines printed `false`: the dispatch gate intercepted the
+# four names and folded the call to `Constant::Bool(false)` before any
+# resolution avenue ran, so it made no difference that the method was perfectly
+# resolvable. This cell is a separate fixture because the cross-module avenue is
+# a DIFFERENT resolution path (`resolve_method_by_name`, keyed on the type NAME
+# because TypeIds do not match across modules) from the same-module ones pinned
+# by `user_four_name_method_provenance.gg`.
+from sensor import XSensor
+
+void main():
+    XSensor a = XSensor(5)
+    XSensor b = XSensor(0)
+    print(a.is_ok())
+    print(a.is_none())
+    print(b.is_ok())
+    print(b.is_none())

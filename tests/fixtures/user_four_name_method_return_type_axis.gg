@@ -1,0 +1,40 @@
+# The RETURN-TYPE axis of `t1017` — and the cell that shows the defect was TYPE
+# CONFUSION, not merely a wrong value.
+#
+# The dispatch gate folded `is_some` / `is_none` / `is_ok` / `is_error` on a
+# non-Option/Result receiver to `Constant::Bool(false)` — REGARDLESS OF THE
+# USER METHOD'S DECLARED RETURN TYPE. So:
+#
+#   bool  is_ok(self)     printed `false`   — wrong, and it LOOKS like a value
+#   int   is_ok(self)     printed `false`   — a Bool constant in an int slot
+#   String is_some(self)  printed `false`   — ⛔ a Bool constant delivered into
+#                                              a STRING result slot
+#
+# ⚠ THE `bool` CELL IS THE ONE THAT HID THE CLASS (SIX QUESTIONS #6): `false` is
+# a plausible answer for a predicate, so the two type-confusion cells beside it
+# are what make the defect legible. Their presence is the point of this fixture.
+#
+# ⚠ AND THE INSTRUMENT FOR THE STRING CELL IS THE STDOUT COMPARE, NOT ASan.
+# Measured under `gg build --sanitize` with `ASAN_OPTIONS=detect_leaks=1`, BOTH
+# the broken and the fixed program are ASan-clean, rc 0 — nothing is
+# dereferenced, so the sanitizer is STRUCTURALLY BLIND to this cell (Core #13:
+# pick an instrument that can SEE the failure class).
+struct Holder:
+    String s
+    int n
+
+equip Holder:
+    bool is_ok(self):
+        return self.n > 0
+
+    int is_error(self):
+        return self.n + 100
+
+    String is_some(self):
+        return self.s
+
+void main():
+    Holder h = Holder("payload-string-value", 7)
+    print(h.is_ok())
+    print(h.is_error())
+    print(h.is_some())

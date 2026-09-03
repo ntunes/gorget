@@ -1,3 +1,85 @@
+- [2026-09-03] **R49 Track C — `t1017` + `t1019`: the four tag-check names never dispatched, and the
+  checker never asked whether the type HAS the method.** One change, two edits, one layer apart.
+  `src/ir/lowering/exprs/methods.rs` intercepted `is_some`/`is_none`/`is_ok`/`is_error` for EVERY
+  receiver and folded a non-Option/Result one to `Constant::Bool(false)`, so a user type's own `equip`
+  method was never called — `gg check` clean, both backends agreeing on a wrong answer, and a
+  `String is_some(self)` delivering a `Bool(false)` into a `String` result slot. The same ten lines
+  read `n.starts_with("Option") || n.starts_with("Result")` beside the typed predicate, routing a user
+  `struct OptionalConfig` into the enum tag check, which read its FIRST FIELD as a discriminant.
+  The gate is now the typed `type_registry.is_option_or_result` predicate ALONE and every other
+  receiver falls through to normal dispatch (Core #2, CLAUDE.md § "No name matching"); paired with a
+  check-time method-existence rule at `src/semantic/typecheck.rs` so the new fall-through cannot reach
+  a raw linker error (Core #10 lower-OR-reject, satisfied as a pair). ⊕ Plus the `shared auto` carrier
+  re-infer at `src/ir/lowering/stmts/mod.rs`, gated on the typed `Type::Inferred` marker.
+
+  **Six mechanisms died before this one, all on the same axis — a receiver-keyed TABLE cannot see
+  METHOD PROVENANCE.** `impls_by_name` has no entry for a trait-BOUND type parameter (that attempt
+  rejected 57 healthy fixtures, all 26 `iter_*` among them); `fn_sigs` has no entry for a
+  trait-IMPLEMENTED method (registered as `{Trait}_for_{Type}__{method}`); and a name-scoped guard
+  covers four names out of an unbounded set, yielding a compiler that rejects `is_some` and silently
+  miscompiles `is_somee`. The subject was never "these four names" — it is "the receiver type has no
+  such method", and it belongs at CHECK time. `DefKind::GenericParam` is the discriminator the fifth
+  attempt lacked; scoping the claim to `Struct | Enum | Newtype` (plus a `struct_fields` shadow test
+  for `Callable`-typed fields) takes the whole-corpus check delta from 57 rejections to ONE.
+
+  **Measured.** Whole-corpus check sweep, all **4348** fixtures: exactly ONE changed row, and it is
+  `known_gaps/equip_paren_trait_spelling_silently_dropped.gg`, whose filed INTENDED is literally "`gg
+  check` REJECTS" — graduated this round. Full **2209**-fixture build + run + stdout-md5 sweep: **3
+  differing rows**, dispositioned PER ROW rather than by a blanket verdict — the first draft of this
+  entry claimed "all three PROVEN NONDETERMINISTIC" while naming only two, and the third's evidence
+  turns out to be a different shape (Core #15b: a claim over a SET owes a row-by-row disposition):
+  * `test_process_timeout` — five runs of the SAME HEAD binary give **five distinct hashes**.
+  * `vector_task_mixed_await_int` — likewise, five runs, five distinct hashes.
+  * `test_process` — **not** per-run-random: it is COLD-START / LOAD sensitive. The same HEAD binary
+    gave two different hashes across runs (the first differs from runs 2-6, which are identical), and
+    run directly rather than under the sweep's 8-way parallelism **HEAD, the fix, and the deliberately
+    WRONG variant all produce the identical hash**. Three different compilers, one output ⇒ the
+    sweep's difference is environmental, not a compiler difference.
+
+  ⇒ **zero deterministic corpus change**.
+  Six healthy receiver provenances go `false` → `true`: bare equip, self-receiver, trait impl, trait
+  default, trait-bound generic parameter, `Box[Trait]` — plus cross-module `equip`.
+
+  **The brief's payload-type axis table was WRONG, and the corrected characterization is sharper.**
+  It recorded `Result[int,_]` and `Result[String,_]` as "unchanged"; they were measured inside `void
+  main()`. Inside a function that can AUTO-PROPAGATE, every scalar payload becomes a build failure.
+  The discriminator is the ENCLOSING CONTEXT, not the payload type: `auto x = <method call returning
+  Result>` peels only where propagation is possible, and lowering then binds the PAYLOAD while the
+  checker binds the `Result`. Filed against `t0434` (widened, HIGH) with three durable repros split by
+  failure mode — link error, invented `gorget_str_is_error` C-compile error, and the one that still
+  BUILDS and lets the payload's own `is_error` decide the user's branch.
+
+  **READINESS ROW 4 PROVEN MECHANICALLY, and it is the sharpest measurement in the track.** The
+  tempting misreading — drop only the `return Bool(false)` and leave the tag check UNGATED — was BUILT
+  and swept over the whole 2209-fixture corpus with build rc + run rc + stdout MD5. It differs from
+  the shipped code on **exactly THREE rows, and all three are the same proven-nondeterministic
+  process/task fixtures**. ⇒ **ZERO deterministic difference: the corpus is STRUCTURALLY INCAPABLE of
+  seeing the wrong edit**, because no corpus fixture defines a user four-name method. The four
+  hand-written positives all go RED under it — the dispatch table prints interleaved garbage, the
+  return-type axis `false|true|false`, the option-named fixture `true` for ALL THREE structs
+  *including the non-prefixed control* (the "generalises to every struct and enum" claim, measured),
+  and the provenance fixture stays at HEAD's `false` six times. They are the only guard that fails
+  when the fix is reverted, and now that is a measurement rather than an assertion.
+
+  **`|pinned| == |changed|`, and closing it found two more.** Sweeping the receiver axis by hand
+  turned up two changed cells no pass had named: an UNBOUNDED generic parameter
+  (`bool probe[T](T a): return a.is_some()` — HEAD `false`, now a link error on the MONOMORPHIZED
+  `int64_t__is_some`) and a CLOSURE LOCAL (`__Closure_0__is_some`). Both are pre-existing in class —
+  the same program with a bogus method name link-fails identically before and after — and both are now
+  pinned. The generic-parameter one is `t1023`, and it is deliberately NOT a widening of `t1019`:
+  excluding `DefKind::GenericParam` is exactly what keeps `lib/std/iter.gg`'s bound `Iter` and all 26
+  `iter_*` fixtures accepted. The rule it needs reads the parameter's BOUNDS.
+
+  **Records.** `t1017` + `t1019` closed. `t0025` NARROWED, not closed — the link-error half graduated,
+  the `Box[Trait]` rc-139 half and the teaching-diagnostic half each keep their own repro. `t0947`
+  amended (silent wrong output → build failure; the defect is unmoved). `t0434` widened. Filed
+  `t1020` (SH `Box[UserStruct]` dispatch), `t1021` (SH `shared auto` binds an int64 carrier),
+  `t1022` (the Core #9 accept/reject lane divergence this round created, with the port's shape:
+  a NEW function, never a tenth arm), `t1023` (the unbounded generic-parameter receiver).
+  ⊕ The brief's "unfiled and pre-existing" `robustness_map/cells/doc_b09_optional_chaining.gg` panic
+  is NOT unfiled: `t0015` names it (*"Ch9 § Optional Chaining ICEs … resource-move panic at
+  mod.rs:1753"*), `t0720` carries the same site's mechanism, and `t0934` says the cell file IS its
+  repro. Nothing filed; the brief was wrong.
 - [2026-09-03] **`scripts/convergence.sh` OVER-COUNTED OPEN `known_gaps` BY 5 — a COUNTING CORRECTION that belongs to the NEXT baseline, NOT to R49.**
   ⛔ **DO NOT BANK THE −5 AS THIS ROUND'S CONVERGENCE.** The script's own header rules that a correction
   of this shape *"lands BETWEEN rounds and belongs to the NEXT baseline — never to a round claiming

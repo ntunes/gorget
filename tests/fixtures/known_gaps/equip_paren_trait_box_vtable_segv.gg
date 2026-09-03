@@ -1,0 +1,41 @@
+# KNOWN GAP — the `Box[Trait]` form of the `equip Pt(Shifter):` mis-spelling
+# BUILDS CLEAN and SEGVs. It is the worse half of `todo/t0025`, and the half no
+# method-existence rejection reaches.
+#
+# `equip Pt(Shifter):` is a mis-spelling of `equip Pt with Shifter:` whose whole
+# method block is silently discarded. Where the call goes through a plain
+# receiver (`Pt p = Pt(1); p.shift()`) the checker now REJECTS it — pinned by
+# `tests/fixtures/equip_paren_trait_spelling_rejected.gg`.
+#
+# ⛔ THROUGH A TRAIT OBJECT NOTHING CATCHES IT. `Box[Shifter] b = Box.new(Pt(1))`
+# packs a vtable whose slot for the dropped method is never filled, so:
+#
+#     gg check  → "OK: no semantic errors"     (there IS a `shift` on `Shifter`)
+#     gg build  → rc 0, NO DIAGNOSTIC AT ALL
+#     ./binary  → rc 139 (SIGSEGV)
+#
+# Measured 2026-09-03 both before and after the `t1017`/`t1019` pair — the
+# rejection cannot see this cell, because the method the user calls DOES exist
+# on the type the checker resolved (the TRAIT). The trait object removed the
+# linker, which was the only thing catching the other half.
+#
+# ⚠ THE SEVERITY BAND IN `t0025`'s HEADER IS TOO LOW FOR THIS PATH: a silent
+# SEGV outranks the link error the item was originally filed for.
+#
+# INTENDED: `2` — either because `gg check` rejects the mis-spelled `equip` (and
+# then this program never runs), or because the packed vtable refuses to leave a
+# slot unfilled. What is not a legal outcome is a clean build that segfaults.
+trait Shifter:
+    int shift(self)
+
+struct Pt:
+    int x
+
+equip Pt(Shifter):
+    int shift(self):
+        return self.x + 1
+
+int main():
+    Box[Shifter] b = Box.new(Pt(1))
+    print(b.shift())
+    return 0

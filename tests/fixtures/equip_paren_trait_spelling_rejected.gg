@@ -1,0 +1,36 @@
+# `equip Pt(Shifter):` is a MIS-SPELLING of `equip Pt with Shifter:`, and the
+# whole block's methods are silently dropped by whatever reading the grammar
+# gives the parenthesised form. `gg check` used to ACCEPT the program anyway and
+# the build died at LINK on `undefined reference to 'Pt__shift'` — a mangled
+# internal symbol the user never wrote, for what is simply a wrong keyword
+# (Core #10 silent drop).
+#
+# GRADUATED from `known_gaps/`: the checker now REJECTS the call, because a
+# user struct with NO surviving `equip` block has an authoritative method
+# surface and `shift` is not on it (`t1019`). The correct spelling
+# `equip Pt with Shifter:` still builds and runs, so nothing legal was closed —
+# `user_four_name_method_provenance.gg`'s trait-impl cell is the live control
+# for that.
+#
+# ⚠ THE GAP THIS FIXTURE GRADUATES IS THE LINK ERROR, NOT ALL OF `t0025`. The
+# diagnostic is a plain `E_NoMethodFound` on the CALL; it does not point at the
+# `equip Pt(Shifter):` line, and it does not teach the `with` spelling — which
+# is what `t0025` asks for and what
+# `known_gaps/equip_paren_trait_spelling_no_teaching_diagnostic.gg` keeps open.
+# The `Box[Trait]` form of the same mis-spelling is worse still and is not
+# reached by this rejection at all: it builds clean and SEGVs
+# (`known_gaps/equip_paren_trait_box_vtable_segv.gg`).
+trait Shifter:
+    int shift(self)
+
+struct Pt:
+    int x
+
+equip Pt(Shifter):
+    int shift(self):
+        return self.x + 1
+
+int main():
+    Pt p = Pt(1)
+    print(p.shift())
+    return 0

@@ -1,0 +1,68 @@
+# `shared auto x = <expr>` carries the value's REAL type into the shared
+# carrier.
+#
+# A `shared` declaration mints its carrier type name from the inner type —
+# `Shared__<inner>`, `Mutex__<inner>`, `Guard__<inner>`, `RWLock__<inner>`,
+# `ReadGuard__<inner>`, `WriteGuard__<inner>`. That name used to be computed
+# from `resolve_var_type`'s PRE-LOWERING guess, and for `auto` initialised from
+# a METHOD CALL the guess was wrong, so the carrier was minted around the wrong
+# payload:
+#
+#   shared auto s = b.ratio()   # float  → printed 2      (silent wrong output)
+#   shared auto s = m.make()    # struct → printed 0      (silent wrong output)
+#   shared auto s = h.greet()   # String → the C compile failed outright
+#
+# The fix re-infers the inner type from the LOWERED value, gated on the typed
+# `auto` marker (`Type::Inferred`) — the same typed fact `resolve_var_type`
+# already switches on. Gating on the marker rather than on a shape test of the
+# answer is what makes the WRITTEN-type cells below unchanged BY CONSTRUCTION:
+# the re-infer provably never runs on a type the user wrote, so an inferred type
+# can never override the user's invariant.
+#
+# The FREE-CALL cells are the negative control that locates the defect: they
+# were already correct before the fix, so the defect was never "shared", it was
+# "shared + auto + a method call".
+struct Inner:
+    int v
+
+struct Maker:
+    int a
+
+equip Maker:
+    float ratio(self):
+        return 5.0 / 2.0
+
+    String greet(self):
+        return "hello"
+
+    Inner make(self):
+        return Inner(9)
+
+String free_greet():
+    return "hello"
+
+float free_ratio():
+    return 5.0 / 2.0
+
+void main():
+    Maker m = Maker(1)
+
+    # METHOD-CALL RHS — the three cells the fix moves.
+    shared auto a = m.ratio()
+    print(a)
+    shared auto b = m.greet()
+    print(b)
+    shared auto c = m.make()
+    print(c.v)
+
+    # FREE-CALL RHS — correct before the fix, and still correct.
+    shared auto d = free_greet()
+    print(d)
+    shared auto e = free_ratio()
+    print(e)
+
+    # WRITTEN types — the re-infer never runs on these at all.
+    shared float f = 2.5
+    print(f)
+    shared int g = 7
+    print(g)
