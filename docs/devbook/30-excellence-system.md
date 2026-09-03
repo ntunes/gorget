@@ -1867,3 +1867,114 @@ the third instance of the class in one session, which is itself the finding:
 so absence has to be hunted deliberately. The cheapest instrument is a reader who
 knows the system being asked, at round close, "is X stated?" — for each X the
 round relied on.
+
+---
+
+## §21 — Orchestrator errata: the mistakes the system caught in its author (R48, 2026-09-03)
+
+Every rule in this chapter was earned by someone tripping over its absence. This
+section is the round where the tripping was done almost entirely by the
+orchestrator, and where the guards the same round was building caught it. It is
+recorded because an errata list that lives only in a session handover is deleted
+by the next round's rewrite — and these are not session state.
+
+### The brief that decayed faster than it could be executed
+
+Track T-a2 declared seven round-close gate constants as rows in `scripts/figures.db`.
+It cost **six brief-review passes and a full rebuild**, and **not one blocking pass
+found a design defect**. Every one found STALENESS.
+
+The brief cached values, line numbers and collision tables across ten precedence-
+ordered addenda. Main moved four commits underneath it while it was being reviewed,
+and the cached facts decayed silently. The sharpest instance: two addenda cited
+`MIN_FIXTURES` at a line that by then held `SELFHOST_MATCH_FLOOR`, so a line-anchored
+`regen_extract` written from the brief would have captured the **wrong constant** and
+stayed green. A second: a reviewer designated an earlier report "the authority" for
+exact `--where` collision counts, and those counts had already moved twice.
+
+This is the same disease as the round's headline defect class — *a derived fact
+cached where nothing can invalidate it* — committed in the artifact that existed to
+cure it.
+
+**The rule: a brief carries regeneration commands, not figures.** Cite constants by
+NAME + FILE, never by line. Give the command that regenerates each number instead of
+the number. State explicitly that no figure in the brief, or in any review report, is
+an input. The rebuild was 130 lines against 781, and the three reviewers after it each
+confirmed the NAME+FILE discipline survived further line drift that would have
+invalidated line citations again.
+
+**And the corollary that costs the most when missed:** a fold is exactly where a new
+stale fact enters. Three separate passes caught a fold introducing precisely what it
+had just been asked to remove. After folding, re-read the enclosing section *and* grep
+the correction (Core #15c/d).
+
+### Reaching a class by resemblance, three times, on one defect
+
+`t0936` was framed three times before one survived, and the first two framings were
+the orchestrator's. Each was reached by **resemblance** — "this looks like the
+no-clone-path class", then "the axis is the receiver shape" — and each was killed by a
+single cheap **non-member probe**. The surviving diagnosis came from a reviewer who
+applied the prescribed fix, measured it INERT with a fire count of **zero**, and found
+the real gate 227 lines upstream.
+
+**Before stating a class, probe a non-member.** It costs one command and it is the
+difference between a class and an anecdote. The same round produced the sibling
+failure: a **one-cell probe** was promoted in a brief to *"verdict preserved EXACTLY —
+do not re-derive"*, and it under-rejected on tuple-field places. A selection cannot
+show you what it omits.
+
+### Merge with `--no-commit`, verify, then commit
+
+Track R was merged without its output review. Track T-a1 was merged with
+`git merge --no-edit`, which **auto-commits**, and only then were the separate targets
+run — `--test lints` came back RED, so main briefly carried a red commit while the fix
+went back to the track.
+
+The recipe says run the separate targets *at integration*. For a merge that means
+`git merge --no-commit` → run the targets → `git commit` only if green. The same round
+had already done this correctly for an earlier track and then didn't; consistency is
+the whole rule.
+
+### Give concurrent tracks disjoint id ranges
+
+Two concurrent tracks were told "the next free todo id is `t0951`" — twice, in one
+round — costing a renumber of four items and roughly twenty cross-references. A third
+collision followed when the orchestrator filed an id out of a range it had itself
+assigned to a track an hour earlier.
+
+**Give each concurrent track a disjoint RANGE in its brief** (*"your ids are
+t0965–t0974"*), never a shared "next free id".
+
+⚠ The collision had an edge worth keeping. Resolving it the other way would have left
+an allowlist citation pointing at a **different** item whose only occurrence of that
+token is a sentence saying it is NOT that class — and the new `UNCITED_LEAK_CLASS_PAIRS`
+lint would still have PASSED, because the token is present. The pin would have been
+right and the record silently false. **A token check is a FLOOR, not a LOCK.**
+
+### A guard is green wherever its blind spot is the environment it runs in
+
+T-a1 added a corpus-manifest lint that passed **five** gauntlet passes and then failed
+at integration. Every gauntlet pass ran in a fresh worktree, where the
+`tests/fixtures/.gorget` build artifact does not exist; it appears only where the suite
+has actually been run. **A guard whose blind spot is its own execution environment is
+green exactly where nothing has happened**, and only integration can find it.
+
+### Two shell traps that produce confident wrong readings
+
+`$?` after a pipeline is the **last stage's** status. A census was read as rc=0 when it
+was rc=1, because `| tail` swallowed it — use `${PIPESTATUS[0]}`. And a persisting `cd`
+into an agent worktree misroutes commits: use `git -C <path>`. Both produce an answer
+that looks measured, which is what makes them expensive.
+
+### What the round's own guards caught in their author
+
+The machinery this round built then caught the orchestrator four times, hours later:
+three incomplete clone-pin moves (`clone_meter_pins_carry_their_provenance` twice, once
+for a non-sha `PINNED-BY` and once for an annotation parsed as part of the VALUE, plus
+`figures_db_values_have_one_spelling` from the spelling side), a `todo/` item filed with
+an invalid `severity` and a mis-shaped `areas`, and a DONE.md census that the round entry
+itself moved — that last one with a message stating that re-pinning it was *"the records
+commit's own chore"*.
+
+That is the argument for binding a derived value to its provenance and guarding the
+binding, made by the system against the person who had just written it.

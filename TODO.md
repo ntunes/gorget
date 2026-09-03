@@ -68,44 +68,16 @@ costs seconds. A grep for another type is not evidence about abstention.**
 - **`sanitize_sweep.sh` had NEVER been run during R48** — which is why three leaks sat unnoticed from
   Aug 31 to the close. It is in the battery; run it *during* the round, not only at the end.
 
-### ⚠ ORCHESTRATOR ERRATA — MINE, THIS ROUND, DO NOT REPEAT
-- **Three framings of `t0936` died before one survived**, the first two mine, each reached by RESEMBLANCE
-  and killed by a cheap NON-MEMBER PROBE. The survivor came from a reviewer who APPLIED the prescribed fix
-  and measured it INERT (fire count 0). **Before stating a class, probe a non-member.**
-- **I promoted a ONE-CELL probe to "verdict preserved EXACTLY — do not re-derive"** in a brief. It
-  under-rejected on tuple-field places. A selection cannot show you what it omits.
-- **I merged Track R without its output review**, and Track T-a1 with `git merge --no-edit` (which
-  AUTO-COMMITS) before running the separate targets — `--test lints` then came back RED, so main briefly
-  carried a red commit. ⇒ **`git merge --no-commit` → run the targets → `git commit` only if green.**
-- **I gave two CONCURRENT tracks the same "next free todo id" TWICE** (P vs main; T-a1 vs U), costing a
-  renumber of four items and ~20 cross-references. ⇒ **Give each concurrent track a DISJOINT RANGE**
-  ("your ids are t0951–t0960"), never a shared next-free id.
-  ⊕ The collision had a sharp edge: resolving it the other way would have left an allowlist citation
-  pointing at a DIFFERENT item whose only occurrence of that token says it is NOT that class — and the new
-  `UNCITED_LEAK_CLASS_PAIRS` lint would still PASS. **A token check is a FLOOR, not a LOCK.**
-- **`$?` after a pipeline is the LAST stage's status** — I read a census as rc=0 when it is rc=1 because
-  `| tail` swallowed it. Use `${PIPESTATUS[0]}`.
-- **`git add <explicit paths>` silently omits**, and a persisting `cd` into an agent worktree misroutes
-  commits — use `git -C <path>`.
-- **A guard whose blind spot is its own execution environment is green exactly where nothing has
-  happened.** T-a1's manifest lint passed FIVE gauntlet passes because every one ran in a FRESH worktree,
-  where the `tests/fixtures/.gorget` build artifact does not exist. Only integration could find it.
-- **⭐ WRITE BRIEFS WITH REGENERATION COMMANDS, NOT CACHED VALUES — THIS ROUND'S MOST EXPENSIVE
-  MISTAKE.** Track T-a2 cost **six** brief-review passes and a full rebuild for what was, in the end, a
-  sound design. **Not one of the blocking passes found a design defect.** Every one found STALENESS: the
-  brief cached values, line numbers and collision tables across ten addenda, main moved four commits
-  underneath it, and the cached facts decayed silently. The worst instance: two addenda cited
-  `MIN_FIXTURES` at a line that by then held `SELFHOST_MATCH_FLOOR`, so a line-anchored `regen_extract`
-  would have captured the WRONG CONSTANT and stayed green.
-  ⚠ **This is the same disease as `t0964` and the spec-floor drift** — a derived fact cached where
-  nothing can invalidate it — committed in the ARTIFACT that was supposed to cure it.
-  ⇒ **Default for every brief: cite constants by NAME + FILE, never by line; give the command that
-  regenerates each figure instead of the figure; and state explicitly that no number in the brief or in
-  any review report is an input.** The rebuilt brief was 130 lines against 781 across ten addenda, and
-  the next three reviewers each confirmed the NAME+FILE discipline survived further line drift.
-  ⊕ Corollary on FOLDS: a fold is exactly where a new stale fact enters. After folding, re-read the
-  enclosing section AND grep the correction (Core #15c/d) — three separate passes caught the fold itself
-  introducing what it had just been asked to remove.
+### ⚠ ORCHESTRATOR ERRATA — R48's are in the devbook, not here
+`docs/devbook/30-excellence-system.md` **§21** carries them: the brief that decayed faster than it
+could be executed (T-a2 — six review passes, a rebuild, and NOT ONE blocking pass found a design
+defect); reaching a class by resemblance three times on one defect; merge with `--no-commit`, verify,
+THEN commit; disjoint todo-id ranges for concurrent tracks; a guard green wherever its blind spot is
+its own execution environment; `${PIPESTATUS[0]}` and `git -C`; and the four times this round's own
+new guards caught the orchestrator hours later.
+⇒ **Errata are WAR STORIES and belong in the devbook, where they survive.** The handover is rewritten
+every round close by mandate, so anything recorded only here is deleted by the next one — which is why
+this pointer exists instead of the list.
 
 ### 🔁 THE ROUND-CLOSE BATTERY — COMMANDS, NOT NUMBERS (regenerate every figure; Core #5)
 ```
