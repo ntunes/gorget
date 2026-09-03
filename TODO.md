@@ -505,6 +505,49 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **⛔⛔ A1-I · PASS 3 — THE DEFECT IS WORSE THAN A CRASH, AND MY GUARD RULING IS DISPROVEN.** 3 blocking,
+  folded as ADDENDUM 3; **pass 4 launched.** ⭐ Pass 3 states explicitly this is **NOT a "review harder"
+  case** — the spine (carrier #1 on `TypeMetadata`, the `ClosureCallSig` route, the A1/A2 split) **is sound
+  and it concurs**; what was unsound is **one ruling and one omission**, both now folded.
+  ⛔⛔ **B6 · THE CAPTURING CELL IS SILENT WRONG OUTPUT, AND ASan + UBSan ARE BLIND TO IT.**
+  A capturing closure whose **first capture is itself a `Callable`** — so the mis-shaped env's first 8 bytes
+  are **a valid code pointer instead of an integer** — gives **ggdef `7063` vs Rust `7028` on BOTH backends,
+  rc 0, `gg check` clean, and `--sanitize` rc 0 WITH NO DIAGNOSTIC.** `7028 = (1004 + 0) × 7`: **the capture
+  silently read as 0.** ⇒ **§5's instrument claim is FALSE for the highest-severity cell — only a wired
+  stdout-diff against ggdef sees it (Core #13 failing on the brief's OWN instrument claim).** ⇒ ⚡ **THE
+  FIXTURE NET MUST ASSERT STDOUT, NOT `rc != 139`** — a fix validated on exit codes **greens the loud cells
+  and leaves the silent one live.** ⊕ `_call` as a method name is **also silently wrong**; a **FREE**
+  function named `call` is the **green control** proving only MANGLED METHODS collide.
+  ⛔⛔ **B7 · "CARRIERS ARE THE CLASS-RETIRING GUARD" IS DISPROVEN BY PROTOTYPE — MY ADDENDUM-2 DECISION WAS
+  WRONG.** With the carrier landed, an `assert_eq!` probe at `:551` **compiles and FIRES**
+  (`left: true, right: false` on `Runner__call`) ⇒ **the carrier ADDS a typed route; it does not make the
+  old fact UNAVAILABLE** — and **the const-hoist evasion still works with the carrier in place**
+  (`--test lints` **220/0 green**, capturing cell back to `7028`). **SIX Q#2 answered NO for BOTH halves.**
+  ⭐ **BUT THE ANSWER IS ALREADY IN THE TRACK'S OWN SCOPE: THE GUARD THAT CAN CATCH THIS CLASS IS
+  BEHAVIOURAL.** The stdout-asserting fixture net is **RED at pristine HEAD (`7028`) · GREEN with the
+  carrier (`7063`) · RED AGAIN under the evasion WHERE THE LINT STAYS GREEN.** **It cannot be respelled
+  around, because it tests BEHAVIOUR.** ⚡ **DECIDED: strike the class-retiring claim; name the FIXTURE NET
+  as the Core #6 guard with that three-state proof; keep the ratchet as labelled BOOKKEEPING; file the truly
+  class-retiring form (typed callee identity on `Instruction::Call`) as `t1053`.**
+  ⊕ **The typed route also FIXES THE SILENT CELL** (`7028 → 7063`) — **§3's yield had only ever measured the
+  CRASH cells.**
+  ⛔ **B8 · THE CENSUS'S ARITHMETIC CLOSES; ITS SCOPE DOES NOT — AND `|changed|` WAS UNDEFINED.** All 99 rows
+  reproduce, **but they are LITERAL-KEYED PREDICATE rows**, blind to **variable-key sidecar maps**
+  (`closure_info`: 1 writer + **8 call sites**, **ZERO in the 99**, and **Layering rule 3 names it exactly**)
+  and to name-DERIVATION rows. **The body's site list had been retracted with nothing in its place.**
+  ⚡ **WORK-LIST NOW STATED:** 10 distinct predicate sites (2 `#[cfg(test)]`) · the 3 byte-identical
+  key-derivations (**Core #4, all three or none**) · the 2 backend-only derivations → carrier #2 · the
+  `closure_info` sidecar → carrier #1.
+  ⭐⭐ **THE SEVENTH CONVENTION — IDENTITY BY *SENTINEL*, NOT BY NAME.** `calls.rs:1897`'s
+  `if local_type_id == UNIT_TYPE` **is in the class by the repo's OWN wording** — Layering rule 2 forbids
+  *"name prefixes, SENTINEL VALUES, or runtime-symbol conventions"* **in one breath** — and it is **invisible
+  to ANY ratchet regex, because there is no string to match.** It is **A2's by the split** so it does not
+  grow A1-I, **but the totality claim must NAME it, or the census is a selection for the SEVENTH time —
+  this time selecting on MECHANISM (strings) rather than on keyword list.**
+  ⊕ **`t1051` gains an unnamed sibling:** `llvm/mod.rs:4766-4769` derives `elem_size` from
+  `name.contains("int64_t")/…` with `else { 8 }` — **the same shape, and IT IS THE ARM THAT SENDS `t1052`'s
+  `Vector__Tally` TO A WRONG DEFAULT.** The item claims both.
+
 - **✅ C · INTEGRATED — `d419176b6`, the round's THIRD landing.** Squash-merge (4 commits, 39 files).
   **Closes `t1017`, `t1019`; narrows `t0025`; widens `t0434`; files `t1020`–`t1023`.** Gates at the
   integrated state, bare: build 0 · `--lib` 1181/0 · `--test lints` **220/0/1**.
