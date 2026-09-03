@@ -461,6 +461,72 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **⚡ E · EXECUTOR RETURNED — 3 commits on `worktree-agent-a0f9f2926c665565b`, 91 files, +589/−1917.
+  OUTPUT-REVIEW LAUNCHED; NOT YET INTEGRATED.** `13793b85b` removes the implicit `it` closure parameter
+  (`Keyword::It` / `Expr::It` / `Expr::ImplicitClosure` gone; **207 self-host lines across 25 files**, all
+  four representations regenerated to **0**; `LiftedClosure.is_implicit` deleted — written at two sites,
+  read at none). `58668de53` docs+ledger; `4e12d85a6` spells `t0977`'s glyphs as words.
+  **Executor gates, bare:** `cargo check --all-targets` 0 · `--test lints` 0 (218/0) · `--lib` 0 (**1181/0**
+  = 1185 − the 4 deleted `it` parser tests) · **`self_host_bootstrap_fixed_point` 0** · `spec_conformance` 0
+  · `security` 0 · `sanitize_sweep.sh` 0 · `robustness_map.py` 0 · `-p ggdef` 0 · all five `*_comparison` 0.
+  ⛔ **THE HIGHEST-RISK EDIT, SELF-FLAGGED:** `ex_shopping_cart`'s `expected` column was an **ellipsis
+  placeholder** and was replaced with a real string sourced from the fixture's header comment + a deleted
+  fossil companion. **`t0934` binds those rows — never edit an expectation to match what the compiler
+  prints.** The output-review must adjudicate it from the header and git history, **not** from the binary.
+  ⚠ **Commit 1 is RED IN ISOLATION** for `todo_index_is_current` (three `git rm`'d items rode along; the
+  regenerated `TODO.md` is in commit 2). Tip is green; squash-at-integration is the open call.
+  ✅ **ZONE EDGES HELD:** `integration.rs:6532` (Track H's assertion) **untouched** — only the `.gg` body and
+  the two comment sentences the rewrite falsified; `beginner_map`'s corpus **not** deleted (F's call), but
+  one row struck from `FINDINGS.md`'s *"all nine rejections are correct"* table, which the change falsified.
+  Two one-line deletions in Track C's `context.rs` / `stmts/mod.rs`.
+  ⭐ **FILED `t0977` (HIGH, silent wrong output):** `auto out = v.map(<closure>)` **reads back a raw pointer**
+  when the closure's result type differs from the source's and is a heap `String`. Six cells; **the four
+  CORRECT ones are the finding.** Same symptom as `t0823` γ1a, whose R48 fix covered only the same-type
+  case. **Claimed NOT introduced here** — the review verifies that against the pre-diff compiler.
+  ⊕ **`t0978`** files the typed retired-keyword table (`mod` was retired years earlier with no note at all).
+  ⚡ **OWNER LEDGER ENTRY OWED — the executor correctly did NOT touch `decisions.md`:** *the implicit `it`
+  closure parameter is removed from the surface; `it` is an ordinary identifier at every naming position; a
+  single-parameter closure names its parameter like any other, with the type omittable where context fixes
+  it; `E_UndefinedName` on `it` carries a retirement note that displaces the edit-distance suggestion.*
+  ⚠ **`figures.db`:** no floor moved, so the parity waiver cascade never fired (the ceiling is **invariant**
+  under deleting a matching row — both terms of `non_excluded − matched` drop). It **did** cascade on the
+  leak side; `500` now carries `scan = none` with a stated 32-spelling caveat and `2286` an exact waiver of
+  1 — **the review checks those are honest and not a tolerance band greening its own drift (Core #6).**
+
+- **⛔ C · PASS 4 — 3 BLOCKING, 5 SCOPE. DESIGN SIGNED A SECOND CONSECUTIVE TIME; READINESS ROWS 2 AND 3
+  FAIL.** Folded as ADDENDUM 4; **pass 5 launched, scoped to confirming the fold.** Pass 4 reproduced the
+  4348-fixture sweep EXACTLY (one changed row) and **discharged the whole previously-unverified gate list**
+  (`-p ggdef` 187/0 · `spec_conformance` 3/0 · `security` 213/0 · **LLVM lane** · `robustness_map --lanes c`
+  rc 0 zero-regression · a **258-fixture** union sweep, superset of the brief's 161, **one differing row**).
+  1. ⛔ **THE PAIR CREATES A THIRD SILENT-WRONG-OUTPUT CELL — a MISCOMPILE that outranks every link-error
+     cell in the track.** `auto j = s.join(g)` returning `Result[Payload, String]` where `Payload` carries
+     its own `is_error()`: HEAD prints **nothing**; the PAIR prints `handled`/`custom message` **by
+     dispatching `Payload__is_error` — the PAYLOAD's method — on a value the source treats as a `Result`.**
+     The output is decided by the payload's method, not the Result's error state. **`t1019` cannot see it:
+     at check the method legitimately EXISTS on the `Result`.**
+     ⭐ **ROOT CAUSE IS MY CLASS LABEL.** Class (3) said *"no usable type name (Callable / closure / mono'd
+     param / `bool`)"* — **but `bool` and `Payload` BOTH HAVE usable type names.** The real discriminator is
+     **"the receiver's LOWERING type DISAGREES with the CHECKER's type"**, which is **unbounded**. The
+     partition I recorded as *"PROVABLE, not sampled"* is falsified.
+  2. ⛔ **THE SELF-HOST DISPOSITION WAS BACKWARDS.** SH already DISPATCHES all four names correctly and
+     returns the right type; **step 1 CONVERGES RUST ONTO THE SELF-HOST and needs NO port.** Addendum 1's
+     *"genuine divergences needing a PORT"* would have **broken a correct lane** (§ Self-host: fix Rust as
+     oracle hygiene). ⊕ **But `t1019` IS a genuine SH lag** — after the pair Rust rejects at check while SH
+     accepts ⇒ **a Core #9 accept/reject lane divergence CREATED THIS ROUND that the brief never named.**
+  3. ⛔ **The SH site enumeration is a SELECTION** — two more four-name sites (`typecheck.gg:4861`, which
+     `self_host_lowerer/typecheck.gg` SYMLINKS; `lir_lower.gg:2117`).
+  ⛔ **S1 · AN `#[ignore]`d TEST STARTS PASSING AND A CI GATE REDS.** The census does **set equality**
+  against a 6-row allowlist whose count is asserted EXACTLY (`lints.rs:22608`) ⇒ graduate it.
+  ⛔⛔ **DO NOT CLOSE `t0025`** — its `Box[Trait]` half is **still rc 139 on HEAD and PAIR**; it narrows.
+  ⛔ **S2 · The row-4 instrument samples ONE value of a typed axis** — `MyOpt(7)` leaves `is_none`/`is_error`
+  **accidentally correct**; only `MyOpt(7)` + `MyOpt(0)` + `MyOpt(-1)` cover all four names.
+  ⛔ **S3 · The `--sanitize` cell is the WRONG INSTRUMENT** — both sides ASan-clean because nothing is
+  dereferenced; **the stdout compare is the discriminator** (Core #13).
+  ⛔⛔ **S5 · ENVIRONMENT TRAP FOR EVERY FRESH WORKTREE:** three `clone_meter_*` lints fail with
+  `fatal: detected dubious ownership`. **Fix first: `git config --global --add safe.directory "$(git rev-parse --show-toplevel)"`.**
+  ✅ **Q1 SETTLES THE `t0947` ERRATA INDEPENDENTLY** — `decisions.md:2081-2093` reads exactly as `7275d56f9`
+  says. **No owner ask.**
+
 - **⛔ F · PASS 5 — 3 BLOCKING, 5 SCOPE. DESIGN HOLDS FOR A FOURTH PASS; ALL THREE BLOCKERS ARE IN MY
   FOLD.** Folded as ADDENDUM 7. **Streak reset to 0; pass 6 launched, SCOPED to confirming the fold, not
   re-litigating the design.**
