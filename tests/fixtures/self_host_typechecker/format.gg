@@ -221,10 +221,6 @@ String format_expr(SpannedExpr se):
                 result = result + f"{format_type(p.param_type)} {p.param_name}"
             result = result + "):" + format_block(body)
             return result
-        case EIt():
-            return "it"
-        case EImplicitClosure(inner):
-            return format_expr(*inner)
         case EArrayLiteral(elems):
             String result = "["
             for (i, e) in elems.enumerate():

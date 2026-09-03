@@ -113,7 +113,7 @@ fn body_contains_fallible_arith(body: &FunctionBody) -> bool {
                     return;
                 }
             }
-            if matches!(&expr.node, Expr::Closure { .. } | Expr::ImplicitClosure { .. }) {
+            if matches!(&expr.node, Expr::Closure { .. }) {
                 return;
             }
             walk_expr(self, expr);
@@ -497,7 +497,6 @@ fn rename_expr(expr: &mut Spanned<Expr>, aliases: &rustc_hash::FxHashMap<String,
             // Body is the load-bearing path for renaming.
             rename_expr(body, aliases);
         }
-        Expr::ImplicitClosure { body } => rename_expr(body, aliases),
         Expr::ListComprehension { expr: e, iterable, condition, .. } => {
             rename_expr(e, aliases);
             rename_expr(iterable, aliases);
@@ -566,7 +565,7 @@ fn rename_expr(expr: &mut Spanned<Expr>, aliases: &rustc_hash::FxHashMap<String,
         }
         Expr::MetaOpToken(_) | Expr::IntLiteral(_) | Expr::FloatLiteral(_)
         | Expr::BoolLiteral(_) | Expr::NoneLiteral | Expr::SelfExpr
-        | Expr::ReturnValue | Expr::It => {}
+        | Expr::ReturnValue => {}
     }
 }
 
@@ -854,7 +853,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
         Expr::Block(block) | Expr::Do { body: block, .. } => {
             rewrite_block(block, res, scopes, errors);
         }
-        Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
+        Expr::Closure { body, .. } => {
             rewrite_expr(body, res, scopes, errors);
         }
         Expr::ListComprehension { expr: comp_expr, iterable, condition, .. } => {
@@ -915,7 +914,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::StringLiteral(_, _) | Expr::NoneLiteral
         | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. }
-        | Expr::ReturnValue | Expr::It => {}
+        | Expr::ReturnValue => {}
     }
 
     // Rewrite field_value(val, "field") → val.field (for literal usage outside meta for)

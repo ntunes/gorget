@@ -45,9 +45,6 @@ pub struct Parser {
     pos: usize,
     pub errors: Vec<ParseError>,
     pub warnings: Vec<ParseWarning>,
-    /// Nesting depth for call-arg parsing. Used to auto-wrap `it` only at the
-    /// outermost call-arg level and prevent double-wrapping in nested calls.
-    call_arg_depth: usize,
     /// AST-tree nesting depth for the current expression. Bumped on each
     /// `parse_prefix` entry (parens/unary/atoms) and checked against
     /// `MAX_EXPR_DEPTH` both there and on the accumulated left-spine inside the
@@ -156,7 +153,6 @@ impl Parser {
             pos: 0,
             errors: lex_errors,
             warnings: Vec::new(),
-            call_arg_depth: 0,
             expr_depth: 0,
             in_extern_c: false,
             comments,

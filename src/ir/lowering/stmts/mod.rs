@@ -646,7 +646,7 @@ fn lower_var_decl(
             let gir_type_is_fnptr = matches!(ctx.type_registry.get(gir_type), Some(GirType::FnPtr { .. }));
             let needs_reinfer = !gir_type_is_fnptr && (
                 matches!(type_.node, ast::Type::Inferred)
-                || matches!(value.node, ast::Expr::Closure { .. } | ast::Expr::ImplicitClosure { .. })
+                || matches!(value.node, ast::Expr::Closure { .. })
                 || gir_type_is_box_callable
                 || gir_type_is_lazy_generic
             );

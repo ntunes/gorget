@@ -1,0 +1,18 @@
+# The implicit-`it` closure parameter was REMOVED from the surface. A program
+# that still spells `xs.map(it * 2)` must be rejected with the teaching error
+# that names the retirement and shows the replacement — never accepted, and
+# never met with the edit-distance suggestion (`it`/`xs` is distance 2, so the
+# generic path would answer "did you mean `xs`?", which is worse than useless).
+#
+# The rejection is a single spanned `E_UndefinedName` on the `it` token: after
+# the removal `it` is an ordinary identifier, so this is exactly the diagnostic
+# any other undefined name gets, plus the retirement note that displaces the
+# suggestion.
+#
+# The fixture lives in its own directory (like break_value_removed_error/) so
+# the rejected source stays OUT of the top-level fixture sweeps (fmt_idempotent,
+# *_comparison, runtime_diff). Negative fixture: `gg check` must fail.
+void main():
+    Vector[int] xs = [1, 2, 3]
+    Vector[int] ys = xs.map(it * 2)
+    print(ys.len())

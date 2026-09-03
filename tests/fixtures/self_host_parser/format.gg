@@ -306,10 +306,6 @@ String format_expr(SpannedExpr se):
             result = result + "):"
             result = result + format_block(body)
             return result
-        case EIt():
-            return "it"
-        case EImplicitClosure(inner):
-            return format_expr(*inner)
         case EArrayLiteral(elems):
             String result = "["
             int i = 0

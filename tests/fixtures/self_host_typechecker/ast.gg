@@ -165,7 +165,6 @@ enum Expr:
     ENoneLiteral
     EIdentifier(String)
     ESelfExpr
-    EIt
     EBinaryOp(Box[SpannedExpr], String, Box[SpannedExpr])
     EUnaryOp(String, Box[SpannedExpr])
     ECall(Box[SpannedExpr], Vector[CallArg], Vector[SpannedType])
@@ -176,7 +175,6 @@ enum Expr:
     EIf(Box[SpannedExpr], Vector[Stmt], Vector[ElseBranch])
     EMatch(Box[SpannedExpr], Vector[MatchArm])
     EClosure(Vector[Param], Vector[Stmt])
-    EImplicitClosure(Box[SpannedExpr])
     EArrayLiteral(Vector[SpannedExpr])
     ETupleLiteral(Vector[SpannedExpr])
     EDictLiteral(Vector[SpannedExpr], Vector[SpannedExpr])

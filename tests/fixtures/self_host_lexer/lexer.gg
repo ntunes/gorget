@@ -32,7 +32,7 @@ enum Keyword:
     KwExtern
     KwSelfLower  KwSelfUpper
     KwMove
-    KwTest  KwSuite  KwBench  KwIt  KwAssert
+    KwTest  KwSuite  KwBench  KwAssert
     KwShared  KwMeta  KwSelect  KwRethrow  KwCatch  KwSnapshot
     KwBlocking  KwUnchecked  KwPrivate  KwNoreturn
 
@@ -245,8 +245,6 @@ Option[Keyword] keyword_from_str(String s):
         return Some(KwSuite())
     elif s == "bench":
         return Some(KwBench())
-    elif s == "it":
-        return Some(KwIt())
     elif s == "assert":
         return Some(KwAssert())
     elif s == "shared":

@@ -609,7 +609,7 @@ fn uses_expr<'a>(
             *live = union;
             uses_expr(&scrutinee.node, scrutinee.span.start, live, lu);
         }
-        Expr::Closure { body, .. } | Expr::ImplicitClosure { body, .. } => {
+        Expr::Closure { body, .. } => {
             // Closures capture — treat as uses at the closure creation site.
             uses_expr(&body.node, span_start, live, lu);
         }
@@ -741,8 +741,7 @@ fn uses_expr<'a>(
         | Expr::SelfExpr
         | Expr::ReturnValue
         | Expr::Path { .. }
-        | Expr::It
-        | Expr::MetaOpToken(_) => {} // Literals, type names, Path, MetaOp*, It, etc.
+        | Expr::MetaOpToken(_) => {} // Literals, type names, Path, MetaOp*, etc.
     }
 }
 

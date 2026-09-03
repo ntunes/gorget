@@ -201,7 +201,7 @@ impl crate::parser::visitor::ExprVisitor for CapturedRefOriginCollector<'_> {
                 }
             }
             // Skip nested closures — they have their own capture scope
-            Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+            Expr::Closure { .. } => {}
             // Default walk handles all other variants exhaustively
             _ => crate::parser::visitor::walk_expr(self, expr),
         }
@@ -245,7 +245,7 @@ impl crate::parser::visitor::ExprVisitor for CapturedMutationCollector<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
             // Skip nested closures — they have their own mutation scope
-            Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+            Expr::Closure { .. } => {}
             // Detect method calls that take &self (mutable borrow) as mutations.
             // Also detect any `&`-sigil args (contractually a write under D31).
             Expr::MethodCall { receiver, method, args, .. } => {
@@ -378,7 +378,7 @@ impl crate::parser::visitor::ExprVisitor for CaptureSetCollector<'_> {
                 });
             }
             // Skip nested closures — they have their own capture scope
-            Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+            Expr::Closure { .. } => {}
             _ => crate::parser::visitor::walk_expr(self, expr),
         }
     }
@@ -419,7 +419,7 @@ impl crate::parser::visitor::ExprVisitor for ClosureBodyParamTracer<'_> {
                 }
             }
             // Skip nested closures — they have their own capture scope
-            Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+            Expr::Closure { .. } => {}
             // Default walk handles all other variants exhaustively
             _ => crate::parser::visitor::walk_expr(self, expr),
         }

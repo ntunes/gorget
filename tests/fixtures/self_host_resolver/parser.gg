@@ -159,7 +159,6 @@ const int KW_AWAIT = 81
 const int KW_SPAWN = 82
 const int KW_TEST = 83
 const int KW_SUITE = 84
-const int KW_IT = 85
 const int KW_PANIC = 86
 const int KW_SHARED = 87
 const int KW_META = 88
@@ -465,8 +464,6 @@ int keyword_tag(Token tok):
                     return KW_SUITE
                 case KwBench:
                     return KW_BENCH
-                case KwIt:
-                    return KW_IT
                 case KwPanic:
                     return KW_PANIC
                 case KwShared:
@@ -603,57 +600,6 @@ String type_to_name(SpannedType st):
 # ── Helper: check if keyword is a type keyword ──────────────
 
 
-# Check if an expression contains the implicit `it` parameter.
-# Stops at closure boundaries (it inside a closure belongs to that closure).
-bool expr_contains_it(Expr e):
-    match e:
-        case EIt():
-            return true
-        case EIdentifier(name):
-            return name == "it"
-        case EBinaryOp(left, _, right):
-            SpannedExpr l = *left
-            SpannedExpr r = *right
-            return expr_contains_it(l.expr) or expr_contains_it(r.expr)
-        case EUnaryOp(_, operand):
-            SpannedExpr op = *operand
-            return expr_contains_it(op.expr)
-        case ECall(callee, args, _, _):
-            SpannedExpr c = *callee
-            if expr_contains_it(c.expr):
-                return true
-            int i = 0
-            while i < args.len():
-                SpannedExpr a = args.get(i).unwrap()
-                if expr_contains_it(a.expr):
-                    return true
-                i = i + 1
-            return false
-        case EMethodCall(obj, _, args, _, _):
-            SpannedExpr o = *obj
-            if expr_contains_it(o.expr):
-                return true
-            int i = 0
-            while i < args.len():
-                SpannedExpr a = args.get(i).unwrap()
-                if expr_contains_it(a.expr):
-                    return true
-                i = i + 1
-            return false
-        case EFieldAccess(obj, _):
-            SpannedExpr o = *obj
-            return expr_contains_it(o.expr)
-        case EIndex(obj, idx):
-            SpannedExpr o = *obj
-            SpannedExpr ix = *idx
-            return expr_contains_it(o.expr) or expr_contains_it(ix.expr)
-        case EClosure(_, _):
-            return false
-        case EImplicitClosure(_):
-            return false
-        else:
-            return false
-
 bool is_type_keyword(int kw):
     if kw == KW_INT:
         return true
@@ -775,8 +721,6 @@ String non_type_keyword_name(int kw):
         return "false"
     elif kw == KW_NONE:
         return "none"
-    elif kw == KW_IT:
-        return "it"
     elif kw == KW_TYPE:
         return "type"
     elif kw == KW_ASYNC:
@@ -1002,7 +946,6 @@ struct Parser:
     Vector[SpannedToken] tokens
     int pos
     Vector[String] errors
-    int call_arg_depth
     # Per-Parser counter for f-string interpolation segment span keys.
     # Starts at 1<<40 (≈1 TiB), bumps by 1<<20 per segment. Matches
     # Rust's `Parser.next_interp_offset` so RES entries for f-string
@@ -2055,18 +1998,8 @@ equip Parser:
             if token_tag(next_arg.lex_token) == TOK_EQ:
                 self.advance()
                 self.advance()
-                self.call_arg_depth = self.call_arg_depth + 1
-                SpannedExpr val = self.parse_expr()
-                self.call_arg_depth = self.call_arg_depth - 1
-                if self.call_arg_depth == 0 and expr_contains_it(val.expr):
-                    return SpannedExpr(EImplicitClosure(Box[SpannedExpr](val)), val.span)
-                return val
-        self.call_arg_depth = self.call_arg_depth + 1
-        SpannedExpr val = self.parse_expr()
-        self.call_arg_depth = self.call_arg_depth - 1
-        if self.call_arg_depth == 0 and expr_contains_it(val.expr):
-            return SpannedExpr(EImplicitClosure(Box[SpannedExpr](val)), val.span)
-        return val
+                return self.parse_expr()
+        return self.parse_expr()
 
     # ── Prefix expressions ───────────────────────────────────
 
@@ -2243,7 +2176,7 @@ equip Parser:
                                     int interp_base = self.next_interp_offset
                                     self.next_interp_offset = interp_base + 1048576
                                     Vector[SpannedToken] sub_tokens = lex_tokenize_with_offset(expr_text, interp_base)
-                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 0, 1099511627776, 0, Vector[String](), false)
+                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 1099511627776, 0, Vector[String](), false)
                                     SpannedExpr parsed_expr = sub.parse_expr()
                                     fexprs.push(parsed_expr)
                                     fspecs.push(spec)
@@ -2286,11 +2219,6 @@ equip Parser:
             String tname = type_keyword_name(prefix_kw)
             SpannedToken t = self.advance()
             return SpannedExpr(EIdentifier(tname), Span(t.lex_start, t.lex_end))
-
-        # it keyword (implicit closure parameter)
-        if self.check_kw(KW_IT):
-            SpannedToken t = self.advance()
-            return SpannedExpr(EIt(), Span(t.lex_start, t.lex_end))
 
         # panic keyword (treated as a function call)
         if self.check_kw(KW_PANIC):
@@ -4104,6 +4032,6 @@ Module parse_source(String source):
             tokens.push(tok)
         ti = ti + 1
     # 1099511627776 = 1<<40 — base offset for f-string interp sub-parses.
-    Parser p = Parser(tokens, 0, Vector[String](), 0, 1099511627776, 0, Vector[String](), false)
+    Parser p = Parser(tokens, 0, Vector[String](), 1099511627776, 0, Vector[String](), false)
     Module m = p.parse_module()
     return m

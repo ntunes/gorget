@@ -663,7 +663,7 @@ done_md.round_close.anchor_age_matched.mirror = none
 done_md.round_close.anchor_age_matched.note = when this moves WITH roundish, a close landed in the shape the predicate sees — confirm the anchors were re-seeded, then re-pin both
 
 row = done_md.round_close.roundish_headlines
-done_md.round_close.roundish_headlines.value = 81
+done_md.round_close.roundish_headlines.value = 82
 done_md.round_close.roundish_headlines.unit = DONE.md entries whose headline begins ROUND / Round / Rn
 done_md.round_close.roundish_headlines.polarity = exact-pin
 done_md.round_close.roundish_headlines.provenance = measured
@@ -672,10 +672,10 @@ done_md.round_close.roundish_headlines.regen_extract = round-ish headlines: (?P<
 done_md.round_close.roundish_headlines.regen_fires = round-close census over DONE.md
 done_md.round_close.roundish_headlines.regen_env = none
 done_md.round_close.roundish_headlines.instrument = scripts/clone_meter_check.sh --round-close-census (the ONE place the predicate is spelled)
-done_md.round_close.roundish_headlines.measured_at = ea527a19b
+done_md.round_close.roundish_headlines.measured_at = 74fc27705
 done_md.round_close.roundish_headlines.home = scripts/figures.db (DB-native)
 done_md.round_close.roundish_headlines.scan = none
-done_md.round_close.roundish_headlines.caveat = a SUPERSET, not an enumeration — it contains mid-round entries (R42 Phase 4b, R41 T-FMT-A, ROUND-33 rolling item 4, R43 Track C), which is exactly why the predicate is not widened to it
+done_md.round_close.roundish_headlines.caveat = a SUPERSET, not an enumeration — it contains mid-round entries (R42 Phase 4b, R41 T-FMT-A, ROUND-33 rolling item 4, R43 Track C, R49 Track E), which is exactly why the predicate is not widened to it
 done_md.round_close.roundish_headlines.cost_secs = 60
 done_md.round_close.roundish_headlines.input = none
 done_md.round_close.roundish_headlines.mirror = none
@@ -914,7 +914,7 @@ parity.runtime_diff.ggdef_adjudicated_floor.input = none
 # value has not — but only for someone who RUNS it. See each row's caveat.
 
 row = sanitize.leak.rows.pin
-sanitize.leak.rows.pin.value = 294
+sanitize.leak.rows.pin.value = 293
 sanitize.leak.rows.pin.unit = rows in tests/sanitize/LEAK_ALLOWLIST.txt (one per leaking fixture)
 sanitize.leak.rows.pin.polarity = exact-pin
 sanitize.leak.rows.pin.provenance = derived
@@ -924,7 +924,7 @@ sanitize.leak.rows.pin.regen_extract = census: rows=(?P<value>[0-9]+) pairs=
 sanitize.leak.rows.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
 sanitize.leak.rows.pin.regen_env = none
 sanitize.leak.rows.pin.instrument = an awk census over the allowlist, applying the same non-comment/non-blank filter as tests/lints.rs::sanitize_allowlists_shrink_only's `read()` helper
-sanitize.leak.rows.pin.measured_at = dc0b0024b
+sanitize.leak.rows.pin.measured_at = 74fc27705
 sanitize.leak.rows.pin.home = tests/lints.rs:LEAK_CEILING
 sanitize.leak.rows.pin.scan = none
 sanitize.leak.rows.pin.caveat = scan = none — 294 has 33 unmasked spellings across the roots (14 in tests/integration.rs, 3 in scripts/clone_meter.spec, one each in nine todo/ items) because it is also the R47 cross-checkout clone discrepancy; a waiver farm on that scale is how a guard dies. ⚠ AND A ROW COUNT IS NOT LEAK VOLUME: it counts FIXTURES, and one fixture's row can tolerate five mechanisms and dozens of records — read it with `records` and `class_pairs` or not at all
@@ -952,7 +952,7 @@ sanitize.leak.rows.round_open.mirror = none
 sanitize.leak.rows.round_open.input = none
 
 row = sanitize.leak.records.pin
-sanitize.leak.records.pin.value = 2297
+sanitize.leak.records.pin.value = 2286
 sanitize.leak.records.pin.unit = leak records the allowlist tolerates in total
 sanitize.leak.records.pin.polarity = exact-pin
 sanitize.leak.records.pin.provenance = derived
@@ -962,9 +962,10 @@ sanitize.leak.records.pin.regen_extract = census: rows=[0-9]+ pairs=[0-9]+ recor
 sanitize.leak.records.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
 sanitize.leak.records.pin.regen_env = none
 sanitize.leak.records.pin.instrument = the awk census over tests/sanitize/LEAK_ALLOWLIST.txt (shares one run with the other three HEAD-side leak rows)
-sanitize.leak.records.pin.measured_at = dc0b0024b
+sanitize.leak.records.pin.measured_at = 74fc27705
 sanitize.leak.records.pin.home = tests/lints.rs:LEAK_RECORDS
 sanitize.leak.records.pin.scan = standard
+sanitize.leak.records.pin.waiver = tests/lints.rs 1 declared the re-seed ledger line directly above the constant, which spells this value as R48 Track T-a1's landing figure — the number this round returns to after deleting Track U's admitted row
 sanitize.leak.records.pin.caveat = the `*N+` signatures are counted at their FLOOR — a `+` means at-least-N and switches that row's count check off, so this total is a lower bound on what the concurrency rows may actually leak; see sanitize.leak.loose_signatures.pin for how many rows are in that state
 sanitize.leak.records.pin.cost_secs = 30
 sanitize.leak.records.pin.mirror = tests/lints.rs:LEAK_RECORDS
@@ -990,7 +991,7 @@ sanitize.leak.records.round_open.mirror = none
 sanitize.leak.records.round_open.input = none
 
 row = sanitize.leak.class_pairs.pin
-sanitize.leak.class_pairs.pin.value = 501
+sanitize.leak.class_pairs.pin.value = 500
 sanitize.leak.class_pairs.pin.unit = (fixture, leak-class) pairs the allowlist names
 sanitize.leak.class_pairs.pin.polarity = exact-pin
 sanitize.leak.class_pairs.pin.provenance = derived
@@ -1000,10 +1001,10 @@ sanitize.leak.class_pairs.pin.regen_extract = census: rows=[0-9]+ pairs=(?P<valu
 sanitize.leak.class_pairs.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
 sanitize.leak.class_pairs.pin.regen_env = none
 sanitize.leak.class_pairs.pin.instrument = the awk census over tests/sanitize/LEAK_ALLOWLIST.txt (shares one run with the other three HEAD-side leak rows)
-sanitize.leak.class_pairs.pin.measured_at = dc0b0024b
+sanitize.leak.class_pairs.pin.measured_at = 74fc27705
 sanitize.leak.class_pairs.pin.home = tests/lints.rs:LEAK_CLASS_PAIRS
-sanitize.leak.class_pairs.pin.scan = standard
-sanitize.leak.class_pairs.pin.caveat = the PAIR is the citation unit precisely because the ROW is not: most rows carrying multiple mechanisms would leave the majority of pairs unobliged under a per-row rule. This count says how many obligations exist, never whether any is discharged — that is sanitize.leak.uncited_class_pairs.pin
+sanitize.leak.class_pairs.pin.scan = none
+sanitize.leak.class_pairs.pin.caveat = scan = none since R49 Track E — 500 is a round three-digit number with 32 legitimate spellings across the roots (18 in tests/integration.rs, 12 in tests/lints.rs — `> 500` size thresholds and the re-seed ledger — one each in todo/t0154 and todo/t0605), and a waiver farm on that scale is how a guard dies. It carried `scan = standard` only while the value happened to be 501. The mirror to LEAK_CLASS_PAIRS is what actually holds this row. ⊕ the PAIR is the citation unit precisely because the ROW is not: most rows carrying multiple mechanisms would leave the majority of pairs unobliged under a per-row rule. This count says how many obligations exist, never whether any is discharged — that is sanitize.leak.uncited_class_pairs.pin
 sanitize.leak.class_pairs.pin.cost_secs = 30
 sanitize.leak.class_pairs.pin.mirror = tests/lints.rs:LEAK_CLASS_PAIRS
 sanitize.leak.class_pairs.pin.input = none

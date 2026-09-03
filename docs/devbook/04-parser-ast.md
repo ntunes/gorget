@@ -69,8 +69,8 @@ The three workhorse node families:
 
 - **`Expr`** (`ast.rs:485`) — literals, `Identifier`, `Path`,
   `UnaryOp`, `BinaryOp`, `Call`, `MethodCall`, `FieldAccess`,
-  `TupleFieldAccess`, `Closure` / `ImplicitClosure`, `Await`,
-  `Rethrow` / `Catch`, `Block` / `Do`, `It`, and more. Calls and
+  `TupleFieldAccess`, `Closure`, `Await`,
+  `Rethrow` / `Catch`, `Block` / `Do`, and more. Calls and
   method calls carry an optional `generic_args: Option<Vec<Spanned<Type>>>`
   (`ast.rs:525`, `:533`) populated only when the source wrote explicit
   `[T]` turbofish; inferred type-args are filled in later by Pass 4.5,
@@ -170,7 +170,7 @@ binding power `>= min_bp`, parse it and continue; (2) else if it's an
 continue; (3) else stop. Postfix is checked before infix.
 
 - **Prefix** (`parse_prefix`, `expr.rs:382`): literals, identifiers,
-  `self`, `it`, unary `not` / `-`, parenthesized/tuple/closure forms,
+  `self`, unary `not` / `-`, parenthesized/tuple/closure forms,
   and the divergent-expressions-in-expression-position trick where
   `throw e` / `return e` parse to a synthetic single-statement
   `Expr::Block` so they can appear inside `?? throw err()` and inline
@@ -202,17 +202,6 @@ method call `expr.method[T](args)` or a field access followed by
 indexing. The parser uses `try_parse` to speculatively read `[T]` as
 generic args, and only commits if a `(` follows; otherwise it
 backtracks and returns a plain `FieldAccess` (`expr.rs:1090-1115`).
-
-### Implicit `it`-closures
-
-`it` parses to `Expr::It` (`expr.rs:423-426`). At the **outermost**
-call-argument level only, `parse_call_arg` (the per-argument helper,
-`expr.rs:1889`) checks whether an argument expression `contains_it`
-and, if so, auto-wraps it in `Expr::ImplicitClosure { body }`
-(`expr.rs:1917-1922`). The
-"outermost" restriction is enforced by a `call_arg_depth` counter
-(`mod.rs:43`) bumped by an RAII guard during nested call-arg parsing
-(`expr.rs:8-24`), so `and_then(Some(it + 1))` wraps once, not twice.
 
 ## Bare-tuple syntax
 

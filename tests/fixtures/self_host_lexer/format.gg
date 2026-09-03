@@ -161,8 +161,6 @@ String describe_keyword_canonical(Keyword kw):
             return "kw:suite"
         case KwBench():
             return "kw:bench"
-        case KwIt():
-            return "kw:it"
         case KwAssert():
             return "kw:assert"
         case KwShared():

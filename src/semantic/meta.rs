@@ -253,7 +253,7 @@ fn fixup_calls_in_expr(
         | Expr::SpawnBlocking { expr: inner, .. } => {
             fixup_calls_in_expr(inner, fixups);
         }
-        Expr::Closure { body, .. } | Expr::ImplicitClosure { body, .. } => {
+        Expr::Closure { body, .. } => {
             fixup_calls_in_expr(body, fixups);
         }
         _ => {}
@@ -2400,9 +2400,6 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
             }
             substitute_expr(body, env, type_env);
         }
-        Expr::ImplicitClosure { body } => {
-            substitute_expr(body, env, type_env);
-        }
         Expr::ListComprehension { expr: comp_expr, iterable, condition, .. } => {
             substitute_expr(comp_expr, env, type_env);
             substitute_expr(iterable, env, type_env);
@@ -2469,7 +2466,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::NoneLiteral
         | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. }
-        | Expr::ReturnValue | Expr::It => {}
+        | Expr::ReturnValue => {}
         // StringLiteral handled below
         Expr::StringLiteral(_, _) => {}
     }

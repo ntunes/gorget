@@ -675,15 +675,6 @@ impl Parser {
         // is unambiguously a misuse of a keyword as a variable name; we carry a
         // typed `Reserved` signal out of the speculative closure (its position
         // stays advanced on `Some`) and raise a clear error in the caller.
-        //
-        // This deliberately reverts commit 089b8e48, which special-cased the
-        // `it` keyword as an acceptable binding name. That acceptance bound a
-        // local named `it`, but every *read* of `it` parses to `Expr::It`
-        // (the implicit-closure parameter), so the binding was unreadable —
-        // `int it = 42; print(it)` printed garbage with only an unused-variable
-        // warning. Rejecting the declaration outright makes such programs a hard
-        // parse error, which is correct. Implicit-`it` closures are unaffected:
-        // they never go through this var-decl path.
         match self.try_parse(|p| {
             let type_ = {
                 // D35 (Advisory A1, 2026-07-28): `parse_type` can fail with

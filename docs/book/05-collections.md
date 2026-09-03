@@ -592,16 +592,6 @@ auto copy = v.sorted()         # new sorted copy, original unchanged
 
 Elements must implement the `Comparable` trait. All primitive types do.
 
-### Implicit `it` Closures
-
-For single-parameter closures, you can use the implicit `it` parameter:
-
-```gorget
-auto names = ["Alice", "Bob", "Charlie"]
-auto lengths = names.map(it.len())           # [5, 3, 7]
-auto long = names.filter(it.len() > 3)      # ["Alice", "Charlie"]
-```
-
 ### Dict and Set
 
 Dicts support direct named HOFs (`any` / `all` / `each` / `find` / `fold` /

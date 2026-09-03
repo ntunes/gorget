@@ -1,0 +1,71 @@
+# KNOWN GAP (todo/t0977) — `auto out = v.map(<closure>)` where the closure's
+# RESULT type differs from the source element type and is a heap `String`
+# reads back a RAW POINTER. `gg check` is clean, the element COUNT is right,
+# and only the values are garbage — the failure mode a length assertion sleeps
+# through.
+#
+# THE AXIS IS THREE-DIMENSIONAL and no single column is the defect. Measured
+# 2026-09-03, `gg run`, one program:
+#
+#   | # | destination        | callee          | source -> result | HEAD      |
+#   |---|--------------------|-----------------|------------------|-----------|
+#   | 1 | `auto`             | closure, untyped| User -> String   | **GARBAGE** |
+#   | 2 | `auto`             | closure, untyped| User -> int      | correct   |
+#   | 3 | `Vector[String]`   | closure, untyped| User -> String   | correct   |
+#   | 4 | `auto`             | NAMED function  | User -> String   | correct   |
+#   | 5 | `auto`             | closure, TYPED  | User -> String   | **GARBAGE** |
+#   | 6 | `auto`             | closure, untyped| String -> String | correct   |
+#
+# Cells 2/3/4/6 are LOAD-BEARING, not filler. 3 says the destination is half
+# of it (a declared element type repairs the same expression). 4 says the
+# CALLEE KIND is the other half (a named function with the identical signature
+# is correct, so this is not the protocol's return-type inference in general).
+# 6 says it takes a CROSS-TYPE map — a String->String map through the same
+# closure path is correct — and 2 says the result element must be a HEAP type.
+# The defect is the conjunction: auto destination AND closure callee AND
+# cross-type AND heap result.
+#
+# HEAP-FORCED: every `String` here is built at runtime by `mk`, never a static
+# literal, so the value read back is a real heap payload and a pointer printed
+# in its place is unmistakable.
+#
+# SAME SYMPTOM AS `todo/t0823` γ1a — *"the Rust half was the builtin protocol's
+# `ret_self` (`auto` destination wrong, typed destination right)"* — which R48
+# Track γ closed for the SAME-TYPE case (`nums.map((int n): …)`). This is the
+# CROSS-TYPE cell of that class, still live. NOT `todo/t0954`: that is a LEAK
+# (the accumulator's missing `elem_drop`) on a program whose stdout is CORRECT;
+# here stdout is WRONG and the leak is beside the point.
+#
+# INTENDED (asserted by the #[ignore]d wired test): a / 20 / a / a / a / ab!
+
+String mk(String a, String b):
+    return a + b
+
+struct User:
+    String name
+    int age
+
+String tag(User u):
+    return u.name
+
+void main():
+    Vector[User] users = [User(mk("a", ""), 20), User(mk("b", ""), 30)]
+
+    auto c1 = users.map((u): u.name)
+    print(c1.get(0).unwrap())
+
+    auto c2 = users.map((u): u.age)
+    print(c2.get(0).unwrap())
+
+    Vector[String] c3 = users.map((u): u.name)
+    print(c3.get(0).unwrap())
+
+    auto c4 = users.map(tag)
+    print(c4.get(0).unwrap())
+
+    auto c5 = users.map((User u): u.name)
+    print(c5.get(0).unwrap())
+
+    Vector[String] words = [mk("a", "b"), mk("c", "d")]
+    auto c6 = words.map((w): w + "!")
+    print(c6.get(0).unwrap())

@@ -319,10 +319,6 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
             # `cow_closure_mutated` (NEVER-pristine) — position-AGNOSTIC,
             # matching tier-1's whole-fn refusal.
             cow_scan_stmts(&ctx, &gmod, clo_body, true)
-        case EImplicitClosure(ic_box):
-            # An implicit closure (`it`-form) is also a closure body —
-            # any mutation it performs is closure-deferred. (d).
-            cow_scan_expr(&ctx, &gmod, *ic_box, true)
         case EDefaultOp(lhs_box, rhs_box):
             cow_scan_expr(&ctx, &gmod, *lhs_box, in_closure)
             cow_scan_expr(&ctx, &gmod, *rhs_box, in_closure)

@@ -840,9 +840,8 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod, int expected_type):
 # `Option__int64_t` — an 8-byte payload slot the 16-byte `Str` overflows,
 # and the closure gets called through an `int64_t(*)` cast (sret mismatch
 # → SIGSEGV). This re-reads the closure body's OWN return type (the same
-# inference `compute_closure_sig` / `compute_implicit_closure_sig` run at
-# the make-site) so the caller can mint `Option__U` / `Result__U__E` /
-# `Result__T__F`. SIDE-EFFECT-FREE: the arg was already lowered by the
+# inference `compute_closure_sig` runs at the make-site) so the caller can
+# mint `Option__U` / `Result__U__E` / `Result__T__F`. SIDE-EFFECT-FREE: the arg was already lowered by the
 # call-site loop — this is a pure re-read, burning no closure id and
 # registering no `__Closure_N`. `expected_type` is passed `-1` because we
 # want the closure's OWN return type, not a context-coerced one. The
@@ -907,226 +906,12 @@ int combinator_closure_ret_type(LowerCtx ctx, SpannedExpr closure_arg, GirModule
                         u = guess_return_type(cl_expr, &gmod, -1)
                     else:
                         u = UNIT_TYPE
-        case EImplicitClosure(cbox):
-            # `.map(it*2)` parsed as an explicit implicit-closure wrapper.
-            u = guess_return_type(*cbox, &gmod, -1)
         else:
-            # A raw `it`-expression arg (`.map(it*2)` where the parser did
-            # NOT wrap it) — infer directly off the body, same as
-            # compute_implicit_closure_sig.
+            # Any other argument shape — infer directly off the expression.
             u = guess_return_type(closure_arg, &gmod, -1)
     if u == STRING_MARKER:
         u = lookup_or_register_named(&gmod, "GorgetString")
     return u
-
-# ── Closure scanning ─────────────────────────────────────
-
-# The TAIL EXPRESSION of a single-statement block, if it has one. A
-# tail-value `if`'s branch is spelled exactly this way (`[SExpr(e)]`, or
-# `[SReturn(Some(e))]` in the multi-line form), which is the same shape
-# `closure_extract` accepts as a closure body. Anything longer is a real
-# statement block and is not an implicit-`it` body.
-bool stmts_tail_has_it(Vector[Stmt] body):
-    if body.len() != 1:
-        return false
-    match body.get(0).unwrap():
-        case SExpr(tail_e):
-            return expr_has_it(tail_e)
-        case SReturn(tail_opt):
-            match tail_opt:
-                case Some(tail_r):
-                    return expr_has_it(tail_r)
-                case None:
-                    return false
-        else:
-            return false
-
-# Check if an expression tree contains the implicit `it` parameter.
-# Unlike the parser's expr_contains_it (which only checks top-level to
-# avoid borrow issues), this traverses owned values — safe to recurse.
-#
-# ⚠ THIS PREDICATE IS THE ONLY THING THAT DECIDES WHETHER AN ARGUMENT IS AN
-# IMPLICIT-`it` CLOSURE BODY, and a `false` it should not have given is a
-# MISCOMPILE, not a missed optimisation. The parser deliberately does NOT wrap
-# these bodies in `EImplicitClosure` (`expr_contains_it` checks only the top
-# level, by design), so both consumers — `lower_expr`'s method-call argument
-# loop and `extract_hof_closure` — depend entirely on this walk. When it
-# answers `false` for a body that DOES mention `it`, the argument is treated as
-# a CALLABLE VALUE and wrapped as `(body)(__hofp0)`: a call whose callee is
-# whatever the body happens to be. `.map(it.n)` became `(it.n)(__hofp0)` and
-# SEGV'd; `.filter(it.n > 1)` produced an empty vector, silently.
-#
-# So the arms below are EXHAUSTIVE over the variants that carry a
-# subexpression, not a working set — the previous eight-arm version omitted
-# `EFieldAccess`, `EIndex` and every wrapper and container form, which is
-# exactly the family a real `it`-body reaches through.
-#
-# The DELIBERATE stop is a CLOSURE BOUNDARY: `EClosure` and `EImplicitClosure`
-# return false, because an `it` inside a nested closure belongs to THAT
-# closure, not to this one. Everything else that reaches the `else:` reaches it
-# for one of three reasons, and they are NOT interchangeable:
-#
-#   (a) NOTHING TO WALK — the seven literal / nullary forms (`EIntLiteral`,
-#       `EFloatLiteral`, `EBoolLiteral`, `EStringLiteral`, `ECharLiteral`,
-#       `ENoneLiteral`, `ESelfExpr`). No subexpression exists.
-#   (b) NEEDS A `Stmt` WALK this predicate does not have — `EBlock`, `EDo`.
-#       Exactly two variants, not a family.
-#   (c) ⚠ A KNOWN LANE DIVERGENCE, NOT A NON-CELL — `EListComp`, `ESetComp`,
-#       `EDictComp`. See below; these are `todo/t0962`.
-#
-# ⚠⚠ THIS PARAGRAPH HAS NOW BEEN WRONG TWICE, so read what replaced it. The
-# first version said "no implicit-`it` body is spelled that way"; `if` is, and
-# the `EIf` arm above walks its condition AND both branch tails because
-# `xs.map(if flag: it else: 0)` runs on the reference. The second version said
-# the comprehensions "need a `Stmt` walk" and that the reference ICEs on them.
-# BOTH HALVES WERE FALSE. Mechanically: `ast.gg` gives `EListComp` / `ESetComp`
-# / `EDictComp` only `Box[SpannedExpr]` and `Option[Box[SpannedExpr]]` fields —
-# there is no `Stmt` anywhere in them, so (b) never applied. Behaviourally,
-# MEASURED at HEAD: `grid.map([z * 2 for z in it])` prints `2 4 6 8` on Rust
-# `gg`, `xs.map([it for k in [0, 1]])` prints `1 1 2 2`, and the filtered form
-# runs too. The reference ACCEPTS all of them.
-#
-# What the self-host does with them is REJECT, loudly — `cannot lower a call
-# whose callee is a EListComp` — because a `false` here sends the body down the
-# callable-wrapper path. So Core #10 holds and nothing is silently miscompiled,
-# but this is a Core #9 LANE DIVERGENCE and it is filed as `todo/t0962`.
-# Adding the three arms is the likely fix and it is deliberately NOT done here:
-# it is a compiler change, and this pass is correcting a false record.
-#
-# The two genuine non-cells, each CHECKED against the reference rather than
-# assumed: `xs.map(it as float)` is a Rust type error (`E_TypeMismatch` on
-# `?T0`), and the inline `match` / `do:` forms are Rust parse errors.
-bool expr_has_it(SpannedExpr sexpr):
-    match sexpr.expr:
-        case EIt():
-            return true
-        case EIdentifier(name):
-            return name == "it"
-        case EBinaryOp(lhs, _, rhs):
-            return expr_has_it(*lhs) or expr_has_it(*rhs)
-        case EUnaryOp(_, inner):
-            return expr_has_it(*inner)
-        case ECall(callee, args, _):
-            if expr_has_it(*callee):
-                return true
-            for a in args:
-                if expr_has_it(a.value):
-                    return true
-            return false
-        case EMethodCall(obj, _, args, _):
-            if expr_has_it(*obj):
-                return true
-            for a in args:
-                if expr_has_it(a.value):
-                    return true
-            return false
-        case EIf(cond, if_then, if_elses):
-            # The CONDITION and both branch TAILS. Walking only the condition
-            # was the omission the header used to justify with "no
-            # implicit-`it` body is spelled that way" — but
-            # `xs.map(if flag: it else: 0)` puts `it` in a BRANCH and runs
-            # correctly on the reference compiler, so the claim was false and
-            # the arm is widened rather than the claim repeated.
-            if expr_has_it(*cond):
-                return true
-            if stmts_tail_has_it(if_then):
-                return true
-            for eb in if_elses:
-                match eb.condition:
-                    case Some(eb_c):
-                        if expr_has_it(eb_c):
-                            return true
-                    case None:
-                        pass
-                if stmts_tail_has_it(eb.body):
-                    return true
-            return false
-        case EFString(_, fexprs, _):
-            for fx in fexprs:
-                if expr_has_it(fx):
-                    return true
-            return false
-        # ── Projection: how an `it` body most often reads its parameter ──
-        case EFieldAccess(base, _):
-            return expr_has_it(*base)
-        case EIndex(ibase, idx):
-            return expr_has_it(*ibase) or expr_has_it(*idx)
-        # ── Single-operand wrappers ──
-        case EAs(as_inner, _):
-            return expr_has_it(*as_inner)
-        case EDeref(dr_inner):
-            return expr_has_it(*dr_inner)
-        case EMutableBorrow(mb_inner):
-            return expr_has_it(*mb_inner)
-        case EMove(mv_inner):
-            return expr_has_it(*mv_inner)
-        case ETry(try_inner):
-            return expr_has_it(*try_inner)
-        case EPropagate(pr_inner):
-            return expr_has_it(*pr_inner)
-        case EAwait(aw_inner):
-            return expr_has_it(*aw_inner)
-        case ESpawn(sp_inner):
-            return expr_has_it(*sp_inner)
-        case ESpawnBlocking(spb_inner):
-            return expr_has_it(*spb_inner)
-        case EIs(is_lhs, _, _):
-            return expr_has_it(*is_lhs)
-        case EMatch(scrut, _):
-            return expr_has_it(*scrut)
-        case EDefaultOp(do_lhs, do_rhs):
-            return expr_has_it(*do_lhs) or expr_has_it(*do_rhs)
-        case ERange(r_start, r_end, _):
-            match r_start:
-                case Some(rs):
-                    if expr_has_it(*rs):
-                        return true
-                case None:
-                    pass
-            match r_end:
-                case Some(re):
-                    if expr_has_it(*re):
-                        return true
-                case None:
-                    pass
-            return false
-        # ── Container / aggregate literals ──
-        case EArrayLiteral(al_elems):
-            for al in al_elems:
-                if expr_has_it(al):
-                    return true
-            return false
-        case ETupleLiteral(tl_elems):
-            for tl in tl_elems:
-                if expr_has_it(tl):
-                    return true
-            return false
-        case EDictLiteral(dl_keys, dl_vals):
-            for dk in dl_keys:
-                if expr_has_it(dk):
-                    return true
-            for dv in dl_vals:
-                if expr_has_it(dv):
-                    return true
-            return false
-        case EStructLiteral(_, _, sl_vals):
-            for sv in sl_vals:
-                if expr_has_it(sv):
-                    return true
-            return false
-        case EDotShorthand(_, ds_args):
-            for da in ds_args:
-                if expr_has_it(da.value):
-                    return true
-            return false
-        case ECatch(c_body, _, c_handler):
-            return expr_has_it(*c_body) or expr_has_it(*c_handler)
-        case ERethrow(rt_body, _, _, rt_handler):
-            return expr_has_it(*rt_body) or expr_has_it(*rt_handler)
-        else:
-            # Literals, `self`, closure boundaries and the statement-bodied
-            # forms. Reached deliberately — see the header.
-            return false
 
 # ── Phase 1 closure-body lowering: free-var (capture) guard ──
 #
@@ -1139,7 +924,7 @@ bool expr_has_it(SpannedExpr sexpr):
 # not exist here). The guard is therefore INVERTED: walk the closure body
 # tracking the set of in-scope NON-capture names; a bare `EIdentifier`
 # name is a CAPTURE iff it is NONE of:
-#   1. a closure param (or the implicit `"it"`);
+#   1. a closure param;
 #   2. a body-local declared earlier in the body via SVarDecl / for-loop
 #      pattern / match-arm pattern (tracked as we walk — mirrors Rust
 #      `local_names.insert` on VarDecl, `closures.rs:730-744`; we also
@@ -1347,10 +1132,8 @@ bool closure_expr_has_capture(SpannedExpr sexpr, Dict[String, bool] in_scope, Gi
             # own make-site entry guards it); over-stubbing the OUTER one on
             # account of the inner's params would be wrong.
             return false
-        case EImplicitClosure(_):
-            return false
         else:
-            # Literals (int/float/bool/string/char/none), EIt, comprehensions,
+            # Literals (int/float/bool/string/char/none), comprehensions,
             # spawn, catch/rethrow, etc. — no bare free-var identifier to
             # capture at THIS node; conservative non-recursion is fine for
             # the literals, and the recursive forms above cover the shapes
@@ -1476,30 +1259,6 @@ bool closure_body_captures(Vector[Param] params, Vector[Stmt] body, GirModule &g
         in_scope.put(p.param_name.clone(), true)
     return closure_stmts_have_capture(body, in_scope, &gmod)
 
-# closure Phase-2 §4d: entry guard for the implicit-`it`
-# (EImplicitClosure / `.map(it*2)`, `.and_then(Some(it+1))`) body shape,
-# built on the COLLECTOR (`cc_collect_expr`) — the SAME capture analysis
-# the EXPLICIT closure make-site uses (lower_expr.gg:~3216), NOT the
-# Phase-1 detector (`closure_expr_has_capture`). The detector mis-classifies
-# a bare-identifier CALLEE that is module-unresolvable — notably a PRELUDE
-# enum variant `Some`/`None`/`Ok`/`Error` (which `closure_ident_module_-
-# resolvable` does NOT cover: `enum_variant_parent` only indexes USER enums)
-# — as a captured free var, STUBbing the whole body. The collector routes a
-# bare callee through `cc_callee_is_free_fn` (function namespace, captures
-# nothing) and records ONLY genuine outer-LOCALs (`nl_contains`) as captures.
-# Returns true iff the body GENUINELY captures (an outer local → `caps`, or a
-# capture-shaped-but-unresolvable var / `self` → `unliftable`), which keeps
-# capturing implicit-`it` (`.map(it+k)`, k an outer local) STUBBED — capture
-# support for the implicit-`it` path is DEFERRED. The single implicit param
-# is `"it"`. Mirrors Rust `FreeVarCollector::visit_expr` (closures.rs:631).
-bool implicit_closure_genuine_capture(LowerCtx &ctx, SpannedExpr body, GirModule &gmod):
-    Dict[String, bool] in_scope = {}
-    in_scope.put("it", true)
-    Vector[ClosureCapture] caps0 = []
-    Dict[String, bool] seen0 = {}
-    CaptureCollector cc = CaptureCollector(!caps0, !seen0, false)
-    cc_collect_expr(&ctx, body, in_scope, &gmod, &cc)
-    return cc.unliftable or cc.caps.len() > 0
 
 # ── closure Phase 2 Step B: capture COLLECTOR + CLASSIFIER ───────────
 #
@@ -1668,8 +1427,6 @@ void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_sco
             # Do NOT descend into a nested closure (mirror the detector +
             # Rust collector). The nested-closure guard (b/d) keeps the
             # whole outer closure stubbed anyway.
-            pass
-        case EImplicitClosure(_):
             pass
         else:
             pass
@@ -2042,51 +1799,6 @@ ClosureSig compute_closure_sig(int cid, Vector[Param] params, Vector[Stmt] body,
 
     return ClosureSig(!abi_param_types, self_ptr, !body_param_types, !body_param_names, ret_type)
 
-# closure Phase 2 Step A: signature for an IMPLICIT `it` closure
-# (`EImplicitClosure` / `.map(it*2)`), lifting the `emit_it_closure` shape:
-# a single implicit `it` param typed I64, return inferred by guess_return_type.
-ClosureSig compute_implicit_closure_sig(int cid, SpannedExpr body, GirModule &gmod, int expected_type):
-    String closure_name = "__Closure_" + int_to_str(cid)
-    int closure_tid = lookup_or_register_named(&gmod, closure_name)
-    int self_ptr = register_ptr(&gmod, closure_tid)
-    Vector[int] abi_param_types = [self_ptr, I64_TYPE]
-    Vector[int] body_param_types = [I64_TYPE]
-    Vector[String] body_param_names = ["it"]
-    int ret_type = guess_return_type(body, &gmod, expected_type)
-    if ret_type == STRING_MARKER:
-        ret_type = lookup_or_register_named(&gmod, "GorgetString")
-    return ClosureSig(!abi_param_types, self_ptr, !body_param_types, !body_param_names, ret_type)
-
-# closure Phase 2 Step A: record an implicit `it` closure whose BODY is
-# `ic_body` (a raw arg expression containing `it`, e.g. `it*2` in
-# `.map(it*2)`), emit its GorgetClosure value, and return the value local.
-# Shared by lower_expr's EImplicitClosure arm AND the call/method-call arg
-# loops (which detect a raw `it` via expr_has_it — the OLD scan handled both
-# the same way via emit_it_closure). The post-pass pushes its
-# __Closure_<cid>__call by draining the record.
-int record_implicit_it_closure(LowerCtx &ctx, SpannedExpr ic_body, GirModule &gmod):
-    int ic_cid = gmod_next_closure_id(&gmod)
-    String ic_closure_name = "__Closure_" + int_to_str(ic_cid)
-    int ic_gc_tid = lookup_or_register_named(&gmod, "GorgetClosure")
-    String ic_make_fn = "__make_closure_" + int_to_str(ic_cid)
-    int ic_cdst = add_local(&ctx, ic_gc_tid, None)
-    Vector[Operand] ic_make_args = []
-    gmod.fn_sigs.put(ic_make_fn, ic_gc_tid)
-    emit(&ctx, GICallExtern(ic_cdst, ic_make_fn, ic_make_args))
-    ClosureSig ic_sig = compute_implicit_closure_sig(ic_cid, ic_body, &gmod, ctx.expected_type)
-    # Lowerable guard (§4d): lower IFF the body neither GENUINELY captures nor
-    # nests a closure. The capture check routes through the COLLECTOR (the same
-    # analysis the explicit-closure make-site uses), so a prelude/user enum-ctor
-    # callee like `Some(it+1)` is correctly a free-fn (not a capture) and the
-    # body lowers via the enum-ctor machinery; a real outer-local capture
-    # (`.map(it+k)`) stays STUBBED (implicit-it capture support is DEFERRED).
-    bool ic_lowerable = not (implicit_closure_genuine_capture(&ctx, ic_body, &gmod) or expr_has_nested_closure(ic_body))
-    Vector[Stmt] ic_body_stmts = [SExpr(ic_body)]
-    # implicit-it closures: capture support is DEFERRED (stay stubbed-if-
-    # capturing). Pass empty captures.
-    Vector[ClosureCapture] ic_no_caps = []
-    gmod.lifted_closures.push(LiftedClosure(ic_cid, ic_closure_name + "__call", ic_sig.self_ptr, ic_sig.abi_param_types, ic_sig.body_param_types, ic_sig.body_param_names, ic_sig.return_type, ic_body_stmts, true, ic_lowerable, !ic_no_caps))
-    return ic_cdst
 
 # ── Phase 1 closure-body lowering: fresh-ctx body lowering ──
 #

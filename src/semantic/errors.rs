@@ -1156,6 +1156,18 @@ impl std::fmt::Display for SemanticError {
         match &self.kind {
             SemanticErrorKind::UndefinedName { name, suggestion } => {
                 write!(f, "undefined name `{name}`")?;
+                // `it` was the implicit closure parameter until the keyword was
+                // retired. Every `xs.map(it * 2)` in the wild now lands here, and
+                // the edit-distance suggestion is pure noise for it (`it`/`xs` is
+                // distance 2), so the retirement note DISPLACES the suggestion.
+                // Pinned by `it_removed_error/main.gg`.
+                if name == "it" {
+                    return write!(
+                        f,
+                        "; it is no longer a keyword — write an explicit closure, \
+                         e.g. `(x): x * 2`"
+                    );
+                }
                 if let Some(s) = suggestion {
                     write!(f, "; did you mean `{s}`?")?;
                 }

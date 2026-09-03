@@ -54,8 +54,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
         | Expr::Identifier(_)
         | Expr::SelfExpr
         | Expr::ReturnValue
-        | Expr::Path { .. }
-        | Expr::It => {}
+        | Expr::Path { .. } => {}
 
         // ── String literal (may contain interpolations) ──
         Expr::StringLiteral(s, _) => {
@@ -182,7 +181,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
         }
 
         // ── Closures ──
-        Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
+        Expr::Closure { body, .. } => {
             v.visit_expr(body);
         }
 
@@ -511,7 +510,6 @@ pub fn visit_expr_children<'a>(
         | Expr::Identifier(_)
         | Expr::SelfExpr
         | Expr::ReturnValue
-        | Expr::It
         | Expr::MetaOpToken(_) => {}
         Expr::Path { segments: _ } => {}
 
@@ -519,8 +517,7 @@ pub fn visit_expr_children<'a>(
         Expr::Move { expr }
         | Expr::Propagate { expr }
         | Expr::MutableBorrow { expr }
-        | Expr::Deref { expr }
-        | Expr::ImplicitClosure { body: expr } => on_expr(expr),
+        | Expr::Deref { expr } => on_expr(expr),
         Expr::As { expr, type_: _ } => on_expr(expr),
         Expr::Await { expr, prefix_form: _ } => on_expr(expr),
         Expr::Spawn { expr, unchecked: _ } => on_expr(expr),

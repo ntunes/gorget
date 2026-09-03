@@ -54,7 +54,7 @@ from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_va
 from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
 from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
 from lower_loops import lower_for, lower_for_vector, lower_for_string, parse_dict_kv_types, for_pat_binding_name, lower_for_dict, lower_for_range, lower_for_iterator, bind_tuple_field, bind_tuple_destructure, bind_for_local, local_is_borrow_alias, scrutinee_nonowning, scrutinee_owned_whole_dropped, scrutinee_borrow_into_owning_collection, resolve_elem_type_id, lower_while
-from lower_closures import lower_function, mangle_prim_type, mangle_trait_name, mangle_trait_equip_name, is_builtin_trait, is_iterator_protocol_trait, method_has_self, lower_equip_block, guess_return_type, expr_has_it, closure_ident_module_resolvable, closure_collect_pattern_bindings, closure_expr_has_capture, closure_stmt_has_capture, closure_stmts_have_capture, closure_body_captures, cc_callee_is_free_fn, cc_classify_ident, cc_collect_expr, cc_collect_stmt, cc_collect_stmts, collect_closure_captures, stmts_mutate_any, expr_target_mutates_any, stmt_mutates_any, expr_has_nested_closure, stmt_has_nested_closure, stmts_have_nested_closure, compute_closure_sig, compute_implicit_closure_sig, record_implicit_it_closure, lower_closure_body
+from lower_closures import lower_function, mangle_prim_type, mangle_trait_name, mangle_trait_equip_name, is_builtin_trait, is_iterator_protocol_trait, method_has_self, lower_equip_block, guess_return_type, closure_ident_module_resolvable, closure_collect_pattern_bindings, closure_expr_has_capture, closure_stmt_has_capture, closure_stmts_have_capture, closure_body_captures, cc_callee_is_free_fn, cc_classify_ident, cc_collect_expr, cc_collect_stmt, cc_collect_stmts, collect_closure_captures, stmts_mutate_any, expr_target_mutates_any, stmt_mutates_any, expr_has_nested_closure, stmt_has_nested_closure, stmts_have_nested_closure, compute_closure_sig, lower_closure_body
 from lower_generics import GenericInstance, ProtoMethInst, proto_method_targ_tid, proto_inst_targ_count, proto_inst_targ_tid, proto_walk_expr, proto_walk_stmts, expand_meta_for_generics, expand_meta_for_stmt, expand_meta_for_expr, discover_generic_calls_expr, discover_generic_calls_stmt, discover_generic_calls_stmts, discover_adapter_chain_expr, discover_adapter_chain_stmts, spanned_type_to_c_name, has_type_variable_ctx, compute_mangled_name, setup_type_subs, clear_type_subs, lower_generic_function, lower_generic_equip, spawn_type_base_name, collect_shared_vars, scan_spawn_wrappers, scan_expr_for_spawn, stmts_have_await, emit_named_closure_spawn_expr, emit_named_closure_spawn_stmts, substitute_type, discover_transitive_expr, discover_transitive_stmt, discover_transitive_stmts, discover_mono_method_insts, block_has_delayed_meta, evaluate_delayed_meta_stmts
 # Typed builtin-method declaration tables — the single source of truth
 # for the String-view / collection-owning-arg / String-return facts the
@@ -195,7 +195,7 @@ struct ClosureSig:
     Vector[int] abi_param_types      # full ABI vector [self_ptr, p0, p1, …]
     int self_ptr                     # env-ptr type id (*__Closure_<cid>)
     Vector[int] body_param_types     # the closure's OWN param types [p0, p1, …]
-    Vector[String] body_param_names  # the closure's param names (implicit-it: ["it"])
+    Vector[String] body_param_names  # the closure's param names
     int return_type
 
 # closure Phase 2 Step B: result of the make-site capture COLLECTOR+
@@ -368,9 +368,9 @@ struct LowerCtx:
     # bind, reallocating the source while a flipped alias is still live →
     # UAF). So a closure-captured-mutated name is treated as NEVER
     # pristine: `cow_pristine_after` consults this set FIRST and returns
-    # false. Populated in the `EClosure`/`EImplicitClosure` scan arms
-    # (any mutation seen while scanning a closure body routes here, not
-    # into the position-aware map). This keeps the closure case
+    # false. Populated in the `EClosure` scan arm (any mutation seen while
+    # scanning a closure body routes here, not into the position-aware map).
+    # This keeps the closure case
     # position-AGNOSTIC, matching tier-1's whole-fn refusal — straight-
     # line / loop sources stay position-aware.
     Dict[String, bool] cow_closure_mutated
@@ -620,8 +620,6 @@ String expr_kind(Expr e):
             return "EIdentifier"
         case ESelfExpr:
             return "ESelfExpr"
-        case EIt:
-            return "EIt"
         case EBinaryOp(_, _, _):
             return "EBinaryOp"
         case EUnaryOp(_, _):
@@ -642,8 +640,6 @@ String expr_kind(Expr e):
             return "EMatch"
         case EClosure(_, _):
             return "EClosure"
-        case EImplicitClosure(_):
-            return "EImplicitClosure"
         case EArrayLiteral(_):
             return "EArrayLiteral"
         case ETupleLiteral(_):
@@ -1538,8 +1534,6 @@ bool mutinf_scan_expr(SpannedExpr e, String target, GirModule &gmod, Vector[Stri
         case EClosure(_, clo_body):
             # A closure body that writes self also mutates self (deferred).
             if mutinf_scan_stmts(clo_body, target, &gmod, &callees): m = true
-        case EImplicitClosure(ic_box):
-            if mutinf_scan_expr(*ic_box, target, &gmod, &callees): m = true
         case EDefaultOp(lhs_box, rhs_box):
             if mutinf_scan_expr(*lhs_box, target, &gmod, &callees): m = true
             if mutinf_scan_expr(*rhs_box, target, &gmod, &callees): m = true
@@ -6071,10 +6065,9 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
     # __Closure_N__call. Drain gmod.lifted_closures (recorded at the
     # make-site during the lower_function loop). Re-read .len() each
     # iteration (drain-until-empty): lowering a lowerable body re-enters
-    # lower_expr, which may APPEND a new record past the current len (e.g.
-    # an implicit-it `.map(it*2)` inside a lowerable body — the nested-
-    # closure guard doesn't see EImplicitClosure, so such a body IS lowered
-    # and its implicit closure is appended mid-drain). The while picks it up.
+    # lower_expr, which may APPEND a new record past the current len (a
+    # closure nested inside a lowerable body is recorded mid-drain). The
+    # while picks it up.
     # Termination: each record is lowered exactly once and lowering appends
     # only strictly-new records with fresh cids, so `di` advances monotonically.
     int di = 0

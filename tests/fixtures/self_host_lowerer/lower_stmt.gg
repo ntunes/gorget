@@ -163,11 +163,6 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     if cvc_n > 0:
                         int cvc_cid = gmod.lifted_closures.get(cvc_n - 1).unwrap().cid
                         gmod.closure_var_cids.put(ctx.current_fn_name + "\0" + name, "__Closure_" + int_to_str(cvc_cid))
-                case EImplicitClosure(_):
-                    int icvc_n = gmod.lifted_closures.len()
-                    if icvc_n > 0:
-                        int icvc_cid = gmod.lifted_closures.get(icvc_n - 1).unwrap().cid
-                        gmod.closure_var_cids.put(ctx.current_fn_name + "\0" + name, "__Closure_" + int_to_str(icvc_cid))
                 else:
                     pass
             int var_type = ctx.locals.get(val).unwrap().type_id
@@ -230,8 +225,6 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             bool init_is_closure_lit = false
             match init_expr.expr:
                 case EClosure(_, _):
-                    init_is_closure_lit = true
-                case EImplicitClosure(_):
                     init_is_closure_lit = true
                 else:
                     pass

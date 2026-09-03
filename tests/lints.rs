@@ -965,7 +965,12 @@ fn d29_propagate_walker_arm_coverage() {
         ("src/ir/lowering/generics/substitute.rs", 1),
         ("src/ir/lowering/liveness.rs", 1),
         ("src/loader.rs", 2),
-        ("src/parser/expr.rs", 2),
+        // R49 Track E (2026-09-03): 2 → 1. The implicit-`it` closure keyword
+        // was REMOVED from the surface, and with it the whole `contains_it` /
+        // `stmt_contains_it` / `block_contains_it` walker family that lived in
+        // this file — one of whose arms held the `Expr::Propagate` counted
+        // here. Case (c) below: walker DELETED, not routed and not stripped.
+        ("src/parser/expr.rs", 1),
         // R44 Track E (2026-08-23): 1 → 2. The child-enumeration CHOKEPOINT
         // `visit_expr_children` adds a SECOND `Expr::Propagate` arm in this
         // file — it is the one exhaustive enumeration of an expression's
@@ -999,7 +1004,7 @@ fn d29_propagate_walker_arm_coverage() {
         let count = content.matches("Expr::Propagate").count();
         assert_eq!(
             count, *expected,
-            "`Expr::Propagate` arm coverage changed in {file}: {count} vs              {expected}.\n\n             The D29 mark is a TRANSPARENT wrapper: every AST walker that has a              `Expr::Move`/wrapper group must see THROUGH it, and `_ => {{}}`              catch-alls make a missing arm silent (missed use → conservative              clone; lost generic instance → undefined symbol; silent              under-capture).\n\n             ⚠ A DROP IS NOT AUTOMATICALLY A REGRESSION, and 'restore the              arm' is the WRONG remedy when the walker was ROUTED. Ask which              of these happened:\n             (a) The walker now DELEGATES its recursion to the child-enumeration              chokepoint `parser::visitor::visit_expr_children`. Then it has MORE              coverage, not less — the wrapper arm lives once, in              `src/parser/visitor.rs`, under rustc exhaustiveness. Lower this              file's count to match and let              `expr_stmt_walker_population_is_pinned` hold the routing: it              computes the `[ROUTED]` disposition from the walker's own body,              so the drop stays machine-checked rather than justified in prose.              Do NOT re-add an arm — that re-opens the hole the routing closed.\n             (b) An arm was genuinely deleted from a still-hand-rolled walker.              Restore it.\n\n             If you are adding a NEW wrapper Expr variant, extend the wrapper              group in EVERY file in this table (the sibling-sweep obligation),              then bump the counts.",
+            "`Expr::Propagate` arm coverage changed in {file}: {count} vs              {expected}.\n\n             The D29 mark is a TRANSPARENT wrapper: every AST walker that has a              `Expr::Move`/wrapper group must see THROUGH it, and `_ => {{}}`              catch-alls make a missing arm silent (missed use → conservative              clone; lost generic instance → undefined symbol; silent              under-capture).\n\n             ⚠ A DROP IS NOT AUTOMATICALLY A REGRESSION, and 'restore the              arm' is the WRONG remedy when the walker was ROUTED. Ask which              of these happened:\n             (a) The walker now DELEGATES its recursion to the child-enumeration              chokepoint `parser::visitor::visit_expr_children`. Then it has MORE              coverage, not less — the wrapper arm lives once, in              `src/parser/visitor.rs`, under rustc exhaustiveness. Lower this              file's count to match and let              `expr_stmt_walker_population_is_pinned` hold the routing: it              computes the `[ROUTED]` disposition from the walker's own body,              so the drop stays machine-checked rather than justified in prose.              Do NOT re-add an arm — that re-opens the hole the routing closed.\n             (b) An arm was genuinely deleted from a still-hand-rolled walker.              Restore it.\n             (c) The WHOLE WALKER was deleted, because the construct it existed              to find no longer exists in the language. Then there is no arm to              restore and nothing to route: lower the count and say WHICH walker              went, so the next reader can tell (c) from (b) — they have the              same shape in a diff and opposite remedies.\n\n             If you are adding a NEW wrapper Expr variant, extend the wrapper              group in EVERY file in this table (the sibling-sweep obligation),              then bump the counts.",
         );
     }
 }
@@ -3340,9 +3345,9 @@ fn self_host_accumulator_producer_sets() {
 /// gg's `scan_expr` (`src/ir/lowering/generics/mod.rs:663-806`).
 ///
 /// The count is pinned to the FULL sub-expr-bearing self-host `Expr` set (all
-/// 35 arms), NOT just the arms the target fixture needed. Only the 9 leaf
+/// 34 arms), NOT just the arms the target fixture needed. Only the 8 leaf
 /// variants (EIntLiteral / EFloatLiteral / EBoolLiteral / EStringLiteral /
-/// ECharLiteral / ENoneLiteral / EIdentifier / ESelfExpr / EIt) may fall to
+/// ECharLiteral / ENoneLiteral / EIdentifier / ESelfExpr) may fall to
 /// `else: pass`.
 ///
 /// **If this fails because an arm was ADDED:** confirm the new arm RECURSES
@@ -3365,7 +3370,10 @@ fn self_host_generic_discovery_expr_arms_count() {
     // (recurses into its inner; the mark carries no semantics of its own).
     // 2026-08-07 (D25 Round XXXIV Track C2): 36 → 35 — the `EFaultCatch` arm
     // vanished when the lexical fault-catch form was removed.
-    const EXPECTED: usize = 35;
+    // 2026-09-03 (R49 Track E): 35 → 34 — the `EImplicitClosure` arm vanished
+    // with the implicit-`it` closure keyword. `EIt` was a LEAF (`else: pass`),
+    // so only one arm went, and the leaf set shrank from 9 to 8.
+    const EXPECTED: usize = 34;
 
     // lower_generics.gg lives ONLY in self_host_lowerer (real file, not
     // symlinked), so no double-count guard is needed.
@@ -3427,9 +3435,9 @@ fn self_host_generic_discovery_expr_arms_count() {
 /// `cow_scan_expr`.
 ///
 /// The count is pinned to the FULL sub-expr-bearing self-host `Expr` set (all
-/// 35 arms). Only the 9 leaf variants (EIntLiteral / EFloatLiteral /
+/// 34 arms). Only the 8 leaf variants (EIntLiteral / EFloatLiteral /
 /// EBoolLiteral / EStringLiteral / ECharLiteral / ENoneLiteral / EIdentifier /
-/// ESelfExpr / EIt) may fall to `else: pass`.
+/// ESelfExpr) may fall to `else: pass`.
 ///
 /// **If this fails because an arm was ADDED:** confirm the new arm RECURSES
 /// into its sub-exprs (and, if it is a method call, keeps the user→builtin→leaf
@@ -3449,7 +3457,10 @@ fn self_host_mutinf_scan_expr_arms_count() {
     // (recurses into its inner; the mark carries no semantics of its own).
     // 2026-08-07 (D25 Round XXXIV Track C2): 36 → 35 — the `EFaultCatch` arm
     // vanished when the lexical fault-catch form was removed.
-    const EXPECTED: usize = 35;
+    // 2026-09-03 (R49 Track E): 35 → 34 — the `EImplicitClosure` arm vanished
+    // with the implicit-`it` closure keyword. `EIt` was a LEAF (`else: pass`),
+    // so only one arm went, and the leaf set shrank from 9 to 8.
+    const EXPECTED: usize = 34;
 
     // lower.gg lives ONLY in self_host_lowerer (real file, not symlinked), so
     // no double-count guard is needed.
@@ -6124,13 +6135,13 @@ fn self_host_safety_walker_is_exhaustive() {
     /// nullary arm has TWO legal spellings and `gg fmt` rewrites between them.
     /// Canonicalization drops the empty parens (`case ENoneLiteral():` becomes
     /// `case ENoneLiteral:`), so the old `contains("case {v}(")` probe went
-    /// blind on exactly the nullary arms and reported 7 present-and-correct
-    /// arms (ENoneLiteral, ESelfExpr, EIt, SBreak, SContinue, SPass, SMeta) as
+    /// blind on exactly the nullary arms and reported 6 present-and-correct
+    /// arms (ENoneLiteral, ESelfExpr, SBreak, SContinue, SPass, SMeta) as
     /// MISSING — a fake Core #8 one-sided-reject alarm on a canonical corpus.
     ///
     /// The terminator is what pins the whole name: `(` for a payload arm, `:`
-    /// for a nullary one. Without it a bare prefix probe would let `case EItem`
-    /// satisfy the check for `EIt`.
+    /// for a nullary one. Without it a bare prefix probe would let `case ESelf`
+    /// satisfy the check for `ESelfExpr`.
     fn matched_variants(body: &str) -> std::collections::HashSet<String> {
         let mut out = std::collections::HashSet::new();
         for line in body.lines() {
@@ -6474,9 +6485,7 @@ fn self_host_targ_recorder_pregate_mirrors_recorder() {
 /// it could not see `Box[SpannedExpr](val)`, a receiver named anything but
 /// `lhs`, a whole-span copy (`…, val.span)` with no `Span(` literal at all), a
 /// construction wrapped across two lines, or an alias line with a trailing
-/// comment. Two of those are not hypothetical: `parser.gg`'s `EImplicitClosure`
-/// site uses the turbofish AND the whole-span copy at once, so the file already
-/// contained a construction the census could not see; and a plain `gg fmt` sweep
+/// comment. One of those is not hypothetical: a plain `gg fmt` sweep
 /// re-wrapping the over-120-column `EMethodCall` lines would have made the lint
 /// RED with a message telling the reader to DELETE the `EMethodCall` arm — a
 /// guard whose failure mode is "delete the fix". The census below therefore
@@ -6660,7 +6669,7 @@ fn self_host_targ_recorder_chain_link_spine_set() {
     // cross-check is the RUST parser, which uses a different idiom entirely
     // (`lhs_span.merge(end)`, src/span.rs) and agrees on both of the two rows
     // this shape found that the textual predecessor missed
-    // (`ImplicitClosure`, src/parser/expr.rs; the synthesized `Do`,
+    // (the synthesized `Do`,
     // src/parser/mod.rs).
     let logical = gg_logical_lines(&parser);
 
@@ -6717,7 +6726,7 @@ fn self_host_targ_recorder_chain_link_spine_set() {
                      continuation-line joiner did not close this construction. Logical line:\n  \
                      {line}\n\
                      An unparseable site is a FAILURE, not a skip: it is exactly how the previous \
-                     census went blind to `EImplicitClosure`."
+                     census went blind to a construction site."
                 );
             };
             from = past;
@@ -7017,10 +7026,18 @@ fn self_host_cow_write_walkers_share_one_root_peel() {
     // `enum Expr` variant must be either a peeled arm or an explicitly declared
     // no-mutable-path row. Add a variant to ast.gg and this goes red until
     // someone decides which it is — the forcing function Core #10 asks for.
+    //
+    // ⚠ AND THE RATCHET RUNS BOTH WAYS, because for a long time it did not.
+    // `decided` is `NO_MUTABLE_PATH ∪ write_arms` and the only assertion used
+    // to be `undecided.is_empty()`, so a name REMOVED from `ast.gg` but left in
+    // the roster below only ever GREW `decided` — it could not fail. A guard
+    // whose hardcoded roster can accumulate dead names forever is a guard that
+    // green-lights its own class (Core #6: a ratchet needs BOTH directions).
+    // The reverse assert after the totality check is the other direction.
     const NO_MUTABLE_PATH: &[&str] = &[
         // literals and atoms — no storage reachable through them
         "EIntLiteral", "EFloatLiteral", "EBoolLiteral", "EStringLiteral", "ECharLiteral",
-        "ENoneLiteral", "EIt", "EFString",
+        "ENoneLiteral", "EFString",
         // `self` — the SH prescan keys on named locals only; a `self.f.push(x)`
         // mutation is recorded against the field path's root, and `self` is not
         // one. A real gap (Rust DOES have `Expr::SelfExpr => Some("self")`), but
@@ -7037,7 +7054,7 @@ fn self_host_cow_write_walkers_share_one_root_peel() {
         "EIf", "EMatch", "EBlock", "EDo", "ECatch", "ERethrow",
         // closures and async: the mutation happens elsewhere in time, and the
         // scan routes those through `cow_closure_mutated` (never-pristine)
-        "EClosure", "EImplicitClosure", "EAwait", "ESpawn", "ESpawnBlocking",
+        "EClosure", "EAwait", "ESpawn", "ESpawnBlocking",
         // fallible/ownership marks: Rust routes these to `=> None` too. Peeling
         // them WRITE-side would mark a root through a link that may not have
         // produced storage at all; the READ side peels them deliberately (see
@@ -7081,6 +7098,38 @@ fn self_host_cow_write_walkers_share_one_root_peel() {
          Rust makes the same decision explicit in its own source (`extract_path_for_mut` lists \
          every non-path variant rather than using `_ => None`, and the comment there says the \
          catch-all WAS the live defect)."
+    );
+
+    // ── THE OTHER DIRECTION: no DEAD names in the hardcoded roster ──────────
+    //
+    // The totality assert above is one-directional by construction: it asks
+    // whether every VARIANT is decided, and a stale roster entry only makes
+    // `decided` bigger. So a variant deleted from the language leaves its name
+    // sitting in `NO_MUTABLE_PATH` forever, inside the very guard whose job is
+    // to notice undecided shapes, and nothing anywhere goes red.
+    //
+    // ⭐ DEMONSTRATED, not asserted (Core #13). This assert was written in R49
+    // Track E, the round that REMOVED the implicit-`it` closure parameter. On
+    // the pre-removal tree `NO_MUTABLE_PATH` named `EIt` and `EImplicitClosure`
+    // and `ast.gg` still had both, so it was green; on the tree with the
+    // variants deleted from `ast.gg` and the roster untouched it goes RED
+    // naming exactly those two — which is how the two dead names were found at
+    // all, since the whole `--test lints` run stayed green with them inside.
+    // Green on this tree: zero stale names against `ast.gg`'s variant set.
+    let live: std::collections::HashSet<&str> = variants.iter().map(|v| v.as_str()).collect();
+    let stale: Vec<&&str> = NO_MUTABLE_PATH.iter().filter(|n| !live.contains(*n)).collect();
+    assert!(
+        stale.is_empty(),
+        "`NO_MUTABLE_PATH` names variant(s) that no longer exist in \
+         `tests/fixtures/self_host_lowerer/ast.gg`: {stale:?}.\n\n\
+         DELETE the row(s). A stale name is not harmless bookkeeping: this roster \
+         is half of `decided`, so a dead entry can only ENLARGE the decided set \
+         and the totality assert above can never fail on it. That is a guard \
+         accumulating dead state inside itself while reporting green — the same \
+         one-directional-ratchet defect Core #6 exists to forbid.\n\n\
+         If instead the VARIANT was renamed, rename it here too; if `ast.gg` \
+         parsing broke, the variant-count assert above should have caught it \
+         first, so check that before deleting anything."
     );
 
     let mut read_arms = arms_of("String cow_source_root_name(SpannedExpr e):");
@@ -8956,7 +9005,15 @@ fn sanitize_allowlists_shrink_only() {
     // `callable_callee_shape_axis`, is CLEAN and owes no row. Both counts taken
     // from the sweep's own `verdicts.tsv` column 4 under a restricted `FIXLIST`.
     // See the `⚖ ADMITTED (R48 Track U)` block in the allowlist.
-    const LEAK_CEILING: usize = 294;
+    // ⚖ And 307 -> 293 -> back through this round: R49 Track E DELETED that row
+    // and its block. The fixture it covered, `hof_implicit_it_collection_axis`,
+    // was a regression net for a construct the language no longer has — the
+    // implicit-`it` closure parameter — so the row retires with the fixture, not
+    // with `todo/t0953`, which still owns the class and still has its own rows.
+    // ⛔ NOT A BURN-DOWN. Nothing was fixed; a leaking program stopped being
+    // spellable. Read the drop as corpus shrinkage, and do not count it toward
+    // the debt trend.
+    const LEAK_CEILING: usize = 293;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -9119,8 +9176,13 @@ fn sanitize_allowlists_shrink_only() {
     // `*N+` marker, so LEAK_LOOSE_SIGNATURES is unchanged). Measured, not counted
     // by hand: the sweep's `verdicts.tsv` column 4 reads
     // `hof_implicit_it_collection_axis  LEAK  -  __gorget_closure_env_alloc*11`.
-    const LEAK_CLASS_PAIRS: usize = 501;
-    const LEAK_RECORDS: usize = 2297;
+    // ⚖ And 512 -> 511 / 2273 -> 2262 with R49 Track E's deletion of that same
+    // row: the ONE pair and its ELEVEN records leave together, exactly the
+    // numbers R48 Track U added. ⛔ Again NOT a burn-down — the fixture was
+    // deleted because the construct was removed from the language, so the
+    // records did not stop leaking, they stopped being reachable.
+    const LEAK_CLASS_PAIRS: usize = 500;
+    const LEAK_RECORDS: usize = 2286;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────
@@ -17943,10 +18005,6 @@ fn formatter_collection_literal_interior_hook_dispatch() {
             "src/parser/visitor.rs",
             "Expr::StructLiteral { name: _, generic_args: _, args } => {",
         ),
-        (
-            "src/parser/expr.rs",
-            "Expr::StructLiteral { args, .. } => args.iter().any(contains_it),",
-        ),
     ];
     let mut found: Vec<String> = Vec::new();
     for entry in fs::read_dir("src/parser").expect("cannot read src/parser") {
@@ -18719,14 +18777,12 @@ fn fmt_multiline_group_paren_wrap_class() {
 ///    them), depending on which side it enters from — which is why the caller
 ///    count is pinned with per-site attribution rather than merely counted.
 ///
-/// **Break-and-verify, all four measured on this tree:** flipping
+/// **Break-and-verify, measured on this tree:** flipping
 /// `wrap_multiline_expr_in_parens`'s suppression off reds
 /// `fmt_output_reparses_corpus_wide` (67 of 2862 files) plus 6 more fmt tests;
 /// flipping `format_expr_maybe_parens`' dedup off reds it on 121 files;
 /// dropping the `collect_binary_operands` guard reds
-/// `fmt_author_parens_survive_and_are_stable` on every 3-operand cell; pointing
-/// the `ImplicitClosure` arm back at `format_expr` makes `xs.map((it * 2))`
-/// double its parens on every pass.
+/// `fmt_author_parens_survive_and_are_stable` on every 3-operand cell.
 #[test]
 fn fmt_author_paren_dedup_class() {
     /// The EXPRESSION-WRAPPING paren writers. Structural parens (argument
@@ -18750,11 +18806,11 @@ fn fmt_author_paren_dedup_class() {
     ];
     /// Callers of `format_expr_inner`, per site:
     ///   1. `format_expr` — the author-paren wrapper, THE owner of the layer
-    ///      emission.
-    ///   2. the `Expr::ImplicitClosure` arm — a TRANSPARENT WRAPPER that reuses
-    ///      its body's span, so two nodes share one table key; it delegates
-    ///      here to let the body emit the layer exactly once.
-    const EXPECTED_INNER_CALLERS: usize = 2;
+    ///      emission, and since R49 Track E the ONLY caller. The second site
+    ///      was the `Expr::ImplicitClosure` arm, a transparent wrapper that
+    ///      reused its body's span; the node went with the implicit-`it`
+    ///      keyword, so no node shares a table key any more.
+    const EXPECTED_INNER_CALLERS: usize = 1;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
@@ -18848,14 +18904,14 @@ fn fmt_author_paren_dedup_class() {
         inner_callers, EXPECTED_INNER_CALLERS,
         "`format_expr_inner` caller count changed: {inner_callers} vs expected \
          {EXPECTED_INNER_CALLERS}.\n\n\
-         The sanctioned callers are `format_expr` (which emits the author's \
-         paren layers around the delegation) and the `Expr::ImplicitClosure` \
-         arm (a transparent wrapper sharing its body's span, which delegates \
-         so the layer is emitted ONCE). A third caller either bypasses the \
-         emission — deleting the author's parens at that position — or \
+         The one sanctioned caller is `format_expr`, which emits the author's \
+         paren layers around the delegation. A second caller either bypasses \
+         the emission — deleting the author's parens at that position — or \
          double-emits it, and both are invisible to the corpus round-trip \
-         gate. Route through `format_expr` unless the new site is another \
-         span-sharing transparent wrapper; then add it here with that reason."
+         gate. Route through `format_expr` unless the new site is a \
+         span-sharing TRANSPARENT WRAPPER (a node that reuses a child's span, \
+         so two nodes answer to one table key); then add it here with that \
+         reason. No such node exists today."
     );
 }
 
@@ -18941,11 +18997,13 @@ fn fmt_author_paren_dedup_class() {
 /// `formatter_suite_layout_hook_census` immediately, and produced NO paren
 /// accretion, because the author layer is keyed on the node the parser recorded
 /// and that reroute does not make two nodes share it. The accreting shape needs
-/// literal span REUSE, which is what `Expr::ImplicitClosure` alone has (it
-/// wraps `body` at `body.span`); that spelling is pinned by the
-/// `format_expr_inner` caller count above, and
-/// `tests/fixtures/fmt_author_parens/wrappers.gg` carries a cell per censused
-/// shared-span pair kind. Those two, not this lint, are the net for it.
+/// literal span REUSE — a node built at its own child's span — and NO `Expr`
+/// variant does that today (`Expr::ImplicitClosure`, which wrapped `body` at
+/// `body.span`, went with the implicit-`it` keyword). The
+/// `format_expr_inner` caller count above pins that there is no second entry
+/// into the dispatch, and `tests/fixtures/fmt_author_parens/wrappers.gg`
+/// carries a cell per censused shared-span pair kind. Those two, not this
+/// lint, are the net for it.
 #[test]
 fn fmt_paren_emission_census() {
     #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -23151,11 +23209,9 @@ fn expr_stmt_walker_population_is_pinned() {
     "src/loader.rs::qualify_expr [HAND-ROLLED]",
     "src/loader.rs::qualify_stmt [HAND-ROLLED]",
     "src/loader.rs::stmt_mentions_iter [HAND-ROLLED]",
-    "src/parser/expr.rs::contains_it [HAND-ROLLED]",
     "src/parser/expr.rs::parse_infix [HAND-ROLLED]",
     "src/parser/expr.rs::parse_postfix [HAND-ROLLED]",
     "src/parser/expr.rs::parse_prefix_inner [HAND-ROLLED]",
-    "src/parser/expr.rs::stmt_contains_it [HAND-ROLLED]",
     "src/parser/pattern.rs::parse_single_pattern [HAND-ROLLED]",
     "src/parser/visitor.rs::visit_expr_children [CHOKEPOINT]",
     "src/parser/visitor.rs::walk_expr [HAND-ROLLED]",

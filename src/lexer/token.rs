@@ -385,7 +385,6 @@ pub enum Keyword {
     Meta,
 
     // Special identifiers
-    It,
     Assert,
 }
 
@@ -496,7 +495,6 @@ impl Keyword {
             Keyword::Bench => "bench",
             Keyword::Snapshot => "snapshot",
             Keyword::Meta => "meta",
-            Keyword::It => "it",
             Keyword::Assert => "assert",
         }
     }
@@ -585,7 +583,6 @@ impl Keyword {
             "snapshot" => Some(Keyword::Snapshot),
             "meta" => Some(Keyword::Meta),
             // "mod" removed as keyword — now .mod() method on ints
-            "it" => Some(Keyword::It),
             "assert" => Some(Keyword::Assert),
             _ => None,
         }

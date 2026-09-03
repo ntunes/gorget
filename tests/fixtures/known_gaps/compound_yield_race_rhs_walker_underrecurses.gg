@@ -3,26 +3,24 @@
 # assignment's RHS. A missing diagnostic on a genuinely racy program: nothing
 # turns red, nothing is printed, the race ships.
 #
-# MECHANISM: `src/semantic/safety/helpers.rs:333 expr_contains_yield_point`
-# hand-rolls its recursion over 20 of the 47 `Expr` variants and ends in
-# `_ => false` (`helpers.rs:375`). Any child-bearing variant among the other 27
-# hides the call from the walk, so the `&&` at
-# `src/semantic/safety/check_stmt.rs:392` never fires.
+# MECHANISM: `expr_contains_yield_point` in `src/semantic/safety/helpers.rs`
+# hand-rolls its recursion over 20 of the 45 `Expr` variants and ends in
+# `_ => false`. Any child-bearing variant among the other 25 hides the call
+# from the walk, so the `&&` in `check_compound_assign`
+# (`src/semantic/safety/check_stmt.rs`) never fires.
 #
 # THE SET, not a selection (regenerate: diff the `Expr::` names in
-# `helpers.rs:333-376` against `awk '/^pub enum Expr \{/,/^\}/' src/parser/ast.rs`).
-# 17 of the 27 unhandled variants are child-bearing and therefore hiding places:
+# `expr_contains_yield_point`'s match against
+# `awk '/^pub enum Expr \{/,/^\}/' src/parser/ast.rs`).
+# 16 of the 25 unhandled variants are child-bearing and therefore hiding places:
 #   Block · Catch · DictComprehension · DictLiteral · Do · DotShorthand ·
-#   ImplicitClosure · ListComprehension · Match · MetaOpInfix · Range ·
-#   Rethrow · SetComprehension · Spawn · SpawnBlocking · StringLiteral ·
-#   StructLiteral
-# The other 10 are genuine leaves (BoolLiteral, FloatLiteral, Identifier,
-# IntLiteral, It, MetaOpToken, NoneLiteral, Path, ReturnValue, SelfExpr).
+#   ListComprehension · Match · MetaOpInfix · Range · Rethrow ·
+#   SetComprehension · Spawn · SpawnBlocking · StringLiteral · StructLiteral
+# The other 9 are genuine leaves (BoolLiteral, FloatLiteral, Identifier,
+# IntLiteral, MetaOpToken, NoneLiteral, Path, ReturnValue, SelfExpr).
 # ⚠ `Expr::Closure` is a DELIBERATE `false` ("closures execute separately") and
-# must stay one. `ImplicitClosure` is listed above because it is NOT deliberate
-# — the sibling walker `find_shared_ref_in_expr_spanned` (`helpers.rs:135`) DOES
-# recurse it while treating `Closure` as opaque, so the two disagree today.
-# Rule its disposition with the conversion; do not assume it copies `Closure`.
+# must stay one; rule its disposition explicitly with the conversion rather
+# than letting the exhaustive enumeration silently flip it.
 #
 # This is the SIBLING CONSUMER of the purity walker R44 Track E fixed: that
 # round routed `purity_walk_expr` through the one exhaustive child enumeration
@@ -36,8 +34,8 @@
 #   `lc`   — `ListComprehension` body  → SILENT. WRONG.
 #   `fs`   — `StringLiteral` interp    → SILENT. WRONG.
 #   `dl`   — `DictLiteral` value       → SILENT. WRONG.
-# Cells NOT sampled, and why: the other twelve forgotten variants share the
-# same `_ => false` arm and the same one-line remedy (route this walker through
+# Cells NOT sampled, and why: the other thirteen child-bearing variants share
+# the same `_ => false` arm and the same one-line remedy (route this walker through
 # `parser::visitor::visit_expr_children`, exactly as Track E did for
 # `purity_walk_expr`); three costumes are enough to pin the class, and a
 # variant-complete net arrives with the conversion.

@@ -516,6 +516,16 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-09-03 — **D54 RATIFIED (owner): THE IMPLICIT `it` CLOSURE PARAMETER IS REMOVED FROM THE SURFACE.**
+  `it` is an ordinary identifier at every naming position. A single-parameter closure names its parameter
+  like any other, with the type omittable where context fixes it. `E_UndefinedName` on `it` carries a
+  retirement note that **displaces the edit-distance suggestion** — the note is part of the decision, not a
+  diagnostic detail: it is the migration path, and without it the removal reads to a user as a plain
+  undefined name. Landed R49 Track E: `Keyword::It` / `Expr::It` / `Expr::ImplicitClosure` deleted from Rust
+  gg, 207 self-host lines across 25 files rewritten, all four representations (`KwIt`, `KW_IT`, bare `"it"`,
+  `call_arg_depth`) regenerated to zero, `LiftedClosure.is_implicit` deleted (written at two sites, read at
+  none). Write-through: `docs/book/`, `docs/language-reference.md`.
+
 - 2026-09-02 — **D10(a) ADDENDUM sharpened in place (owner): NO PARTIAL MOVES, NO UNPACK.** Closes the 2026-07-11 sentence *"Rust-style destructuring partial moves remain a possible future WIDENING, undecided."* Only whole-value moves (`^m`). Field/index moves (`^m.a`, `^v[i]`) reject; consuming every field in one call (`f(^m.a, ^m.b)`) is the same reject — not an exception. A live value has no holes. Disjoint sibling borrows stay D10(b). The 2026-07-11 body (move-binds stay legal; the criterion is aliasing, not sigils-at-binds) is unchanged. Live NEG `place_overlap_disjoint_sibling_move_error`; `todo/t0438` closed. `todo/t0437` (`take(^self.items)`) closed as `E_PartialMove`. Write-through: book ch.11, language-reference §Ownership.
 
 - 2026-09-01 — **D53 RATIFIED (owner): `Mutex` AND `RWLock` ARE UNIQUE LOCKS. SHARING IS `Shared[Mutex[T]]`.** Owner: *"Add Mutex/RWLock to the E_MoveWithoutOperator list, as you recommended."* Same-day re-examination (owner stands with the unique-lock recommendation): **Mutex is not multi-owner.** Sharpened in place — not a second dated copy.
@@ -1308,6 +1318,17 @@ P1-infra reviewers' recommendation.
     sharing `gorget_str_slice` with `substring`), while the sequence `.slice` at `:383`
     carries `returns_view: false`. So the fix may be at the producer rather than at 211
     call sites — establish which BEFORE scoping it.
+    - **AMENDMENT, owner 2026-09-03 — the CONCLUSION STANDS; the MECHANISM above is REFUTED by
+      measurement (R49 Track K).** `.slice()` does **not** materialize per call: at a TEMP it is FREE
+      (`string_clone=0`, measured over 1,000 iterations with `--clones=stats`). It materializes at the
+      **BIND** — exactly where a correctly-tagged `s[a:b]` also must. So "materialize nothing" is true
+      **at a temp**, and is preserved by the soundness fix; the clone at a bind is D52's territory
+      (`SOUNDNESS FIRST, at the accepted cost of safe-but-wasteful cloning`), not a defect in `.slice()`.
+      ⛔ **The "1,002 vs 2" figure was a BIND-vs-BIND comparison, and its "2" IS the dangling-view defect**
+      `t0871` records: `s[a:b]` was cheap because it was not doing the work. ⇒ **The clone-reclaim yield
+      from migrating onto `s[a:b]` is ZERO**, which is why `t0316`/`t0850` withdrew the 205-site
+      recommendation. The two spellings are cost-equivalent aliases (Rider 2), and a guard now pins that
+      equivalence in both directions rather than banning either.
   - **RIDER 2, owner 2026-08-31 — THE REMOVAL CLAUSE IS OVERRIDDEN. `.slice()` AND
     `.substring()` ARE KEPT.** *"let's not remove .slice/substring as ratified by D22. we
     keep it for now, both documented as aliases."* ⇒ **D22's *".slice() removed after

@@ -1,0 +1,44 @@
+# `it` is an ORDINARY IDENTIFIER. It was the implicit-closure parameter
+# keyword; with the construct retired, the spelling is free everywhere a name
+# is, and this fixture pins every naming position the parser and the resolver
+# treat differently:
+#
+#   * a local binding      — `int it = 5`, which the parser used to reject
+#                            outright as a reserved keyword in binding-name
+#                            position;
+#   * a FOR-LOOP variable  — `for it in xs`, the shape a beginner writes
+#                            without thinking about it and which used to
+#                            cascade parse errors;
+#   * a function PARAMETER — `int twice(int it)`, plus a read of it in the
+#                            body;
+#   * a CLOSURE parameter  — `(int it): it + 1`, the position the retired
+#                            keyword used to occupy implicitly;
+#   * a struct FIELD       — `Cart.it`, read through a field access, which
+#                            goes through the type namespace rather than the
+#                            value one.
+#
+# Each position is READ as well as bound: a binding the program never reads
+# would stay green if `it` still parsed to a distinct node.
+
+struct Cart:
+    int it
+
+int twice(int it):
+    return it * 2
+
+void main():
+    int it = 5
+    print(it)
+    print(twice(it))
+
+    Vector[int] xs = [1, 2, 3]
+    int total = 0
+    for it in xs:
+        total = total + it
+    print(total)
+
+    Callable[int(int)] bump = (int it): it + 1
+    print(bump(41))
+
+    Cart c = Cart(7)
+    print(c.it)

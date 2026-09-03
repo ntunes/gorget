@@ -6474,63 +6474,40 @@ fn callable_unit_form_clone_segv() {
     run_gg("known_gaps/callable_unit_form_clone_segv.gg", "2\n2\n2");
 }
 
-/// KNOWN GAP `todo/t0963` — ⭐ THE REFERENCE LAGS THE SELF-HOST. `flat_map`
-/// with an implicit-`it` body zeroes every element after the first of each
-/// inner vector on Rust `gg` (`1 0 2 0`), while the explicit-closure and
-/// named-function spellings of the SAME program are correct and the self-host
-/// prints `1 1 2 2` for all three. Right element COUNT, wrong values — the
-/// failure mode any length assertion sleeps through.
-///
-/// Asserts the CORRECT output, never the reference's current answer: per the
-/// succession plan the Rust side is fixed as oracle hygiene and the self-host
-/// is never dumbed down to match. NOT `todo/t0878` (that is the `Callable`
-/// PARAMETER monomorph gap, a link failure). Un-ignore when Rust prints
-/// `1 1 2 2` for all three spellings.
-#[test]
-#[ignore = "todo/t0963 — Rust gg miscompiles `flat_map(it)` (1 0 2 0); the explicit-closure and \
-named-fn spellings are correct and the SELF-HOST is right. Reference lags the self-host. \
-Asserts the intended 1 1 2 2 on all three spellings."]
-fn flat_map_implicit_it_zeroes() {
-    run_gg(
-        "known_gaps/flat_map_implicit_it_zeroes.gg",
-        "closure 1\nclosure 1\nclosure 2\nclosure 2\nnamed 1\nnamed 1\nnamed 2\nnamed 2\nit 1\nit 1\nit 2\nit 2",
-    );
-}
-
-/// KNOWN GAP `todo/t0962`, SELF-HOST lane — a comprehension-bodied
-/// implicit-`it` argument is REJECTED by the self-host and accepted by Rust
-/// `gg`, which runs it correctly. `expr_has_it` has no `EListComp` /
-/// `ESetComp` / `EDictComp` arm, so the body is treated as a CALLABLE and the
-/// `ECall` callee dispatcher refuses the synthesized
-/// `([z * 2 for z in it])(__hofp0)`. LOUD, so nothing is miscompiled — a
-/// Core #9 lane divergence, not a Core #10 hole. Asserts the intended output
-/// on the SELF-HOST lane.
-#[test]
-#[ignore = "KNOWN GAP t0962: the self-host rejects a comprehension-bodied implicit-`it` argument \
-that Rust gg accepts and runs (expr_has_it has no EListComp/ESetComp/EDictComp arm). Asserts the \
-intended 2/4/6/8 on the self-host lane; TODO.md."]
-#[serial(self_host_lowerer_driver)]
-fn sh_comprehension_bodied_implicit_it() {
-    sh_known_gap_expect(
-        "known_gaps/sh_comprehension_bodied_implicit_it.gg",
-        "sh_comprehension_bodied_implicit_it",
-        "a 2\na 4\na 6\na 8",
-    );
-}
-
 // `todo/t0953` (Track T-a1's item, owned there) — the UNBOUNDEDNESS cell of
 // the closure-literal-argument env leak, which that item's own two-call repro
 // cannot show: twenty `map` calls leak twenty records (160 bytes), so the cost
-// scales with trip count rather than being a constant. Deliberately the
-// IMPLICIT-`it` spelling, which t0953's probes do not use, so the two together
-// show the class spans the explicit literal and the synthesised one. stdout is
-// already correct; the gap is visible only under the sanitizer.
+// scales with trip count rather than being a constant. stdout is already
+// correct; the gap is visible only under the sanitizer.
 #[test]
 #[ignore = "todo/t0953 — a closure-literal argument leaks its env, UNBOUNDED per call: 20 map \
 calls leak 20 records. stdout is already correct; the gap is the leak, visible only under \
 `gg build --sanitize` + LeakSanitizer. Asserts the intended output (120)."]
 fn hof_call_env_leak_unbounded() {
     run_gg("known_gaps/hof_call_env_leak_unbounded.gg", "120");
+}
+
+/// KNOWN GAP `todo/t0977` — `auto out = v.map(<closure>)` reads back a RAW
+/// POINTER when the closure's result type differs from the source element type
+/// and is a heap `String`. Silent wrong output on ordinary syntax: `gg check`
+/// is clean and the element COUNT is right.
+///
+/// SIX CELLS over a three-dimensional axis (destination · callee kind · source
+/// vs result type), four of which are CORRECT and are what localises the
+/// defect to the conjunction rather than to any one column — a declared
+/// element type repairs the same expression, a named function with the
+/// identical signature is correct, and a same-type map through the same
+/// closure path is correct. Asserts the INTENDED output, so it is RED at HEAD
+/// on purpose.
+#[test]
+#[ignore = "todo/t0977 — auto-destination cross-type `map` with a closure callee and a heap \
+String result reads back a raw pointer. gg check is clean; the count is right and only the \
+values are garbage. Asserts the intended a/20/a/a/a/ab!."]
+fn hof_cross_type_map_auto_dest_garbage() {
+    run_gg(
+        "known_gaps/hof_cross_type_map_auto_dest_garbage.gg",
+        "a\n20\na\na\na\nab!",
+    );
 }
 
 // `todo/t0957` — an indexed callee with a VARIABLE index (`fs[n](21)`) is
@@ -7341,17 +7318,6 @@ fn iter_for_else() {
         "\
 empty set
 done",
-    );
-}
-
-#[test]
-fn implicit_it() {
-    run_gg(
-        "implicit_it.gg",
-        "\
-84
-0
-43",
     );
 }
 
@@ -14724,7 +14690,7 @@ const FMT_AUTHOR_PAREN_TEXT_CELLS: &[(&str, &[&str])] = &[
     (
         "wrappers.gg",
         &[
-            "xs.map((it * 2))",
+            "xs.map((int x): (x * 2))",
             "return (n + 2)",
             "return (n * 3)",
             "return (a + b)",
@@ -26149,7 +26115,6 @@ fn format_expr_canonical(expr: &Expr) -> String {
         // -value node, both sides change in the same commit.
         Expr::ReturnValue => "__return__".to_string(),
         Expr::SelfExpr => "self".to_string(),
-        Expr::It => "it".to_string(),
         Expr::Path { segments } => segments
             .iter()
             .map(|s| s.node.as_str())
@@ -26277,10 +26242,6 @@ fn format_expr_canonical(expr: &Expr) -> String {
                 _ => format!(" {};", format_expr_canonical(&body.node)),
             };
             format!("({}):{body_str}", param_strs.join(", "))
-        }
-        Expr::ImplicitClosure { body } => {
-            // Gorget parser doesn't wrap implicit-it in closures, so just emit the body expression
-            format_expr_canonical(&body.node)
         }
         Expr::Block(block) => {
             let body = format_block_canonical(&block.stmts);
@@ -40470,13 +40431,23 @@ fn self_host_runtime_diff() {
     // CRASH, both to MATCH; `shared_callable` moved WRONG-OUTPUT -> CC-FAIL
     // (its `Shared[Callable].get()()` invoke is now EMITTED rather than
     // discarded, and hits an unresolved inner C type — `todo/t0612`, corrected
-    // there). Track U's own two new fixtures add ZERO inflow: BOTH are
-    // top-level, BOTH are in this auto-scanned corpus, and BOTH MATCH —
-    // measured, not asserted (`callable_callee_shape_axis`,
-    // `hof_implicit_it_collection_axis`). The second carries a declared row in
-    // `tests/sanitize/LEAK_ALLOWLIST.txt` for a PRE-EXISTING closure-env leak
-    // it makes visible (`todo/t0953`); that is a sanitizer matter and has no
-    // bearing on this count.
+    // there). Track U's own two new fixtures added ZERO inflow: both were
+    // top-level, both in this auto-scanned corpus, and both MATCHed —
+    // measured, not asserted.
+    //
+    // 2026-09-03 (R49 Track E): the CORPUS shrank and the count did not move.
+    // Two top-level fixtures were DELETED with the implicit-`it` closure
+    // keyword and one was added, a net -1 on the scanned corpus.
+    // Re-MEASURED at that landing, `--release`, the regen in `scripts/figures.db`:
+    //   WRONG-OUTPUT 29 + CC-FAIL 67 + CRASH 36 + DRIVER-FAIL 15 = 147,
+    //   MATCH 1531 of 1678 non-excluded (PARITY 91.2%).
+    // ⛔ THE CEILING DOES NOT MOVE WHEN A *MATCHING* ROW IS DELETED, and that is
+    // the trap: `non_match` is `non_excluded - matched`, so BOTH terms drop and
+    // the difference is invariant. Lowering it by the count of deleted matching
+    // rows would set it BELOW a measurement that has not changed, which is a
+    // self-inflicted RED. Only a deleted NON-matching row moves it.
+    // The track's own new top-level fixture `it_ordinary_identifier.gg` MATCHes
+    // — measured, not asserted: it appears in no non-MATCH bucket of that run.
     const RUNTIME_DIFF_NONMATCH_CEILING: usize = 147;
     // ⛔ THIS GATE NO-OPS IN THE PROFILE PEOPLE ACTUALLY RUN, AND THAT IS A
     // COVERAGE HOLE, NOT A DESIGN. `cargo test --test integration self_host` is
@@ -46566,6 +46537,24 @@ fn break_value_removed_error() {
     );
 }
 
+/// The implicit-`it` closure parameter was REMOVED from the surface: `it` is
+/// an ordinary identifier again, so `xs.map(it * 2)` is an undefined name.
+/// What this pins is not that it fails — an undefined name always did — but
+/// WHICH message it fails with. The generic path computes an edit-distance
+/// suggestion, and `it`/`xs` is distance 2, so without the retirement note the
+/// diagnostic reads "did you mean `xs`?": confidently wrong, and pointing at
+/// the receiver of the very call the user was writing. The note DISPLACES the
+/// suggestion (`src/semantic/errors.rs`), and this is the only thing that says
+/// so. Same own-directory shape as `break_value_removed_error` — the rejected
+/// source stays out of the top-level sweeps.
+#[test]
+fn it_removed_error() {
+    check_gg_fails(
+        "it_removed_error/main.gg",
+        "it is no longer a keyword — write an explicit closure",
+    );
+}
+
 /// D35 (docs/define-gorget/decisions.md, ratified 2026-07-26): an unnamed
 /// parameter's sigil in a function type goes AFTER the type
 /// (`Callable[void(int &)]`), mirroring the named-parameter rule
@@ -48645,44 +48634,29 @@ fn callable_callee_shape_axis() {
     );
 }
 
-/// REGRESSION (R48 Track U) — an implicit-`it` body handed to a COLLECTION
-/// higher-order method is a closure BODY, not a callable value. The HOF
-/// extractor wrapped it as `(it * 2)(__hofp0)` — a call whose callee is a
-/// BinaryOp — which the self-host lowerer then discarded silently, filling the
-/// accumulator with unmapped, uninitialized elements. RED-verified: exit 139
-/// on the pre-fix self-host driver.
-///
-/// TWO axes, eleven cells, so a partial regression at any one trips it. AXIS 1
-/// is the HOF ARM (map, filter, any, all, Set.any). AXIS 2 is the BODY SHAPE —
-/// how the body reaches `it`: arithmetic (`it * 2`), field and index
-/// projection (`it.n`, `it[0]`), projection under a comparison
-/// (`it.n > 1`), and three `if` forms. Axis 2 failed two different ways: a
-/// non-exhaustive `expr_has_it` never recognised the projection bodies as
-/// implicit-`it` bodies at all (SEGV, or a silently EMPTY vector), and the
-/// DECLARED destination type leaked into the `if`-bodied ones so the
-/// accumulator was minted `Vector[Vector[int]]` (silent garbage, while `auto`
-/// was correct). It carries a `tests/sanitize/LEAK_ALLOWLIST.txt` row — Rust `gg`
-/// leaks one closure env per implicit-`it` HOF call, a PRE-EXISTING class this
-/// fixture makes VISIBLE rather than one it introduces, owned by `todo/t0953`
-/// and cited on the row. `closure_mixed_implicit_explicit_wiring.gg` below
-/// carries the same defect's `map` cell and was green throughout it.
-#[test]
-fn hof_implicit_it_collection_axis() {
-    run_gg(
-        "hof_implicit_it_collection_axis.gg",
-        "proj 1\nproj 2\nproj 3\nprojfilt 2\nprojfilt 3\nidx 10\nidx 20\ncond 0\ncond 7\ncond 7\ncond 7\nbranch 1\nbranch 2\nbranch 3\nbranch 4\nboth 0\nboth 2\nboth 3\nboth 4\nmap 2\nmap 4\nmap 6\nmap 8\nfilter 2\nfilter 4\nany true\nall true\nset_any true",
-    );
-}
-
 /// The `closure Phase 2 Step A` wiring proof, which had NO wired assertion at
 /// all — it was only ever exercised by the auto-scanned self-host parity
-/// corpus. It also now reads the mapped VALUES, not just the length: it stayed
-/// green right through the miscompile `hof_implicit_it_collection_axis` pins,
-/// because `map`'s accumulator had the right element COUNT and only the values
-/// were garbage.
+/// corpus. It also reads the mapped VALUES, not just the length: reading only
+/// the length stayed green right through a self-host miscompile that filled
+/// the accumulator with unmapped elements, because the COUNT was right and
+/// only the values were garbage.
 #[test]
 fn closure_mixed_implicit_explicit_wiring() {
     run_gg("closure_mixed_implicit_explicit_wiring.gg", "3\n2\n4\n6\n6");
+}
+
+/// `it` is an ORDINARY IDENTIFIER now that the implicit-closure keyword is
+/// retired. FIVE naming positions, each bound AND read, because the parser and
+/// the resolver treat them differently and a partial regression would leave
+/// some of them working: local binding (`int it = 5` — the parser used to
+/// reject this outright), for-loop variable (the beginner shape that used to
+/// cascade parse errors), function parameter, closure parameter (the position
+/// the keyword used to occupy implicitly) and struct field (the type namespace
+/// rather than the value one). Binding without reading would stay green if
+/// `it` still parsed to a node of its own, which is why every cell reads back.
+#[test]
+fn it_ordinary_identifier() {
+    run_gg("it_ordinary_identifier.gg", "5\n10\n6\n42\n7");
 }
 
 /// KNOWN GAP (Track K residual) — RETURNED-CALL-RESULT cell of the
@@ -57516,8 +57490,8 @@ fn c1_d26_shift_capture_type_mismatch_intended() {
 #[ignore = "KNOWN GAP (filed 2026-08-06, D26 F1a executor scope-note): a closure \
 whose body contains a fallible-arith operator does NOT auto-infer \
 `throws ArithError` on the closure's signature. The F1a pre-collect_top_level \
-walker in src/semantic/rewrite.rs deliberately skips Expr::Closure / \
-Expr::ImplicitClosure to avoid false-positive promotion of the enclosing fn. \
+walker in src/semantic/rewrite.rs deliberately skips Expr::Closure to avoid \
+false-positive promotion of the enclosing fn. \
 Consequence: a closure using +! requires the user to declare `throws ArithError` \
 explicitly (an asymmetry with fn-body auto-infer). Current behavior is a SOUND \
 E_UnhandledThrows reject (not a miscompile) — this is an ERGONOMIC gap. ⚡ FIX \
@@ -60312,12 +60286,6 @@ fn fmt_output_reparses_corpus_wide() {
 //   ERange            → OMITTED: `(a.m()..b).n()` needs a method on a range value;
 //                       none exists. The arm is present (and takes only the LOW
 //                       endpoint, the only one that can contend).
-//   EImplicitClosure  → NO SEPARATE ROW, arm present. It copies the wrapped
-//                       expression's WHOLE span (`val.span`), so it inherits both
-//                       start and end; the discriminator recurses into it for
-//                       completeness, but the wrapper is returned directly as a call
-//                       argument, never as a method receiver, so no chain can be
-//                       spelled through it today.
 //   EDo               → NOT A SPINE LINK, and no arm can fix it (Core #15e Q4 — a
 //                       case with no subject). The synthesized `catch (e):`-block
 //                       form inherits `lhs.span.start` WITHOUT wrapping `lhs`: its

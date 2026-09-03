@@ -13,7 +13,7 @@ from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, EAs, 
 from ast import EFieldAccess, EUnaryOp, EIndex, EIntLiteral
 from ast import SExpr, SVarDecl, SReturn
 # Full Expr/Stmt surface for the exhaustive unified safety walker (check_safety_*).
-from ast import ERange, EIf, EImplicitClosure, EArrayLiteral, ETupleLiteral
+from ast import ERange, EIf, EArrayLiteral, ETupleLiteral
 from ast import EDictLiteral, EStructLiteral, EDotShorthand, ETry, EMove, EPropagate, EMutableBorrow, EDeref
 from ast import EListComp, ESetComp, EDictComp, EDefaultOp, EAwait, ESpawn, ESpawnBlocking
 from ast import ERethrow, ECatch
@@ -21,7 +21,7 @@ from ast import SAssign, SCompoundAssign, SThrow, SBreak, SContinue, SPass, SFor
 from ast import SLoop, SMatch, SWith, SAssert, SAssertReturn, SNamedScope, SSelect, SOnError
 from ast import SItem, SSnapshot, SMeta, SMetaFor, SMetaIf, SMetaConst, SMetaForMatch
 from ast import SMetaMatch, SMetaWhile, SOSend
-from ast import EFloatLiteral, EBoolLiteral, EStringLiteral, ECharLiteral, ENoneLiteral, ESelfExpr, EIt
+from ast import EFloatLiteral, EBoolLiteral, EStringLiteral, ECharLiteral, ENoneLiteral, ESelfExpr
 from ast import TPrimitive
 from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo, ScopeKind, SkEquipBlock, SkFunction
@@ -1862,7 +1862,7 @@ void collect_idents_expr(SpannedExpr e, Vector[SpannedExpr] &out):
                 collect_idents_expr(a, &out)
         else:
             # EMove operand (`!x`) is an explicit move, not an implicit-copy
-            # capture — deliberately not recursed. Literals / ESelfExpr / EIt
+            # capture — deliberately not recursed. Literals / ESelfExpr
             # carry no capturable outer local.
             pass
 
@@ -2650,8 +2650,6 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             live_check_use(use_key, name, expr.span, state, &ctx)
         case ESelfExpr():
             live_check_use(-2, "self", expr.span, state, &ctx)
-        case EIt():
-            pass
         case EBinaryOp(left, op, right):
             check_safety_expr(*left, scope_id, &state, &scopes, &types, &ctx)
             check_safety_expr(*right, scope_id, &state, &scopes, &types, &ctx)
@@ -2866,8 +2864,6 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
                             reject_tainted_place(tail_expr, scopes, &types, &ctx)
                     else:
                         pass
-        case EImplicitClosure(inner):
-            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EArrayLiteral(elements):
             # Round XXVIII Track C R1 (walker-driven, per pass-2 reference-
             # grade fold) — container-literal ELEMENTS are D32 consuming init
@@ -4601,8 +4597,6 @@ void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTabl
             pass
         case ESelfExpr():
             pass
-        case EIt():
-            pass
         case EBinaryOp(r0, _, r2):
             record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
             record_method_targs_in_expr(*r2, &scopes, &types, &ctx)
@@ -4688,8 +4682,6 @@ void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTabl
                     record_method_targs_in_expr(__gR1, &scopes, &types, &ctx)
         case EClosure(_, _):
             pass
-        case EImplicitClosure(r0):
-            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
         case EArrayLiteral(r0):
             for __eR0 in r0:
                 record_method_targs_in_expr(__eR0, &scopes, &types, &ctx)
@@ -4932,14 +4924,6 @@ bool expr_spine_has_method_call(SpannedExpr sexpr):
             if sp0opt is Some(__rng_lo):
                 return expr_spine_has_method_call(*__rng_lo)
             return false
-        # WHOLE-SPAN COPY. `EImplicitClosure` is not built as `Span(lhs.span.start, …)`
-        # at all — it is `SpannedExpr(EImplicitClosure(Box[SpannedExpr](val)), val.span)`,
-        # taking the wrapped expression's span ENTIRE. That inherits `span.start` like
-        # every other arm here, and additionally collides on `span.end` — the very key
-        # `expr_link_types` uses as its escape hatch. Its spelling is why the parser
-        # census has to classify whole-span copies and not just `Span(` literals.
-        case EImplicitClosure(sp0):
-            return expr_spine_has_method_call(*sp0)
         else:
             return false
 
@@ -4986,8 +4970,6 @@ bool expr_has_method_generic_call(SpannedExpr sexpr, TraitRegistry registry):
         case EIdentifier(_):
             return false
         case ESelfExpr():
-            return false
-        case EIt():
             return false
         case EBinaryOp(h0, _, h2):
             if expr_has_method_generic_call(*h0, registry):
@@ -5064,10 +5046,6 @@ bool expr_has_method_generic_call(SpannedExpr sexpr, TraitRegistry registry):
                         return true
             return false
         case EClosure(_, _):
-            return false
-        case EImplicitClosure(h0):
-            if expr_has_method_generic_call(*h0, registry):
-                return true
             return false
         case EArrayLiteral(h0):
             for __eH0 in h0:

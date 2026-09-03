@@ -888,15 +888,6 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
 
-        case EIt():
-            pass
-
-        case EImplicitClosure(inner):
-            scopes.push_scope(SkFunction())
-            scopes.define("it", DkVariable(), !Span(0, 0))
-            resolve_expr(*inner, &scopes, &ctx)
-            scopes.pop_scope()
-
         case EListComp(comp_expr, var_name, iterable, opt_cond):
             resolve_expr(*iterable, &scopes, &ctx)
             scopes.push_scope(SkForLoop())

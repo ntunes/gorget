@@ -118,7 +118,7 @@ enum Keyword:
     KwExtern
     KwSelfLower  KwSelfUpper
     KwMove
-    KwTest  KwSuite  KwBench  KwIt  KwPanic  KwAssert
+    KwTest  KwSuite  KwBench  KwPanic  KwAssert
     KwShared  KwMeta  KwSelect  KwRethrow  KwMod  KwCatch  KwOn  KwSnapshot
 
 # ── String literal types ──────────────────────────────────────
@@ -338,8 +338,6 @@ Option[Keyword] keyword_from_str(String s):
         return Some(KwSuite())
     elif s == "bench":
         return Some(KwBench())
-    elif s == "it":
-        return Some(KwIt())
     elif s == "panic":
         return Some(KwPanic())
     elif s == "assert":

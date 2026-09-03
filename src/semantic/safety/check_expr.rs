@@ -359,8 +359,7 @@ impl<'a> BorrowChecker<'a> {
             // forward of the pre-typed-node behaviour: the placeholder
             // identifier had no `resolution_map` entry, so the `Identifier`
             // arm below was already inert for it.)
-            | Expr::ReturnValue
-            | Expr::It => {}
+            | Expr::ReturnValue => {}
 
             // D2-rider scout: a `self` read counts for the dead-write lint —
             // without this, every scratch-copy plain-`self` method (mutate
@@ -1508,32 +1507,6 @@ impl<'a> BorrowChecker<'a> {
                 // tail which lowers to SReturn). A direct top-level `Expr::Move`
                 // as the closure body (`(): !s`) legit-moves the source at the
                 // closure's return boundary; suppress `E_MoveInOperandPosition`.
-                let prev_move = self.suppress_move_in_operand_position;
-                if matches!(&body.node, Expr::Move { .. }) {
-                    self.suppress_move_in_operand_position = true;
-                }
-                self.check_expr(body);
-                self.suppress_move_in_operand_position = prev_move;
-                self.restore_branch_state(&saved);
-                self.loop_depth = saved_loop_depth;
-                self.loop_local_defs = saved_loop_locals;
-                self.in_return_expr = saved_in_return;
-                self.current_function_is_async = saved_is_async;
-                self.arena_depth = saved_arena_depth;
-            }
-
-            Expr::ImplicitClosure { body } => {
-                let saved = self.save_branch_state();
-                let saved_loop_depth = self.loop_depth;
-                let saved_loop_locals = std::mem::take(&mut self.loop_local_defs);
-                let saved_in_return = self.in_return_expr;
-                let saved_is_async = self.current_function_is_async;
-                let saved_arena_depth = self.arena_depth;
-                self.loop_depth = 0;
-                self.arena_depth = 0;
-                self.in_return_expr = false;
-                self.current_function_is_async = false;
-                // Same RESTING treatment as Closure above.
                 let prev_move = self.suppress_move_in_operand_position;
                 if matches!(&body.node, Expr::Move { .. }) {
                     self.suppress_move_in_operand_position = true;

@@ -329,9 +329,9 @@ reference-vs-code conflict is an open question, not doc-wins. Cell: `misc_string
 
 ---
 
-# REJECTED-AND-THAT-IS-RIGHT (9) — with diagnostic-quality notes
+# REJECTED-AND-THAT-IS-RIGHT (8) — with diagnostic-quality notes
 
-All nine rejections are **correct**. What varies is whether the message helps.
+All eight rejections are **correct**. What varies is whether the message helps.
 
 | shape | first message the user sees | verdict |
 |---|---|---|
@@ -343,7 +343,6 @@ All nine rejections are **correct**. What varies is whether the message helps.
 | `v.append(3)` | `E_NoMethodFound: no method 'append' found on type 'Vector[int]'` | **incomplete** — no "did you mean `push`" |
 | `void main() { ... }` | `error: expected type, found '{'` | **poor** — never mentions indentation-based blocks |
 | `int x = 5;` | `error: unexpected character: ';'` (one per semicolon) | terse but adequate |
-| `for it in cart:` | `expected pattern, found 'it'` + **3 cascading errors** | **poor** — none says "`it` is a keyword" |
 
 Two cross-cutting diagnostic findings from the WORKS/WRONG cells:
 

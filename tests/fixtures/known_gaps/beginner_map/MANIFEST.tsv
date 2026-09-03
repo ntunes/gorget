@@ -63,8 +63,8 @@ topic	cell	bucket	expected	actual	note
 14 classic exercises	ex_reverse_string	WORKS	olleh	(matches)	
 14 classic exercises	ex_run_length_encode	WORKS	a3b2c1	(matches)	
 14 classic exercises	ex_second_largest	WORKS	7	(matches)	
-14 classic exercises	ex_shopping_cart	REJECTED-AND-THAT-IS-RIGHT	apple x2 = 300 / ... / total 550	parse error: expected pattern, found 'it' (+3 cascading)	DIAGNOSTIC POOR: `it` is the implicit-closure keyword, so rejecting it as a loop variable is defensible, but 4 cascading errors and none says 'it is a keyword'.
-14 classic exercises	ex_shopping_cart_total	WORKS	apple x2 = 300 / bread x1 = 250 / total 550	(matches)	
+14 classic exercises	ex_shopping_cart	WORKS	apple x2 = 300 / bread x1 = 250 / total 550	(matches)	`it` is no longer a keyword, so `for it in cart:` is an ordinary loop. The rejection this row recorded, and the judgement that it was defensible, are both retired.
+14 classic exercises	ex_shopping_cart_total	WORKS	apple x2 = 300 / bread x1 = 250 / total 550	(matches)	Cell retired: it existed only as the `entry`-named companion to `ex_shopping_cart`, which now compiles under its own name.
 14 classic exercises	ex_star_pyramid	WORKS	* / ** / ***	(matches)	
 14 classic exercises	ex_sum_list	WORKS	15	(matches)	
 14 classic exercises	ex_temperature	WORKS	32.00 / 212.00 / 98.60	(matches)	
@@ -96,9 +96,9 @@ topic	cell	bucket	expected	actual	note
 11 closures & higher-order	hof_any_all	WORKS	true / true / false	(matches)	
 11 closures & higher-order	hof_chain_map_filter	WORKS	2 / 4 / 8	(matches)	
 11 closures & higher-order	hof_filter	WORKS	2 / 2 / 4	(matches)	
-11 closures & higher-order	hof_filter_implicit_it	WORKS	2 / Alice / Charlie	(matches)	
+11 closures & higher-order	hof_filter_implicit_it	WORKS	2 / Alice / Charlie	(matches)	Cell retired with the implicit-`it` closure keyword.
 11 closures & higher-order	hof_fold	WORKS	15	(matches)	
-11 closures & higher-order	hof_implicit_it	WORKS	5 / 3 / 7	(matches)	
+11 closures & higher-order	hof_implicit_it	WORKS	5 / 3 / 7	(matches)	Cell retired with the implicit-`it` closure keyword.
 11 closures & higher-order	hof_iter_chain	WORKS	50	(matches)	
 11 closures & higher-order	hof_map	WORKS	5 / 2 / 10	(matches)	
 11 closures & higher-order	hof_map_strings	WORKS	ALPHA / BETA	(matches)	

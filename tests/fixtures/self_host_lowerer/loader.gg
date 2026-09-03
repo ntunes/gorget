@@ -277,9 +277,6 @@ bool expr_mentions_iter(SpannedExpr sexpr):
         case ESpawnBlocking(inner_box):
             SpannedExpr spb_e = *inner_box
             return expr_mentions_iter(spb_e)
-        case EImplicitClosure(body_box):
-            SpannedExpr ic_e = *body_box
-            return expr_mentions_iter(ic_e)
         case EDefaultOp(lhs_box, rhs_box):
             SpannedExpr do_lhs = *lhs_box
             SpannedExpr do_rhs = *rhs_box

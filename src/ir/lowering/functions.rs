@@ -782,10 +782,8 @@ fn extract_path_for_mut(expr: &Expr) -> Option<String> {
         | Expr::DotShorthand { .. }
         | Expr::FloatLiteral(..)
         | Expr::If { .. }
-        | Expr::ImplicitClosure { .. }
         | Expr::IntLiteral(..)
         | Expr::Is { .. }
-        | Expr::It
         | Expr::ListComprehension { .. }
         | Expr::Match { .. }
         | Expr::MetaOpInfix { .. }
@@ -1205,8 +1203,7 @@ fn cow_after_expr_moves(
         | Expr::Spawn { expr: e, .. }
         | Expr::SpawnBlocking { expr: e, .. }
         | Expr::Is { expr: e, .. }
-        | Expr::OptionalChain { object: e, .. }
-        | Expr::ImplicitClosure { body: e } => {
+        | Expr::OptionalChain { object: e, .. } => {
             cow_after_expr_moves(&e.node, future, info, interner);
         }
         Expr::DefaultOp { lhs, rhs } | Expr::MetaOpInfix { left: lhs, right: rhs, .. } => {
@@ -1327,7 +1324,6 @@ fn cow_after_expr_moves(
         | Expr::SelfExpr
         | Expr::ReturnValue
         | Expr::Path { .. }
-        | Expr::It
         | Expr::MetaOpToken(_) => {}
     }
 }
@@ -1539,7 +1535,7 @@ fn count_uses_in_expr(expr: &Expr, counts: &mut rustc_hash::FxHashMap<String, u3
             }
         }
         Expr::StringLiteral(_, _) => {} // f-string interpolations don't affect move analysis
-        Expr::Closure { body, .. } | Expr::ImplicitClosure { body, .. } => {
+        Expr::Closure { body, .. } => {
             count_uses_in_expr(&body.node, counts);
         }
         Expr::Match { scrutinee, arms, else_arm, .. } => {
@@ -1603,7 +1599,6 @@ fn count_uses_in_expr(expr: &Expr, counts: &mut rustc_hash::FxHashMap<String, u3
         | Expr::SelfExpr
         | Expr::ReturnValue
         | Expr::Path { .. }
-        | Expr::It
         | Expr::MetaOpToken(_) => {}
     }
 }

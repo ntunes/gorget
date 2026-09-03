@@ -351,22 +351,6 @@ fn test_var_decl() {
 }
 
 #[test]
-fn test_var_decl_with_it_binding_rejected() {
-    // `it` is the implicit-closure-parameter keyword: every *read* of `it`
-    // parses to `Expr::It`, so a local named `it` would be unreadable.
-    // `int it = 5` used to be accepted (commit 089b8e48), producing a silent
-    // miscompile (`int it = 42; print(it)` printed garbage). The parser now
-    // rejects a keyword in binding-name position with a clear error.
-    let (_module, errors) = parse_with_errors("void main():\n    int it = 5\n");
-    assert!(!errors.is_empty(), "expected a parse error for `int it = 5`");
-    let rendered = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n");
-    assert!(
-        rendered.contains("reserved keyword") && rendered.contains("it"),
-        "expected a 'reserved keyword' error mentioning `it`, got: {rendered}"
-    );
-}
-
-#[test]
 fn test_type_path_followed_by_infix_keyword_not_rejected() {
     // Regression guard for the `=`-immediately-after lookahead: a parsed
     // type-path followed by an infix keyword (`as` cast here) is a valid
@@ -927,101 +911,6 @@ fn test_parse_generic_function_call() {
                     assert_eq!(args.len(), 2);
                 } else {
                     panic!("Expected Call with generic args");
-                }
-            } else {
-                panic!();
-            }
-        } else {
-            panic!();
-        }
-    } else {
-        panic!();
-    }
-}
-
-// ── Implicit `it` in closures ──────────────────────────────
-
-#[test]
-fn test_implicit_it_wraps_in_method_call() {
-    // `some.map(it * 2)` → MethodCall with an ImplicitClosure arg
-    let module = parse("void main():\n    some.map(it * 2)\n");
-    if let Item::Function(ref f) = module.items[0].node {
-        if let FunctionBody::Block(ref block) = f.body {
-            if let Stmt::Expr(ref expr) = block.stmts[0].node {
-                if let Expr::MethodCall { ref args, .. } = expr.node {
-                    assert_eq!(args.len(), 1);
-                    assert!(
-                        matches!(&args[0].node.value.node, Expr::ImplicitClosure { .. }),
-                        "Expected ImplicitClosure, got {:?}",
-                        args[0].node.value.node
-                    );
-                } else {
-                    panic!("Expected MethodCall");
-                }
-            } else {
-                panic!();
-            }
-        } else {
-            panic!();
-        }
-    } else {
-        panic!();
-    }
-}
-
-#[test]
-fn test_implicit_it_not_wrapped_in_explicit_closure() {
-    // `(x): it + x` — `it` inside an explicit closure should NOT
-    // produce ImplicitClosure at the arg level (it's just a free reference).
-    let module = parse("void main():\n    some.map((int x): it + x)\n");
-    if let Item::Function(ref f) = module.items[0].node {
-        if let FunctionBody::Block(ref block) = f.body {
-            if let Stmt::Expr(ref expr) = block.stmts[0].node {
-                if let Expr::MethodCall { ref args, .. } = expr.node {
-                    assert_eq!(args.len(), 1);
-                    assert!(
-                        matches!(&args[0].node.value.node, Expr::Closure { .. }),
-                        "Expected Closure (not ImplicitClosure), got {:?}",
-                        args[0].node.value.node
-                    );
-                } else {
-                    panic!("Expected MethodCall");
-                }
-            } else {
-                panic!();
-            }
-        } else {
-            panic!();
-        }
-    } else {
-        panic!();
-    }
-}
-
-#[test]
-fn test_implicit_it_nested_call() {
-    // `some.and_then(Some(it + 1))` → single ImplicitClosure wrapping `Some(it + 1)`
-    let module = parse("void main():\n    some.and_then(Some(it + 1))\n");
-    if let Item::Function(ref f) = module.items[0].node {
-        if let FunctionBody::Block(ref block) = f.body {
-            if let Stmt::Expr(ref expr) = block.stmts[0].node {
-                if let Expr::MethodCall { ref args, .. } = expr.node {
-                    assert_eq!(args.len(), 1);
-                    if let Expr::ImplicitClosure { ref body } = args[0].node.value.node {
-                        // Body should be a Call to Some, not another ImplicitClosure
-                        assert!(
-                            matches!(&body.node, Expr::Call { .. }),
-                            "Expected Call inside ImplicitClosure, got {:?}",
-                            body.node
-                        );
-                    } else {
-                        panic!(
-                            "Expected ImplicitClosure, got {:?}",
-                            args[0].node.value.node
-                        );
-                    }
-                } else {
-                    panic!("Expected MethodCall");
                 }
             } else {
                 panic!();

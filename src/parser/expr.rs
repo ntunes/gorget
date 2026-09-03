@@ -13,31 +13,12 @@ use crate::errors::{ParseError, ParseErrorKind};
 /// sized-stack-widened crash wall. See `ExprDepthGuard`.
 pub(crate) const MAX_EXPR_DEPTH: usize = 128;
 
-/// RAII guard that increments `call_arg_depth` on creation and decrements on drop,
-/// ensuring the counter stays consistent even if parsing returns early.
-struct CallArgGuard<'a> {
-    parser: &'a mut Parser,
-}
-
-impl<'a> CallArgGuard<'a> {
-    fn new(parser: &'a mut Parser) -> Self {
-        parser.call_arg_depth += 1;
-        CallArgGuard { parser }
-    }
-}
-
-impl Drop for CallArgGuard<'_> {
-    fn drop(&mut self) {
-        self.parser.call_arg_depth -= 1;
-    }
-}
-
 /// RAII guard for the AST-tree expression depth. Increments `expr_depth` on
 /// creation and decrements on drop (even on an early `?` return). Construction
 /// returns `Err(ExpressionTooDeep)` when the bumped depth exceeds
 /// `MAX_EXPR_DEPTH`, so a pathologically nested expression (deep parens / unary)
-/// is rejected before lowering recurses. Mirrors `CallArgGuard`; all parsing in
-/// the guarded scope goes through `guard.parser`.
+/// is rejected before lowering recurses. All parsing in the guarded scope goes
+/// through `guard.parser`.
 struct ExprDepthGuard<'a> {
     parser: &'a mut Parser,
 }
@@ -79,218 +60,6 @@ fn binary_op_from_token(tok: &Token) -> Option<BinaryOp> {
         Token::GtEq     => BinaryOp::GtEq,
         _ => return None,
     })
-}
-
-/// Recursively check whether an expression contains `Expr::It`.
-/// Returns `false` if `it` only appears inside a nested closure (where it
-/// would be bound by that closure instead).
-fn contains_it(expr: &Spanned<Expr>) -> bool {
-    match &expr.node {
-        Expr::It => true,
-
-        // Stop recursion at closure boundaries — `it` inside a nested
-        // closure belongs to that closure, not an outer implicit one.
-        Expr::Closure { .. } | Expr::ImplicitClosure { .. } => false,
-
-        // Unary
-        Expr::UnaryOp { operand, .. } => contains_it(operand),
-        Expr::Move { expr } | Expr::Propagate { expr } | Expr::MutableBorrow { expr }
-        | Expr::Deref { expr } | Expr::Await { expr, .. }
-        | Expr::Spawn { expr, .. } | Expr::SpawnBlocking { expr, .. } => contains_it(expr),
-
-        // Binary
-        Expr::BinaryOp { left, right, .. } => contains_it(left) || contains_it(right),
-        Expr::DefaultOp { lhs, rhs } => contains_it(lhs) || contains_it(rhs),
-
-        // Access
-        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. }
-        | Expr::OptionalChain { object, .. } => contains_it(object),
-        Expr::Index { object, index } => contains_it(object) || contains_it(index),
-
-        // Calls
-        Expr::Call { callee, args, .. } => {
-            contains_it(callee) || args.iter().any(|a| contains_it(&a.node.value))
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            contains_it(receiver) || args.iter().any(|a| contains_it(&a.node.value))
-        }
-
-        // If
-        Expr::If { condition, then_branch, elif_branches, else_branch } => {
-            contains_it(condition)
-                || contains_it(then_branch)
-                || elif_branches.iter().any(|(c, b)| contains_it(c) || contains_it(b))
-                || else_branch.as_ref().is_some_and(|b| contains_it(b))
-        }
-
-        // Match
-        Expr::Match { scrutinee, arms, else_arm } => {
-            contains_it(scrutinee)
-                || arms.iter().any(|arm| {
-                    pattern_contains_it(&arm.pattern.node)
-                        || arm.guard.as_ref().is_some_and(|g| contains_it(g))
-                        || contains_it(&arm.body)
-                })
-                || else_arm.as_ref().is_some_and(|b| contains_it(b))
-        }
-
-        // Cast
-        Expr::As { expr, .. } => contains_it(expr),
-
-        // Is — walk pattern too (Pattern::Literal contains expressions)
-        Expr::Is { expr, pattern, .. } => {
-            contains_it(expr) || pattern_contains_it(&pattern.node)
-        }
-
-        // Range
-        Expr::Range { start, end, .. } => {
-            start.as_ref().is_some_and(|s| contains_it(s))
-                || end.as_ref().is_some_and(|e| contains_it(e))
-        }
-
-        // Collections
-        Expr::ArrayLiteral(elems, _) | Expr::TupleLiteral(elems) => {
-            elems.iter().any(contains_it)
-        }
-        Expr::DictLiteral(pairs) => {
-            pairs.iter().any(|(k, v)| contains_it(k) || contains_it(v))
-        }
-        Expr::StructLiteral { args, .. } => args.iter().any(contains_it),
-        // generic_args covered by ..
-
-        // Comprehensions — these introduce their own bindings, but `it`
-        // would still refer to the outer implicit closure if present.
-        Expr::ListComprehension { expr, iterable, condition, .. } => {
-            contains_it(expr)
-                || contains_it(iterable)
-                || condition.as_ref().is_some_and(|c| contains_it(c))
-        }
-        Expr::DictComprehension { key, value, iterable, condition, .. } => {
-            contains_it(key)
-                || contains_it(value)
-                || contains_it(iterable)
-                || condition.as_ref().is_some_and(|c| contains_it(c))
-        }
-        Expr::SetComprehension { expr, iterable, condition, .. } => {
-            contains_it(expr)
-                || contains_it(iterable)
-                || condition.as_ref().is_some_and(|c| contains_it(c))
-        }
-
-        // Block / Do — walk statements for expressions
-        Expr::Block(block) | Expr::Do { body: block, .. } => block_contains_it(block),
-
-        // Dot-shorthand: .Variant(args)
-        Expr::DotShorthand { args, .. } => args.iter().any(|a| contains_it(&a.node.value)),
-
-        // Meta op: recurse into operands
-        Expr::MetaOpInfix { left, right, .. } => contains_it(left) || contains_it(right),
-        Expr::MetaOpToken(_) => false,
-
-        // Rethrow / Catch
-        Expr::Rethrow { expr, transform, .. } => contains_it(expr) || contains_it(transform),
-        Expr::Catch { expr, recovery, .. } => contains_it(expr) || contains_it(recovery),
-
-        // Leaves — no sub-expressions
-        Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
-        | Expr::StringLiteral(_, _) | Expr::NoneLiteral
-        | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. }
-        | Expr::ReturnValue => false,
-    }
-}
-
-/// Recursively check whether a pattern contains `Expr::It` (via `Pattern::Literal`).
-fn pattern_contains_it(pat: &Pattern) -> bool {
-    match pat {
-        Pattern::Literal(expr) => contains_it(expr),
-        Pattern::Constructor { fields, .. }
-        | Pattern::Tuple(fields)
-        | Pattern::Or(fields)
-        | Pattern::DotShorthand { fields, .. } => {
-            fields.iter().any(|f| pattern_contains_it(&f.node))
-        }
-        Pattern::Wildcard | Pattern::Binding(_) | Pattern::Rest => false,
-    }
-}
-
-/// Check whether any statement in a block contains `Expr::It`.
-fn block_contains_it(block: &Block) -> bool {
-    block.stmts.iter().any(|stmt| stmt_contains_it(&stmt.node))
-}
-
-fn stmt_contains_it(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Expr(e) => contains_it(e),
-        Stmt::VarDecl { value, .. } => contains_it(value),
-        Stmt::Assign { target, value } => contains_it(target) || contains_it(value),
-        Stmt::CompoundAssign { target, value, .. } => contains_it(target) || contains_it(value),
-        Stmt::Return(Some(e)) | Stmt::Throw(e) => contains_it(e),
-        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Pass => false,
-        Stmt::For { iterable, body, else_body, .. } => {
-            contains_it(iterable)
-                || block_contains_it(body)
-                || else_body.as_ref().is_some_and(block_contains_it)
-        }
-        Stmt::While { condition, body, else_body } => {
-            contains_it(condition)
-                || block_contains_it(body)
-                || else_body.as_ref().is_some_and(block_contains_it)
-        }
-        Stmt::Loop { body } => block_contains_it(body),
-        Stmt::If { condition, then_body, elif_branches, else_body } => {
-            contains_it(condition)
-                || block_contains_it(then_body)
-                || elif_branches.iter().any(|(c, b)| contains_it(c) || block_contains_it(b))
-                || else_body.as_ref().is_some_and(block_contains_it)
-        }
-        Stmt::Match { scrutinee, arms, else_arm } => {
-            contains_it(scrutinee)
-                || arms.iter().filter_map(|i| i.arm()).any(|arm| {
-                    pattern_contains_it(&arm.pattern.node)
-                        || arm.guard.as_ref().is_some_and(|g| contains_it(g))
-                        || contains_it(&arm.body)
-                })
-                || else_arm.as_ref().is_some_and(block_contains_it)
-        }
-        Stmt::Select { arms, else_arm } => {
-            arms.iter().any(|arm| {
-                (match &arm.op {
-                    SelectOp::Recv { channel, .. } => contains_it(channel),
-                    SelectOp::Send { channel, value } => contains_it(channel) || contains_it(value),
-                }) || block_contains_it(&arm.body)
-            }) || else_arm.as_ref().is_some_and(block_contains_it)
-        }
-        Stmt::With { bindings, body } => {
-            bindings.iter().any(|b| contains_it(&b.expr))
-                || block_contains_it(body)
-        }
-        Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
-            contains_it(condition) || message.as_ref().is_some_and(contains_it)
-        }
-        Stmt::Snapshot { value, .. } => contains_it(value),
-        Stmt::Item(_) => false,
-        Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
-            contains_it(condition)
-                || block_contains_it(then_body)
-                || elif_branches.iter().any(|(c, b)| contains_it(c) || block_contains_it(b))
-                || else_body.as_ref().is_some_and(block_contains_it)
-        }
-        Stmt::MetaFor { range, body, .. } => {
-            contains_it(range) || block_contains_it(body)
-        }
-        Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
-            contains_it(scrutinee)
-                || arms.iter().any(|(c, b)| contains_it(c) || block_contains_it(b))
-                || else_arm.as_ref().is_some_and(block_contains_it)
-        }
-        Stmt::MetaWhile { condition, body, .. } => {
-            contains_it(condition) || block_contains_it(body)
-        }
-        Stmt::MetaConst { value, .. } => contains_it(value),
-        Stmt::MetaLog { args, .. } => args.iter().any(contains_it),
-        Stmt::NamedScope { body, .. } => block_contains_it(body),
-        Stmt::OnError { body } => block_contains_it(body),
-    }
 }
 
 /// Binding power (precedence) for operators.
@@ -491,11 +260,6 @@ impl Parser {
                 self.advance();
                 Ok(Spanned::new(Expr::SelfExpr, start))
             }
-            Token::Keyword(Keyword::It) => {
-                self.advance();
-                Ok(Spanned::new(Expr::It, start))
-            }
-
             // Divergent expressions: `throw expr` and `return [expr]` are
             // accepted in expression position so they can flow into things
             // like `?? throw err()`, `if cond: return 0 else: value`, and
@@ -2274,23 +2038,7 @@ impl Parser {
             None
         };
 
-        let value = {
-            let guard = CallArgGuard::new(self);
-            let v = guard.parser.parse_expr()?;
-            v
-        };
-
-        // Auto-wrap: if the argument expression contains `it`, wrap it in
-        // an ImplicitClosure so downstream passes treat it as a lambda.
-        // Only wrap at the outermost call-arg level (depth 0) to prevent
-        // double-wrapping when `it` appears inside nested calls like
-        // `and_then(Some(it + 1))`.
-        let value = if self.call_arg_depth == 0 && contains_it(&value) {
-            let span = value.span;
-            Spanned::new(Expr::ImplicitClosure { body: Box::new(value) }, span)
-        } else {
-            value
-        };
+        let value = self.parse_expr()?;
 
         let end = value.span;
 
@@ -2352,7 +2100,6 @@ impl Parser {
                 | Token::Keyword(Keyword::Spawn)
                 | Token::Keyword(Keyword::Async)
                 | Token::Keyword(Keyword::SelfLower)
-                | Token::Keyword(Keyword::It)
                 | Token::Keyword(Keyword::Move)
                 | Token::Keyword(Keyword::Int)
                 | Token::Keyword(Keyword::Int8)

@@ -380,7 +380,7 @@ fn expr_mentions_iter(expr: &Spanned<crate::parser::ast::Expr>) -> bool {
         Expr::DefaultOp { lhs, rhs } => {
             expr_mentions_iter(lhs) || expr_mentions_iter(rhs)
         }
-        Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
+        Expr::Closure { body, .. } => {
             expr_mentions_iter(body)
         }
         Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
@@ -1118,7 +1118,6 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
         | Expr::NoneLiteral
         | Expr::SelfExpr
         | Expr::ReturnValue
-        | Expr::It
         | Expr::StringLiteral(_, _) => {}
 
         Expr::Path { .. } => {}
@@ -1221,7 +1220,6 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
         }
         Expr::As { expr: inner, .. } => qualify_expr(inner, vm),
         Expr::Closure { body, .. } => qualify_expr(body, vm),
-        Expr::ImplicitClosure { body } => qualify_expr(body, vm),
         Expr::ArrayLiteral(elems, _) | Expr::TupleLiteral(elems) => {
             for e in elems { qualify_expr(e, vm); }
         }

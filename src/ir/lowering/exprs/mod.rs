@@ -571,14 +571,6 @@ fn lower_expr_inner(
             }
         }
 
-        Expr::It => {
-            if let Some((local_id, _)) = ctx.lookup_local("it") {
-                Operand::Copy(Place::local(local_id))
-            } else {
-                Operand::Constant(Constant::Unit)
-            }
-        }
-
         Expr::Block(block) => {
             lower_block_expr(ctx, builder, block)
         }
@@ -1311,21 +1303,6 @@ fn lower_expr_inner(
         // P3.5.4: Set comprehensions
         Expr::SetComprehension { expr: comp_expr, variable, iterable, condition } => {
             lower_set_comprehension(ctx, builder, comp_expr, variable, iterable, condition.as_deref())
-        }
-
-        // P3.5.5: Implicit closures
-        Expr::ImplicitClosure { body } => {
-            let param = ast::ClosureParam {
-                type_: None,
-                ownership: ast::Ownership::Borrow,
-                name: Spanned::dummy("it".to_string()),
-                destructure: None,
-            };
-            let params = vec![Spanned::dummy(param)];
-            let mut cl = std::mem::take(&mut ctx.closures);
-            let result = cl.lower_closure(ctx, builder, &params, body, false, expr.span);
-            ctx.closures = cl;
-            result
         }
 
         // P3.5.6: Optional chaining

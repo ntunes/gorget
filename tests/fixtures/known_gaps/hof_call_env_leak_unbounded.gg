@@ -19,9 +19,8 @@
 # sweep's own conservative-root setting.
 #
 # NOT A SECOND FILING: `todo/t0953` owns this: this is one more cell of its
-# evidence, cited from it. It is deliberately the IMPLICIT-`it` spelling, which
-# that item's own probes do not use, so the two together show the class spans
-# both the explicit closure literal and the synthesised implicit one.
+# evidence, cited from it — the UNBOUNDEDNESS axis its own two-call probes
+# cannot reach.
 #
 # INTENDED (asserted by the #[ignore]d wired test): prints `120` and runs
 # ASan-CLEAN. The stdout is already correct today — the LEAK is the gap, so
@@ -32,7 +31,7 @@ void main():
     int total = 0
     int i = 0
     while i < 20:
-        Vector[int] doubled = xs.map(it * 2)
+        Vector[int] doubled = xs.map((int x): x * 2)
         for d in doubled:
             total = total + d
         i = i + 1

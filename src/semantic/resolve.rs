@@ -1548,8 +1548,7 @@ fn resolve_expr(
         // was carved out of the undefined-name check below; that carve-out
         // stays, because a USER may still spell `__return__` in ordinary
         // source — see the string guard in the `Identifier` arm.)
-        | Expr::ReturnValue
-        | Expr::It => {}
+        | Expr::ReturnValue => {}
 
         // `self` is bound as an ordinary parameter (DefKind::Variable,
         // is_param = true) in `resolve_function`. Wire each usage site to
@@ -1800,16 +1799,6 @@ fn resolve_expr(
                 ) {
                     errors.push(e);
                 }
-            }
-            resolve_expr(body, scopes, errors, resolution_map);
-            scopes.pop_scope();
-        }
-
-        Expr::ImplicitClosure { body } => {
-            scopes.push_scope(super::scope::ScopeKind::Function);
-            // Define implicit `it` parameter
-            if let Ok(def_id) = scopes.define("it".into(), DefKind::Variable, expr.span) {
-                scopes.get_def_mut(def_id).is_param = true;
             }
             resolve_expr(body, scopes, errors, resolution_map);
             scopes.pop_scope();

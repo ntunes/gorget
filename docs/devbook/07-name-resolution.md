@@ -298,8 +298,7 @@ sites that populate the resolution map:
   name (real `UndefinedName` if missing) plus arg expressions.
 
 Binding-introducing expressions push scopes and define names: closures
-(`resolve.rs:1549-1564`), the implicit-`it` closure
-(`resolve.rs:1566-1574`), the comprehensions
+(`resolve.rs:1549-1564`), the comprehensions
 (`resolve.rs:1576-1633`), inline `match` (`resolve.rs:1517-1535`), and the
 error-binding forms `Rethrow`/`Catch` (`resolve.rs:1688-1725`, Snag #37 —
 the resolver registers the bound name so lookups in the transform/recovery

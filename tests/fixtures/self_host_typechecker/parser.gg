@@ -180,7 +180,6 @@ const int KW_AWAIT = 81
 const int KW_SPAWN = 82
 const int KW_TEST = 83
 const int KW_SUITE = 84
-const int KW_IT = 85
 const int KW_PANIC = 86
 const int KW_SHARED = 87
 const int KW_META = 88
@@ -520,8 +519,6 @@ int keyword_tag(Token tok):
                     return KW_SUITE
                 case KwBench:
                     return KW_BENCH
-                case KwIt:
-                    return KW_IT
                 case KwPanic:
                     return KW_PANIC
                 case KwShared:
@@ -646,20 +643,6 @@ String type_to_name(SpannedType st):
 
 # ── Helper: check if keyword is a type keyword ──────────────
 
-
-# Check if an expression contains the implicit `it` parameter.
-# Stops at closure boundaries (it inside a closure belongs to that closure).
-bool expr_contains_it(Expr e):
-    # Check for implicit `it` parameter — only top-level EIt/EIdentifier.
-    # Avoiding deep traversal of borrowed Expr to prevent double-free from
-    # pattern-extracted fields (Box/Vector) being dropped at scope exit.
-    match e:
-        case EIt():
-            return true
-        case EIdentifier(name):
-            return name == "it"
-        else:
-            return false
 
 # Predicate: does this keyword name a type? Mirrors the variant set
 # in type_keyword_name. Takes Keyword so callers don't have to launder
@@ -803,8 +786,6 @@ String non_type_keyword_name(Keyword kw):
             return "false"
         case KwNone:
             return "none"
-        case KwIt:
-            return "it"
         case KwType:
             return "type"
         case KwAsync:
@@ -1132,7 +1113,6 @@ struct Parser:
     Vector[SpannedToken] tokens
     int pos
     Vector[String] errors
-    int call_arg_depth
     # Next synthetic base offset for f-string interpolation segment
     # sub-parsing. Starts at 1<<40 (well above any plausible source-file
     # size, ~1 TiB) and bumps by 1<<20 per segment. Per-Parser instead
@@ -2455,12 +2435,7 @@ equip Parser:
             if op_suffix != "":
                 return SpannedExpr(EIdentifier("__metaop" + op_suffix), Span(meta_start, self.peek().lex_start))
             return SpannedExpr(EIntLiteral(0), Span(meta_start, self.peek().lex_start))
-        self.call_arg_depth = self.call_arg_depth + 1
-        SpannedExpr val = self.parse_expr()
-        self.call_arg_depth = self.call_arg_depth - 1
-        if self.call_arg_depth == 0 and expr_contains_it(val.expr):
-            return SpannedExpr(EImplicitClosure(Box[SpannedExpr](val)), val.span)
-        return val
+        return self.parse_expr()
 
     # ── Prefix expressions ───────────────────────────────────
 
@@ -2732,7 +2707,7 @@ equip Parser:
                                     # depth. Span VALUES differ from Rust for nested f-strings,
                                     # but uniqueness — the property the resolver/typecheck keys
                                     # depend on — holds identically.
-                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 0, self.next_interp_offset, Vector[Stmt](), 0, false)
+                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), self.next_interp_offset, Vector[Stmt](), 0, false)
                                     SpannedExpr parsed_expr = sub.parse_expr()
                                     self.next_interp_offset = sub.next_interp_offset
                                     fexprs.push(parsed_expr)
@@ -2789,11 +2764,6 @@ equip Parser:
                     return SpannedExpr(EIdentifier(tname), Span(t.lex_start, t.lex_end))
             else:
                 pass
-
-        # it keyword (implicit closure parameter)
-        if self.check_kw(KW_IT):
-            SpannedToken t = self.advance()
-            return SpannedExpr(EIt(), Span(t.lex_start, t.lex_end))
 
         # panic keyword (treated as a function call)
         if self.check_kw(KW_PANIC):
@@ -5100,6 +5070,6 @@ Module parse_source_with_offset(String source, int base_offset):
         if tag != TOK_COMMENT and tag != TOK_DOCCOMMENT:
             tokens.push(tok)
         ti = ti + 1
-    Parser p = Parser(tokens, 0, Vector[String](), 0, INTERP_OFFSET_BASE, Vector[Stmt](), 0, false)
+    Parser p = Parser(tokens, 0, Vector[String](), INTERP_OFFSET_BASE, Vector[Stmt](), 0, false)
     Module m = p.parse_module()
     return m

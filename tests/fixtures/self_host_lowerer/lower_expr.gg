@@ -4759,17 +4759,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     pass
             int _ma_idx = 0
             for ma in filled_margs:
-                # closure Phase 2 Step A: a method-call arg that CONTAINS a
-                # raw `it` (e.g. `.map(it*2)`, where the self-host parser does
-                # NOT always wrap it in EImplicitClosure) is an implicit-it
-                # closure body — record it (the OLD scan did the same via
-                # expr_has_it → emit_it_closure). Otherwise lower normally.
                 int ma_val = -1
                 # Inc-4c: for a same-type combinator arg, expose the receiver
                 # Option/Result type as `expected_type` (else -1, the historical
-                # clear). `record_implicit_it_closure` and the EClosure make-site
-                # both read `ctx.expected_type`, so set it for BOTH paths;
-                # save/restore keeps it scoped to this arg.
+                # clear). The EClosure make-site reads `ctx.expected_type`, so
+                # set it here; save/restore keeps it scoped to this arg.
                 int prev_expected_ma = ctx.expected_type
                 ctx.expected_type = _combinator_et
                 # Collection-mutator owning-value arg: hint the Option/Result
@@ -4777,19 +4771,16 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # so a bare `None`/`Some`/`Ok`/`Error` materializes tagged.
                 if _ma_idx == _mut_val_pos and _mut_val_et >= 0:
                     ctx.expected_type = _mut_val_et
-                if expr_has_it(ma):
-                    ma_val = record_implicit_it_closure(&ctx, ma, &gmod)
-                else:
-                    # Clear the enclosing `expected_type` around the arg so a
-                    # Result-typed surrounding context (e.g. `return a.add(to_n(sel))`
-                    # from a `throws` fn) doesn't make the centralized auto-prop
-                    # hook's capture-form check suppress the peel on a throws-call
-                    # arg — leaving a `Result` where the param wants `T`. (For a
-                    # combinator closure/value arg this is the receiver
-                    # Option/Result type, set above; for every other arg it is the
-                    # prior -1.) Mirrors the free-call arg loop and Rust gg's
-                    # per-arg expected_type clear.
-                    ma_val = lower_expr(&ctx, ma, &gmod)
+                # Clear the enclosing `expected_type` around the arg so a
+                # Result-typed surrounding context (e.g. `return a.add(to_n(sel))`
+                # from a `throws` fn) doesn't make the centralized auto-prop
+                # hook's capture-form check suppress the peel on a throws-call
+                # arg — leaving a `Result` where the param wants `T`. (For a
+                # combinator closure/value arg this is the receiver
+                # Option/Result type, set above; for every other arg it is the
+                # prior -1.) Mirrors the free-call arg loop and Rust gg's
+                # per-arg expected_type clear.
+                ma_val = lower_expr(&ctx, ma, &gmod)
                 ctx.expected_type = prev_expected_ma
                 # #37 Phase 2 hook 3 (method non-receiver `&`/`!` args):
                 # `h.poke_vec(&v)` lets the callee mutate `v` through a
@@ -6079,7 +6070,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 emit(&ctx, GICallExtern(cdst, make_fn, make_args))
             # Record the closure for the post-pass, carrying the captures so
             # the post-pass field-loads them before lowering the body.
-            gmod.lifted_closures.push(LiftedClosure(cid, closure_name + "__call", cl_sig.self_ptr, cl_sig.abi_param_types, cl_sig.body_param_types, cl_sig.body_param_names, cl_sig.return_type, cbody, false, cl_lowerable, !cl_caps))
+            gmod.lifted_closures.push(LiftedClosure(cid, closure_name + "__call", cl_sig.self_ptr, cl_sig.abi_param_types, cl_sig.body_param_types, cl_sig.body_param_names, cl_sig.return_type, cbody, cl_lowerable, !cl_caps))
             # CLOSURE LEAK Class B — register the freshly-packed GorgetClosure
             # value (`cdst`, LoOwned) for drop at the MAKE-SITE. A capturing
             # closure owns a HEAP env-box (`__gorget_closure_env_alloc`); when
@@ -6684,23 +6675,6 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # every reaching arm assigns. Mirrors Rust `lower_expr` EMatch
             # dispatch (`exprs/mod.rs:391`).
             return lower_match_expr(&ctx, *scrut_box, arms, &gmod)
-        case EImplicitClosure(ic_body_box):
-            # closure Phase 2 Step A: implicit `it` closure (`.map(it*2)`).
-            # Make-site = sole id source + recorder, exactly like EClosure.
-            # Subsumes the deleted emit_it_closure via the shared helper.
-            return record_implicit_it_closure(&ctx, *ic_body_box, &gmod)
-        case EIt():
-            # closure Phase 2 Step A: `it` is a VALUE (the live implicit
-            # param), NOT a closure. Mirror Rust exprs/mod.rs:417 — resolve
-            # `it` to the in-scope param when present, else a UNIT local.
-            # No cid bump, no record. When an implicit-it body is lowered in
-            # the post-pass, "it" is registered as a named local so this
-            # resolves to the param.
-            if nl_contains(ctx, "it"):
-                return nl_get(ctx, "it")
-            int it_dst = add_local(&ctx, UNIT_TYPE, None)
-            emit(&ctx, GIAssign(it_dst, OpConstUnit()))
-            return it_dst
         case EListComp(lc_comp_box, lc_var, lc_iter_box, lc_filt_opt):
             # List comprehension `[expr for x in iter [if cond]]`. The 4th AST
             # field is `Option[Box[SpannedExpr]]` like its two siblings below,
@@ -7164,30 +7138,6 @@ bool closure_extract(SpannedExpr arg, Vector[String] &out_params, SpannedExpr &o
 bool extract_hof_closure(SpannedExpr arg, int arity, Vector[String] &out_params, SpannedExpr &out_body):
     if closure_extract(arg.clone(), &out_params, &out_body):
         return true
-    # An implicit-`it` body (`.map(it * 2)`, `.filter(it > 0)`) is a closure
-    # BODY, not a callable value: its single parameter is spelled `it` —
-    # exactly the name `compute_implicit_closure_sig` types as the implicit
-    # closure's `body_param_names`. Handle it BEFORE the callable-wrapper
-    # synthesis below, which would otherwise build `(it * 2)(__hofp0)` — an
-    # `ECall` whose callee is an `EBinaryOp`, i.e. not a call at all. That
-    # nonsense AST used to be swallowed by the `ECall` callee dispatcher's
-    # `else: pass`, so `.map(it * 2)` silently produced an unmapped vector
-    # and read back garbage; the lower-or-reject arm (Core #10) surfaced it.
-    # The parser wraps some occurrences in `EImplicitClosure` and leaves
-    # others raw, so accept BOTH spellings.
-    if arity == 1:
-        match arg.expr:
-            case EImplicitClosure(ic_box):
-                SpannedExpr ic_inner = *ic_box
-                out_params.push("it")
-                out_body = ic_inner.clone()
-                return true
-            else:
-                pass
-        if expr_has_it(arg):
-            out_params.push("it")
-            out_body = arg.clone()
-            return true
     Vector[CallArg] call_args = []
     int i = 0
     while i < arity:

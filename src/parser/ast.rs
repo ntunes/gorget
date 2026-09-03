@@ -819,11 +819,6 @@ pub enum Expr {
         body: Box<Spanned<Expr>>,
     },
 
-    // ── Implicit 'it' closure ──
-    ImplicitClosure {
-        body: Box<Spanned<Expr>>,
-    },
-
     // ── Comprehensions ──
     ListComprehension {
         expr: Box<Spanned<Expr>>,
@@ -902,9 +897,6 @@ pub enum Expr {
         negated: bool,
         pattern: Spanned<Pattern>,
     },
-
-    // ── It (implicit closure parameter) ──
-    It,
 
     // ── Dot-shorthand variant: .Red(), .Blue(42) ──
     /// Resolved to `EnumType.Variant(args)` using the expected type from context.

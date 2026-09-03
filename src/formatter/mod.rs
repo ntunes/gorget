@@ -5973,11 +5973,7 @@ impl Formatter {
     /// `wrap_multiline_expr_in_parens` (same, for the broken-chain wrap).
     ///
     /// The layers are emitted HERE and nowhere else, so each span key is
-    /// spelled by exactly one node. A transparent wrapper that shares its
-    /// body's span (`Expr::ImplicitClosure`) therefore delegates to
-    /// `format_expr_inner`, bypassing this emission — otherwise the two nodes
-    /// would emit the same layer twice and `xs.map((it * 2))` would double its
-    /// parens on every pass.
+    /// spelled by exactly one node.
     fn format_expr(&mut self, expr: &Spanned<Expr>) {
         let layers = self.author_paren_layers(expr.span);
         for _ in 0..layers {
@@ -5992,11 +5988,9 @@ impl Formatter {
     }
 
     /// The expression dispatch itself. Every arm is reached through
-    /// [`Formatter::format_expr`], which owns the author-paren layer emission
-    /// — the ONE exception is the transparent `ImplicitClosure` wrapper, whose
-    /// arm re-enters here directly because it shares its body's span. That
-    /// caller count is pinned at 2 by `fmt_author_paren_dedup_class` in
-    /// tests/lints.rs.
+    /// [`Formatter::format_expr`], which owns the author-paren layer emission,
+    /// and there is no second caller. That caller count is pinned at 1 by
+    /// `fmt_author_paren_dedup_class` in tests/lints.rs.
     fn format_expr_inner(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
             Expr::IntLiteral(n) => {
@@ -6501,21 +6495,6 @@ impl Formatter {
                 self.emitter.write(":");
                 self.format_closure_body(body, params);
             }
-            Expr::ImplicitClosure { body } => {
-                // ImplicitClosure is a parser artifact wrapping `it` expressions.
-                // The formatter emits the body directly — the `it` keyword inside
-                // already serves as the implicit parameter marker.
-                //
-                // TRANSPARENT WRAPPER: this node REUSES its body's span, so two
-                // nodes share one author-paren key. The author layer belongs to
-                // exactly one node per key, so this arm re-enters
-                // `format_expr_inner` and lets the body emit it —
-                // `self.format_expr(body)` would emit the same layer a second
-                // time and `xs.map((it * 2))` would double its parens on every
-                // pass. This is the ONLY sanctioned second caller of
-                // `format_expr_inner`, pinned by `fmt_author_paren_dedup_class`.
-                self.format_expr_inner(body);
-            }
             Expr::ListComprehension {
                 expr,
                 variable,
@@ -6748,9 +6727,6 @@ impl Formatter {
                     self.emitter.write(" is ");
                 }
                 self.format_pattern(pattern);
-            }
-            Expr::It => {
-                self.emitter.write("it");
             }
             Expr::DotShorthand { variant, args } => {
                 self.emitter.write(".");
@@ -7481,16 +7457,11 @@ fn emits_leading_ownership_sigil(expr: &Expr) -> bool {
         // the `spawn ` / `spawn blocking ` forms in the arm below.
         Expr::Await { prefix_form: true, .. } => false,
 
-        // ── Transparent wrapper ────────────────────────────────────
-        // `ImplicitClosure` emits its body directly (the `it` inside is the
-        // implicit-parameter marker), so the body's first char is ours.
-        Expr::ImplicitClosure { body } => emits_leading_ownership_sigil(&body.node),
-
         // ── Leads with its OWN token ───────────────────────────────
         // Literals and atoms; prefix operators whose spelling is not a
         // stripped sigil (`-`, `~`, `not `, `*`, `spawn `, `spawn blocking `);
         // bracketed/keyword-introduced forms (`[`, `(`, `{`, `if`, `match`,
-        // `Name(`, `.variant`, `it`, `self`).
+        // `Name(`, `.variant`, `self`).
         //
         // `Block`/`Do` lead with `do:` unless
         // `try_inline_single_terminal_stmt` inlines a lone terminal stmt —
@@ -7526,7 +7497,6 @@ fn emits_leading_ownership_sigil(expr: &Expr) -> bool {
         | Expr::StructLiteral { .. }
         | Expr::Spawn { .. }
         | Expr::SpawnBlocking { .. }
-        | Expr::It
         | Expr::DotShorthand { .. } => false,
     }
 }

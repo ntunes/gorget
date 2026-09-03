@@ -234,8 +234,7 @@ impl<'a> BorrowChecker<'a> {
             | Expr::Await { expr: inner, .. }
             | Expr::Spawn { expr: inner, .. }
             | Expr::SpawnBlocking { expr: inner, .. }
-            | Expr::Is { expr: inner, .. }
-            | Expr::ImplicitClosure { body: inner } => self.find_shared_ref_in_expr_spanned(inner),
+            | Expr::Is { expr: inner, .. } => self.find_shared_ref_in_expr_spanned(inner),
             Expr::ListComprehension { expr, iterable, condition, .. } => {
                 self.find_shared_ref_in_expr_spanned(iterable)
                     .or_else(|| self.find_shared_ref_in_expr_spanned(expr))

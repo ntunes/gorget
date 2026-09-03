@@ -334,7 +334,7 @@ fn substitute_expr_types(expr: &mut Spanned<Expr>, subs: &[(String, Type)]) {
             if let Some(s) = start { substitute_expr_types(s, subs); }
             if let Some(e) = end { substitute_expr_types(e, subs); }
         }
-        Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
+        Expr::Closure { body, .. } => {
             substitute_expr_types(body, subs);
         }
         Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {

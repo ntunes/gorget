@@ -962,7 +962,7 @@ Option[String] get_user_email(int id):
     return Some(addr.email)
 
 # Methods on Option
-auto upper = name.map(it.to_upper())              # Option[String]
+auto upper = name.map((s): s.to_upper())          # Option[String]
 auto parsed = input.and_then((s): s.parse[int]()) # Option[int]
 String n = name.unwrap_or("default")               # String (with fallback)
 String n = name.unwrap()                            # String (panics if None!)
@@ -1547,18 +1547,15 @@ The `@[debug_only]` attribute strips the entire function in release builds, maki
 
 ## 7. Closures & Lambdas
 
-### 7.1 Syntax: `(params):` + Implicit `it`
+### 7.1 Syntax: `(params):`
 
-Closures use parenthesized parameters with a colon, mirroring function definitions. For single-parameter closures, the implicit `it` keyword (Kotlin-inspired) eliminates boilerplate.
+Closures use parenthesized parameters with a colon, mirroring function definitions. Every parameter is named, at every arity (**D54**): a closure body reads like a function body, and a reader never has to infer which value a bare name refers to. There is no implicit single-parameter form — one spelling that works at every arity, rather than a second one that stops working the moment a second parameter appears.
 
 ```gorget
-# Implicit 'it' for single-parameter closures
-auto doubled = numbers.map(it * 2)
-auto names = users.filter(it.age >= 18).map(it.name)
-auto lengths = words.map(it.len())
-
-# Explicit single parameter
+# Single parameter
 auto doubled = numbers.map((x): x * 2)
+auto names = users.filter((u): u.age >= 18).map((u): u.name)
+auto lengths = words.map((w): w.len())
 
 # Multiple parameters
 auto sum = pairs.map((a, b): a + b)
@@ -1573,11 +1570,12 @@ auto process = (int x):
     result += 1
     result                          # last expression is return value
 
-# Multi-line with implicit 'it'
-auto transformed = items.map():
-    auto temp = it.transform()
+# Multi-line closure: bind it, then pass it
+auto transform = (Item item):
+    auto temp = item.transform()
     temp.validate()
     temp
+auto transformed = items.map(transform)
 
 # No-parameter closure
 auto greet = (): "hello!"
@@ -1689,7 +1687,7 @@ ambiguous with a parameter.
 
 ### 7.5 Untyped Parameters & Contextual Inference
 
-Closure parameters can omit type annotations when the compiler can infer them from the calling context. This is the recommended middle ground between the fully implicit `it` (single-param only) and fully typed parameters:
+Closure parameters can omit type annotations when the compiler can infer them from the calling context. This is the recommended middle ground between fully typed parameters and no annotation at all:
 
 ```gorget
 # Fully typed — always works, most verbose
@@ -1697,41 +1695,18 @@ auto sum = v.fold(0, (int acc, int x): acc + x)
 
 # Untyped — inferred from fold's signature: T(T, T) where T = int
 auto sum = v.fold(0, (acc, x): acc + x)
-
-# Implicit it — only works for single-param closures
-auto doubled = v.map(it * 2)
 ```
 
-The three tiers give authors a smooth verbosity dial:
+The two tiers give authors a smooth verbosity dial:
 
 | Need | Syntax | When to use |
 |---|---|---|
-| Trivial single-param body | `it` | `.map(it * 2)`, `.filter(it > 0)` |
-| Multi-param or named clarity | `(params): body` | `.fold(0, (acc, x): acc + x)` |
+| Named clarity, inferred types | `(params): body` | `.map((x): x * 2)`, `.fold(0, (acc, x): acc + x)` |
 | Explicit types needed | `(typed params): body` | Ambiguous contexts, documentation |
 
 **Design rationale.** Positional placeholders like `$1`, `$2` (Swift-style) were considered and rejected. They add a new sigil, introduce arity ambiguity (the compiler must scan the body to determine parameter count), and lose readability for multi-param closures where names like `acc` and `x` carry semantic meaning. The untyped-but-named style `(acc, x):` is nearly as concise while remaining self-documenting.
 
-**Inference strategy.** When a closure is passed to a function or method whose parameter type is known (e.g., `fold` expects `T(T, T)`), the compiler unifies each untyped closure parameter with the corresponding type from the expected signature. This is the same mechanism used for `it` inference, generalized to N parameters.
-
-### 7.6 `it` Rules
-
-- `it` is only valid inside closures with exactly one parameter
-- If `it` appears, no explicit parameter list is needed
-- `it` is always an immutable borrow (use explicit params for `&` or `!`)
-- Nested closures: `it` refers to the innermost closure's parameter
-
-```gorget
-# 'it' is the single parameter
-auto result = numbers.filter(it > 0).map(it * 2)
-
-# When you need mutable access, use explicit params
-auto modified = items.map((Item &item): item.transform())
-
-# Nested: each 'it' refers to its own closure
-auto nested = matrix.map(it.map(it * 2))
-# outer 'it' = each row, inner 'it' = each element
-```
+**Inference strategy.** When a closure is passed to a function or method whose parameter type is known (e.g., `fold` expects `T(T, T)`), the compiler unifies each untyped closure parameter with the corresponding type from the expected signature. The same unification runs at every arity — a one-parameter closure is not a special case.
 
 ---
 
@@ -2194,7 +2169,7 @@ void main():
 | Generics | `[T]` | `<T>` | `[T]` | `<T>` |
 | Mutability | Mutable default + `const`; write-through `&` | `let` default + `mut` | Default mutable | `final`/`const` |
 | Error handling | `throws` + Result capture | `Result` + `?` | Exceptions | Exceptions |
-| Closures | `(params):` + `it` | `\|params\|` | `lambda` | `->` (Java) |
+| Closures | `(params):` | `\|params\|` | `lambda` | `->` (Java) |
 | Inheritance | Traits only | Traits only | Classes | Classes |
 
 ---
@@ -3368,7 +3343,7 @@ void main():
     match result:
         case Ok(records):
             print(f"Processed {records.len()} records")
-            int total = records.iter().map(it.value).sum()
+            int total = records.iter().map((r): r.value).sum()
             print(f"Total value: {total}")
         case Error(e):
             print(f"Error: {e}")

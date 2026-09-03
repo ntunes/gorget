@@ -199,9 +199,7 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 11 closures & higher-order	hof_any_all	WORKS	true / true / false	(matches)		WORKS	WORKS		SANITIZE-FAIL	NO-VERDICT
 11 closures & higher-order	hof_chain_map_filter	WORKS	2 / 4 / 8	(matches)		WORKS	WORKS		SANITIZE-FAIL	REJECTED
 11 closures & higher-order	hof_filter	WORKS	2 / 2 / 4	(matches)		WORKS	WORKS		SANITIZE-FAIL	REJECTED
-11 closures & higher-order	hof_filter_implicit_it	WORKS	2 / Alice / Charlie	(matches)		WORKS	WRONG	DIVERGENT	SANITIZE-FAIL	NO-VERDICT
 11 closures & higher-order	hof_fold	WORKS	15	(matches)		WORKS	WORKS		SANITIZE-FAIL	NO-VERDICT
-11 closures & higher-order	hof_implicit_it	WORKS	5 / 3 / 7	(matches)		WORKS	TRAP	DIVERGENT	SANITIZE-FAIL	NO-VERDICT
 11 closures & higher-order	hof_iter_chain	WORKS	50	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 11 closures & higher-order	hof_map	WORKS	5 / 2 / 10	(matches)		WORKS	WORKS		SANITIZE-FAIL	REJECTED
 11 closures & higher-order	hof_map_strings	WORKS	ALPHA / BETA	(matches)		WORKS	WORKS		SANITIZE-FAIL	NO-VERDICT
@@ -242,8 +240,7 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 14 classic exercises	ex_reverse_string	WORKS	olleh	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 14 classic exercises	ex_run_length_encode	WORKS	a3b2c1	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 14 classic exercises	ex_second_largest	WORKS	7	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
-14 classic exercises	ex_shopping_cart	REJECTED	apple x2 = 300 / ... / total 550	parse error: expected pattern, found 'it' (+3 cascading)	DIAGNOSTIC POOR: `it` is the implicit-closure keyword, so rejecting it as a loop variable is defensible, but 4 cascading errors and none says 'it is a keyword'.	REJECTED	WRONG	DIVERGENT	REJECTED	REJECTED
-14 classic exercises	ex_shopping_cart_total	WORKS	apple x2 = 300 / bread x1 = 250 / total 550	(matches)		WORKS	WORKS		WORKS	WORKS
+14 classic exercises	ex_shopping_cart	WORKS	apple x2 = 300 / bread x1 = 250 / total 550	(matches)		WORKS	WORKS		WORKS	WORKS
 14 classic exercises	ex_star_pyramid	WORKS	* / ** / ***	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 14 classic exercises	ex_sum_list	WORKS	15	(matches)		WORKS	WORKS		WORKS	WORKS
 14 classic exercises	ex_temperature	WORKS	32.00 / 212.00 / 98.60	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
@@ -974,7 +971,6 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 21 docs/language-design examples	doc_ld_comprehensions	WORKS	10 / 50	(matches)	language-design §5.9 Comprehensions (Python-style)	WORKS	WORKS		WORKS	NO-VERDICT
 21 docs/language-design examples	doc_ld_catch_and_rethrow	WORKS	8080 / wrapped: boom	(matches)	language-design §6.1 The `throws` Model: the `! catch (e):` and `! rethrow (e):` one-liners	WORKS	WORKS		WORKS	NO-VERDICT
 21 docs/language-design examples	doc_ld_assert_always_on	WORKS	'before', then a loud failure	(matches)	language-design §6.5 Assert (Always-On): a failing assert must be a loud failure, not a silent pass	WORKS	WORKS		WORKS	WORKS
-21 docs/language-design examples	doc_ld_implicit_it	WORKS	3 / 2	(matches)	language-design §7.1 Syntax: `(params):` + Implicit `it`	WORKS	WRONG	DIVERGENT	SANITIZE-FAIL	NO-VERDICT
 21 docs/language-design examples	doc_ld_box_deref_coercion	WORKS	5	(matches)	language-design §9.4 Deref Coercion, VERBATIM incl. its own '# Box[String] auto-derefs to String'	WORKS	BUILD-FAIL	DIVERGENT	WORKS	NO-VERDICT
 21 docs/language-design examples	doc_ld_dict_get_default_operator	REJECTED	None-safe: 0 / 20	error[E_DefaultOpRhsTypeMismatch]: right-hand side of `??` must be `int &` (unwrapped) or `Option[int &]` (matching left), but got `int` — `??` either unwraps (`Option[T] ?? T	language-design:2609 VERBATIM `int fallback = m.get("z") ?? 0`, annotated "# 0 via default operator": E_DefaultOpRhsTypeMismatch. Same root as the two Book ch05 cells.	REJECTED	REJECTED		REJECTED	NO-VERDICT
 21 docs/language-design examples	doc_ld_vector_get_returns_none	WORKS	true / 20	(matches)	The same doc block WITHOUT the `??` line WORKS -- the control narrowing the failure to the default operator over a Dict.get.	WORKS	WORKS		WORKS	NO-VERDICT

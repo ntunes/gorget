@@ -164,7 +164,7 @@ test  suite  assert  bench  snapshot
 **Special identifiers:**
 
 ```
-it  panic
+panic
 ```
 
 ### 3.2 Identifiers
@@ -2036,18 +2036,14 @@ auto process = (int x):
     result
 ```
 
-**Implicit `it` closures:** For single-parameter closures, the implicit `it` parameter avoids boilerplate:
+A single-parameter closure names its parameter like any other, and the type may
+be omitted where the calling context fixes it. There is no implicit parameter —
+`it` is an ordinary identifier, not a keyword (**D54**).
 
 ```gorget
-auto doubled = numbers.map(it * 2)
-auto names = users.filter(it.age >= 18).map(it.name)
+auto doubled = numbers.map((x): x * 2)
+auto names = users.filter((u): u.age >= 18).map((u): u.name)
 ```
-
-Rules for `it`:
-- Only valid inside closures with exactly one parameter
-- No explicit parameter list needed when `it` is used
-- `it` is always an immutable borrow
-- In nested closures, `it` refers to the innermost closure's parameter
 
 ### 7.22 Comprehensions
 
@@ -7252,11 +7248,11 @@ expr = literal | IDENTIFIER | path_expr | unary_expr | binary_expr
      | call_expr | method_call | field_access | tuple_access | index_expr
      | range_expr | optional_chain | default_op | raw_expr
      | move_expr | mut_borrow_expr | deref_expr | as_expr | is_expr
-     | if_expr | match_expr | do_expr | closure | implicit_closure
+     | if_expr | match_expr | do_expr | closure
      | list_comp | dict_comp | set_comp
      | array_literal | tuple_literal | dict_literal | struct_literal
      | await_expr | spawn_expr | rethrow_expr | catch_expr
-     | "self" | "it" | "(" expr ")" ;
+     | "self" | "(" expr ")" ;
 rethrow_expr = expr "rethrow" ( expr | "(" [ type ] IDENTIFIER ")" ":" expr ) ;
 catch_expr   = contract_catch ;
 contract_catch = expr "catch" "(" IDENTIFIER ")" ":" expr ;

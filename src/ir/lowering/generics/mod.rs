@@ -809,7 +809,7 @@ impl GenericCollector {
                 if let Some(s) = start { self.scan_expr(s); }
                 if let Some(e) = end { self.scan_expr(e); }
             }
-            Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
+            Expr::Closure { body, .. } => {
                 self.scan_expr(body);
             }
             Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
@@ -1195,7 +1195,7 @@ impl GenericCollector {
                 self.walk_expr_for_method_calls(lhs, env);
                 self.walk_expr_for_method_calls(rhs, env);
             }
-            Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
+            Expr::Closure { body, .. } => {
                 self.walk_expr_for_method_calls(body, env);
             }
             Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {

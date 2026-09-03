@@ -50,7 +50,7 @@ from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_va
 from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
 from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
 from lower_loops import lower_for, lower_for_vector, lower_for_string, parse_dict_kv_types, for_pat_binding_name, lower_for_dict, lower_for_range, lower_for_iterator, bind_tuple_field, bind_tuple_destructure, bind_for_local, local_is_borrow_alias, scrutinee_nonowning, scrutinee_owned_whole_dropped, scrutinee_borrow_into_owning_collection, resolve_elem_type_id, lower_while
-from lower_closures import lower_function, mangle_prim_type, mangle_trait_name, is_builtin_trait, is_iterator_protocol_trait, method_has_self, lower_equip_block, guess_return_type, expr_has_it, closure_ident_module_resolvable, closure_collect_pattern_bindings, closure_expr_has_capture, closure_stmt_has_capture, closure_stmts_have_capture, closure_body_captures, cc_callee_is_free_fn, cc_classify_ident, cc_collect_expr, cc_collect_stmt, cc_collect_stmts, collect_closure_captures, stmts_mutate_any, expr_target_mutates_any, stmt_mutates_any, expr_has_nested_closure, stmt_has_nested_closure, stmts_have_nested_closure, compute_closure_sig, compute_implicit_closure_sig, record_implicit_it_closure, lower_closure_body
+from lower_closures import lower_function, mangle_prim_type, mangle_trait_name, is_builtin_trait, is_iterator_protocol_trait, method_has_self, lower_equip_block, guess_return_type, closure_ident_module_resolvable, closure_collect_pattern_bindings, closure_expr_has_capture, closure_stmt_has_capture, closure_stmts_have_capture, closure_body_captures, cc_callee_is_free_fn, cc_classify_ident, cc_collect_expr, cc_collect_stmt, cc_collect_stmts, collect_closure_captures, stmts_mutate_any, expr_target_mutates_any, stmt_mutates_any, expr_has_nested_closure, stmt_has_nested_closure, stmts_have_nested_closure, compute_closure_sig, lower_closure_body
 
 # ── Generic monomorphization ─────────────────────────────
 
@@ -125,8 +125,6 @@ void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &
             pass
         case ESelfExpr():
             pass
-        case EIt():
-            pass
         case EBinaryOp(p0, _, p2):
             proto_walk_expr(*p0, &gmod, &out, &seen)
             proto_walk_expr(*p2, &gmod, &out, &seen)
@@ -196,8 +194,6 @@ void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &
                 proto_walk_stmts(__armP1.body, &gmod, &out, &seen)
         case EClosure(_, p1):
             proto_walk_stmts(p1, &gmod, &out, &seen)
-        case EImplicitClosure(p0):
-            proto_walk_expr(*p0, &gmod, &out, &seen)
         case EArrayLiteral(p0):
             for __eP0 in p0:
                 proto_walk_expr(__eP0, &gmod, &out, &seen)
@@ -710,8 +706,6 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
             discover_generic_calls_expr(*mv, &seen, &instances, &tparams)
         case EMutableBorrow(mb):
             discover_generic_calls_expr(*mb, &seen, &instances, &tparams)
-        case EImplicitClosure(ic):
-            discover_generic_calls_expr(*ic, &seen, &instances, &tparams)
         case EListComp(lc_body, _, lc_iter, lc_filter):
             discover_generic_calls_expr(*lc_body, &seen, &instances, &tparams)
             discover_generic_calls_expr(*lc_iter, &seen, &instances, &tparams)

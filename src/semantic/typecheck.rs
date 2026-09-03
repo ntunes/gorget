@@ -507,7 +507,7 @@ impl ExprVisitor for CapturedMutationDetector {
         if self.found { return; }
         match &expr.node {
             // Nested closures have their own capture scope — skip
-            Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+            Expr::Closure { .. } => {}
             _ => visitor::walk_expr(self, expr),
         }
     }
@@ -630,8 +630,6 @@ struct TypeChecker<'a> {
     current_fn_throws_type_id: Option<TypeId>,
     /// Whether the current function is `async`.
     current_function_is_async: bool,
-    /// Type variable for implicit `it` parameter inside ImplicitClosure.
-    implicit_it_type: Option<TypeId>,
     /// Map from expression span to its inferred TypeId (used by codegen for Result-based `?`).
     expr_types: FxHashMap<Span, TypeId>,
     /// Spans of statement-position / match-arm expressions whose inferred type
@@ -778,7 +776,6 @@ impl<'a> TypeChecker<'a> {
             current_function_throws: false,
             current_fn_throws_type_id: None,
             current_function_is_async: false,
-            implicit_it_type: None,
             expr_types: FxHashMap::default(),
             diverging_exprs: rustc_hash::FxHashSet::default(),
             exhaustive_matches: rustc_hash::FxHashSet::default(),
@@ -1631,11 +1628,6 @@ impl<'a> TypeChecker<'a> {
             // (`tests/fixtures/known_gaps/assert_return_condition_untyped.gg`
             // + its `#[ignore]`d test) and closed on its own round.
             Expr::ReturnValue => self.types.error_id,
-
-            Expr::It => {
-                // Implicit closure parameter — use type from enclosing ImplicitClosure
-                self.implicit_it_type.unwrap_or(self.types.error_id)
-            }
 
             Expr::Path { segments } => {
                 if let Some(first) = segments.first() {
@@ -4542,21 +4534,6 @@ impl<'a> TypeChecker<'a> {
                     param_ownerships,
                     params: param_types,
                     return_type,
-                })
-            }
-
-            Expr::ImplicitClosure { body } => {
-                let param_type = self.fresh_type_var();
-                let prev_it_type = self.implicit_it_type.replace(param_type);
-                let body_type = self.infer_expr(body);
-                self.implicit_it_type = prev_it_type;
-                let ownership = self.extract_function_ownerships(self.decl_type_hint)
-                    .and_then(|v| v.into_iter().next())
-                    .unwrap_or(crate::parser::ast::Ownership::Borrow);
-                self.types.insert(ResolvedType::Function {
-                    params: vec![param_type],
-                    return_type: body_type,
-                    param_ownerships: vec![ownership],
                 })
             }
 
@@ -10046,7 +10023,7 @@ fn expr_has_loop_break(expr: &Expr) -> bool {
 /// returns from the function, so the walk recurses into every statement
 /// body. Expression recursion is limited to block-shaped expressions
 /// (`Expr::Block` / `Expr::Do`, mirroring `expr_has_loop_break`) and
-/// NEVER enters `Expr::Closure` / `Expr::ImplicitClosure` — a `return`
+/// NEVER enters `Expr::Closure` — a `return`
 /// inside a closure returns from the closure, not the enclosing function.
 fn block_contains_return(block: &Block) -> bool {
     block.stmts.iter().any(|s| stmt_contains_return(&s.node))
@@ -10099,7 +10076,7 @@ fn expr_contains_return(expr: &Expr) -> bool {
     match expr {
         Expr::Block(b) => block_contains_return(b),
         Expr::Do { body, .. } => block_contains_return(body),
-        // NEVER `Expr::Closure` / `Expr::ImplicitClosure`: their `return`
+        // NEVER `Expr::Closure`: its `return`
         // binds to the closure body, not the enclosing function.
         _ => false,
     }
@@ -10347,7 +10324,7 @@ pub fn apply_inferred_method_targs(
                 walk_expr(lhs, inferred);
                 walk_expr(rhs, inferred);
             }
-            Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
+            Expr::Closure { body, .. } => {
                 walk_expr(body, inferred);
             }
             Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
@@ -10509,7 +10486,7 @@ pub fn apply_inferred_call_targs(
                 walk_expr(lhs, inferred);
                 walk_expr(rhs, inferred);
             }
-            Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
+            Expr::Closure { body, .. } => {
                 walk_expr(body, inferred);
             }
             Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
@@ -10760,7 +10737,7 @@ pub fn apply_collect_target_rewrites(module: &mut Module) {
                 walk_expr(lhs, sigs);
                 walk_expr(rhs, sigs);
             }
-            Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => walk_expr(body, sigs),
+            Expr::Closure { body, .. } => walk_expr(body, sigs),
             Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
                 for e in elems { walk_expr(e, sigs); }
             }

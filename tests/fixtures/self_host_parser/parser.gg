@@ -161,7 +161,6 @@ const int KW_AWAIT = 81
 const int KW_SPAWN = 82
 const int KW_TEST = 83
 const int KW_SUITE = 84
-const int KW_IT = 85
 const int KW_PANIC = 86
 const int KW_SHARED = 87
 const int KW_META = 88
@@ -471,8 +470,6 @@ int keyword_tag(Token tok):
                     return KW_SUITE
                 case KwBench:
                     return KW_BENCH
-                case KwIt:
-                    return KW_IT
                 case KwPanic:
                     return KW_PANIC
                 case KwShared:
@@ -608,20 +605,6 @@ String type_to_name(SpannedType st):
 
 # ── Helper: check if keyword is a type keyword ──────────────
 
-
-# Check if an expression contains the implicit `it` parameter.
-# Stops at closure boundaries (it inside a closure belongs to that closure).
-bool expr_contains_it(Expr e):
-    # Simple tag check — "it" keyword detection doesn't need deep traversal
-    # for the self-host parser's use case (only top-level check).
-    match e:
-        case EIt():
-            return true
-        case EIdentifier(name):
-            return name == "it"
-        else:
-            return false
-
 bool is_type_keyword(int kw):
     if kw == KW_INT:
         return true
@@ -743,8 +726,6 @@ String non_type_keyword_name(int kw):
         return "false"
     elif kw == KW_NONE:
         return "none"
-    elif kw == KW_IT:
-        return "it"
     elif kw == KW_TYPE:
         return "type"
     elif kw == KW_ASYNC:
@@ -983,7 +964,6 @@ struct Parser:
     Vector[SpannedToken] tokens
     int pos
     Vector[Diagnostic] diagnostics
-    int call_arg_depth
     # Speculation depth — bumped at each speculative-call site, restored
     # before the position rollback. While > 0, parse_type's fallback
     # path suppresses the "expected type" diagnostic push. Mirrors the
@@ -2126,18 +2106,8 @@ equip Parser:
             if token_tag(next_arg.lex_token) == TOK_EQ:
                 self.advance()
                 self.advance()
-                self.call_arg_depth = self.call_arg_depth + 1
-                SpannedExpr val = self.parse_expr()
-                self.call_arg_depth = self.call_arg_depth - 1
-                if self.call_arg_depth == 0 and expr_contains_it(val.expr):
-                    return SpannedExpr(EImplicitClosure(Box[SpannedExpr](val)), val.span)
-                return val
-        self.call_arg_depth = self.call_arg_depth + 1
-        SpannedExpr val = self.parse_expr()
-        self.call_arg_depth = self.call_arg_depth - 1
-        if self.call_arg_depth == 0 and expr_contains_it(val.expr):
-            return SpannedExpr(EImplicitClosure(Box[SpannedExpr](val)), val.span)
-        return val
+                return self.parse_expr()
+        return self.parse_expr()
 
     # ── Prefix expressions ───────────────────────────────────
 
@@ -2326,11 +2296,6 @@ equip Parser:
             String tname = type_keyword_name(prefix_kw)
             SpannedToken t = self.advance()
             return SpannedExpr(EIdentifier(tname), Span(t.lex_start, t.lex_end))
-
-        # it keyword (implicit closure parameter)
-        if self.check_kw(KW_IT):
-            SpannedToken t = self.advance()
-            return SpannedExpr(EIt(), Span(t.lex_start, t.lex_end))
 
         # panic keyword (treated as a function call)
         if self.check_kw(KW_PANIC):
@@ -4152,6 +4117,6 @@ ParseResult parse_source(String source):
         if tag != TOK_COMMENT and tag != TOK_DOCCOMMENT:
             tokens.push(tok)
         ti = ti + 1
-    Parser p = Parser(tokens, 0, Vector[Diagnostic](), 0, 0, 0, Vector[String](), false)
+    Parser p = Parser(tokens, 0, Vector[Diagnostic](), 0, 0, Vector[String](), false)
     Module m = p.parse_module()
     return ParseResult(m, p.diagnostics)

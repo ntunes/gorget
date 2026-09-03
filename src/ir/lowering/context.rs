@@ -5167,7 +5167,7 @@ fn count_name_in_expr(expr: &Expr, name: &str, count: &mut u32) {
             for (c, b) in elif_branches { count_name_in_expr(&c.node, name, count); count_name_in_expr(&b.node, name, count); }
             if let Some(b) = else_branch { count_name_in_expr(&b.node, name, count); }
         }
-        Expr::Closure { body, .. } | Expr::ImplicitClosure { body, .. } => {
+        Expr::Closure { body, .. } => {
             count_name_in_expr(&body.node, name, count);
         }
         Expr::Match { scrutinee, arms, else_arm, .. } => {

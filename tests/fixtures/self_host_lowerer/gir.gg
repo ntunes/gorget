@@ -415,7 +415,7 @@ struct GirGlobal:
 
 # ── Lifted closure record (closure Phase 2 Step A) ───────────────
 # A closure recorded AT THE MAKE-SITE (lower_expr's EClosure /
-# EImplicitClosure / inline-spawn arms) and drained by the post-pass,
+# inline-spawn arms) and drained by the post-pass,
 # which is the SOLE pusher of `__Closure_N__call`. Replaces the deleted
 # `scan_*_for_closures` pre-pass: the make-site is now the single
 # closure-id source + recorder, so the two never-reconciled counters
@@ -459,14 +459,13 @@ struct LiftedClosure:
     int self_ptr                     # env-ptr type id (*__Closure_<cid>)
     Vector[int] abi_param_types      # full ABI vector [self_ptr, p0, p1, …]
     Vector[int] body_param_types     # the closure's OWN param types [p0, p1, …]
-    Vector[String] body_param_names  # the closure's param names (implicit-it: ["it"])
+    Vector[String] body_param_names  # the closure's param names
     int return_type
     Vector[Stmt] body
-    bool is_implicit                 # true for EImplicitClosure (implicit `it`)
     bool lowerable                   # false → emit the Phase-1 stub; true → lower the body
     # closure Phase 2 Step B: ByValue captures, in env-field/ctor-arg/
     # GIFieldLoad-index order (the single source of truth). Empty for
-    # non-capturing closures + inline-spawn/implicit-it records (DEFERRED).
+    # non-capturing closures + inline-spawn records (DEFERRED).
     Vector[ClosureCapture] captures
 
 # Typed payload-type channel for a monomorphized prelude `Option__<Inner>`

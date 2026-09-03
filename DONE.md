@@ -1,3 +1,56 @@
+- [2026-09-03] **R49 Track E — THE IMPLICIT `it` CLOSURE PARAMETER IS REMOVED FROM THE LANGUAGE (owner ruling 2026-09-03).**
+  `it` is an ordinary identifier again. `Keyword::It`, `Expr::It` and `Expr::ImplicitClosure` are
+  gone from Rust `gg`; `KwIt`, `KW_IT`, `EIt`, `EImplicitClosure`, `expr_contains_it`, `expr_has_it`,
+  `compute_implicit_closure_sig`, `record_implicit_it_closure`, `implicit_closure_genuine_capture`
+  and the dead `call_arg_depth` counter are gone from all five self-host stacks (207 lines across 25
+  real files). `LiftedClosure.is_implicit` went with them — a field written at two sites, read at
+  none, that existed only to mark the implicit spelling.
+  **THE REMOVAL IS CLEAN BY CONSTRUCTION, and that was the proof to preserve.** Both AST nodes had
+  exactly ONE producer each, and both producers were reached only from `Token::Keyword(Keyword::It)`.
+  Deleting the keyword makes both nodes unconstructible, so `cargo check` — not a hand census — is
+  what enumerates the arms. The self-host has the same single-producer shape, three copies of
+  `if self.check_kw(KW_IT): … SpannedExpr(EIt(), …)`.
+  **CLOSES `t0963` · `t0962` · `t0961`** — all three dissolve rather than get fixed: the `flat_map(it)`
+  miscompile, the self-host's comprehension-bodied over-reject, and the two-`it`-detectors structural
+  split are all statements about a construct that no longer exists.
+  ⭐ **`t0961`'s OPEN QUESTION, ANSWERED ON THE WAY OUT.** Its blocking concern was an uncited
+  defensive comment at `self_host_typechecker/parser.gg` — *"Avoiding deep traversal of borrowed Expr
+  to prevent double-free from pattern-extracted fields (Box/Vector) being dropped at scope exit."*
+  It was REFUTED TWICE OVER, and the refutation is worth keeping now that the comment is deleted:
+  `self_host_resolver/parser.gg` carried the SAME function under the SAME name recursing DEEPLY on a
+  borrowed `Expr` in a lane the `resolver_comparison` floor exercises across its whole corpus, and
+  `lower_closures.gg::expr_has_it` dereferenced `Box` payloads and iterated `args` directly — exactly
+  the shape the comment feared — in the bootstrap lane. Neither double-freed. The comment was a
+  fossil, and only the TYPECHECKER's copy was one: `self_host_parser/parser.gg` gave a different,
+  non-safety reason for its shallowness ("only top-level check").
+  **THE TRANSITION SURFACE.** `it` is now an ordinary identifier at every naming position — local,
+  loop variable, parameter, closure parameter, struct field — pinned by the new top-level fixture
+  `it_ordinary_identifier.gg`, each cell bound AND read. `xs.map(it * 2)` gets ONE clean spanned
+  `E_UndefinedName` carrying a note that DISPLACES the edit-distance suggestion, which would
+  otherwise have answered *"did you mean `xs`?"* — distance 2, and pointing at the receiver of the
+  very call the user was writing. Pinned by `it_removed_error/main.gg`, in its own directory on the
+  `break_value_removed_error` precedent so the rejected source stays out of the top-level sweeps.
+  The general shape — a typed retired-keyword table serving `it` AND the long-retired `mod` — is
+  filed as `t0978` rather than built here.
+  ⭐ **`ex_shopping_cart` FLIPS REJECTED → WORKS on all five lanes**, and its `robustness_map`
+  expectation was an ELLIPSIS placeholder (`apple x2 = 300 / ... / total 550`) written when nobody
+  could measure the cell. Restored from two independent witnesses that predate the compiler ever
+  running it — the fixture's own header comment and the deleted fossil companion
+  `ex_shopping_cart_total`, which existed for no reason but to spell the same program with a loop
+  variable that was not a keyword. The fossil is deleted; `beginner_map/MANIFEST.tsv`'s
+  `REJECTED-AND-THAT-IS-RIGHT` verdict on the same cell is retired with it.
+  ⚠ **THE TENTH LINT DID NOT GO RED, AND THAT IS THE Core #14 CASE IN THE WILD.**
+  `self_host_cow_write_walkers_share_one_root_peel` hardcodes a `NO_MUTABLE_PATH` roster and asserts
+  only `undecided.is_empty()`. Post-removal `decided` becomes a strict superset, so the guard greens
+  forever with two dead variant names inside it — a guard whose own doc says *"Add a variant to
+  ast.gg and this goes red"*, i.e. it guards the ADD direction only. Nine lints went red and named
+  themselves; this one had to be found by grepping the guard.
+  ⊕ **FILED ALONG THE WAY: `t0977`** — `auto out = v.map(<closure>)` reads back a RAW POINTER when
+  the closure's result type differs from the source element type and is a heap `String`. Found while
+  re-writing the `docs/language-design.md` closure examples off `it`, so the doc examples are what
+  surfaced it. Six cells; the four GREEN ones are the finding, because each kills a one-column
+  hypothesis. Same symptom as `t0823` γ1a, whose R48 fix covered the same-type case only.
+
 - [2026-09-03] **ROUND XLVIII (R48) CLOSED — SIX CRITICAL MEMORY-SAFETY DEFECTS, AND A ROUND-CLOSE THAT BECAME A ROUND.**
   24 track integrations · 183 commits · 23 touching `src/`.
 

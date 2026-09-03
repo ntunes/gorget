@@ -34,7 +34,7 @@ else round-trips, and the formatter goes out of its way to preserve a handful of
 facts that *look* cosmetic but are semantically load-bearing on re-parse
 (visibility on statics, the `:`-vs-`= "sym"` shape of a function body, the
 author's suite layout). The goal is **idempotence**: `fmt(fmt(x)) == fmt(x)`,
-which the unit tests assert directly (`src/formatter/mod.rs:7796`, `:8096`, and
+which the unit tests assert directly (`src/formatter/mod.rs:7767`, `:8095`, and
 many more).
 
 ## The `gg fmt` command
@@ -68,7 +68,7 @@ build would simply be **absent** from the result — silent data loss on the use
 file. Refusing is the only safe answer: on any parse error the driver renders the
 diagnostics and exits non-zero *without* writing to disk or printing a partial
 format. Call sites that are contractually fed valid Gorget (unit tests, fixtures) use
-`format_source_infallible` (`src/formatter/mod.rs:7574`), which panics rather than
+`format_source_infallible` (`src/formatter/mod.rs:7557`), which panics rather than
 returning a truncated file.
 
 What `gg fmt` still does not do is run semantic analysis: type errors, ownership
@@ -716,7 +716,7 @@ first non-import, non-directive item (`past_imports`,
 `src/formatter/mod.rs:2496-2509`), so only the *leading* import block is reordered.
 Within that block imports are sorted with std/`xtd` libraries first, then
 alphabetically (`src/formatter/mod.rs:2511-2524`; `is_std_import` at
-`src/formatter/mod.rs:7615`).
+`src/formatter/mod.rs:7586`).
 
 The NAME axis is not. The names inside an import keep the order the author wrote,
 on both spellings: `import a.{X, Y}` groups are fill-packed in source order, so a
@@ -748,7 +748,7 @@ Gorget is type-first (`int x = 5`), and the formatter prints declarations that w
 `format_param` emits `type [&|!]name` (`src/formatter/mod.rs:3414-3464`), `VarDecl`
 emits `type name = expr` (`src/formatter/mod.rs:4754-4804`). Ownership sigils (`&`,
 `!`) print *immediately before the name*, via `format_ownership_prefix`
-(`src/formatter/mod.rs:6865`), matching the language rule that the sigil binds the
+(`src/formatter/mod.rs:6842`), matching the language rule that the sigil binds the
 binding, not the type.
 
 Several positions canonicalize a tuple to its **bare** (parens-free) spelling because
@@ -780,7 +780,7 @@ the tree.
 ### String literals and the verbatim chokepoint
 
 A string literal is emitted **verbatim first**: `format_string_lit`
-(`src/formatter/mod.rs:6968`) asks for the author's own lexeme and, when it can have
+(`src/formatter/mod.rs:6945`) asks for the author's own lexeme and, when it can have
 it, writes exactly that. Quote style, the prefix letter, which escape spelled a
 character, the f-string brace form and — the case that makes a long `"""` block
 readable — its physical line layout all survive, because nothing was regenerated.
@@ -812,7 +812,7 @@ no longer denotes this node — `format_string_lit` rebuilds the literal from it
 `StringKind` prefix (`r"`, `b"`, `c"`, `f"`, `"""`, `"`) and its segment list,
 re-emitting interpolation segments as `{expr_text[:spec]}` from the stored source text
 rather than re-formatting the embedded expression. Bodies are escaped by
-`canonical_string_escape` (`src/formatter/mod.rs:7078`): raw strings pass through,
+`canonical_string_escape` (`src/formatter/mod.rs:7055`): raw strings pass through,
 `{`/`}` double inside f-strings, every control character is escaped — C0 and DEL as
 `\xHH`, C1 (`0x80-0x9F`) as `\u{XX}`, because the lexer rejects `\x` above `0x7F` and a
 raw C1 byte would plant an invisible control character in the user's source. Printable
@@ -890,8 +890,8 @@ expand them (that is Pass 0's job; see chapter 6). They re-print as written:
   (`:5228`), `meta while` (`:5283`), `meta const` (`:5293`), `meta log` (`:5300`) in
   `format_stmt`.
 - **Expression-level**: `meta`-prefixed operators — `a meta[op] b` for infix
-  (`src/formatter/mod.rs:6780-6785`) and `meta <op>` token form
-  (`src/formatter/mod.rs:6786-6789`).
+  (`src/formatter/mod.rs:6747-6751`) and `meta <op>` token form
+  (`src/formatter/mod.rs:6753-6756`).
 
 The AST is deliberately structured so that `meta if`/`meta for` carry their bodies as
 *real* statements/items (so resolution and the rest of the pipeline can see inside
