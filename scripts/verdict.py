@@ -220,7 +220,16 @@ BUILD_REJECT_MARKERS = (
 # failure read as BUILD-FAIL — five robustness-map cells diverged across lanes
 # on nothing but this table, and the c,llvm gate has been RED since 2026-08-31
 # (t0863 read that divergence as classification granularity; it was a missing
-# row). `build_message_markers_are_complete` in tests/lints.rs holds the line.
+# row).
+#
+# ⚠ NOTHING ENFORCES THIS TABLE'S COMPLETENESS. Adding a build-failure message
+# to `src/main.rs` without adding its spelling here silently reopens the class:
+# the affected cells report UNKNOWN and diverge across lanes, which is how the
+# LLVM rows came to be missing in the first place. The class-retiring guard is
+# FILED, NOT BUILT -- t1047. Until it lands, the table is maintained by hand and
+# this comment is the only thing that says so. Census the sites with:
+#   grep -nE '"(Guest|Host|Runtime|llc) compilation failed|"C compiler exited \
+#   with|"Failed to run|"Linking failed' src/main.rs
 BUILD_DELIVER_FAIL_MARKERS = (
     "C compiler exited with:",       # C backend, incl. the freestanding arm
     "Failed to run C compiler '",    # cc could not be spawned at all
