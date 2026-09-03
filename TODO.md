@@ -8,6 +8,70 @@ class fix, plus the owner's ease ruling.** No track has been scouted or briefed 
 is the ROSTER, not a set of signed-off designs. Every track still owes scout → brief → ≥3 fresh
 sequential brief-reviews → executor → fresh output-review before it integrates.
 
+### 📍 R49 LIVE STATE (2026-09-03, orchestrator) — supersedes the per-track prose below on STATUS
+⭐ **TRACK E IS SIGNED OFF AND EXECUTING — the round's first executor.** FIVE sequential fresh brief-reviews,
+**five confirmations, and not one ever attacked the removal.** Brief: `/tmp/brief_E_v2.md` (body + 2 addenda).
+⚠ **§ E's prose below carries STALE SIZINGS** (152 occurrences · 1181 lib tests · 12 symlinks · four parser
+stacks). **THE BRIEF WINS OVER § E.** Corrected: **207 lines across 25 real files**, **1185/0**, **29
+symlinks**, **five stacks**, and a FOURTH self-host representation (`call_arg_depth`, 18 sites) on top of
+`KwIt` / `KW_IT` / bare `"it"`.
+⛔ **E's two must-fold errata, both found only at the fifth gate:** (a) **the `figures.db` WAIVER CASCADE** —
+moving any parity floor reds three waiver rows, and one is **THE PLANT (`tests/lints.rs:27171`)** whose red
+message tells you to *undo a refactor you never made*; three of five `regen` commands begin with an `rm -f`
+of the self-host driver, so omitting them measures against a **stale driver** (Core #7's false-green).
+(b) **a SIXTH artifact category** — walker-enumeration headers (`compound_yield_race_rhs_walker_underrecurses.gg`,
+`t0370`, `t0379`, `c1_d26_closure_body_no_auto_infer.gg`) carrying an *explicitly-total* enumeration this
+track invalidates, **one of which § E knew about and the v2 rebuild LOST.**
+⚡ **Two decisions the orchestrator settled rather than passing down:** ship the ONE-LINE `E_UndefinedName`
+note (the typed retired-keyword table is filed as the follow-up); **UPDATE `beginner_map/MANIFEST.tsv`'s four
+rows in place — do NOT delete the corpus, that is Track F's call under `t0018`.**
+
+**⛔ SIX DESIGNS HAVE BEEN REFUTED THIS ROUND, EVERY ONE BY EXECUTION, NOT ARGUMENT. The pattern is the
+finding, and it belongs in `docs/devbook/30` at round close:**
+- **A1 v1** *"pack at birth + delete the name-matchers"* — deleting them removes the mechanism the fix needs.
+- **A1 v1's fold** *"delete the IIFE arm"* — measured: one working fixture → BUILD FAIL, two → SEGV.
+- **A1 v2** *"typed GIR pack + keep the escape condition"* — **mutually unimplementable**: there is NO escape
+  analysis in the tree, and pack-at-birth makes the IIFE and every HOF arg allocate where they allocate ZERO.
+- **A1-M v1** *"hoist `pack_closure_for_smart_ptr_ctor`"* — it keys on a TypeDef **NAME**; a `Callable[T]`
+  field is `GirType::FnPtr`, which has none. Hoisting it verbatim moved **ZERO of six cells**. ⊕ And *"the
+  single chokepoint"* does not exist (**4 / 26 / 13** callers).
+- **C mechanism 1** the one-shot — cannot reach a match-expression **arm tail**, and misses the SECOND `auto`
+  statement path (`lower_shared_var_decl`).
+- **C mechanism 2** the typed ambient — Form A fixes nothing; **Form B BREAKS TWO OF D23's EIGHT RATIFIED
+  `throws_autoprop_*` POSITIVES**, turning `8 / ok / neg` into garbage. **Not narrowable**: only D45-E0's
+  typed `!`-provenance can tell an unmarked arm tail from a marked one.
+
+⭐ **AND THE TWO REPLACEMENT DESIGNS BOTH CAME FROM REVIEWERS, PROTOTYPED:**
+- **A1-M's fifth design** — `pack_closure_at_dest_type(…, dest_ty: TypeId)` keyed on `GirType::FnPtr`, temp
+  typed to the destination, `set_owned_fresh` on it. **6/6 cells green on C AND LLVM.** ⚠ Container-literal
+  elements (**D53-ratified**, `decisions.md:529`) are still rc 139 — `t0873(a)` is NOT closed.
+- **C v2** — stop making the peel correct everywhere; **MAKE THE SILENT DROP LOUD** at
+  `exprs/methods.rs:1653`'s `Bool(false)` fold. ⭐ **Whole-corpus fire count: EXACTLY 1 IN 4348, and it is
+  the bug.** It catches its OWN class, is mechanism-independent, and turns a Core #10 violation into the
+  LEGAL outcome — loud is legal, silent is not, **even for the cell the track cannot fix.**
+
+⚡ **TRACK F-G SPLIT OUT OF F (2026-09-03)** — D46 on the **ggdef** lane only. F had taken four blocking
+passes and the ggdef half was the recurring blocker in two; `AGENTS.md` says REBUILT or SPLIT, never
+reviewed harder. F-G inherits: the `Ty::Unknown` decision, the `eval.rs:2294` /
+`Value::Tuple|Struct|Enum` alternative that needs **zero inference**, the `spec_conformance_ggdef.rs`
+**FrontendError-as-SKIP false green**, and the **open check-time-vs-eval-time question** (D46 says
+CHECK-time; an eval-time trap cannot satisfy an `expect.reject` frontmatter). ⛔ **F must not touch
+`spec/ggdef/`.** Core #9 still binds the ROUND: if F lands D46's production lanes without F-G, the round
+owes a note + a filed subset gap.
+
+⚠ **INSTRUMENT LESSONS THAT OUTLIVE THIS ROUND:**
+- **The whole-corpus GIR sweep is a REGRESSION BOUND, not coverage.** It gave `CHANGED=1` for BOTH of C's
+  mechanisms while they differ on FOUR cells. **820 of 4348 fixtures do not build at HEAD**, so the positive
+  denominator is **3528**, and negatives are compared **by rc only — a changed REJECTION MESSAGE is
+  invisible.**
+- **`cargo test --test lints` is FLAKY at HEAD** — `orphan_reaper_self_test` (`lints.rs:25954`): one run
+  exits 101, the next 0; passes in isolation. **Pre-existing, unrelated to any track. Do not chase it.**
+- **A stdout/md5 gate is structurally blind to the leak class a materialization change moves** — ASan is
+  mandatory wherever a fix allocates an env (Core #13).
+- **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
+  *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
+  `Vector[Callable] = [closure]` still SEGVs.
+
 ### 🔢 R49 ID BLOCKS — orchestrator-allocated per AGENTS.md multi-agent rule **MA-3b** (owner 2026-09-03)
 **A TRACK NEVER PICKS ITS OWN `todo/` ID.** Each executor gets a private disjoint block in its brief and
 asks the orchestrator to extend it if exhausted. This retires the collision that forced the Track P/R
