@@ -461,6 +461,47 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **✅ C · PASS 5 SIGNED OFF (THIRD CONSECUTIVE) — EXECUTOR LAUNCHED.** Folded as ADDENDUM 5.
+  ⛔⛔ **AND IT FOUND A ROUND-LEVEL RED THAT IS NOT TRACK C's.** `known_gaps_census.sh --check` run in full:
+  **the gate is ALREADY RED on the integration branch at `908ea0ad6`** — **two pre-existing unallowlisted
+  passers**, `catch_binding_throw_in_match_arm_ice` and `hof_call_env_leak_unbounded`. ⚡ **BOTH ARE TRACK
+  H's** (H2 graduates the first, H3 REWIRES the second) — **H is executing them now.** The second is a
+  textbook Core #12 violation shipped by an earlier landing: its `#[ignore]` reason says the gap is *"visible
+  only under `--sanitize` + LeakSanitizer"* while its body is `run_gg(..., "120")` — **a stdout assertion
+  that can never observe a leak.** ⛔ **Track C is NOT charged for them, and C's executor is briefed NOT to
+  use the census as an instrument until H lands.**
+  ⛔ **A SECOND AUTO-PEEL CELL, WORSE IN REACHABILITY THAN THE FIRST:** a payload **without** `is_error` —
+  **HEAD builds and prints the CORRECT output; the PAIR is build rc 1.** A **build regression on a program
+  correct at HEAD**, needing **no** user-defined four-name method, only the ordinary
+  `auto x = <method returning Result[UserType, E]>` idiom. **ADDENDUM 4 pinned only the has-method variant.**
+  ⭐ **THE MECHANISM, NAMED AT LAST — and it is visible in the emitted C.** `auto j = s.join(g)` lowers to a
+  **PEEL**: `__bb1` extracts `Ok_0` into a `Payload` slot and binds `j` to it. **So LOWERING binds the
+  payload while the CHECKER binds the `Result`** (D45 pin 6: an unmarked position never peels) — `t0947`/
+  `t0434` exactly. **`x_payload_ok.PAIR.c:3760` emits `Payload__is_error(...)` where HEAD emits no call.**
+  ⭐ **THE CLASS IS BOUNDED, NOT UNBOUNDED — `|pinned| == |changed|` IS ACHIEVABLE.** Full payload-type axis
+  measured (7 rows): only two cells change; `Result[int,_]`, `Result[String,_]`, `Option[Payload]` and the
+  **explicit** `Result[…] j = …` binding are all **unchanged** — **the peel is Result-only and `auto`-only.**
+  ⭐ **CORPUS WITNESS (row 2, mechanical):** across **4408** `.gg` files, those containing **both**
+  `auto X = …` and `X.is_{some,none,ok,error}()` = **ZERO** ⇒ **the corpus is STRUCTURALLY INCAPABLE of
+  seeing this class**, so no green fixture regresses and no sweep bounds `|changed|` for it.
+  ✅ **THE SHIP ARGUMENT, CHECKABLE AT OUTPUT-REVIEW:** by the owner's ranking the pair moves **no cell UP** —
+  A is silent-wrong → silent-wrong (lateral); A(2) and `t0947` are silent-wrong → **build failure, BELOW
+  silent-wrong-output**. Step 1 fixes the track's highest-severity cell (`String is_some(&self)` delivering
+  `Bool(false)` into a `String` slot) plus **six** healthy provenances, and `t1019` closes a real Core #10
+  hole. **Core #8's teeth are about a defect the round CREATED and PRETENDED WAS FINE; this one is filed,
+  RED-verified, and moves DOWN the ranking.**
+  ⊕ **SIXTH FIX ROW, in no table before:** a trait-BOUND generic param (`bool probe[Checkable T](T a)`) is
+  **HEAD `false` → PAIR `true`** — §2 listed the mono'd generic param as a BREAK row; **with the bound
+  providing the method it is a FIX.**
+  ⚡ **REQUIRED OF THE EXECUTOR:** the **FULL 2209-fixture build+run+stdout-hash sweep** — **the check-only
+  sweep is MEASURED STRUCTURALLY BLIND to the pair's worst class**, and the gate table topped out at 258.
+  ⛔ **DO NOT CLOSE `t0025`** — it narrows; **both** halves stay live (`Box[Trait]` rc 139 on HEAD *and*
+  PAIR, and the teaching-diagnostic half the pair does not deliver).
+  ⚠ **SH:** step 1 needs **no port** (Rust converges onto SH); `t1019` **is** a genuine lag creating an
+  accept/reject divergence this round — port as a **NEW FUNCTION**, not a tenth arm
+  (`sh_reject_wrong_receiver_combinator_arms_count` pins the set at **9**), or `#[ignore]` + citation +
+  subset gap.
+
 - **✅ F · PASS 6 SIGNED OFF — EXECUTOR LAUNCHED. Six passes; the design needed none of them, MY FOLDS did.**
   Pass 6 built the REAL patch from ADDENDUM 6 + 7 B1, measured it, RED-verified the guard, reverted clean.
   `cargo build` 0 · `--lib` **1186/0** · `--test lints` **218/0** · `robustness_map --lanes c` **rc 0,
