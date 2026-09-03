@@ -1443,10 +1443,20 @@ fn amp_in_operand_position_reject_sites_count() {
 /// `ExitStatus::code()` returns `None` on Unix for signal-death, and both
 /// `.code().unwrap_or(1)` and `process::exit(if any_failed { 1 } else { 0 })`
 /// silently folded signal-death into the same 1 emitted for a compile error.
-/// Fix routes ALL child-process exit propagation through
-/// `propagate_child_status` (chokepoint) OR through an aggregation loop that
-/// reads `ExitStatusExt::signal()` and exits `128 + signo`. This lint prevents
-/// any new site from re-instantiating either syntactic costume.
+/// Fix routes ALL child-process exit propagation through `child_exit_code`
+/// (the chokepoint) OR through an aggregation loop that reads
+/// `ExitStatusExt::signal()` and yields `128 + signo`. This lint prevents any
+/// new site from re-instantiating either syntactic costume.
+///
+/// ⚠ **BOTH SPELLINGS OF THE AGGREGATION COSTUME COUNT.** `todo/t0966`
+/// confined the three destructor-bearing scopes in `src/main.rs`, turning the
+/// exits inside them into `return`s — so the `gg test` parallel-worker
+/// instance of this costume changed spelling from `process::exit(if
+/// any_failed` to `return if any_failed`. A lint that knew only the `exit`
+/// spelling would have kept passing on HALF the population with no signal that
+/// anything had left its view, which is why `EXPECTED_AGGREGATION_SITES` pins
+/// the count as well: a shrinking set of watched sites must be a deliberate
+/// edit here, not a silent side effect of a refactor over there.
 #[test]
 fn child_exit_status_propagation_chokepoint() {
     let src = std::fs::read_to_string("src/main.rs").unwrap();
@@ -1467,7 +1477,7 @@ fn child_exit_status_propagation_chokepoint() {
         }
         if line.contains(".code().unwrap_or(") || line.contains(".code().unwrap()") {
             hits.push(format!(
-                "src/main.rs:{}: DIRECT COSTUME — must route through propagate_child_status(): {}",
+                "src/main.rs:{}: DIRECT COSTUME — must route through child_exit_code(): {}",
                 lineno + 1,
                 line.trim()
             ));
@@ -1476,28 +1486,43 @@ fn child_exit_status_propagation_chokepoint() {
 
     // Costume 2: the aggregation pattern. It MAY appear in the tree, but only
     // when immediately preceded (within 25 lines above) by a signal-aware
-    // guard block that reads `ExitStatusExt::signal()` and exits `128+signo`.
-    // We enforce this positionally: for every `process::exit(if any_failed`
-    // line, require an `ExitStatusExt::signal()` mention within the preceding
-    // 25 lines. (A novel THIRD costume would bypass both arms; this lint
-    // guards the EXISTING syntactic costumes from silent regression.)
+    // guard block that reads `ExitStatusExt::signal()` and yields `128+signo`.
+    // We enforce this positionally: for every aggregation line, require the
+    // signal-guarded termination within the preceding 25 lines. (A novel THIRD
+    // costume would bypass both arms; this lint guards the EXISTING syntactic
+    // costumes from silent regression.)
+    //
+    // BOTH terminating spellings are watched on each side, because
+    // `todo/t0966` legitimately converts a `process::exit` inside a
+    // destructor-bearing scope into a `return` out of that scope:
+    //   aggregation : `process::exit(if any_failed`  |  `return if any_failed`
+    //   signal guard: `process::exit(128 + signo)`   |  `return 128 + signo`
+    /// Both instances of the aggregation costume in `src/main.rs`: the
+    /// `gg test <dir>` multi-file block (which opens no tempdir and therefore
+    /// still exits directly) and the `gg test --parallel` worker loop (inside
+    /// a confined scratch scope, so it returns). SHRINK ONLY BY DELIBERATE
+    /// EDIT — see this test's doc comment.
+    const EXPECTED_AGGREGATION_SITES: usize = 2;
+    let mut aggregation_sites = 0usize;
     for (lineno, line) in lines.iter().enumerate() {
         if line.trim_start().starts_with("//") {
             continue;
         }
-        if line.contains("process::exit(if any_failed") {
+        if line.contains("process::exit(if any_failed") || line.contains("return if any_failed") {
+            aggregation_sites += 1;
             let window_start = lineno.saturating_sub(25);
             let window: String = lines[window_start..lineno].join("\n");
-            // The signal-guarded exit block (`process::exit(128 + signo);`
-            // within `if let Some((.., signo)) = first_signal { ... }`) must
-            // appear immediately before the aggregation exit. The raw
+            // The signal-guarded termination (within
+            // `if let Some((.., signo)) = first_signal { ... }`) must appear
+            // immediately before the aggregation. The raw
             // `ExitStatusExt::signal()` call may live further up the function
-            // (in the collection loop), but the guarded-exit block itself is
+            // (in the collection loop), but the guarded block itself is
             // load-bearing at this position.
-            let has_guarded_exit = window.contains("process::exit(128 + signo)");
+            let has_guarded_exit =
+                window.contains("process::exit(128 + signo)") || window.contains("return 128 + signo");
             if !has_guarded_exit {
                 hits.push(format!(
-                    "src/main.rs:{}: AGGREGATION COSTUME without signal-guard — must be immediately preceded (within 25 lines) by an `if let Some((_, signo)) = first_signal {{ ... process::exit(128 + signo); }}` block that surfaces signal-death: {}",
+                    "src/main.rs:{}: AGGREGATION COSTUME without signal-guard — must be immediately preceded (within 25 lines) by an `if let Some((_, signo)) = first_signal {{ ... 128 + signo }}` block that surfaces signal-death: {}",
                     lineno + 1,
                     line.trim()
                 ));
@@ -1507,10 +1532,288 @@ fn child_exit_status_propagation_chokepoint() {
 
     assert!(
         hits.is_empty(),
-        "child-exit status must route through propagate_child_status() or a \
+        "child-exit status must route through child_exit_code() or a \
          signal-guarded aggregation (Round XXIV Track B). Found: {:#?}",
         hits
     );
+
+    assert_eq!(
+        aggregation_sites, EXPECTED_AGGREGATION_SITES,
+        "the AGGREGATION-COSTUME population in src/main.rs moved: {aggregation_sites} \
+         vs expected {EXPECTED_AGGREGATION_SITES}. This lint has no other way to notice \
+         that a site left its view — a refactor that respells one (e.g. \
+         `process::exit(if any_failed` -> `return if any_failed`, which \
+         `todo/t0966`'s scope confinement did) would otherwise green a check \
+         running on HALF the population. If a site was genuinely added or \
+         removed, verify the signal-death path by RUNNING it \
+         (`gg_run_propagates_signal_death` / `gg_test_propagates_signal_death` \
+         in tests/integration.rs — a textual lint cannot see a behavioural \
+         regression, Core #13) and then move this constant."
+    );
+}
+
+/// `todo/t0966` — the SCRATCH-DIRECTORY LEAK CLASS, retired as a class.
+///
+/// `tempfile::TempDir` removes its directory in its `Drop` impl and NOWHERE
+/// ELSE. `std::process::exit` ends the process without unwinding, so it never
+/// runs a destructor. An exit taken inside a scope that holds a `TempDir`
+/// therefore leaks the directory and everything in it — measured at R49 open
+/// as **161,898 directories / ~37 GB**, 93% of all `/tmp` scratch, from three
+/// `gg` arms (`gg <file>.gg`, `gg run`, `gg test`).
+///
+/// The runtime guard `gg_commands_do_not_leak_their_scratch_dir`
+/// (`tests/integration.rs`) pins the three arms that exist. THIS lint pins the
+/// CLASS: it fails on the next termination added inside any destructor-bearing
+/// scope, in any file, before anyone runs it.
+///
+/// # Why the subject is wider than `process::exit(`
+///
+/// The ORIGINAL spelling of this very leak was not `process::exit(` at all —
+/// it was a call to `propagate_child_status`, a `-> !` helper that ended in
+/// one. A lint grepping only for `process::exit(` missed 3 of the 21 live
+/// sites and, worse, would have stayed green if the helper were kept and a new
+/// call added. So the subject is:
+///
+/// 1. a CLOSED literal set of process-terminating spellings, and
+/// 2. a call to any `-> !` (diverging) function declared anywhere in `src/`,
+///    enumerated rather than named — naming `propagate_child_status` would be
+///    name-matching a single instance (Core #2), and factoring the helper into
+///    another module would green the guard.
+///
+/// The set also carries the spellings that DISABLE the destructor without
+/// terminating (`into_path()`, `.keep()`, `mem::forget`, `ManuallyDrop`),
+/// because those leak the directory just as thoroughly.
+///
+/// # What this does NOT cover (Core #12: name the omitted cells)
+///
+/// `panic!` is deliberately absent: `Cargo.toml` sets no `[profile]` and no
+/// `panic = "abort"`, so a panic UNWINDS and `Drop` runs. If that ever
+/// changes, panics inside these scopes join the class.
+///
+/// It is also a TEXTUAL guard over `src/`. It cannot see a scratch directory
+/// created by a hand-rolled `env::temp_dir().join(..)` + `create_dir_all`
+/// (there is one, `src/main.rs`'s `gorget_tui`, adjudicated in `todo/t0966`
+/// as NOT this class: a fixed name, bounded at one entry, with no destructor
+/// to skip), and it cannot see a behavioural regression. The integration guard
+/// is the complement, and neither substitutes for the other.
+#[test]
+fn scratch_dir_scopes_have_no_process_exit() {
+    // (1) THE DIVERGING-FUNCTION INVENTORY, enumerated over all of `src/`.
+    //     A declaration is `fn NAME(..) -> ! {`, possibly with the return type
+    //     on its own line after a multi-line parameter list. Prose mentions of
+    //     `-> !` in doc comments are not declarations and must not count.
+    /// `comprehension_source_not_iterable` (`src/ir/lowering/exprs/`), a
+    /// `panic!` helper never called from a scratch scope. The count is pinned
+    /// because a NEW diverging helper is exactly how this leak class re-enters
+    /// invisibly — `propagate_child_status` was one, and deleting it is what
+    /// took this inventory from 2 to 1.
+    const EXPECTED_DIVERGING_FNS: usize = 1;
+    let mut diverging: Vec<(String, String)> = Vec::new(); // (name, path:line)
+    let mut sources: Vec<(String, String)> = Vec::new(); // (path, text)
+    for path in walkdir_rs("src") {
+        let text = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let disp = path.display().to_string();
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, raw) in lines.iter().enumerate() {
+            let t = raw.trim_start();
+            if t.starts_with("//") || t.starts_with("*") {
+                continue;
+            }
+            // Same line: `fn foo(..) -> ! {`
+            if let Some(name) = fn_name_of_decl(raw) {
+                if raw.contains("-> !") {
+                    diverging.push((name, format!("{disp}:{}", i + 1)));
+                    continue;
+                }
+                // Multi-line signature: scan forward for the closing `) -> ! {`
+                // before the body opens.
+                for probe in lines.iter().take((i + 40).min(lines.len())).skip(i + 1) {
+                    let p = probe.trim_start();
+                    if p.starts_with(") -> ! {") || p.starts_with(")->! {") {
+                        diverging.push((name.clone(), format!("{disp}:{}", i + 1)));
+                        break;
+                    }
+                    if p.starts_with(')') || p.starts_with('{') {
+                        break;
+                    }
+                }
+            }
+        }
+        sources.push((disp, text));
+    }
+    diverging.sort();
+    let diverging_names: Vec<&str> = diverging.iter().map(|(n, _)| n.as_str()).collect();
+
+    // (2) The terminating / destructor-disabling spellings. CLOSED SET, and
+    //     each row states how it was shown absent-or-present at HEAD, so the
+    //     next reader can re-derive it rather than trust it (Core #5).
+    //       process::exit / std::process::exit — the raw form
+    //       process::abort                     — no live instance
+    //       libc::_exit, libc::exit            — no `libc` dependency today
+    //       CommandExt::exec()                 — no live instance
+    //       into_path(), .keep(), mem::forget, ManuallyDrop
+    //                                          — disable Drop without exiting
+    const TERMINATORS: [&str; 9] = [
+        "process::exit(",
+        "process::abort(",
+        "libc::_exit(",
+        "libc::exit(",
+        ".exec()",
+        ".into_path()",
+        ".keep()",
+        "mem::forget(",
+        "ManuallyDrop::",
+    ];
+
+    // (3) Every destructor-bearing scope: a binding of a `tempfile` RAII guard.
+    //     The scope is the enclosing block, found by brace matching.
+    const GUARD_CTORS: [&str; 4] = [
+        "tempfile::tempdir(",
+        "tempfile::TempDir::",
+        "tempfile::NamedTempFile::",
+        "tempfile::Builder::",
+    ];
+    let mut hits: Vec<String> = Vec::new();
+    let mut scopes = 0usize;
+    for (path, text) in &sources {
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, raw) in lines.iter().enumerate() {
+            let t = raw.trim_start();
+            if t.starts_with("//") || t.starts_with("///") || !raw.contains("let ") {
+                continue;
+            }
+            if !GUARD_CTORS.iter().any(|c| raw.contains(c)) {
+                continue;
+            }
+            scopes += 1;
+            let end = enclosing_block_end(&lines, i);
+            for (j, body) in lines.iter().enumerate().take(end + 1).skip(i) {
+                let b = body.trim_start();
+                if b.starts_with("//") || b.starts_with("///") || b.starts_with('*') {
+                    continue;
+                }
+                let mut why: Option<String> = None;
+                if let Some(term) = TERMINATORS.iter().find(|t| body.contains(**t)) {
+                    why = Some(format!("terminating call `{term}`"));
+                } else if let Some(name) = diverging_names.iter().find(|n| {
+                    body.contains(&format!("{n}(")) && fn_name_of_decl(body).as_deref() != Some(*n)
+                }) {
+                    why = Some(format!("call to the diverging (`-> !`) helper `{name}`"));
+                }
+                if let Some(why) = why {
+                    hits.push(format!(
+                        "  {path}:{}: {why} inside the destructor-bearing scope opened at {path}:{}\n      {}",
+                        j + 1,
+                        i + 1,
+                        body.trim(),
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        scopes >= 3,
+        "expected at least the three `gg` scratch scopes (shorthand / run / \
+         test) in src/main.rs, found {scopes} — the scope detector stopped \
+         matching, so a green result here says nothing (SIX QUESTIONS #2)."
+    );
+
+    assert!(
+        hits.is_empty(),
+        "PROCESS TERMINATION INSIDE A DESTRUCTOR-BEARING SCOPE (todo/t0966).\n\n{}\n\n\
+         `tempfile::TempDir` deletes its directory in `Drop` and nowhere else, and \
+         `std::process::exit` never unwinds, so this path leaks the scratch \
+         directory with the emitted `.c` and the linked binary inside it — on \
+         EVERY invocation, not just on failure. This is what put 161,898 \
+         directories and ~37 GB into `/tmp` before R49.\n\n\
+         THE FIX IS AT THE WRITE SITE (Core #1): confine the destructor-bearing \
+         scope in an `(|| -> i32 {{ .. }})()` and `return` the exit code out of \
+         it, then `process::exit` that code AFTER the scope closes — see the \
+         three arms in `src/main.rs`. ⛔ Do NOT add a `$TMPDIR` reaper: it cannot \
+         tell this driver's directories from another live process's, and it \
+         races. ⛔ Do NOT add an exemption here: an exemption is a hole the next \
+         site walks through, and the ctor's own error path (where no directory \
+         exists yet) is a `match` arm precisely so that none is needed.",
+        hits.join("\n")
+    );
+
+    // Pinned LAST on purpose: when a scratch scope really does terminate, the
+    // enumeration of the offending sites above is the message worth reading.
+    // The inventory is the slower-moving half of the guard.
+    assert_eq!(
+        diverging.len(),
+        EXPECTED_DIVERGING_FNS,
+        "the `-> !` (diverging-function) inventory in src/ moved: {:#?}\n\n\
+         Every one of these terminates the process on the caller's behalf, so a \
+         CALL to one inside a scope holding a `tempfile::TempDir` leaks that \
+         directory exactly as a raw `process::exit` does — and is invisible to a \
+         grep for `process::exit(` (todo/t0966; that IS how the 37 GB leak was \
+         spelled). If you added one, confirm it is never called from a \
+         destructor-bearing scope and bump this constant. Prefer returning a \
+         code and letting the caller terminate: a function that computes cannot \
+         skip a destructor.",
+        diverging
+    );
+}
+
+/// `fn NAME(` → `Some("NAME")`, for a line that declares a function.
+fn fn_name_of_decl(line: &str) -> Option<String> {
+    let t = line.trim_start();
+    let rest = t
+        .strip_prefix("pub(crate) ")
+        .or_else(|| t.strip_prefix("pub "))
+        .unwrap_or(t);
+    let rest = rest.strip_prefix("unsafe ").unwrap_or(rest);
+    let rest = rest.strip_prefix("fn ")?;
+    let name: String = rest
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() || !rest[name.len()..].starts_with(['(', '<']) {
+        return None;
+    }
+    Some(name)
+}
+
+/// Index of the `}` that closes the block enclosing `start_idx`, by brace
+/// matching with string literals and line comments stripped.
+fn enclosing_block_end(lines: &[&str], start_idx: usize) -> usize {
+    let mut depth: i32 = 0;
+    for (i, line) in lines.iter().enumerate().skip(start_idx) {
+        let mut code = String::new();
+        let mut in_str = false;
+        let mut prev = '\0';
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            if in_str {
+                if c == '"' && prev != '\\' {
+                    in_str = false;
+                }
+            } else if c == '"' {
+                in_str = true;
+            } else if c == '/' && chars.peek() == Some(&'/') {
+                break;
+            } else {
+                code.push(c);
+            }
+            prev = c;
+        }
+        for c in code.chars() {
+            if c == '{' {
+                depth += 1;
+            } else if c == '}' {
+                depth -= 1;
+                if depth < 0 {
+                    return i;
+                }
+            }
+        }
+    }
+    lines.len().saturating_sub(1)
 }
 
 fn count_amp_in_operand_position_rejects() -> usize {
@@ -9653,6 +9956,142 @@ fn readiness_checklist_rows_are_capped() {
         "the READINESS CHECKLIST's row markers are not a contiguous 1..N run: {seen:?}. \
          A retired row must be renumbered, not left as a hole — a gap reads as a row the \
          reader is expected to find somewhere else."
+    );
+}
+
+/// `todo/t0824`: the round-close battery must actually COVER every gate CI
+/// runs — enforced, not asserted.
+///
+/// `AGENTS.md` step 4 used to end with *"The full battery covers every target
+/// CI runs, so local-green IS the round-close sign-off."* **Measured false.**
+/// Three CI steps appeared nowhere in the battery — `known_gaps_census.sh
+/// --check`, `staging_move_burndown.sh --check` and `cargo test --test
+/// c_runtime` — so a round could run every documented leg green and still be
+/// red in CI. R48 closed in exactly that state, with the census red at HEAD.
+///
+/// A procedure that asserts totality it does not have is worse than one that
+/// admits the gap, and prose cannot notice a step being added to `ci.yml`
+/// tomorrow. So the claim is now a GUARD (Core #6): every `run:` command in
+/// `.github/workflows/ci.yml` is reduced to the TARGET it exercises, and every
+/// target must appear in the battery block.
+///
+/// # What this does NOT check (Core #12: name the omitted cells)
+///
+/// It checks MEMBERSHIP, not flags, env or ordering: a battery leg that names
+/// `--test security` satisfies CI's `--test security --release` under
+/// `GG_BACKEND=llvm` too, because the LLVM sweep bullet is what carries that
+/// axis and reproducing every env matrix here would pin CI's shape rather than
+/// its coverage. It also cannot tell you whether the documented leg was RUN.
+#[test]
+fn round_close_battery_covers_ci_steps() {
+    let ci = fs::read_to_string(".github/workflows/ci.yml").expect("ci.yml");
+    let agents = fs::read_to_string("AGENTS.md").expect("AGENTS.md");
+
+    // The battery block: step 4 of the Round lifecycle, up to step 5.
+    let start = agents
+        .find("4. **Round-close gate")
+        .expect("AGENTS.md no longer has a `4. **Round-close gate` step — the battery block \
+                 this lint reconciles against ci.yml is gone, which is a bigger problem than \
+                 whatever edit removed it.");
+    let rest = &agents[start..];
+    let end = rest.find("\n5. **").unwrap_or(rest.len());
+    let battery = &rest[..end];
+
+    /// CI steps that are NOT gates and therefore need no battery leg. Each row
+    /// states WHY, because an unexplained exemption is where a real gate hides.
+    const EXEMPT: [(&str, &str); 4] = [
+        ("apt-get", "environment provisioning (LLVM/SDL2 install), not a gate"),
+        ("cargo build", "a PREREQUISITE of every gate below it, not a gate itself"),
+        ("rustup", "toolchain setup"),
+        ("actions/", "a marketplace action, not a shell gate"),
+    ];
+
+    // A CI command satisfies the battery when the battery names the same
+    // TARGET. `--test integration` is the one alias: the battery mandates the
+    // wrapper (`scripts/run_integration.sh`) rather than the raw cargo target,
+    // deliberately — a hand-rolled thread count is its own defect class.
+    let target_is_covered = |target: &str| -> bool {
+        if target == "--test integration" {
+            return battery.contains("scripts/run_integration.sh");
+        }
+        battery.contains(target)
+    };
+
+    let mut missing: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    for (i, line) in ci.lines().enumerate() {
+        let t = line.trim();
+        // `run: <cmd>` (single line) and the body lines of a `run: |` block.
+        let cmd = if let Some(c) = t.strip_prefix("run: ") {
+            if c.trim() == "|" { continue; }
+            c.trim()
+        } else if t.starts_with("cargo ") || t.starts_with("python3 scripts/")
+            || t.starts_with("scripts/") || t.contains("scripts/sanitize_sweep.sh")
+        {
+            // Body of a `run: |` block, or an env-prefixed script invocation.
+            t
+        } else {
+            continue;
+        };
+        if EXEMPT.iter().any(|(pat, _)| cmd.contains(pat)) {
+            continue;
+        }
+
+        // Reduce the command to the target(s) it exercises.
+        let mut targets: Vec<String> = Vec::new();
+        for (idx, w) in cmd.split_whitespace().enumerate() {
+            if w == "--test" {
+                if let Some(name) = cmd.split_whitespace().nth(idx + 1) {
+                    targets.push(format!("--test {name}"));
+                }
+            } else if w == "-p" {
+                if let Some(name) = cmd.split_whitespace().nth(idx + 1) {
+                    targets.push(format!("-p {name}"));
+                }
+            } else if w == "--lib" {
+                targets.push("--lib".to_string());
+            } else if let Some(pos) = w.find("scripts/") {
+                let path = &w[pos..];
+                if path.ends_with(".sh") || path.ends_with(".py") {
+                    targets.push(path.to_string());
+                }
+            }
+        }
+        if targets.is_empty() {
+            continue;
+        }
+        for target in targets {
+            checked += 1;
+            if !target_is_covered(&target) {
+                missing.push(format!(
+                    "  ci.yml:{}: `{target}` — from `{}`",
+                    i + 1,
+                    cmd.chars().take(90).collect::<String>()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        checked >= 10,
+        "the ci.yml step scanner matched only {checked} targets — it stopped parsing, so a \
+         green result here says nothing (SIX QUESTIONS #2). Check whether `run:` steps changed \
+         shape."
+    );
+
+    missing.sort();
+    missing.dedup();
+    assert!(
+        missing.is_empty(),
+        "CI RUNS GATES THE ROUND-CLOSE BATTERY DOES NOT (todo/t0824):\n{}\n\n\
+         AGENTS.md's Round lifecycle step 4 claims local-green IS the round-close sign-off. \
+         That is only true while every CI gate has a battery leg — and the last time it was \
+         not, a round closed all-green with CI red on `known_gaps_census.sh --check`. Add the \
+         step to the step-4 list (a target name is enough; this lint checks membership, not \
+         flags), or, if it genuinely is not a gate, add it to EXEMPT above WITH ITS REASON. \
+         ⛔ Never resolve this by weakening the sentence in AGENTS.md — the sentence is the \
+         thing this lint exists to keep true.",
+        missing.join("\n")
     );
 }
 
@@ -23865,12 +24304,43 @@ fn known_gaps_repros_are_wired_to_a_test() {
     }
 
     let mut unwired: Vec<String> = Vec::new();
+    let mut dirs_seen = 0usize;
     for entry in fs::read_dir("tests/fixtures/known_gaps").expect("read known_gaps/") {
         let path = entry.expect("dir entry").path();
-        if path.extension().and_then(|e| e.to_str()) != Some("gg") {
+        // ⚠ A REPRO DIRECTORY IS A UNIT TOO, and this lint could not see one.
+        // It skipped everything without a `.gg` extension, so a multi-file
+        // repro committed as `known_gaps/<dir>/` was STRUCTURALLY INVISIBLE —
+        // which is exactly how a scout corpus sat in the tree unwired while
+        // this guard stayed green. `scripts/known_gaps_census.sh`'s enumerator
+        // and `scripts/convergence.sh`'s inventory both treat a directory as
+        // one unit; this now agrees with them instead of disagreeing silently.
+        let is_dir = path.is_dir();
+        if is_dir {
+            dirs_seen += 1;
+        } else if path.extension().and_then(|e| e.to_str()) != Some("gg") {
             continue;
         }
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let stem = if is_dir {
+            path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string()
+        } else {
+            path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string()
+        };
+        if is_dir {
+            // A directory unit is wired when a test names the directory itself
+            // OR any file inside it — one entry point is what a multi-file
+            // repro has, and the contract is that SOMETHING states what the
+            // program should print.
+            let spellings = [
+                format!("\"known_gaps/{stem}\""),
+                format!("\"known_gaps/{stem}/"),
+                format!("\"tests/fixtures/known_gaps/{stem}\""),
+                format!("\"tests/fixtures/known_gaps/{stem}/"),
+            ];
+            if !spellings.iter().any(|sp| sources.contains(sp)) {
+                unwired.push(stem);
+            }
+            continue;
+        }
         // Match how the harness helpers spell the fixture: with or without
         // `.gg` — but the path must sit inside a STRING LITERAL, i.e. carry
         // its opening quote.
@@ -23901,6 +24371,15 @@ fn known_gaps_repros_are_wired_to_a_test() {
         }
     }
     unwired.sort();
+
+    // SIX QUESTIONS #2: a green result means nothing if the directory arm
+    // stopped enumerating. `known_gaps/` has carried at least ten repro
+    // directories since R44.
+    assert!(
+        dirs_seen >= 10,
+        "the known_gaps DIRECTORY enumeration saw only {dirs_seen} directories — it stopped \
+         matching, so a green result here says nothing about the class it was added to catch."
+    );
 
     let arrivals: Vec<&String> = unwired
         .iter()

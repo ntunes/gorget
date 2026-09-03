@@ -2292,6 +2292,247 @@ fn gg_run_propagates_signal_death() {
     // No cleanup: `gg run` builds into a `tempfile::tempdir()` (`src/main.rs`),
     // so it leaves nothing beside the fixture. (The previous body's
     // remove_file calls were dead code asserting the opposite.)
+    //
+    // ⚠ This comment is about the FIXTURE directory and it is TRUE — the `.c`
+    // and the binary go INSIDE the tempdir, not beside the source.  What was
+    // false was the sibling belief that the tempdir itself went away:
+    // `todo/t0966` measured 161,898 leaked scratch directories at R49 open,
+    // because `TempDir` cleans up in `Drop` and `process::exit` never runs one.
+    // That half is now enforced by `gg_commands_do_not_leak_their_scratch_dir`
+    // below; this line asserts only what it says.
+}
+
+/// `todo/t0966` — the scratch-directory leak in the SHIPPED driver, and the
+/// ratchet that keeps it closed.
+///
+/// `tempfile::TempDir` removes its directory in its `Drop` impl **and nowhere
+/// else**, and `std::process::exit` ends the process without unwinding, so it
+/// never runs one. Three `gg` arms open a scratch tempdir — the
+/// `gg <file>.gg` shorthand, `gg run` and `gg test` — and every one of them
+/// used to terminate through an exit taken INSIDE that scope, leaking the
+/// directory with the emitted `.c` and the linked binary inside it, on every
+/// path, success and failure alike. Residue measured at R49 open: **161,898
+/// directories, ~37 GB, 93% of all `/tmp` scratch.** The fix confines the
+/// destructor-bearing scope (Core #1: write site, not a `$TMPDIR` reaper).
+///
+/// # Why the cells are shaped the way they are
+///
+/// **Each cell gets a private `TMPDIR` *and* a private WORK directory.** The
+/// private TMPDIR makes the count exact and race-free under parallel workers.
+/// The separate work directory covers a second shared resource the TMPDIR axis
+/// is silent about: `gg test` writes `<dir>/.gorget/<stem>.test-results.json`
+/// BESIDE THE FIXTURE, which is why all seven other tests touching
+/// `tests/fixtures/test_basic.gg` carry `#[serial(test_basic_gg)]`. Generating
+/// this test's fixtures into private directories sidesteps that collision
+/// outright instead of serialising against it.
+///
+/// **Cell 0 is a POSITIVE CONTROL, and it is DOT-PREFIXED on purpose.** The
+/// artifact this guard hunts is a HIDDEN directory — `tempfile` names them
+/// `.tmpXXXXXX` — so a counter that skipped dot-entries, or counted files
+/// instead of directories, would read zero forever and green-light the exact
+/// class it was written for (SIX QUESTIONS #2). Seeding `.tmpDECOY` and
+/// asserting the counter SEES it falsifies both instrument bugs; measured
+/// against two deliberately broken counters, a skips-dot-dirs variant and a
+/// files-only variant, both of which read 0 on the seeded directory.
+///
+/// ⚠ **`gg build` is a WEAK control and is deliberately NOT the primary one.**
+/// It reads zero under *every* state of the code under test — pre-fix,
+/// post-fix, and with a broken counter — because it never creates a tempdir at
+/// all: the build arm passes `None` for the scratch argument
+/// (`src/main.rs`, `try_build_ir(.., None, None, Some(shared_path), ..)`), and
+/// `grep -n tempfile src/main.rs` finds exactly the three arms above. A control
+/// that cannot fail is not a control. It is kept only because it is the one
+/// cell that writes a FILE into the scratch, so it also pins that the counter
+/// discriminates directories from entries.
+///
+/// **Every arm is exercised on a SUCCESS path AND an ERROR path.** 18 of the
+/// 21 terminations inside the three scopes are error paths; a success-only
+/// guard leaves them unrun. The error cells also pin the conversion's own
+/// failure mode — a `return` taken from the wrong closure — which the
+/// companion lint `scratch_dir_scopes_have_no_process_exit` structurally
+/// cannot see, because after the fix there is no `process::exit` left to find.
+#[test]
+fn gg_commands_do_not_leak_their_scratch_dir() {
+    fn count_dirs_in(dir: &Path) -> usize {
+        std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .count()
+    }
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let root = std::env::temp_dir().join(format!(
+        "gg_scratch_leak_guard_{}_{nanos}",
+        std::process::id(),
+    ));
+    std::fs::create_dir_all(&root).expect("create guard root");
+
+    // ---- Cell 0: POSITIVE CONTROL. Verify the counter before trusting it. --
+    let control = root.join("positive_control");
+    std::fs::create_dir_all(control.join(".tmpDECOY")).expect("seed decoy");
+    let seen = count_dirs_in(&control);
+    assert_eq!(
+        seen, 1,
+        "POSITIVE CONTROL FAILED (todo/t0966): the counter cannot see a \
+         DOT-PREFIXED directory, which is exactly the shape `tempfile` \
+         creates (`.tmpXXXXXX`). Every zero this test reports below would be \
+         an instrument artifact rather than a fact about the compiler. Fix \
+         `count_dirs_in` before trusting a green run."
+    );
+
+    const OK_SRC: &str = "void main():\n    print(\"hi\")\n";
+    const BAD_SRC: &str = "void main():\n    print(undefined_thing_zzz)\n";
+    const TEST_SRC: &str = "test \"leak guard\":\n    assert 1 + 1 == 2\n";
+
+    // (label, subcommand, source, expected exit code)
+    let cells: [(&str, Option<&str>, &str, i32); 7] = [
+        ("gg <file>.gg shorthand — success", None, OK_SRC, 0),
+        ("gg <file>.gg shorthand — compile error", None, BAD_SRC, 1),
+        ("gg run — success", Some("run"), OK_SRC, 0),
+        ("gg run — compile error", Some("run"), BAD_SRC, 1),
+        ("gg test — success", Some("test"), TEST_SRC, 0),
+        ("gg test — compile error", Some("test"), BAD_SRC, 1),
+        ("gg build -o (weak negative control)", Some("build"), OK_SRC, 0),
+    ];
+
+    let mut leaked = Vec::new();
+    for (i, (label, sub, src, expect_code)) in cells.iter().enumerate() {
+        let work = root.join(format!("work_{i}"));
+        let scratch = root.join(format!("scratch_{i}"));
+        std::fs::create_dir_all(&work).expect("create work dir");
+        std::fs::create_dir_all(&scratch).expect("create private TMPDIR");
+        let prog = work.join("leakprobe.gg");
+        std::fs::write(&prog, src).expect("write probe program");
+
+        // Symmetric with `after`: both count DIRECTORIES. The prototype
+        // counted all entries before and directories after, which is only
+        // equivalent while `before` is always empty — and the positive
+        // control above deliberately breaks that assumption.
+        let before = count_dirs_in(&scratch);
+
+        let mut cmd = Command::new(gg_binary());
+        if let Some(s) = sub {
+            cmd.arg(s);
+        }
+        cmd.arg(&prog);
+        if *sub == Some("build") {
+            // Write the artifact INTO the scratch on purpose: this is the one
+            // cell that proves the counter discriminates a directory from an
+            // entry.
+            cmd.arg("-o").arg(scratch.join("control_out"));
+        }
+        cmd.env("TMPDIR", &scratch);
+        let out = build_with_timeout(&mut cmd, label);
+
+        assert_eq!(
+            out.status.code(),
+            Some(*expect_code),
+            "{label}: expected exit {expect_code}, got {:?}. The leak count \
+             below would be meaningless — and an exit code that moved on an \
+             ERROR cell is the signature of a `return` taken from the wrong \
+             closure when the destructor-bearing scope was confined \
+             (todo/t0966).\nstderr: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr),
+        );
+
+        let after = count_dirs_in(&scratch);
+        if after != before {
+            leaked.push(format!(
+                "  {label}: {before} -> {after} directories in its private $TMPDIR"
+            ));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(
+        leaked.is_empty(),
+        "a gg command left its build scratch directory behind in $TMPDIR \
+         (todo/t0966). `TempDir` cleans up in `Drop` and `std::process::exit` \
+         never runs a destructor, so an exit taken inside the scope holding \
+         `tmp_dir` leaks the directory, the emitted `.c` and the linked \
+         binary. ⛔ Do NOT fix this with a `$TMPDIR` reaper — it cannot tell \
+         this driver's directories from another live process's, and it races. \
+         Confine the destructor-bearing scope and `return` the exit code out \
+         of it (Core #1, write site).\n{}",
+        leaked.join("\n"),
+    );
+}
+
+/// `gg test` must surface a test binary's signal death as `128 + signo`, the
+/// same Bash/`cargo run`/`timeout(1)` convention `gg run` follows (Round XXIV
+/// Track B).
+///
+/// ⚠ **This existed nowhere before R49 Track H.** Both signal-propagation
+/// tests in the tree — `gg_run_propagates_signal_death` and its self-host twin
+/// — cover `gg run`. `gg test` was pinned only by the TEXTUAL lint
+/// `child_exit_status_propagation_chokepoint`, and a textual lint cannot see a
+/// BEHAVIOURAL regression (Core #13). `todo/t0966` restructured exactly this
+/// code — the `"test" =>` arm's exits became `return`s out of a confined
+/// destructor-bearing scope — so the invariant needed a runtime witness before
+/// the restructure, not after.
+///
+/// The fixture is generated into a private directory rather than committed to
+/// `tests/fixtures/`: `runtime_parity_corpus` auto-scans every top-level `*.gg`
+/// there, so a committed file would be self-host parity inflow this test has
+/// no reason to create. `gg test` also writes `.gorget/` beside its fixture,
+/// which a private directory keeps out of the shared tree.
+#[test]
+fn gg_test_propagates_signal_death() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let work = std::env::temp_dir().join(format!(
+        "gg_test_signal_death_{}_{nanos}",
+        std::process::id(),
+    ));
+    std::fs::create_dir_all(&work).expect("create work dir");
+    let fixture = work.join("test_signal_death.gg");
+    std::fs::write(
+        &fixture,
+        "int deep(int n):\n\
+         \x20   if n == 0:\n\
+         \x20       return 0\n\
+         \x20   return deep(n - 1) + 1\n\
+         \n\
+         test \"deep recursion overflows the stack\":\n\
+         \x20   assert deep(200000) == 200000\n",
+    )
+    .expect("write signal-death fixture");
+
+    // Same pin, and for the same reason, as `gg_run_propagates_signal_death`:
+    // unpinned, this program is host-conditional (a huge host stack makes it
+    // simply succeed). `;` and not `&&` so a host whose HARD limit is under
+    // 8MB still runs the program on its smaller stack.
+    let output = build_with_timeout(
+        Command::new("sh")
+            .arg("-c")
+            .arg("ulimit -S -s 8192; exec \"$0\" test \"$1\"")
+            .arg(gg_binary())
+            .arg(&fixture),
+        "test_signal_death.gg (gg test pinned to 8MB)",
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let _ = std::fs::remove_dir_all(&work);
+
+    assert_eq!(
+        output.status.code(),
+        Some(139),
+        "gg test must propagate 128+SIGSEGV as exit 139, got {:?} — or the \
+         ulimit pin didn't take (host HARD stack limit below 8MB: look for \
+         `ulimit: error setting limit` on stderr; a huge host stack makes \
+         this program pass instead)\nstderr: {stderr}",
+        output.status.code(),
+    );
+    assert!(
+        stderr.contains("SIGSEGV") || stderr.contains("signal 11"),
+        "gg test must emit a stderr diagnostic on signal death; got: {stderr:?}",
+    );
 }
 
 #[test]
@@ -4579,7 +4820,34 @@ fn shared_vector_root_shapes() {
 #[test]
 fn weak_vector_bound_handle() {
     // Cell: handle = Weak. Same `Gorget<Family>*` typedef, same defect.
+    // VALUE lane only — see the ASan twin directly below, which is the half
+    // this assertion is structurally unable to see.
     run_gg("known_gaps/weak_vector_bound_handle.gg", "2\n9");
+}
+
+/// `todo/t0620` — the MEMORY half of the fixture above, which the live
+/// `run_gg` pin cannot reach.
+///
+/// `Weak[T].upgrade()` bound in a match arm leaks the upgraded `Shared`: the
+/// match-bound handle is an incref'd `Shared` from `gorget_weak_upgrade` that
+/// is never drop-registered, so the strong count never decs (Core #3 —
+/// register ownership at the binding's birth). Re-measured at R49 with
+/// `gg build --sanitize` + `ASAN_OPTIONS=detect_leaks=1:exitcode=0
+/// LSAN_OPTIONS=use_stacks=0`: **40 bytes in 2 allocations** — the 32-byte
+/// control block plus the 8-byte value, exactly the split the item names.
+///
+/// ⚠ The value-lane pin above is GREEN and must stay green; this is an
+/// ADDITION beside it, not a rewire of it. One fixture, two lanes, two
+/// assertions — a leak gap pinned only on the value lane is pinned by an
+/// instrument that is structurally blind to it, which is the same defect
+/// `hof_call_env_leak_unbounded` was carrying. `t0620` STAYS OPEN; un-ignore
+/// this when the upgrade-result binding is drop-registered.
+#[test]
+#[ignore = "todo/t0620 — `Weak[T].upgrade()` bound in a match arm leaks the upgraded Shared (40 \
+bytes in 2 allocations: the 32-byte control block + the 8-byte value); the binding is never \
+drop-registered so the strong count never decs. Asserts the intended ASan-clean run."]
+fn known_gap_weak_vector_bound_handle_upgrade_leak() {
+    assert_gg_sanitize_clean("known_gaps/weak_vector_bound_handle", "2\n9");
 }
 
 #[test]
@@ -6341,18 +6609,148 @@ fn equip_exprbody_owning_param_return_uaf() {
     run_gg("known_gaps/equip_exprbody_owning_param_return_uaf.gg", "5\n28");
 }
 
-// The ICE this fixture was filed for is gone (builds, prints 8080). The
-// remaining defect was a 2 B leak of the catch-bound CE.NotFound String —
-// `lower_catch_expr` tagged the binding Owned but never enrolled it in the
-// drop elaborator. Drop-registration landed at that writer; the live pins
-// are `catch_binding_droppable_enum_{unused,match_arm}_is_dropped`. This
-// row stays ignored (not graduated this round) and asserts via
-// `assert_gg_sanitize_clean` so a stdout-only green cannot re-enter the
-// census PASS set. Un-ignore + move out of known_gaps/ when graduating.
+/// GRADUATED out of `known_gaps/` in R49 (`todo/t0054`, closed). Re-throwing
+/// the `catch` error-binding from inside a `match` ARM used to panic the
+/// Tier 2a consume-site validator at IR lowering (exit 101).
+///
+/// ⚠ **TWO ASSERTIONS, BECAUSE NEITHER INSTRUMENT COVERS THE OTHER HALF OF
+/// THE FIX.** Re-adjudicated at HEAD 2026-09-03 by breaking each half of
+/// `lower_catch_expr`'s `if matches!(err_mode, AssignMode::Move)` block in
+/// turn (`src/ir/lowering/exprs/mod.rs`), each break anchored BY LINE — the
+/// sibling in `lower_rethrow_expr` spells `ctx.set_owned(builder, err_local);`
+/// identically apart from indentation, and a substring-anchored patch hits it
+/// instead and reports the wrong adjudication (measured; it did):
+/// * no-op `ctx.set_owned` → **rc 101, the ICE returns** — *"Tier 2a
+///   consume-site violation … fn @handle bb6 i0 — EnumInit(Error, arg #0) —
+///   untracked source consumed (ownership not decided)"*. The compiler does
+///   not build at all, so THIS test is what pins that half.
+/// * no-op `ctx.drops.register_local` → builds, prints 8080, and **leaks 2
+///   bytes in 1 allocation**. Stdout is identical either way, so only the
+///   sanitize sibling below can see it.
+///
+/// The violation text moved since filing (`bb2 i3 — AssignIntoOwnedSlot`);
+/// the CLASS — an untracked source consumed at a consuming position — did not.
+/// Independent witness for the sibling pair, rather than the fixer's own list:
+/// `grep -n "if matches!(err_mode" src/ir/lowering/exprs/mod.rs` → exactly 2.
 #[test]
-#[ignore = "catch-binding ICE is gone; drop-register landed; not graduated this round — LSAN pin; un-ignore + move out of known_gaps/ when graduating"]
-fn catch_binding_throw_in_match_arm_ice() {
-    assert_gg_sanitize_clean("known_gaps/catch_binding_throw_in_match_arm_ice", "8080");
+fn catch_binding_throw_in_match_arm() {
+    run_gg("catch_binding_throw_in_match_arm.gg", "8080");
+}
+
+/// MEMORY half of `catch_binding_throw_in_match_arm` — the catch-bound
+/// `CE.NotFound` payload's heap String must be freed. See that test for the
+/// adjudication; this is the assertion that goes red when
+/// `ctx.drops.register_local` stops firing (2 bytes in 1 allocation).
+#[test]
+fn catch_binding_throw_in_match_arm_no_leak() {
+    assert_gg_sanitize_clean("catch_binding_throw_in_match_arm", "8080");
+}
+
+/// `todo/t0054`'s FULL AXIS, which the graduation owed (Core #12: a fixture
+/// set that samples one value of a typed axis is an anecdote, not a net).
+/// {int, String, droppable enum, `Vector[String]`} × {bare, if, match arm,
+/// nested match}, every cell re-throwing the catch binding and carrying its
+/// own marker, so a cell that stopped re-throwing prints its recovery constant
+/// instead and a cell that regressed to the ICE fails the build.
+///
+/// **14 of the 16 cells, and the two omissions are NAMED, not substituted.**
+/// `Vector[String]` × {match arm, nested match} have NO SUBJECT: Gorget has no
+/// vector pattern (`case [s]:` → `error: expected pattern, found '['`), and
+/// the only available spelling, `match e.len():`, does not make `e` the
+/// scrutinee — so it would not hold the scrutinee-live-alias axis the item's
+/// own diagnosis names. The four `int` cells are negative controls by
+/// construction: `lower_catch_expr` gates both halves of the fix on
+/// `AssignMode::Move`, and a Copy-mode payload is not drop-tracked.
+///
+/// SELF-HOST lane MEASURED, not asserted (Core #9; owner 2026-08-10 on new
+/// fixtures): the driver's `--emit-c` → `cc` → run output is byte-identical to
+/// the Rust oracle on all 14 cells, as it is for the graduated fixture above.
+#[test]
+fn catch_binding_throw_nesting_axis() {
+    run_gg(
+        "catch_binding_throw_nesting_axis.gg",
+        "int/bare -101\n\
+         int/if -102\n\
+         int/match_arm -103\n\
+         int/nested_match -104\n\
+         String/bare -105\n\
+         String/if -106\n\
+         String/match_arm -107\n\
+         String/nested_match -108\n\
+         enum/bare -109\n\
+         enum/if -110\n\
+         enum/match_arm -111\n\
+         enum/nested_match -112\n\
+         Vector/bare -113\n\
+         Vector/if -114",
+    );
+}
+
+/// `todo/t0018`'s BEGINNER ROBUSTNESS MAP corpus, wired — the first assertion
+/// any of its 18 preserved repros has ever had.
+///
+/// ⚠ **WHY THIS EXISTS AND WHY IT IS ONE CELL.** `tests/fixtures/known_gaps/
+/// beginner_map/` was committed as EVIDENCE (18 repros + `FINDINGS.md` + a
+/// 359-row `MANIFEST.tsv`) and `t0018`'s own text records that the wiring is
+/// OWED. It sat unwired because `known_gaps_repros_are_wired_to_a_test` skipped
+/// everything without a `.gg` extension and so was STRUCTURALLY BLIND to a
+/// repro DIRECTORY; teaching that lint to enumerate directories (R49) surfaced
+/// this as its one and only catch. ⛔ Parking it in `ALLOWED_UNWIRED` was
+/// explicitly refused: that array is a shrink-only ratchet, and a new row is
+/// the parking-lot outcome it exists to prevent.
+///
+/// **The cell chosen is the one whose INTENDED output is not a design question.**
+/// `t0018` warns the map is a LEAD LIST, not a verified filing set, so most
+/// cells need triage before anything can be asserted about them — that triage
+/// is `t0018`'s, and this test does not pre-empt it. `p18` is the exception:
+/// its shape is already filed and adjudicated as
+/// `known_gaps/match_expression_ignores_guards.gg`, whose header states the
+/// intended semantics outright — a `match` EXPRESSION must honour its arm
+/// guards exactly as the STATEMENT form does. Five sub-cells: statement form,
+/// expression form, literal patterns without guards, first-guard-true, and
+/// no-arm-matches.
+///
+/// **RED at HEAD, measured**: the expression form always takes arm one, so it
+/// prints `expr A` / `expr2 A` / `expr3 A` where the intended values are
+/// `expr B` / `expr2 A` / `expr3 F`. `expr2` is the cell that is accidentally
+/// correct today (SIX QUESTIONS #6) and is kept precisely so a "fix" that
+/// merely reorders the arms cannot pass. The statement form (`stmt B`) and the
+/// guard-free literal form (`lit two`) are correct today and are the negative
+/// controls that localise the defect to guards-in-expression-position.
+#[test]
+#[ignore = "todo/t0018 / todo's match_expression_ignores_guards filing — a `match` EXPRESSION \
+ignores its arm guards and always takes the first arm, while the identical guards as a `match` \
+STATEMENT are correct. Asserts the INTENDED output; un-ignore when guards are honoured in \
+expression position on every lane."]
+fn known_gap_beginner_map_match_guards_in_expression_position() {
+    run_gg(
+        "known_gaps/beginner_map/p18.gg",
+        "stmt B\nexpr B\nlit two\nexpr2 A\nexpr3 F",
+    );
+}
+
+/// MEMORY half of the axis: every re-throw moves an owned payload out of the
+/// catch binding, and the droppable-enum and `Vector[String]` rows put real
+/// heap data through it. Measured ASan-CLEAN at HEAD.
+#[test]
+fn catch_binding_throw_nesting_axis_no_leak() {
+    assert_gg_sanitize_clean(
+        "catch_binding_throw_nesting_axis",
+        "int/bare -101\n\
+         int/if -102\n\
+         int/match_arm -103\n\
+         int/nested_match -104\n\
+         String/bare -105\n\
+         String/if -106\n\
+         String/match_arm -107\n\
+         String/nested_match -108\n\
+         enum/bare -109\n\
+         enum/if -110\n\
+         enum/match_arm -111\n\
+         enum/nested_match -112\n\
+         Vector/bare -113\n\
+         Vector/if -114",
+    );
 }
 
 // `todo/t0936` — GRADUATED (R48 Track R). `.clone()` on a value-form `Callable`
@@ -6476,15 +6874,36 @@ fn callable_unit_form_clone_segv() {
 
 // `todo/t0953` (Track T-a1's item, owned there) — the UNBOUNDEDNESS cell of
 // the closure-literal-argument env leak, which that item's own two-call repro
-// cannot show: twenty `map` calls leak twenty records (160 bytes), so the cost
-// scales with trip count rather than being a constant. stdout is already
-// correct; the gap is visible only under the sanitizer.
+// cannot show: twenty `map` calls leak twenty records, so the cost scales with
+// trip count rather than being a constant.
+//
+// ⚠ **THIS WAS GREEN ON ARRIVAL, AND FOR A REASON UNRELATED TO WHAT IT TESTS**
+// (SIX QUESTIONS #6). It was wired as `run_gg(.., "120")` — a STDOUT assertion
+// for a LEAK gap — and its own `#[ignore]` text said stdout was already
+// correct, so nothing it asserted could ever fail while the gap was open, and
+// nothing could ever pass differently when the gap closed. Re-measured at R49
+// (`gg build --sanitize`, `ASAN_OPTIONS=detect_leaks=1:exitcode=0
+// LSAN_OPTIONS=use_stacks=0`): **160 bytes leaked in 20 allocations, every one
+// `__gorget_closure_env_alloc`** — the gap is live and the pin could not see
+// it. Rewired onto `assert_gg_sanitize_clean`, the same helper its sibling
+// cell `known_gap_closure_literal_call_arg_env_leak` already uses.
+// `todo/t0953` STAYS OPEN: this fixes the EVIDENCE, not the bug.
+//
+// ⚠ THE FIGURE IS SPELLING-INDEPENDENT, and that was MEASURED rather than
+// assumed, because the fixture body is being rewritten in the same round to
+// drop the implicit-`it` parameter. Both spellings — `xs.map(it * 2)` and
+// `xs.map((int x): x * 2)` — are NON-capturing, so each trip mints the same
+// 8-byte placeholder env: 160 bytes in 20 allocations either way. The
+// distinguishing axis of this cell is the UNBOUNDEDNESS (change the trip
+// count and the record count follows), never the spelling, so nothing here
+// rests on which form the body uses.
 #[test]
 #[ignore = "todo/t0953 — a closure-literal argument leaks its env, UNBOUNDED per call: 20 map \
-calls leak 20 records. stdout is already correct; the gap is the leak, visible only under \
-`gg build --sanitize` + LeakSanitizer. Asserts the intended output (120)."]
+calls leak 20 records (160 bytes in 20 allocations, all `__gorget_closure_env_alloc`). The \
+distinguishing axis is the UNBOUNDEDNESS; stdout is already correct, so the gap is visible only \
+under the sanitizer. Asserts the intended ASan-clean run."]
 fn hof_call_env_leak_unbounded() {
-    run_gg("known_gaps/hof_call_env_leak_unbounded.gg", "120");
+    assert_gg_sanitize_clean("known_gaps/hof_call_env_leak_unbounded", "120");
 }
 
 /// KNOWN GAP `todo/t0977` — `auto out = v.map(<closure>)` reads back a RAW

@@ -1,0 +1,55 @@
+# GRADUATED out of `known_gaps/` (R49 Track H, 2026-09-03) — `todo/t0054`.
+#
+# Re-throwing the `catch` error-binding from inside a `match` ARM used to panic
+# the Tier 2a consume-site validator at IR lowering (exit 101). It builds,
+# prints 8080 and is LeakSanitizer-clean on C, LLVM and the self-host lane.
+#
+# ⚠ THIS IS A REGRESSION NET, AND BOTH HALVES OF THE FIX ARE LOAD-BEARING —
+# re-adjudicated at HEAD 2026-09-03 by breaking each in turn:
+#   * no-op `ctx.set_owned(builder, err_local)` (`src/ir/lowering/exprs/mod.rs`,
+#     in `lower_catch_expr`) -> the ICE RETURNS: rc 101, "Tier 2a consume-site
+#     violation ... fn @handle bb6 i0 - EnumInit(Error, arg #0) - untracked
+#     source consumed (ownership not decided)". So the VALUE assertion below is
+#     what pins that half: without the tag the compiler does not build at all.
+#   * no-op `ctx.drops.register_local(err_local, ..)` at the same site -> builds,
+#     prints 8080, and leaks 2 bytes in 1 allocation. Stdout cannot see that, so
+#     the ASan assertion is the half that pins it. Neither instrument covers the
+#     other, which is why this fixture is wired BOTH ways.
+#   * The violation text moved since filing (`bb2 i3 - AssignIntoOwnedSlot`);
+#     the CLASS - untracked source consumed - is the same.
+#
+# The SIBLING write site is `lower_rethrow_expr`, which carries the identical
+# `if matches!(err_mode, AssignMode::Move)` guard. Independent witness for the
+# pair, not the fixer's own list:
+#   grep -n "if matches!(err_mode" src/ir/lowering/exprs/mod.rs   -> exactly 2
+# ⚠ Note when probing: both sites spell `ctx.set_owned(builder, err_local);`
+# identically apart from indentation, so a substring-anchored patch silently
+# hits the wrong one and reports the wrong adjudication. Anchor by LINE.
+#
+# The full {payload} x {nesting} axis this item promised lives in
+# `catch_binding_throw_nesting_axis.gg`; this file is the ORIGINAL filed shape
+# and the only cell where the recovery arm RECOVERS (8080) rather than
+# re-throwing.
+#
+# INTENDED: `load("x")` throws `CE.NotFound("x")`; the catch binds it, the match
+# takes the `NotFound` arm, the recovery value is 8080, and the heap String in
+# the payload is freed.
+
+enum CE:
+    NotFound(String)
+    BadPort(int)
+
+int load(String p) throws CE:
+    throw CE.NotFound(p)
+
+int handle(String p) throws CE:
+    int c = load(p)! catch (e):
+        match e:
+            case CE.NotFound(_):
+                8080
+            else:
+                throw e
+    return c
+
+void main():
+    print(handle("x")! catch (_): -1)

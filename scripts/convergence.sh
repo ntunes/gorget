@@ -178,6 +178,46 @@ fi
 # number with no work done, so it lands BETWEEN rounds and the -7 belongs to the
 # NEXT baseline -- never to a round claiming compliance. Same rule the fused-entry
 # note above states.
+# -- ONE DEFINITION OF WHAT A `known_gaps` CITATION LOOKS LIKE --------------
+# Fixed 2026-09-03 (R49 Track H). This script recognised ONLY the
+# `known_gaps/<name>.gg` spelling, while the INVENTORY above (and
+# `scripts/known_gaps_census.sh`'s enumerator, deliberately) treats a whole
+# repro DIRECTORY as a unit and tests spell those as a BARE `known_gaps/<dir>`.
+# So those units could never match a citation and counted as open forever, and
+# `snag52b` was doubly wrong -- it is LIVE-wired through
+# `run_gg_dir("known_gaps/snag52b", ..)`.
+#
+# WARNING: THE FIX HAD TO LAND AT BOTH SITES, 17 LINES APART (Core #4): the
+# LIVE/IGNORED scan over `tests/*.rs` and the CITED scan over the record used
+# the same blind regex, and fixing only one would have left the two halves of
+# the exemption running on different rules.
+#
+# WARNING: TERMINATING BOUNDARY, load-bearing once the `.gg` is optional. The
+# record legitimately writes GLOBS -- `known_gaps/rust_gg_bug_*`,
+# `known_gaps/cow_scope_bare_param_{`. Without a boundary those read as
+# citations of units called `rust_gg_bug_` and `cow_scope_bare_param_`, which
+# is harmless only until a glob's PREFIX happens to be a real unit name, at
+# which point a mention in prose silently exempts a genuinely open gap. A `.`
+# followed by an alphanumeric is rejected for the same reason: it is a file
+# EXTENSION (`known_gaps/foo.rs`), not a unit. A sentence-ending `.` is fine --
+# no known_gaps name contains `.` or `-`, so nothing else needs a rule.
+KG_EMIT='
+function kg_emit(line, tag,   m, nxt, nxt2, ref) {
+  while (match(line, /known_gaps\/[A-Za-z0-9_\/]+(\.gg)?/)) {
+    m    = substr(line, RSTART, RLENGTH)
+    nxt  = substr(line, RSTART + RLENGTH, 1)
+    nxt2 = substr(line, RSTART + RLENGTH + 1, 1)
+    line = substr(line, RSTART + RLENGTH)
+    if (nxt == "*" || nxt == "{") continue
+    if (nxt == "." && nxt2 ~ /[A-Za-z0-9]/) continue
+    ref = substr(m, 12)
+    sub(/\.gg$/, "", ref)
+    sub(/\/.*$/, "", ref)          # a nested citation belongs to its DIRECTORY unit
+    if (tag == "") print ref; else printf "%s %s\n", ref, tag
+  }
+}
+'
+
 known_gaps=$(
   # A UNIT is one filed gap: a top-level fixture, or a whole repro DIRECTORY.
   # A multi-file repro (entry point + the modules it imports) is ONE gap, not N
@@ -189,7 +229,7 @@ known_gaps=$(
   # Scan EVERY test target that cites a repro, not just integration.rs: lints.rs
   # and security.rs carry citations too, and security.rs's ignored tests were a
   # population this metric could not see at all.
-  awk '
+  awk "$KG_EMIT"'
     /^[[:space:]]*#\[ignore/          { ign = 1; next }
     /^[[:space:]]*fn [A-Za-z0-9_]+\(/ { cur_ign = ign; ign = 0 }
     # (3) COMMENTS ARE NOT REFERENCES -- the deflating sibling of defect (2), found by the
@@ -208,12 +248,7 @@ known_gaps=$(
         q = gsub(/"/, "\"", before)
         if (q % 2 == 0) line = before
       }
-      while (match(line, /known_gaps\/[A-Za-z0-9_\/]+\.gg/)) {
-        ref = substr(line, RSTART + 11, RLENGTH - 11 - 3)
-        sub(/\/.*$/, "", ref)          # a nested citation belongs to its DIRECTORY unit
-        printf "%s %s\n", ref, (cur_ign ? "IGNORED" : "LIVE")
-        line = substr(line, RSTART + RLENGTH)
-      }
+      kg_emit(line, (cur_ign ? "IGNORED" : "LIVE"))
     }
   ' tests/integration.rs tests/lints.rs tests/security.rs | sort -u > "$TMP_STATUS"
   awk '$2=="IGNORED"{print $1}' "$TMP_STATUS" | sort -u > "$TMP_IGN"
@@ -225,8 +260,13 @@ known_gaps=$(
   # Both TODO.md and todo/ are scanned: the item bodies moved into todo/, but a
   # `#### ` group heading and the handover still legitimately name a repro, and
   # a citation is a citation wherever the record makes it.
-  grep -rhoE 'known_gaps/[A-Za-z0-9_/]+\.gg' TODO.md todo 2>/dev/null \
-    | sed 's|^known_gaps/||; s|\.gg$||; s|/.*$||' | sort -u > "$TMP_CITED"
+  # `-L` and a `cat` pipe rather than `find | xargs`: `todo` may legitimately be
+  # a SYMLINK (it is in a sandboxed re-measurement), and an unfollowed symlink
+  # makes this scan silently empty -- which reads as "nothing is cited" and
+  # INFLATES the count with no work done. Measured while verifying this very fix.
+  { cat TODO.md; find -L todo -type f -exec cat {} + ; } 2>/dev/null \
+    | awk "$KG_EMIT"'{ kg_emit($0, "") }' \
+    | sort -u > "$TMP_CITED"
   cat "$TMP_NETS" "$TMP_CITED" | sort -u > "$TMP_EXEMPT"
   comm -23 "$TMP_ALL"  "$TMP_EXEMPT" | wc -l | tr -d ' '
 )

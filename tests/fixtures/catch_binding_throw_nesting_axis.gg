@@ -1,0 +1,236 @@
+# `todo/t0054`'s FULL AXIS: {error payload} x {nesting of the `throw e`}.
+#
+# The filed defect was an ICE — `throw <catch-error-binding>` inside a `match`
+# ARM panicked the Tier 2a consume-site validator, because the catch binding was
+# consumed at a CONSUMING position without the ownership tag the validator
+# demands. The item's own diagnosis says the trigger is the DROPPABILITY of the
+# error type and the scrutinee's live alias of the owned binding, so one cell is
+# an anecdote: it names the axis {int, String, droppable enum, Vector[String]} x
+# {bare, if, match arm, nested match} and this file is that axis, RUN-wired.
+#
+# Every cell RE-THROWS the binding and carries its OWN marker at the outer
+# catch, so the 14 lines are a fingerprint: a cell that stopped re-throwing
+# would print its recovery constant (11/12/13/21/.../41) instead of its -1NN
+# marker, and a cell that regressed to the ICE fails the build outright.
+#
+# ⚠ TWO OF THE SIXTEEN CELLS HAVE NO SUBJECT, and they are named rather than
+# quietly substituted (Core #12). `Vector[String]` x {match arm, nested match}
+# cannot be written: Gorget has no vector PATTERN — `case [s]:` is
+# `error: expected pattern, found '['`. The only spelling available is
+# `match e.len():`, where `e` is NOT the scrutinee, so it would not hold the
+# scrutinee-live-alias axis the item's diagnosis actually names. A cell with no
+# subject is not a cell a wider rule reaches; it is a gap in the language
+# surface, and substituting the `.len()` shape would have made this file claim
+# coverage it does not have.
+#
+# The four `int` cells are NEGATIVE CONTROLS BY CONSTRUCTION, not extra
+# coverage: `lower_catch_expr` gates both the ownership tag and the drop
+# registration on `AssignMode::Move`, and a Copy-mode payload is not
+# drop-tracked at all, so those four must pass whatever the fix does.
+#
+# MEASURED 2026-09-03 at HEAD, all four lanes:
+#   * Rust gg (C):  rc 0, the 14 lines below.
+#   * `--backend=llvm`: rc 0, byte-identical.
+#   * `gg build --sanitize` + `ASAN_OPTIONS=detect_leaks=1:exitcode=0
+#     LSAN_OPTIONS=use_stacks=0`: CLEAN.
+#   * SELF-HOST lane (driver --emit-c -> cc -> run): byte-identical to the
+#     Rust oracle. MEASURED, not asserted (Core #9, owner 2026-08-10).
+#   * ggdef ABSTAINS LOUDLY — RUN, not assumed:
+#       cargo build -p ggdef --bin ggdef && \
+#         ./target/debug/ggdef run tests/fixtures/catch_binding_throw_nesting_axis.gg
+#     prints "elaboration error: expression `unsupported` is outside the
+#     phase-0 subset", pointing at the FIRST `! catch` in the file (the one in
+#     `int_bare`). ⚠ No byte offset is quoted: the span is absolute into this
+#     file, so every edit to THIS COMMENT moves it — an earlier draft recorded
+#     318, which was the offset measured before the header existed. Quote the
+#     command, never the value (Core #5). The `!`/`catch` error model is out of
+#     the phase-0 subset, so ggdef adjudicates nothing about these cells.
+#
+# RED-VERIFIED against a PRE-FIX compiler (Core #12 — a fixture green on
+# arrival is not coverage). No-op'ing `ctx.set_owned(builder, err_local)` in
+# `lower_catch_expr` and rebuilding: this file fails with **rc 101 and SEVEN
+# violations**, against the single-cell graduated fixture's ONE. The int-only
+# slice of the same file still builds and runs, which is the negative-control
+# claim confirmed rather than asserted.
+#
+# ⭐ AND THE AXIS CORRECTED THE ITEM'S OWN BISECTION. `todo/t0054` recorded
+# `throw e` inside an `if` as OK and concluded *"the `match` arm is the
+# discriminator"*. The seven violating cells are
+#   str_if · str_match_arm · str_nested_match ·
+#   enum_if · enum_match_arm · enum_nested_match · vec_if
+# — every non-`int` cell EXCEPT the three `bare` ones. So the discriminator is
+# a droppable payload consumed from inside ANY block-structured recovery, `if`
+# included; only the bare `throw e` was ever clean. The filed bisection was a
+# SELECTION reported as a discriminator (SIX QUESTIONS #3), and one cell per
+# axis value is what showed it.
+#
+# The original filed shape — the one cell whose recovery arm RECOVERS rather
+# than re-throwing — is `catch_binding_throw_in_match_arm.gg`.
+
+enum CE:
+    NotFound(String)
+    BadPort(int)
+
+int raise_int() throws int:
+    throw 7
+
+int raise_str() throws String:
+    throw "boom"
+
+int raise_enum() throws CE:
+    throw CE.NotFound("x")
+
+int raise_vec() throws Vector[String]:
+    throw ["a", "b"]
+
+# ---- int payload ----
+int int_bare() throws int:
+    int c = raise_int()! catch (e):
+        throw e
+    return c
+
+int int_if() throws int:
+    int c = raise_int()! catch (e):
+        if e == 0:
+            11
+        else:
+            throw e
+    return c
+
+int int_match_arm() throws int:
+    int c = raise_int()! catch (e):
+        match e:
+            case 7:
+                throw e
+            else:
+                12
+    return c
+
+int int_nested_match() throws int:
+    int c = raise_int()! catch (e):
+        match e:
+            case 7:
+                match e:
+                    case 7:
+                        throw e
+                    else:
+                        13
+            else:
+                14
+    return c
+
+# ---- String payload ----
+int str_bare() throws String:
+    int c = raise_str()! catch (e):
+        throw e
+    return c
+
+int str_if() throws String:
+    int c = raise_str()! catch (e):
+        if e == "":
+            21
+        else:
+            throw e
+    return c
+
+int str_match_arm() throws String:
+    int c = raise_str()! catch (e):
+        match e:
+            case "boom":
+                throw e
+            else:
+                22
+    return c
+
+int str_nested_match() throws String:
+    int c = raise_str()! catch (e):
+        match e:
+            case "boom":
+                match e:
+                    case "boom":
+                        throw e
+                    else:
+                        23
+            else:
+                24
+    return c
+
+# ---- droppable enum payload ----
+int enum_bare() throws CE:
+    int c = raise_enum()! catch (e):
+        throw e
+    return c
+
+int enum_if() throws CE:
+    int c = raise_enum()! catch (e):
+        if false:
+            31
+        else:
+            throw e
+    return c
+
+int enum_match_arm() throws CE:
+    int c = raise_enum()! catch (e):
+        match e:
+            case CE.NotFound(_):
+                throw e
+            else:
+                32
+    return c
+
+int enum_nested_match() throws CE:
+    int c = raise_enum()! catch (e):
+        match e:
+            case CE.NotFound(_):
+                match e:
+                    case CE.NotFound(_):
+                        throw e
+                    else:
+                        33
+            else:
+                34
+    return c
+
+# ---- Vector[String] payload ----
+int vec_bare() throws Vector[String]:
+    int c = raise_vec()! catch (e):
+        throw e
+    return c
+
+int vec_if() throws Vector[String]:
+    int c = raise_vec()! catch (e):
+        if e.len() == 0:
+            41
+        else:
+            throw e
+    return c
+
+void main():
+    int a1 = int_bare()! catch (_): -101
+    print(f"int/bare {a1}")
+    int a2 = int_if()! catch (_): -102
+    print(f"int/if {a2}")
+    int a3 = int_match_arm()! catch (_): -103
+    print(f"int/match_arm {a3}")
+    int a4 = int_nested_match()! catch (_): -104
+    print(f"int/nested_match {a4}")
+    int b1 = str_bare()! catch (_): -105
+    print(f"String/bare {b1}")
+    int b2 = str_if()! catch (_): -106
+    print(f"String/if {b2}")
+    int b3 = str_match_arm()! catch (_): -107
+    print(f"String/match_arm {b3}")
+    int b4 = str_nested_match()! catch (_): -108
+    print(f"String/nested_match {b4}")
+    int c1 = enum_bare()! catch (_): -109
+    print(f"enum/bare {c1}")
+    int c2 = enum_if()! catch (_): -110
+    print(f"enum/if {c2}")
+    int c3 = enum_match_arm()! catch (_): -111
+    print(f"enum/match_arm {c3}")
+    int c4 = enum_nested_match()! catch (_): -112
+    print(f"enum/nested_match {c4}")
+    int d1 = vec_bare()! catch (_): -113
+    print(f"Vector/bare {d1}")
+    int d2 = vec_if()! catch (_): -114
+    print(f"Vector/if {d2}")

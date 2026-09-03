@@ -217,8 +217,17 @@ export GG_TEST_TIMEOUT_SECS="${GG_TEST_TIMEOUT_SECS:-120}"
 : > "$BATCH"
 while IFS=$'\t' read -r name site fixtures; do
   if [ ${#ONLY[@]} -gt 0 ]; then
+    # A NAME FILTER IS A SKIP, NOT AN ABSENCE. Recording it is what keeps
+    # `--check <name>` honest: an unrecorded row is missing from BOTH sides of
+    # the set comparison below, so every allowlisted row you did not select
+    # reported as "no longer PASS" -- a phantom, and one that looks exactly
+    # like the real win the gate is built to surface. `--fast` already
+    # marks-and-subtracts its skips; this is the same class, and the same fix.
     keep=0; for w in "${ONLY[@]}"; do [ "$w" = "$name" ] && keep=1; done
-    [ "$keep" -eq 1 ] || continue
+    if [ "$keep" -ne 1 ]; then
+      printf '%s\t%s\tSKIPPED_FILTER\t%s\n' "$name" "$site" "$fixtures" >> "$RESULTS"
+      continue
+    fi
   fi
   if [ "$FAST" -eq 1 ] && is_sh_row "$name"; then
     printf '%s\t%s\tSKIPPED_SH\t%s\n' "$name" "$site" "$fixtures" >> "$RESULTS"
@@ -287,7 +296,12 @@ cat "$RESULTS"
 n_pass=$(awk -F'\t' '$3 == "PASS"' "$RESULTS" | wc -l | tr -d ' ')
 n_fail=$(awk -F'\t' '$3 == "FAIL"' "$RESULTS" | wc -l | tr -d ' ')
 n_skip=$(awk -F'\t' '$3 == "SKIPPED_SH"' "$RESULTS" | wc -l | tr -d ' ')
-echo "# roster $total · PASS $n_pass · FAIL $n_fail · SKIPPED_SH $n_skip" >&2
+n_filt=$(awk -F'\t' '$3 == "SKIPPED_FILTER"' "$RESULTS" | wc -l | tr -d ' ')
+echo "# roster $total · PASS $n_pass · FAIL $n_fail · SKIPPED_SH $n_skip · SKIPPED_FILTER $n_filt" >&2
+if [ "$n_filt" -gt 0 ]; then
+  echo "# ⚠ NAME-FILTERED RUN: $n_filt row(s) were not measured. This run is NOT evidence" >&2
+  echo "#   about them, and --check compares only what it measured." >&2
+fi
 
 [ "$CHECK" -eq 1 ] || exit 0
 
@@ -305,14 +319,19 @@ expected=$(mktemp); actual=$(mktemp)
 grep -vE '^\s*#|^\s*$' "$ALLOWLIST" | awk '{print $1}' | sort -u > "$expected"
 awk -F'\t' '$3 == "PASS" { print $1 }' "$RESULTS" | sort -u > "$actual"
 
-if [ "$FAST" -eq 1 ]; then
-  # Skipped rows cannot be adjudicated this run — drop them from BOTH sides so
-  # --fast reports drift on what it actually measured, never a phantom.
-  skipped=$(mktemp)
-  awk -F'\t' '$3 == "SKIPPED_SH" { print $1 }' "$RESULTS" | sort -u > "$skipped"
+# A row that was not MEASURED cannot be adjudicated this run — drop it from
+# BOTH sides so a partial run reports drift on what it actually measured,
+# never a phantom. Two ways a row goes unmeasured, and they are the same class:
+# `--fast` skips the self-host rows, and a NAME FILTER skips everything else.
+# Only the first was handled, so `--check <name>` reported every allowlisted
+# row it had not selected as "no longer PASS".
+skipped=$(mktemp)
+awk -F'\t' '$3 == "SKIPPED_SH" || $3 == "SKIPPED_FILTER" { print $1 }' "$RESULTS" \
+  | sort -u > "$skipped"
+if [ -s "$skipped" ]; then
   comm -23 "$expected" "$skipped" > "$expected.f" && mv "$expected.f" "$expected"
-  rm -f "$skipped"
 fi
+rm -f "$skipped"
 
 new_pass=$(comm -13 "$expected" "$actual")
 gone=$(comm -23 "$expected" "$actual")

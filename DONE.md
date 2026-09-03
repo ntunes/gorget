@@ -1,3 +1,168 @@
+- [2026-09-03] **`scripts/convergence.sh` OVER-COUNTED OPEN `known_gaps` BY 5 — a COUNTING CORRECTION that belongs to the NEXT baseline, NOT to R49.**
+  ⛔ **DO NOT BANK THE −5 AS THIS ROUND'S CONVERGENCE.** The script's own header rules that a correction
+  of this shape *"lands BETWEEN rounds and belongs to the NEXT baseline — never to a round claiming
+  compliance"*, exactly as the −7 of 2026-08-23 did. **Measured on one identical tree: `known_gaps=21`
+  before, `16` after**, and the five are precisely `beginner_map` ·
+  `gorget_arena_snag_1_llvm_ffi_only_typedef` · `manifest_malformed` · `snag52b` ·
+  `snag58_private_int_import`, with **zero rows newly counted as open**.
+  **THE DEFECT.** The citation regex was `known_gaps/[A-Za-z0-9_/]+\.gg`, so it could not see a
+  BARE-DIRECTORY citation — while the script's own INVENTORY treats a whole repro directory as one
+  unit, and `known_gaps_census.sh`'s enumerator explicitly recognises both spellings. Five units could
+  therefore never match a citation and counted as open forever. `snag52b` was doubly wrong: it is
+  LIVE-wired at `run_gg_dir("known_gaps/snag52b", ..)`.
+  ⚠ **AND IT WAS TWO INSTANCES 17 LINES APART (Core #4)** — the LIVE/IGNORED scan over `tests/*.rs`
+  and the CITED scan over the record ran the same blind regex, and the LIVE half was additionally
+  blind to the no-`.gg` quoted form used at 19 sites. Fixing only the CITED half would have left the
+  two halves of one exemption on different rules. Both now call ONE shared awk recogniser.
+  ⊕ **TERMINATING BOUNDARY, and it is not theoretical.** Once `.gg` is optional, the record's own GLOB
+  spellings match: measured, `known_gaps/rust_gg_bug_*` · `callable_amp_abi_*` ·
+  `cow_scope_bare_param_{` · `sound_amp_owning_position_*` would have been read as citations of units
+  named after the truncated PREFIX. Harmless only until a glob's prefix IS a real unit name, at which
+  point a mention in prose silently exempts an open gap. The rule rejects a match whose next character
+  is `*` or `{`, or a `.` followed by an alphanumeric (a file extension). **Verified both ways: it
+  rejects exactly those four and drops ZERO real units.**
+  ⊕ **One fragility found while verifying the fix, and fixed with it:** the replacement CITED scan was
+  first written as `find TODO.md todo -type f | xargs awk`, and `find` does not follow a SYMLINKED
+  `todo/` — which made the scan silently EMPTY and inflated the count with no work done. It is
+  `{ cat TODO.md; find -L todo -type f -exec cat {} + ; } | awk` now. The re-measurement sandbox is
+  what caught it; a probe that can be wrong in the same direction as the bug is worth building anyway.
+  ⊕ **The sibling audit stands: no other script has this defect.** `resolver_totality.sh` and
+  `convergence.sh`'s own exit-0 are BY DOCUMENTED DESIGN and were not touched.
+- [2026-09-03] **`t0824` CLOSED — the round-close battery did not cover CI, and the claim that it did is now a LINT rather than a sentence.**
+  `AGENTS.md` step 4 ended with *"The full battery covers every target CI runs, so local-green IS the
+  round-close sign-off."* **Measured false.** Three CI `run:` steps appeared nowhere in the battery —
+  `scripts/known_gaps_census.sh --check`, `scripts/staging_move_burndown.sh --check` and
+  `cargo test --test c_runtime` — so a round could run every documented leg green and still be red in
+  CI. R48 closed in exactly that state. All three are now battery legs; the cost of adding them is
+  ~2.7 min against a battery already carrying a ~25-min sanitize sweep.
+  ⭐ **THE DURABLE HALF IS THE GUARD, NOT THE THREE LINES (Core #6).** `round_close_battery_covers_ci_steps`
+  (`tests/lints.rs`) reduces every `run:` command in `.github/workflows/ci.yml` to the TARGET it
+  exercises and asserts each has a battery leg, with a documented EXEMPT list (provisioning, `cargo
+  build` as a prerequisite) and one documented alias (`--test integration` is satisfied by
+  `scripts/run_integration.sh`, because the battery mandates the wrapper on purpose). It checks
+  MEMBERSHIP, not flags or env — the omitted cells are named in its doc comment. **Demonstrated RED in
+  both directions:** reverted to the pre-R49 battery it names exactly the three gaps this item filed,
+  independently rediscovering them; given a fabricated new CI gate it names that instead. ⛔ Its
+  message forbids the one repair that would defeat it — weakening the AGENTS.md sentence.
+  ⊕ **THE CENSUS RED IS REPAIRED, NOT DOCUMENTED.** `scripts/known_gaps_census.sh --check` is GREEN at
+  HEAD — `REAL_EXIT=0`, roster 196 · PASS 6 · FAIL 190, read off the BARE command. (The roster grew by
+  one inside this round: the `beginner_map` wiring is the 196th row and it FAILs, correctly — an open
+  gap's `#[ignore]`d pin is supposed to be red. Regenerate rather than quote: `scripts/known_gaps_census.sh
+  --check` prints its own `# roster N · PASS n · FAIL n` line.) The two unaccounted
+  PASS rows are gone: `catch_binding_throw_in_match_arm_ice` GRADUATED (`t0054`), and
+  `hof_call_env_leak_unbounded` was rewired onto `assert_gg_sanitize_clean`, fails under LSan and left
+  the PASS set (`t0953`). Neither was allowlisted — the parking-lot outcome the reason codes exist to
+  make expensive.
+  ⊕ **AND ONE REAL DEFECT IN THE CENSUS ITSELF, same class as a guard it already carried.** A name
+  filter (`--check <name>`) `continue`d the unselected rows without recording them, so they were
+  missing from BOTH sides of the set comparison and every allowlisted row you had not selected
+  reported as *"no longer PASS"* — a phantom that looks exactly like the real win the gate exists to
+  surface. `--fast` already marks-and-subtracts its skips; a filter is the same class of skip and now
+  does the same, as `SKIPPED_FILTER`, with the summary line and a loud banner saying how many rows the
+  run is NOT evidence about. Verified BOTH ways: a filtered check is clean where it used to report
+  phantoms, and still exits 1 naming the row when a real drift is introduced under the filter.
+  ⊕ **The sibling audit found NOTHING else of this shape** — `convergence.sh` and
+  `resolver_totality.sh` exit 0 BY DOCUMENTED DESIGN. They were not "fixed".
+- [2026-09-03] **`t0054` CLOSED — `throw <catch-binding>` inside a `match` arm GRADUATED out of `known_gaps/`, with the full 4x4 axis the graduation owed.**
+  The filed ICE (Tier 2a consume-site violation, exit 101) is gone; the fixture is
+  `tests/fixtures/catch_binding_throw_in_match_arm.gg`, wired LIVE on BOTH lanes — `run_gg` for the
+  value and `assert_gg_sanitize_clean` for the memory — because the two halves of the fix are pinned
+  by different instruments and neither can see the other.
+  **ADJUDICATED BY MECHANISM, REGENERATED AT HEAD (Core #5 — the round's own figures, not the
+  filing's).** Breaking each half of `lower_catch_expr`'s `if matches!(err_mode, AssignMode::Move)`
+  block in turn: no-op `ctx.set_owned` → **rc 101, the ICE returns** (*"fn @handle bb6 i0 —
+  EnumInit(Error, arg #0) — untracked source consumed (ownership not decided)"*; the class is the
+  filed one, the site spelling has moved from `bb2 i3 — AssignIntoOwnedSlot`); no-op
+  `ctx.drops.register_local` → builds, prints 8080, **leaks 2 bytes in 1 allocation**.
+  ⚠ **AND THE PROBE ITSELF WAS WRONG TWICE BEFORE IT WAS RIGHT, WHICH IS THE METHODOLOGY LESSON.**
+  `lower_rethrow_expr` carries the SIBLING of this guard and spells `ctx.set_owned(builder,
+  err_local);` identically apart from indentation, so a `str.replace(needle, .., 1)` anchored on the
+  8-space form silently matched the 12-space sibling FIRST and reported *"no-op set_owned → still
+  green, the brief is wrong"*. It was the probe that was wrong. **Anchor a deliberate break BY LINE,
+  and re-derive a contradiction before reporting one** — same class as reading an exit code through a
+  pipe.
+  **THE AXIS (Core #12: one cell of a typed axis is an anecdote).**
+  `tests/fixtures/catch_binding_throw_nesting_axis.gg` — {int, String, droppable enum,
+  `Vector[String]`} x {bare, if, match arm, nested match}, **14 of 16 cells; the two omissions are
+  NAMED, not substituted.** `Vector[String]` x {match arm, nested match} have **NO SUBJECT**: Gorget
+  has no vector pattern (`case [s]:` → `error: expected pattern, found '['`), and the only writable
+  spelling, `match e.len():`, does not make `e` the scrutinee, so it would not hold the
+  scrutinee-live-alias axis the item's own diagnosis names. The four `int` cells are negative controls
+  by construction (both halves of the fix gate on `AssignMode::Move`; a Copy payload is not
+  drop-tracked) — confirmed, not assumed: the int-only slice still builds under the broken compiler.
+  ⭐ **THE AXIS CORRECTED THE ITEM'S OWN BISECTION.** `t0054` recorded *"`throw e` inside an `if` →
+  OK"* and concluded *"the `match` arm is the discriminator"*. RED-verified against the pre-fix
+  compiler the axis fails with **SEVEN violations** (against the single filed cell's ONE), and the
+  seven are `str_if` · `str_match_arm` · `str_nested_match` · `enum_if` · `enum_match_arm` ·
+  `enum_nested_match` · `vec_if` — **every non-`int` cell except the three `bare` ones.** So the
+  discriminator is a droppable payload consumed from inside ANY block-structured recovery, `if`
+  included; only the bare `throw e` was ever clean. **The filed bisection was a SELECTION reported as
+  a discriminator (SIX QUESTIONS #3), and only one cell per axis value could show it.** `vec_if` also
+  closes the `Vector[String]`-as-a-`throws`-type cell, which no earlier record had verified at all.
+  **FOUR LANES MEASURED, NOT ASSERTED.** C rc 0 · `--backend=llvm` byte-identical · `gg build
+  --sanitize` + LSan CLEAN on both files · **SELF-HOST byte-identical to the Rust oracle** on all 14
+  axis cells and on the graduated fixture (driver `--emit-c` → `cc` → run, hand-run per owner
+  2026-08-10 — both new files are top-level, so they are parity INFLOW and had to MATCH this round;
+  they do, so the ceiling is untouched) · **ggdef RUN, not assumed to abstain (Core #13)**: it
+  abstains LOUDLY, *"expression `unsupported` is outside the phase-0 subset"* at the first `! catch`.
+  ⊕ **Side effect worth naming: `scripts/known_gaps_census.sh --check` is GREEN again** —
+  `REAL_EXIT=0`, roster 196 · PASS 6 · FAIL 190, read off the BARE command — and regenerate that line
+  rather than quoting it, because the roster moves whenever anyone files or wires a gap (it moved once
+  inside this round). It was RED at R49 open on
+  exactly two unaccounted PASS rows; this graduation removed one and R49 Track H's `t0953` rewire made
+  the other fail under LSan and leave the PASS set. **CI was genuinely red at HEAD and this repairs
+  it**, rather than documenting it.
+- [2026-09-03] **`t0966` CLOSED — the shipped `gg` driver leaked its build scratch directory on EVERY invocation of THREE arms; 161,898 directories / ~37 GB measured at R49 open (93% of all `/tmp` scratch).**
+  `tempfile::TempDir` removes its directory in `Drop` and NOWHERE else; `std::process::exit` ends the
+  process without unwinding, so it never runs one. Fixed at the WRITE SITE (Core #1): the
+  destructor-bearing scope in each of `gg <file>.gg`, `gg run` and `gg test` is confined in an
+  `(|| -> i32 { … })()` and the exit code is `return`ed out of it, `process::exit` firing only after
+  the scope closes. ⛔ Explicitly NOT a `$TMPDIR` reaper — it cannot tell this driver's directories
+  from another live process's, and it races. Measured 1 → 0 leaked directories on all SIX cells
+  (three arms × success/error); `gg build` was 0 throughout.
+  **CORRECTIONS THE ITEM CARRIED AND THIS ENTRY SUPERSEDES (Core #5).** (a) The item said *"`gg build`
+  … its tempdir is dropped normally"*, and cited DONE.md's `t0840` entry saying *"`gg build` deletes
+  its tempdir"*. **Both false, and the truth is stronger: `gg build` MAKES NO TEMPDIR AT ALL** — the
+  build arm passes `None` for the scratch argument and `grep -n tempfile src/main.rs` finds exactly
+  the three leaking arms. Which is why `gg build` is a VACUOUS negative control: it reads zero under
+  every state of the code, including a broken counter. (b) The exit-site table (6 / 3 / 26 ⇒ *"38
+  terminations"*) was wrong. Measured in-scope: **shorthand 5 · run 3 · test 10 raw, plus 3 calls to
+  the `-> !` helper = 21**; the test arm's other 14 exits are in the `--snapshot list/show/delete/diff`
+  sub-block, which runs BEFORE the tempdir is opened and cannot leak. (c) The item ordered
+  `tests/integration.rs`'s *"leaves nothing beside the fixture"* comment DELETED as a false Core #14
+  invariant. **It is TRUE** — the `.c` and the binary go INSIDE the tempdir. The actually-false comment
+  was `src/main.rs`'s *"tmp_dir is dropped here, cleaning up .c, binary, and trace"*, sitting directly
+  above the call that guaranteed it was not, and false on BOTH counts: the trace file is built from the
+  source's parent directory and was never in the tempdir either. Swapped.
+  **THE ORIGINAL SPELLING OF THE LEAK WAS NOT `process::exit`.** Three of the 21 sites were calls to
+  `propagate_child_status`, a `-> !` helper that ended in one — invisible to a grep for the raw form.
+  Splitting it into `child_exit_code(status, hint) -> i32` left the wrapper with zero callers, so it is
+  DELETED rather than kept: the chokepoint now COMPUTES and the caller terminates, and a function that
+  computes cannot skip a destructor.
+  **GUARDS (Core #6), each demonstrated RED.** `gg_commands_do_not_leak_their_scratch_dir`
+  (`tests/integration.rs`) — 7 cells, each with a private `TMPDIR` *and* a private work directory (the
+  second shared resource: `gg test` writes `.gorget/` beside its fixture, which is why seven other
+  tests carry `#[serial(test_basic_gg)]`), both a success and an error path per arm, and a
+  **DOT-PREFIXED positive control**: the artifact is a hidden directory, so a counter that skipped
+  dot-entries or counted files would read zero forever and green-light its own class. Verified RED at
+  pre-fix HEAD naming all six leaking cells, and RED on both broken counters.
+  `scratch_dir_scopes_have_no_process_exit` (`tests/lints.rs`) pins the CLASS: it enumerates the `-> !`
+  inventory over all of `src/` (pinned by count, so factoring a diverging helper into another module
+  cannot green it) plus a closed literal set of terminating and Drop-disabling spellings, and fires on
+  any of them inside a `tempfile` RAII scope, **zero-tolerance — no ctor-closure exemption; the ctors'
+  own error paths are `match` arms so none is needed.** **Fire count 21 → 0** (18 raw + 3 helper at
+  pre-fix HEAD, at `:2633` `:3335` `:3715`). Shown RED on a re-added raw exit AND on a re-added `-> !`
+  wrapper.
+  ⊕ `child_exit_status_propagation_chokepoint`'s aggregation costume was extended to the `return`
+  spelling and given an EXPECTED-COUNT assertion: the confinement respelled one of its two sites, and
+  without the count the lint would have kept passing on half the population. ⊕ `gg test` signal
+  propagation had NO runtime test (both existing ones are `gg run`), so a textual lint was the only
+  guard on code this change restructured — `gg_test_propagates_signal_death` added, RED when the
+  chokepoint stops mapping signal death to `128 + signo`.
+  ⊕ **Disposition of the one sibling the `tempfile` witness cannot see:** `src/main.rs`'s TUI scratch
+  dir (`env::temp_dir().join("gorget_tui")` + `create_dir_all`) is hand-rolled, NOT this class — a
+  fixed name, bounded at one entry, with no destructor to skip. (`src/proc_guard.rs`'s is
+  `#[cfg(test)]`, not shipped.)
 - [2026-09-03] **R49 Track E — THE IMPLICIT `it` CLOSURE PARAMETER IS REMOVED FROM THE LANGUAGE (owner ruling 2026-09-03).**
   `it` is an ordinary identifier again. `Keyword::It`, `Expr::It` and `Expr::ImplicitClosure` are
   gone from Rust `gg`; `KwIt`, `KW_IT`, `EIt`, `EImplicitClosure`, `expr_contains_it`, `expr_has_it`,

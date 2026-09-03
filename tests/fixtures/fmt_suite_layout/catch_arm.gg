@@ -10,11 +10,12 @@
 #
 # RED pre-fix (recorded 2026-08-11):
 #   * block cell — a spurious BLANK line after the enclosing var-decl.
-#   * `tests/fixtures/known_gaps/catch_binding_throw_in_match_arm_ice.gg`
-#     was mutated by `gg fmt` into `catch (e): do:` + a blank (2 hunks), i.e.
-#     the formatter rewrote an ICE reproducer's shape. That fixture is the
-#     in-tree cell for the `do:`-INSERTION direction; this file holds the
-#     no-insertion + no-blank pins for the ordinary shapes.
+#   * `tests/fixtures/catch_binding_throw_in_match_arm.gg` was mutated by
+#     `gg fmt` into `catch (e): do:` + a blank (2 hunks), i.e. the formatter
+#     rewrote an ICE reproducer's shape. That fixture is the in-tree cell for
+#     the `do:`-INSERTION direction; this file holds the no-insertion +
+#     no-blank pins for the ordinary shapes. (It lived in `known_gaps/` until
+#     R49 graduated it out; the shape it pins is unchanged.)
 
 int risky(int x):
     throw "boom"

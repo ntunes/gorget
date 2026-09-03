@@ -28,27 +28,43 @@ use gorget::resolver;
 /// through to C and builds successfully.
 const BACKENDS: &[&str] = &["c", "c-lir", "llvm"];
 
-/// Propagate a child process's exit status to `gg`'s own exit, preserving
-/// signal-death information the naive `status.code().unwrap_or(1)` pattern
-/// erases. Follows the Bash/`cargo run`/`timeout(1)` convention:
-/// - signal death → exit `128 + signo`, with a stderr diagnostic naming the
+/// Map a child process's exit status onto the code `gg` should itself exit
+/// with, preserving signal-death information the naive
+/// `status.code().unwrap_or(1)` pattern erases. Follows the
+/// Bash/`cargo run`/`timeout(1)` convention:
+/// - signal death → `128 + signo`, with a stderr diagnostic naming the
 ///   signal so an interactive user sees a real error message instead of the
 ///   silent exit-1 (memory-safety bugs used to be indistinguishable from
 ///   compile errors at the `gg run` UX — Round XXIV Track B).
-/// - normal exit → propagate the child's exit code.
-/// - unknown state → exit 1.
-fn propagate_child_status(status: std::process::ExitStatus, exe_hint: &str) -> ! {
+/// - normal exit → the child's exit code.
+/// - unknown state → 1.
+///
+/// This is the CHOKEPOINT, and it COMPUTES rather than TERMINATES on purpose.
+/// It used to be `propagate_child_status(..) -> !`, ending in `process::exit`.
+/// All three of its call sites sit inside a scope holding a `tempfile::TempDir`,
+/// whose directory is removed in `Drop` and nowhere else — and `process::exit`
+/// ends the process without unwinding, so the destructor never ran and every
+/// `gg run` / `gg test` / `gg <file>.gg` leaked its scratch directory
+/// (`todo/t0966`; 161,898 directories / ~37 GB measured at R49 open).
+///
+/// Returning the code lets each arm `return` it out of the confined scope, so
+/// `TempDir::drop` runs on every path. ⛔ Do NOT re-add a diverging `-> !`
+/// wrapper and call it from inside one of those scopes — that is the ORIGINAL
+/// spelling of this leak, and it is invisible to a grep for `process::exit`.
+/// `scratch_dir_scopes_have_no_process_exit` (`tests/lints.rs`) enumerates the
+/// `-> !` inventory precisely so that spelling cannot come back silently.
+fn child_exit_code(status: std::process::ExitStatus, exe_hint: &str) -> i32 {
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
         if let Some(signo) = status.signal() {
             let name = signal_name(signo);
             eprintln!("gg: {exe_hint} terminated by {name} (signal {signo})");
-            process::exit(128 + signo);
+            return 128 + signo;
         }
     }
     let _ = exe_hint; // silence unused warning on non-Unix
-    process::exit(status.code().unwrap_or(1)); // LINT-CHOKEPOINT-FALLBACK: this IS the chokepoint (non-signal fallback), lint exempts this line
+    status.code().unwrap_or(1) // LINT-CHOKEPOINT-FALLBACK: this IS the chokepoint (non-signal fallback), lint exempts this line
 }
 
 // Signal-number → name mapping is Linux-specific for numbers > ~6.
@@ -2593,10 +2609,29 @@ fn real_main() {
         let no_trace = args.iter().any(|a| a == "--no-trace");
         let sanitize = args.iter().any(|a| a == "--sanitize");
         let dep_paths = resolve_deps_for_file(filename);
-        let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
-            eprintln!("Failed to create temp directory: {e}");
-            process::exit(1);
-        });
+        // `todo/t0966`: everything from here to the end of the arm is the
+        // DESTRUCTOR-BEARING scope. `tmp_dir` is a `tempfile::TempDir`, which
+        // removes its directory in `Drop` and nowhere else, and
+        // `std::process::exit` ends the process without unwinding — so an exit
+        // taken inside this scope leaks the scratch directory, the emitted `.c`
+        // and the linked binary, on every path. Confine the scope and `return`
+        // the code instead. ⛔ NO raw `process::exit` below this line until the
+        // IIFE closes; `scratch_dir_scopes_have_no_process_exit`
+        // (`tests/lints.rs`) is the ratchet.
+        //
+        // The conversion is observationally inert beyond that: `TempDir` is the
+        // ONLY destructor these three scopes newly run. `grep -rn "impl Drop"
+        // src/` (non-sqlite) finds three — `RawModeGuard` (`tui.rs`),
+        // `CallArgGuard` and `ExprDepthGuard` (`parser/expr.rs`) — and none is
+        // live here; `src/main.rs` declares none of its own.
+        let scratch_scope_code = (|| -> i32 {
+        let tmp_dir = match tempfile::tempdir() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Failed to create temp directory: {e}");
+                return 1;
+            }
+        };
         let features = parse_features(&args);
         let hot_reload_flag = args.iter().any(|a| a == "--hot-reload");
         let has_trace = !no_trace && (trace || source_has_trace(&source));
@@ -2614,23 +2649,28 @@ fn real_main() {
             sanitize, scheduler_mode: parse_scheduler(&args),
             ..Default::default()
         };
-        let clone_modes = parse_clone_modes(&args).unwrap_or_else(|e| {
-            eprintln!("{e}");
-            process::exit(1);
-        });
-        let resolver_modes = parse_resolver_modes(&args).unwrap_or_else(|e| {
-            eprintln!("{e}");
-            process::exit(1);
-        });
-        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &clone_modes, &resolver_modes, "c-lir", "native")
-            .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
-        let status = Command::new(&exe_path)
-            .status()
-            .unwrap_or_else(|e| {
+        let clone_modes = match parse_clone_modes(&args) {
+            Ok(m) => m,
+            Err(e) => { eprintln!("{e}"); return 1; }
+        };
+        let resolver_modes = match parse_resolver_modes(&args) {
+            Ok(m) => m,
+            Err(e) => { eprintln!("{e}"); return 1; }
+        };
+        let exe_path = match try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &clone_modes, &resolver_modes, "c-lir", "native") {
+            Ok(p) => p,
+            Err(e) => { eprintln!("{e}"); return 1; }
+        };
+        let status = match Command::new(&exe_path).status() {
+            Ok(s) => s,
+            Err(e) => {
                 eprintln!("Failed to execute {}: {e}", exe_path.display());
-                process::exit(1);
-            });
-        propagate_child_status(status, &exe_path.display().to_string());
+                return 1;
+            }
+        };
+        child_exit_code(status, &exe_path.display().to_string())
+        })();
+        process::exit(scratch_scope_code);
     }
 
     // `gg report <file>.trace.jsonl` — generate HTML report from trace
@@ -3285,10 +3325,16 @@ fn real_main() {
         }
         "run" => {
             let dep_paths = resolve_deps_for_file(filename);
-            let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
-                eprintln!("Failed to create temp directory: {e}");
-                process::exit(1);
-            });
+            // `todo/t0966`: DESTRUCTOR-BEARING scope — see the shorthand arm.
+            // ⛔ NO raw `process::exit` until the IIFE closes.
+            let scratch_scope_code = (|| -> i32 {
+            let tmp_dir = match tempfile::tempdir() {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("Failed to create temp directory: {e}");
+                    return 1;
+                }
+            };
             let has_trace = !no_trace && (trace || source_has_trace(&source));
             let trace_filename = if has_trace {
                 let input_path = Path::new(filename);
@@ -3325,20 +3371,22 @@ fn real_main() {
                         if !seen_filename && arg == filename { seen_filename = true; continue; }
                         if seen_filename { script_args.push(arg); }
                     }
-                    let status = Command::new(&exe_path)
-                        .args(&script_args)
-                        .status()
-                        .unwrap_or_else(|e| {
+                    let status = match Command::new(&exe_path).args(&script_args).status() {
+                        Ok(s) => s,
+                        Err(e) => {
                             eprintln!("Failed to execute {}: {e}", exe_path.display());
-                            process::exit(1);
-                        });
-                    propagate_child_status(status, &exe_path.display().to_string());
+                            return 1;
+                        }
+                    };
+                    child_exit_code(status, &exe_path.display().to_string())
                 }
                 Err(e) => {
                     eprintln!("{e}");
-                    process::exit(1);
+                    1
                 }
             }
+            })();
+            process::exit(scratch_scope_code);
         }
         "test" => {
             // Collect --tag, --exclude-tag, --filter, --report, --bench, --timeout,
@@ -3507,10 +3555,19 @@ fn real_main() {
 
             // --report html implies --trace (unless --no-trace is explicit)
             let trace = if report_html && !no_trace { true } else { trace };
-            let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
-                eprintln!("Failed to create temp directory: {e}");
-                process::exit(1);
-            });
+            // `todo/t0966`: DESTRUCTOR-BEARING scope — see the shorthand arm.
+            // The `--snapshot list/show/delete/diff` sub-block above runs
+            // BEFORE this point and opens no tempdir, so it stays outside:
+            // the confined scope is the destructor-bearing one, not the arm.
+            // ⛔ NO raw `process::exit` until the IIFE closes.
+            let scratch_scope_code = (|| -> i32 {
+            let tmp_dir = match tempfile::tempdir() {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("Failed to create temp directory: {e}");
+                    return 1;
+                }
+            };
             let dep_paths = resolve_deps_for_file(filename);
             let has_trace = !no_trace && (trace || source_has_trace(&source));
             let trace_filename = if has_trace {
@@ -3558,11 +3615,13 @@ fn real_main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &CloneDiagModes::default(), &ResolverDiagModes::default(), "c-lir", "native")
-                .unwrap_or_else(|e| {
+            let exe_path = match try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &CloneDiagModes::default(), &ResolverDiagModes::default(), "c-lir", "native") {
+                Ok(p) => p,
+                Err(e) => {
                     eprintln!("{e}");
-                    process::exit(1);
-                });
+                    return 1;
+                }
+            };
 
             // Ensure .gorget/ directory exists for results file
             let _ = std::fs::create_dir_all(&results_dir);
@@ -3590,7 +3649,7 @@ fn real_main() {
                             for c in children.iter_mut() {
                                 proc_guard::kill_process_tree(c);
                             }
-                            process::exit(1);
+                            return 1;
                         }
                     }
                 }
@@ -3620,7 +3679,7 @@ fn real_main() {
                             eprintln!("Failed to wait for worker: {e}");
                             proc_guard::kill_process_tree(&mut child);
                             reap_remaining(&mut children);
-                            process::exit(1);
+                            return 1;
                         }
                     };
                     if !status.success() { any_failed = true; }
@@ -3643,9 +3702,9 @@ fn real_main() {
                         "gg: test worker {who} terminated by {} (signal {signo})",
                         signal_name(signo)
                     );
-                    process::exit(128 + signo);
+                    return 128 + signo;
                 }
-                process::exit(if any_failed { 1 } else { 0 });
+                return if any_failed { 1 } else { 0 };
             }
 
             // Snapshot temp file for capture
@@ -3664,35 +3723,40 @@ fn real_main() {
             if let Some(ref snap_path) = snapshot_tmp {
                 cmd.env("GORGET_SNAPSHOT_PATH", snap_path.display().to_string());
             }
-            let status = cmd.status()
-                .unwrap_or_else(|e| {
+            let status = match cmd.status() {
+                Ok(s) => s,
+                Err(e) => {
                     eprintln!("Failed to execute {}: {e}", exe_path.display());
-                    process::exit(1);
-                });
+                    return 1;
+                }
+            };
 
             // If snapshot save mode, restructure capture file into versioned JSON
             if let (Some(snap_path), Some(_cmd)) = (&snapshot_tmp, &snapshot_cmd) {
-                let version = snapshot_args.first().unwrap_or_else(|| {
-                    eprintln!("Usage: gg test <file> --snapshot save <version>");
-                    process::exit(1);
-                });
+                let version = match snapshot_args.first() {
+                    Some(v) => v,
+                    None => {
+                        eprintln!("Usage: gg test <file> --snapshot save <version>");
+                        return 1;
+                    }
+                };
                 let _ = std::fs::create_dir_all(&snapshot_dir);
                 let dest = snapshot_dir.join(format!("{version}.json"));
                 if snap_path.exists() {
                     let raw = std::fs::read_to_string(snap_path).unwrap_or_default();
                     let structured = restructure_snapshot_capture(&raw, version, filename);
-                    std::fs::write(&dest, &structured).unwrap_or_else(|e| {
+                    if let Err(e) = std::fs::write(&dest, &structured) {
                         eprintln!("Failed to write snapshot: {e}");
-                        process::exit(1);
-                    });
+                        return 1;
+                    }
                     println!("Snapshot '{version}' saved to {}", dest.display());
                 } else {
                     // No snapshot statements executed — write empty
                     let structured = format!("{{\n  \"version\": \"{version}\",\n  \"file\": \"{filename}\",\n  \"tests\": {{}}\n}}\n");
-                    std::fs::write(&dest, &structured).unwrap_or_else(|e| {
+                    if let Err(e) = std::fs::write(&dest, &structured) {
                         eprintln!("Failed to write snapshot: {e}");
-                        process::exit(1);
-                    });
+                        return 1;
+                    }
                     println!("Snapshot '{version}' saved (no snapshot points captured)");
                 }
             }
@@ -3711,8 +3775,20 @@ fn real_main() {
                     println!("Report: {}", report_path.display());
                 }
             }
-            // tmp_dir is dropped here, cleaning up .c, binary, and trace
-            propagate_child_status(status, &exe_path.display().to_string());
+            // `tmp_dir` is dropped when this scope closes, removing the scratch
+            // directory with the emitted `.c` and the linked binary inside it.
+            //
+            // ⚠ Core #14: this comment used to sit DIRECTLY above a
+            // `propagate_child_status` call and was false on both counts — the
+            // helper is `-> !` and ends in `process::exit`, which never runs a
+            // destructor, and the trace file was never in here anyway
+            // (`trace_filename` is built from the SOURCE's parent directory
+            // above, so it is written beside the input and deliberately
+            // survives the run). It is now enforced by
+            // `gg_commands_do_not_leak_their_scratch_dir` (`tests/integration.rs`).
+            child_exit_code(status, &exe_path.display().to_string())
+            })();
+            process::exit(scratch_scope_code);
         }
         "fmt" => {
             let in_place = args.iter().any(|a| a == "--in-place" || a == "-i");
