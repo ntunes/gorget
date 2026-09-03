@@ -435,9 +435,25 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
-- **⏸ H · ON HOLD — OWNER, 2026-09-03: *"put track H on hold. I think another fix for `t0824` is coming
-  from another agent soon. I'll let you know."*** ⛔ **DO NOT LAUNCH H WORK — no brief-review, no executor —
-  UNTIL THE OWNER LIFTS THE HOLD.** Its brief-review pass 1 was STOPPED mid-flight rather than allowed to
+- **✅ H · HOLD LIFTED — OWNER, 2026-09-03: *"please unblock track H. the other agent work is not
+  usable."*** The external `t0824` fix did not arrive.
+  ⭐ **ALL H4 PREMISES RE-VERIFIED AT HEAD ON RESUME (the rule this hold set for itself) — EVERY ONE HOLDS
+  UNCHANGED, so the brief stands as written and needs no re-scoping:**
+  `scripts/known_gaps_census.sh --check` read BARE → **`REAL_EXIT=1`**, roster **195 · PASS 8 · FAIL 187 ·
+  SKIPPED_SH 0**, and the **same two** un-allowlisted extras (`catch_binding_throw_in_match_arm_ice`,
+  `hof_call_env_leak_unbounded`) · all three CI steps still absent from the battery
+  (`grep -c` in `AGENTS.md` → **0, 0, 0**) · `AGENTS.md`'s *"The full battery covers every target CI runs"*
+  still present and still measured-false · and `git log` shows **nothing landed** on
+  `scripts/known_gaps_census.sh`, `todo/t0824.md`, `.github/workflows/ci.yml` or `AGENTS.md` during the hold.
+  ⚠ **THE STREAK RESTARTS AT ZERO** — its pass-1 review was STOPPED mid-flight, and a stopped review is not
+  a passed review. Re-run ≥3 fresh sequential passes from pass 1.
+  ⊕ Unaffected by the hold and unchanged: **H1** (`t0966`, fix + guard prototyped, RED in both directions) ·
+  **H2** (the `catch_binding` graduation, both assertion halves shown load-bearing) · **H3** (the
+  `hof_call_env_leak_unbounded` REWIRE + the orphan filing) · **H5** (the `convergence.sh` bare-directory
+  over-count of 5) · **H6** (two unwired `known_gaps` fixtures).
+
+  **[superseded — the hold's own text, kept for provenance]**
+- **⏸ H · WAS ON HOLD** ⛔ (lifted; do not action this paragraph) Its brief-review pass 1 was STOPPED mid-flight rather than allowed to
   finish, deliberately: `H4` rests on `t0824`'s battery-membership premises, and an external fix landing
   would decay them, so a completed review would have to be discarded anyway.
   ⚠ **ON RESUME, RE-VERIFY BEFORE RE-REVIEWING — do not restart from this brief as written.** The external
