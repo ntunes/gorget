@@ -461,6 +461,46 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **✅ K · SCOUT RETURNED — BRIEF WRITTEN (`/tmp/brief_K.md`), PASS 1 LAUNCHED. It is a ONE-LANE fix.**
+  Repro CONFIRMED at HEAD both backends; **ggdef prints the correct answer on every row** and `.slice()` is
+  out of its subset, so **ggdef covers only the colon form — the broken one — and adjudicates both Rust
+  backends DEFINITIVELY WRONG.** Not a "both backends agree" ambiguity (Core #8).
+  ⭐ **RUST GG LAGS THE SELF-HOST — the succession-plan case.** `self_host_lowerer/lower_expr.gg:5293`
+  (slice) and `:5403` (index) already call `add_local_with(..., LoView(), ...)` **with a comment naming this
+  very UAF.** Fix Rust as oracle hygiene; never dumb the self-host down to match.
+  ⛔ **RUNTIME MECHANISM:** `gorget_str_slice` returns `gorget_str_view_region` — `cap=0`, `alloc=NULL`,
+  borrowing the source buffer (`runtime_string.c:738,750-753`) — while `gorget_array_slice` allocates +
+  memcpys + deep-clones (`runtime_array.c:462-496`). **String is the only broken container BY CONSTRUCTION.**
+  ⛔ **ASan IS STRUCTURALLY BLIND** (custom `__gorget_current_alloc` pool) — **a green sanitize sweep says
+  NOTHING here.** stdout is the only instrument.
+  ⛔ **TWO AXES `t0871` NEVER NAMED, and one FAKES A NON-REPRODUCTION:** the `&`-sig-arg mutation route
+  (`grow(&s)`) is **ALREADY CORRECT**, so an executor probing that way sees green and concludes wrongly —
+  use INLINE REASSIGN. Second axis: field-rooted receivers (`h.s[0:5]`), broken and fixed by the same tag.
+  ⭐ **TOTALITY WITNESS:** 16 `gorget_str_view_region` call sites × 12 `returns_view: true` entries
+  (`builtins.rs:853-875`) — every view-returning helper is method-tagged **except the two the index route
+  reaches untagged**. Derivation axis **total at 2**; **|changed| = 6** = {slice, index} × {bare-local bind,
+  field-rooted bind, return}.
+  ⚡ **COST MEASURED: +1 clone per BIND, +12 KB (~1%) RSS; TEMPS STAY FREE** (identical before/after).
+  ⭐ **AND IT KILLS A PREMISE:** this makes `s[a:b]` cost the same as `.slice()`, so **`t0316`/`t0850`'s
+  "1,002 vs 2 MEASURED FREE" clone-reclaim premise EVAPORATES — it was free because it did not do the work.**
+  ⛔ **THE CRITICAL ITEM HAS NO DURABLE REPRO:** `t0871`'s cited
+  `known_gaps/string_index_slice_bind_dangles.gg` **was never committed on any branch** and no `#[ignore]`d
+  test exists — a Task Continuity violation the executor closes.
+  ⚠ **Core #14:** `methods.rs:4726-4730` asserts *"boundary clones own it when it escapes"* — **false for 2
+  of Rule 3's 5 boundaries. It is WHY the defect survived.** Guard it or delete it.
+  ⚠ **All of `t0871`'s line cites drifted** (`methods.rs:3748`/`:4762`/`:4662-4663`, not `:3475`/`:4394`/
+  `:4291`), **and both decision cites are stale** (D22 Rider 2 is `decisions.md:1311` not `:1278`; D52 is
+  `:3191` not `:3158`). Its "slice 398/0" gate figure is stale too (**421/0**).
+  ⛔ **THE CEILING IS AN OWNER ASK, NOT THE TRACK'S CALL** — `t0871` says do not restore it, and D22 Rider 2
+  keeps `.slice()`/`.substring()` as PERMANENT ALIASES, so whether a ceiling is wanted **at all** is open.
+  **The lint stays `#[ignore]`d; the track reports and does not decide.**
+  ⊕ **OUT OF SCOPE, stated so nobody pulls them in:** `t0697` is its OWN track (root
+  `pack_trait_object_for_smart_ptr_ctor`, `calls.rs:1038-1041` — assign + `set_owned_fresh`, never consumes
+  the source; **no shared root**). And the fifth Rule-3 boundary — closure capture of a reallocating
+  `String` — **reproduces with NO SLICE and through the METHOD route `t0871` calls correct**, so it is the
+  `t0704`/`t0771` family. **`t0704`'s scope erratum is FILED** (its `mechanism` said "captured COLLECTION
+  handle"; the class is wider — a captured plain `String` corrupts the same way).
+
 - **✅ H · PASS 3 SIGNED OFF THE DESIGN (0 blocking, 8 scope + 6 errata). EXECUTOR LAUNCHED.** Folded as
   `/tmp/brief_H.md` ADDENDUM 3. **Both ADDENDUM 2 blockers are closed, and the termination-spelling
   enumeration is now TOTAL with independent witnesses per row** — `process::exit` (18) · `-> !` helper (3,
