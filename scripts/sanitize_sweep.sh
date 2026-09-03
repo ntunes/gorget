@@ -168,9 +168,19 @@ CRASH_CEILING="${CRASH_CEILING:-0}"
 # telling you it cannot see, which is strictly more useful than a green it has
 # not earned.
 #
-# ⚠ IT IS A CENSUS, NOT A CEILING, AND THE DISTINCTION IS DELIBERATE. Every other
-# gate in this file counts a DEFECT IN THE COMPILER; UNKNOWN counts a LIMITATION
-# OF THE INSTRUMENT. Two reasons that must not become a ratchet at 0:
+# ⚠ WHAT IT COUNTS IS STILL SPECIAL, BUT IT IS NOW A RATCHET. Every other gate in
+# this file counts a DEFECT IN THE COMPILER; UNKNOWN counts a LIMITATION OF THE
+# INSTRUMENT, and that distinction still governs how you MOVE it (see "WHAT
+# MOVING THIS COSTS" below). ⛔ It is NO LONGER a census: it is enforced fatally
+# further down, at the measured value.
+# ⚠ THIS PARAGRAPH OPENED WITH "IT IS A CENSUS, NOT A CEILING" UNTIL R48 CLOSE,
+# thirteen lines above the sentence that says it became a ratchet — a comment
+# describing the state its own block had already left. It was found by a brief
+# reviewer who had to make a judgement call FROM it, which is when a stale
+# comment stops being untidy and starts arguing the wrong way.
+# The two reasons below are why it must not be pinned at 0 UNMEASURED; they were
+# never reasons against ratcheting it at a MEASURED value, and reading them as
+# such is the mistake the old opening invited:
 #   * the `run_rc1` ambiguity cell (todo/t0647: a program's own `exit(1)` is
 #     indistinguishable from `gorget_panic_at`'s) means ANY fixture that
 #     legitimately exits 1 lands here — and this corpus has no expectation column
