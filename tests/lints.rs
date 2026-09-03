@@ -27388,11 +27388,16 @@ fn clone_meter_pin_provenance_shas_resolve() {
 /// `scripts/figures.db` claims that POLARITY (what a checker does with a
 /// number) and PROVENANCE (where the number came from) are independent
 /// questions about one row. That claim shipped once as prose and was **false as
-/// written** — it said "`policy` crosses more than one polarity", which it does
-/// not: `policy` occupies exactly one cell, because `SHAPE_MAX_DEPTH`, the row
-/// that would have given it a second, is correctly excluded as terminal. Three
-/// copies of that sentence went out; the one place that had it right was the
-/// round record. Prose rots, so the fact is a lint now (Core #6).
+/// written** — it said "`policy` crosses more than one polarity", which was not
+/// true when it was written (`SHAPE_MAX_DEPTH`, the row it counted on, is
+/// correctly excluded as terminal). Three copies of that sentence went out; the
+/// one place that had it right was the round record. **The correction then
+/// shipped a CENSUS in its place — a claim about how many cells `policy`
+/// occupies — and that was falsified too, one adopted row later.** So it is
+/// gone from all four live copies rather than re-counted: a cell tally is the
+/// one part of that paragraph no lint can police. Prose rots, so the fact is a
+/// lint now (Core #6) — and this lint asserts OCCUPANCY and INDEPENDENCE,
+/// deliberately never a count.
 ///
 /// The claim it actually asserts, which IS true and IS load-bearing:
 ///

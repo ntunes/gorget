@@ -31,12 +31,17 @@
 #     ⇒ derived, and then `authority` names what is read.
 #
 #   ⛔ `policy` IS NOT A FIFTH POLARITY — AND THE PROOF IS NOT "IT CROSSES MORE
-#     THAN ONE POLARITY". It does not: `policy` occupies exactly ONE cell here
-#     (shrink-only), because the row that would have given it a second,
-#     `SHAPE_MAX_DEPTH`, is correctly ruled NEVER. An earlier revision of this
-#     paragraph made the crossing claim anyway; it was false the moment that
-#     ruling stood, and it is exactly the "class statement reached by
-#     resemblance" this file's own doctrine warns about.
+#     THAN ONE POLARITY". An earlier revision of this paragraph made that
+#     crossing claim and it was FALSE WHEN MADE (`SHAPE_MAX_DEPTH`, the row it
+#     counted on, is correctly ruled NEVER); the revision that corrected it put
+#     a CENSUS in its place — a claim about how many cells `policy` occupies —
+#     and R48 falsified that too, by landing `sanitize.coverage_floor` as
+#     grow-only × policy.
+#     ⛔ SO THERE IS NO CENSUS HERE, AND THAT IS THE REPAIR. A count of occupied
+#     cells is the one part of this paragraph no lint can police, it has now
+#     shipped false twice, and the argument never needed it: whatever `policy`'s
+#     current spread happens to be, a crossing tally is not the proof. Adopt a
+#     row into any cell without touching this paragraph.
 #     THE TRUE PROOF IS THAT NEITHER AXIS IS A FUNCTION OF THE OTHER:
 #       polarity does NOT determine provenance — `exact-pin` carries both
 #         `measured` (the clone pins) and `derived` (`fmt.max_width`), and
@@ -671,3 +676,503 @@ done_md.round_close.roundish_headlines.caveat = a SUPERSET, not an enumeration �
 done_md.round_close.roundish_headlines.cost_secs = 60
 done_md.round_close.roundish_headlines.input = none
 done_md.round_close.roundish_headlines.note = when this moves and anchor_age_matched does NOT, adjudicate: a round close in an unseeable shape (re-seed the anchors AND revisit the predicate), or a mid-round round-ish entry (bump this pin only)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# THE ROUND-CLOSE GATES (R48 Track T-a2)
+# ═══════════════════════════════════════════════════════════════════════════
+# THE CRITERION FOR THIS TABLE, stated so the enumeration says what it selects
+# on (SIX QUESTIONS #3): a constant the ROUND-CLOSE BATTERY evaluates as a
+# pass/fail gate on CROSS-LANE CONFORMANCE OR PARITY. Seven constants qualify.
+#
+# ⚠ TWO SAME-SHAPED CONSTANTS ARE DELIBERATELY OUT, named so the omission is
+# visible rather than silent:
+#   * tests/integration.rs:SELF_HOST_COMPREHENSION_CELL_FLOOR — a coverage pin on
+#     one fixture family, not a cross-lane gate.
+#   * tests/integration.rs:EXPECTED_ENTRY_POINTS — an arm-count pin. Proposed for
+#     a later round in todo/t0965; adopting it here would have made this table an
+#     open set, which is the failure two earlier drafts shipped.
+#
+# ⛔ ADOPTION IS MIRROR-MODE AND NOTHING HERE RE-PINS ANYTHING. Every value below
+# was read off the constant at dc0b0024b; a value this track believed wrong would
+# be a finding, never an edit.
+#
+# ⚠ SCAN REACH. Five of the seven take `scan = none` and say why in `caveat`:
+# they are three-digit values, and tests/spec_conformance.rs — which holds four
+# of them — is NOT a declared scan root, while its own re-seed log spells 237
+# eleven times. A `scan = standard` there would be a waiver farm, which is how a
+# guard dies (`fmt.max_width` sets the precedent).
+
+# ── grow-only × measured — the three spec-conformance lane floors ───────────
+# ⚠ THE EXTRACTOR IS LANE-ANCHORED, AND IT HAD TO BE. All three lanes print
+# through the same `run_lane` formatter into one run's stderr, so a bare
+# `MATCH=(?P<value>[0-9]+)` captures whichever comes first — and that is not even
+# the first lane's total: a MISMATCH DETAIL containing `MATCH=` hijacks it.
+# Measured against the real format strings, the bare pattern returns 9 where the
+# anchored one returns 237. Anchor on the lane banner AND on `total=…`, never on
+# a bare `MATCH=`.
+row = parity.spec_conformance.c.match_floor
+parity.spec_conformance.c.match_floor.value = 237
+parity.spec_conformance.c.match_floor.unit = spectests/run seeds whose C-backend run matches the committed expect:
+parity.spec_conformance.c.match_floor.polarity = grow-only
+parity.spec_conformance.c.match_floor.provenance = measured
+parity.spec_conformance.c.match_floor.regen = cargo test --test spec_conformance -- --test-threads=1 --nocapture
+parity.spec_conformance.c.match_floor.regen_extract = ══ spec_conformance_c ══[\s\S]*?total=[0-9]+ · MATCH=(?P<value>[0-9]+)
+parity.spec_conformance.c.match_floor.regen_fires = ══ spec_conformance_[a-z]+ ══
+parity.spec_conformance.c.match_floor.regen_env = GG_PARITY_FLOOR_OFF=unset
+parity.spec_conformance.c.match_floor.regen_forbids = MATCH-count floor (skipped|DISABLED)
+parity.spec_conformance.c.match_floor.instrument = tests/spec_conformance.rs::spec_conformance_c
+parity.spec_conformance.c.match_floor.measured_at = dc0b0024b
+parity.spec_conformance.c.match_floor.home = tests/spec_conformance.rs:C_MATCH_FLOOR
+parity.spec_conformance.c.match_floor.scan = none
+parity.spec_conformance.c.match_floor.caveat = scan = none — 237 has 14 unmasked spellings (11 in tests/spec_conformance.rs's own re-seed log, which is not a scan root), so figures_db_mirrors_agree plus this regen are the whole enforcement; linux-only (floor_active skips off-linux); and CO-MOVEMENT OF THE QUARTET IS NOT ENFORCED BY THIS DB — a shared regen shares the RUN, not the VERDICT, and rows are checked independently. What enforces it is the three `const _: () = assert!` relations in tests/spec_conformance.rs, which fail at COMPILE time
+parity.spec_conformance.c.match_floor.cost_secs = 3600
+parity.spec_conformance.c.match_floor.mirror = tests/spec_conformance.rs:C_MATCH_FLOOR
+parity.spec_conformance.c.match_floor.input = none
+
+row = parity.spec_conformance.llvm.match_floor
+parity.spec_conformance.llvm.match_floor.value = 237
+parity.spec_conformance.llvm.match_floor.unit = spectests/run seeds whose LLVM-backend run matches the committed expect:
+parity.spec_conformance.llvm.match_floor.polarity = grow-only
+parity.spec_conformance.llvm.match_floor.provenance = measured
+parity.spec_conformance.llvm.match_floor.regen = cargo test --test spec_conformance -- --test-threads=1 --nocapture
+parity.spec_conformance.llvm.match_floor.regen_extract = ══ spec_conformance_llvm ══[\s\S]*?total=[0-9]+ · MATCH=(?P<value>[0-9]+)
+parity.spec_conformance.llvm.match_floor.regen_fires = ══ spec_conformance_[a-z]+ ══
+parity.spec_conformance.llvm.match_floor.regen_env = GG_PARITY_FLOOR_OFF=unset
+parity.spec_conformance.llvm.match_floor.regen_forbids = MATCH-count floor (skipped|DISABLED)
+parity.spec_conformance.llvm.match_floor.instrument = tests/spec_conformance.rs::spec_conformance_llvm
+parity.spec_conformance.llvm.match_floor.measured_at = dc0b0024b
+parity.spec_conformance.llvm.match_floor.home = tests/spec_conformance.rs:LLVM_MATCH_FLOOR
+parity.spec_conformance.llvm.match_floor.scan = none
+parity.spec_conformance.llvm.match_floor.caveat = same scan = none reason and the same co-movement reading as the C row: the quartet is held together by the compile-time `const _: () = assert!` relations in tests/spec_conformance.rs, NOT by these rows sharing a regen command. ⚠ this lane does NOT read GG_BACKEND — spec_conformance pins the backend per lane on the build command, which is why regen_env declares only GG_PARITY_FLOOR_OFF
+parity.spec_conformance.llvm.match_floor.cost_secs = 3600
+parity.spec_conformance.llvm.match_floor.mirror = tests/spec_conformance.rs:LLVM_MATCH_FLOOR
+parity.spec_conformance.llvm.match_floor.input = none
+
+row = parity.spec_conformance.selfhost.match_floor
+parity.spec_conformance.selfhost.match_floor.value = 236
+parity.spec_conformance.selfhost.match_floor.unit = spectests/run seeds whose self-host emit+cc+run matches the committed expect:
+parity.spec_conformance.selfhost.match_floor.polarity = grow-only
+parity.spec_conformance.selfhost.match_floor.provenance = measured
+parity.spec_conformance.selfhost.match_floor.regen = cargo test --test spec_conformance -- --test-threads=1 --nocapture
+parity.spec_conformance.selfhost.match_floor.regen_extract = ══ spec_conformance_selfhost ══[\s\S]*?total=[0-9]+ · MATCH=(?P<value>[0-9]+)
+parity.spec_conformance.selfhost.match_floor.regen_fires = ══ spec_conformance_[a-z]+ ══
+parity.spec_conformance.selfhost.match_floor.regen_env = GG_PARITY_FLOOR_OFF=unset
+parity.spec_conformance.selfhost.match_floor.regen_forbids = MATCH-count floor (skipped|DISABLED)
+parity.spec_conformance.selfhost.match_floor.instrument = tests/spec_conformance.rs::spec_conformance_selfhost
+parity.spec_conformance.selfhost.match_floor.measured_at = dc0b0024b
+parity.spec_conformance.selfhost.match_floor.home = tests/spec_conformance.rs:SELFHOST_MATCH_FLOOR
+parity.spec_conformance.selfhost.match_floor.scan = none
+parity.spec_conformance.selfhost.match_floor.caveat = scan = none for the same reason as its two siblings. ⚠ THIS FLOOR SITS ONE BELOW THE CORPUS BY DESIGN — d22_slice_clamp.gg needs Range-in-index lowering in the self-host lowerer — so its compile-time relation is `<=`, not `==`: it may never EXCEED the corpus, and a rise here is a lane catching up, not a gate loosening
+parity.spec_conformance.selfhost.match_floor.cost_secs = 3600
+parity.spec_conformance.selfhost.match_floor.mirror = tests/spec_conformance.rs:SELFHOST_MATCH_FLOOR
+parity.spec_conformance.selfhost.match_floor.input = none
+
+# ── exact-pin × measured, NO BAND — the glob guard ─────────────────────────
+# ⛔ THE ROW AN EARLIER DRAFT GOT WRONG, AND THE ERROR IS THE POINT. MIN_FIXTURES
+# used to be a `>=` glob guard and was adopted as `grow-only` on that basis. At
+# dc0b0024b it is an `assert_eq!` EXACT PIN, changed precisely because `>=` is
+# blind in the direction the corpus actually moves: a corpus of 238 against a
+# constant of 237 gives `238 >= 237` → PASS, which is how two spectests landed
+# unratcheted. Declaring this `grow-only` would have written that blindness into
+# the registry. NO BAND: corpus size is a file count, deterministic, so there is
+# no jitter for a band to absorb.
+row = spec_conformance.corpus.fixtures
+spec_conformance.corpus.fixtures.value = 237
+spec_conformance.corpus.fixtures.unit = .gg seeds in spectests/run
+spec_conformance.corpus.fixtures.polarity = exact-pin
+spec_conformance.corpus.fixtures.provenance = measured
+spec_conformance.corpus.fixtures.regen = ls spectests/run/*.gg | wc -l
+spec_conformance.corpus.fixtures.regen_extract = ^\s*(?P<value>[0-9]+)
+spec_conformance.corpus.fixtures.regen_fires = ^\s*[0-9]+\s*$
+spec_conformance.corpus.fixtures.regen_env = none
+spec_conformance.corpus.fixtures.instrument = ls over spectests/run — the command tests/spec_conformance.rs's own assert message prescribes
+spec_conformance.corpus.fixtures.measured_at = dc0b0024b
+spec_conformance.corpus.fixtures.home = tests/spec_conformance.rs:MIN_FIXTURES
+spec_conformance.corpus.fixtures.scan = none
+spec_conformance.corpus.fixtures.caveat = scan = none — 237 collides 14 times, three of them coincidences (a fixture's expected stdout, two todo/ items). ⚠ THIS IS A COUNT OF SEEDS, NOT OF PASSES: it says the corpus did not silently shrink OR grow, and nothing about whether any lane reproduces them
+spec_conformance.corpus.fixtures.cost_secs = 30
+spec_conformance.corpus.fixtures.mirror = tests/spec_conformance.rs:MIN_FIXTURES
+spec_conformance.corpus.fixtures.input = none
+spec_conformance.corpus.fixtures.note = the three compile-time `const _: () = assert!` relations beneath the constant tie C_MATCH_FLOOR and LLVM_MATCH_FLOOR to this value and bound SELFHOST_MATCH_FLOOR by it; they fail at COMPILE time, so unlike a #[test] they cannot be name-filtered, #[ignore]d, or false-RED under load
+
+# ── the self-host runtime-parity trio — ONE run, three rows ────────────────
+# ⭐ ALL THREE SHARE ONE REGEN STRING AND ONE regen_env, so figures.py's
+# (command, env) memo spends ONE self-host corpus run on the three of them
+# instead of three. The awk tail passes the whole diagnostic through unchanged
+# and APPENDS one computed line: the non-MATCH count is the only one of the
+# three the test does not print, and it is derivable exactly — the gate computes
+# `non_excluded - matched`, and the PARITY line prints both as `matched/
+# non_excluded`.
+# ⚠ THE PROFILE IS PART OF THE MEASUREMENT. All three asserts no-op under
+# `cfg!(debug_assertions)`, so a debug run captures numbers no gate evaluated;
+# `--release` is in the command and the debug notices are in regen_forbids.
+row = parity.runtime_diff.match_floor
+parity.runtime_diff.match_floor.value = 1527
+parity.runtime_diff.match_floor.unit = corpus fixtures whose self-host run matches Rust gg byte-for-byte
+parity.runtime_diff.match_floor.polarity = grow-only
+parity.runtime_diff.match_floor.provenance = measured
+parity.runtime_diff.match_floor.regen = rm -f tests/fixtures/self_host_lowerer/driver tests/fixtures/self_host_lowerer/driver.c; GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release self_host_runtime_diff -- --nocapture 2>&1 | awk '{print} /PARITY = MATCH\//{if (match($0, /= [0-9]+\/[0-9]+ =/)) {s=substr($0,RSTART+2,RLENGTH-4); split(s,p,"/"); print "non-MATCH=" p[2]-p[1]}}'
+parity.runtime_diff.match_floor.regen_extract = MATCH \(both compilers agree\)\s*:\s*(?P<value>[0-9]+)
+parity.runtime_diff.match_floor.regen_fires = Self-host Runtime Parity Diagnostic
+parity.runtime_diff.match_floor.regen_env = GG_BACKEND=unset GG_PARITY_FLOOR_OFF=unset GG_RUNTIME_DIFF=unset
+parity.runtime_diff.match_floor.regen_forbids = self_host_runtime_diff: SKIPPED|MATCH-count floor (skipped|DISABLED)
+parity.runtime_diff.match_floor.instrument = tests/integration.rs::self_host_runtime_diff
+parity.runtime_diff.match_floor.measured_at = dc0b0024b
+parity.runtime_diff.match_floor.home = tests/integration.rs:RUNTIME_DIFF_MATCH_FLOOR
+parity.runtime_diff.match_floor.scan = standard
+parity.runtime_diff.match_floor.caveat = the floor discounts 5 of measured jitter — this test's counts are timeout-flip sensitive under load (todo/t0924) — so a MISS is more likely real than noise but a QUIET tree is still the precondition for triaging one; C backend + linux only (parity_floor_active skips when GG_BACKEND is set)
+parity.runtime_diff.match_floor.cost_secs = 3600
+parity.runtime_diff.match_floor.mirror = tests/integration.rs:RUNTIME_DIFF_MATCH_FLOOR
+parity.runtime_diff.match_floor.waiver = tests/integration.rs 2 declared the two R48-close re-seed lines the constant cites as its evidence
+parity.runtime_diff.match_floor.input = none
+
+row = parity.runtime_diff.nonmatch_ceiling
+parity.runtime_diff.nonmatch_ceiling.value = 147
+parity.runtime_diff.nonmatch_ceiling.unit = corpus fixtures the self-host does NOT reproduce (WRONG-OUTPUT + CC-FAIL + CRASH + DRIVER-FAIL)
+parity.runtime_diff.nonmatch_ceiling.polarity = shrink-only
+parity.runtime_diff.nonmatch_ceiling.provenance = measured
+parity.runtime_diff.nonmatch_ceiling.regen = rm -f tests/fixtures/self_host_lowerer/driver tests/fixtures/self_host_lowerer/driver.c; GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release self_host_runtime_diff -- --nocapture 2>&1 | awk '{print} /PARITY = MATCH\//{if (match($0, /= [0-9]+\/[0-9]+ =/)) {s=substr($0,RSTART+2,RLENGTH-4); split(s,p,"/"); print "non-MATCH=" p[2]-p[1]}}'
+parity.runtime_diff.nonmatch_ceiling.regen_extract = \nnon-MATCH=(?P<value>[0-9]+)
+parity.runtime_diff.nonmatch_ceiling.regen_fires = Self-host Runtime Parity Diagnostic
+parity.runtime_diff.nonmatch_ceiling.regen_env = GG_BACKEND=unset GG_PARITY_FLOOR_OFF=unset GG_RUNTIME_DIFF=unset
+parity.runtime_diff.nonmatch_ceiling.regen_forbids = self_host_runtime_diff: SKIPPED|non-MATCH ceiling SKIPPED|MATCH-count floor (skipped|DISABLED)
+parity.runtime_diff.nonmatch_ceiling.instrument = tests/integration.rs::self_host_runtime_diff, plus the one-line awk tail that subtracts MATCH from the PARITY denominator (the gate's own arithmetic; the test prints the two operands but never their difference)
+parity.runtime_diff.nonmatch_ceiling.measured_at = dc0b0024b
+parity.runtime_diff.nonmatch_ceiling.home = tests/integration.rs:RUNTIME_DIFF_NONMATCH_CEILING
+parity.runtime_diff.nonmatch_ceiling.scan = none
+parity.runtime_diff.nonmatch_ceiling.caveat = scan = none — 147 has 13 unmasked spellings, three of them in TODO.md, which is rewritten every round and would make any waiver rot within one. ⛔ AND THE GATE NO-OPS IN THE PROFILE PEOPLE ACTUALLY RUN: a debug `cargo test --test integration self_host` prints a notice instead of evaluating this ceiling, so a green family run says NOTHING about parity inflow (todo/t0924). Only the --release invocation in `regen` arms it
+parity.runtime_diff.nonmatch_ceiling.cost_secs = 3600
+parity.runtime_diff.nonmatch_ceiling.mirror = tests/integration.rs:RUNTIME_DIFF_NONMATCH_CEILING
+parity.runtime_diff.nonmatch_ceiling.input = none
+
+row = parity.runtime_diff.ggdef_adjudicated_floor
+parity.runtime_diff.ggdef_adjudicated_floor.value = 443
+parity.runtime_diff.ggdef_adjudicated_floor.unit = MATCH fixtures ggdef also elaborates, runs and AGREES with
+parity.runtime_diff.ggdef_adjudicated_floor.polarity = grow-only
+parity.runtime_diff.ggdef_adjudicated_floor.provenance = measured
+parity.runtime_diff.ggdef_adjudicated_floor.regen = rm -f tests/fixtures/self_host_lowerer/driver tests/fixtures/self_host_lowerer/driver.c; GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release self_host_runtime_diff -- --nocapture 2>&1 | awk '{print} /PARITY = MATCH\//{if (match($0, /= [0-9]+\/[0-9]+ =/)) {s=substr($0,RSTART+2,RLENGTH-4); split(s,p,"/"); print "non-MATCH=" p[2]-p[1]}}'
+parity.runtime_diff.ggdef_adjudicated_floor.regen_extract = ADJ-MATCH\s+\(ggdef ran \+ AGREES\)\s*:\s*(?P<value>[0-9]+)
+parity.runtime_diff.ggdef_adjudicated_floor.regen_fires = Self-host Runtime Parity Diagnostic
+parity.runtime_diff.ggdef_adjudicated_floor.regen_env = GG_BACKEND=unset GG_PARITY_FLOOR_OFF=unset GG_RUNTIME_DIFF=unset
+parity.runtime_diff.ggdef_adjudicated_floor.regen_forbids = self_host_runtime_diff: SKIPPED|GGDEF_ADJUDICATED_FLOOR skipped|MATCH-count floor (skipped|DISABLED)
+parity.runtime_diff.ggdef_adjudicated_floor.instrument = tests/integration.rs::self_host_runtime_diff (the ggdef adjudication post-pass)
+parity.runtime_diff.ggdef_adjudicated_floor.measured_at = dc0b0024b
+parity.runtime_diff.ggdef_adjudicated_floor.home = tests/integration.rs:GGDEF_ADJUDICATED_FLOOR
+parity.runtime_diff.ggdef_adjudicated_floor.scan = none
+parity.runtime_diff.ggdef_adjudicated_floor.caveat = scan = none — 9 unmasked spellings, four in TODO.md. ⚠ THIS IS THE TRUTH AXIS, AND IT IS A MINORITY OF THE MATCH SET: the rest is UNADJ-MATCH, where only the two compilers vouch for the answer (Core #8). A rise is succession-safety progress; the number is not a pass rate
+parity.runtime_diff.ggdef_adjudicated_floor.cost_secs = 3600
+parity.runtime_diff.ggdef_adjudicated_floor.mirror = tests/integration.rs:GGDEF_ADJUDICATED_FLOOR
+parity.runtime_diff.ggdef_adjudicated_floor.input = none
+
+# ═══════════════════════════════════════════════════════════════════════════
+# THE SANITIZE GATES (R48 Track T-a2)
+# ═══════════════════════════════════════════════════════════════════════════
+# THE CRITERION FOR THIS TABLE: a constant pinned by the sanitize allowlist lint
+# or by the sweep itself — a number stating how much sanitizer debt is tolerated,
+# or how much of the corpus is covered. Twelve rows.
+#
+# ⚠ ENUMERATED WITH BOTH HALVES OF todo/t0926's declaration-shaped scan — a Rust
+# `const` scan AND a shell one — because the Rust half is STRUCTURALLY BLIND to
+# `${VAR:-N}` defaults, and the two shell rows below (COVERAGE_FLOOR,
+# UNKNOWN_CEILING) live only in that half. A closed grep for five known names
+# cannot show you what it omits.
+# ⚠ CORRUPTION_CEILING is here for the same reason: it sits in the SAME lint
+# function, is parsed by the SAME `read()` helper and carries its own
+# `assert_eq!` a few lines from LEAK_CEILING's. Identical shape ⇒ its absence
+# from an earlier enumeration was an accident, not a decision (Core #4).
+# ⚠ The six ZERO-valued ceilings beside them in scripts/sanitize_sweep.sh
+# (UBSAN / TIMEOUT / INFRA / CRASH / FLAKY / CLASS_UNSTABLE) are correctly OUT: a
+# zero-valued ceiling has nothing to mirror and nothing to trend.
+#
+# ⭐ ALL FIVE LEAK CONSTANTS ARE `assert_eq!`, i.e. EXACT PINS, not `<=`
+# ceilings — regenerated at dc0b0024b by reading each of the five consumers. The
+# lint says why in its own words: under `<=` a burn-down that forgets to lower
+# the number is silently accepted and the leftover headroom quietly admits the
+# next leak. COVERAGE_FLOOR is the only genuine floor in the family.
+#
+# ── WHY ROWS 1-6 ARE PAIRS AND 7-8 ARE NOT ─────────────────────────────────
+# The pair shape is owed to the three totals that measure LEAK DEBT MAGNITUDE —
+# rows · records · class_pairs — and to nothing else. It exists because those
+# three MOVE IN OPPOSITE DIRECTIONS inside one round and the lint says so in its
+# own comment: R48 deleted 16 rows and admitted 3, so rows FELL while records
+# ROSE. A reader watching one total scores that round as a pure burn-down; a
+# reader watching another scores it as a regression; both readings are wrong
+# alone. The `.round_open` half is what makes the round's NET movement readable
+# at all. `loose_signatures` and `uncited_class_pairs` are anti-gaming and
+# burn-down counters, not debt magnitude — and `uncited`'s TARGET IS 0, so a
+# trend pair on it would be noise.
+# ⚠ AND THE PAIR IS NOT THE CLONE METERS' PAIR. There, BOTH halves are code
+# constants and clone_band_anchor_is_reseeded_before_work_resumes watches the
+# anchor. Here only `.pin` has a constant; `.round_open` is DB-NATIVE, carries
+# `mirror = none`, and NOTHING re-seeds it at round open. Its regen follows the
+# tree's one declared round-open anchor (tests/integration.rs `ROUND-OPENED-BY:`)
+# rather than hard-coding a sha, so it goes RED once that anchor moves and this
+# value has not — but only for someone who RUNS it. See each row's caveat.
+
+row = sanitize.leak.rows.pin
+sanitize.leak.rows.pin.value = 294
+sanitize.leak.rows.pin.unit = rows in tests/sanitize/LEAK_ALLOWLIST.txt (one per leaking fixture)
+sanitize.leak.rows.pin.polarity = exact-pin
+sanitize.leak.rows.pin.provenance = derived
+sanitize.leak.rows.pin.authority = tests/sanitize/LEAK_ALLOWLIST.txt — the lint counts its non-comment, non-blank lines; LEAK_CEILING is a hand-kept pin of that count
+sanitize.leak.rows.pin.regen = awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; n=s; sub(/^.*\*/,"",n); if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} pairs++; records+=n+0}} END{print "leak-allowlist census: rows=" rows+0 " pairs=" pairs+0 " records=" records+0 " loose=" loose+0 " (scanned " NR " lines)"}' tests/sanitize/LEAK_ALLOWLIST.txt
+sanitize.leak.rows.pin.regen_extract = census: rows=(?P<value>[0-9]+) pairs=
+sanitize.leak.rows.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
+sanitize.leak.rows.pin.regen_env = none
+sanitize.leak.rows.pin.instrument = an awk census over the allowlist, applying the same non-comment/non-blank filter as tests/lints.rs::sanitize_allowlists_shrink_only's `read()` helper
+sanitize.leak.rows.pin.measured_at = dc0b0024b
+sanitize.leak.rows.pin.home = tests/lints.rs:LEAK_CEILING
+sanitize.leak.rows.pin.scan = none
+sanitize.leak.rows.pin.caveat = scan = none — 294 has 33 unmasked spellings across the roots (14 in tests/integration.rs, 3 in scripts/clone_meter.spec, one each in nine todo/ items) because it is also the R47 cross-checkout clone discrepancy; a waiver farm on that scale is how a guard dies. ⚠ AND A ROW COUNT IS NOT LEAK VOLUME: it counts FIXTURES, and one fixture's row can tolerate five mechanisms and dozens of records — read it with `records` and `class_pairs` or not at all
+sanitize.leak.rows.pin.cost_secs = 30
+sanitize.leak.rows.pin.mirror = tests/lints.rs:LEAK_CEILING
+sanitize.leak.rows.pin.input = none
+
+row = sanitize.leak.rows.round_open
+sanitize.leak.rows.round_open.value = 294
+sanitize.leak.rows.round_open.unit = rows in tests/sanitize/LEAK_ALLOWLIST.txt at the declared round-open anchor
+sanitize.leak.rows.round_open.polarity = exact-pin
+sanitize.leak.rows.round_open.provenance = derived
+sanitize.leak.rows.round_open.authority = tests/sanitize/LEAK_ALLOWLIST.txt as of the commit named by the `ROUND-OPENED-BY:` line in tests/integration.rs — the tree's ONE declared round-open anchor, read rather than copied
+sanitize.leak.rows.round_open.regen = git show "$(grep -m1 -oE 'ROUND-OPENED-BY: [0-9a-f]+' tests/integration.rs | cut -d' ' -f2)":tests/sanitize/LEAK_ALLOWLIST.txt | awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; n=s; sub(/^.*\*/,"",n); if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} pairs++; records+=n+0}} END{print "leak-allowlist census: rows=" rows+0 " pairs=" pairs+0 " records=" records+0 " loose=" loose+0 " (scanned " NR " lines)"}'
+sanitize.leak.rows.round_open.regen_extract = census: rows=(?P<value>[0-9]+) pairs=
+sanitize.leak.rows.round_open.regen_fires = \(scanned [1-9][0-9]* lines\)
+sanitize.leak.rows.round_open.regen_env = none
+sanitize.leak.rows.round_open.instrument = the same awk census, fed by `git show` at the anchor the tree declares
+sanitize.leak.rows.round_open.measured_at = dc0b0024b
+sanitize.leak.rows.round_open.home = scripts/figures.db (DB-native — the leak totals have no ROUND_OPEN constant, unlike the four clone anchors)
+sanitize.leak.rows.round_open.scan = none
+sanitize.leak.rows.round_open.caveat = mirror = none, and there is nothing to mirror — so this row has NO automatic gate; only `figures.py check` evaluates it. ⚠ NOTHING RE-SEEDS IT AT ROUND OPEN. The four ..._CLONE_ROUND_OPEN constants have clone_band_anchor_is_reseeded_before_work_resumes; these do not, and the trigger gap is todo/t0860's. What this row DOES buy is that the regen reads the anchor instead of hard-coding it, so the staleness is DETECTABLE by anyone who runs it rather than invisible
+sanitize.leak.rows.round_open.cost_secs = 60
+sanitize.leak.rows.round_open.mirror = none
+sanitize.leak.rows.round_open.input = none
+
+row = sanitize.leak.records.pin
+sanitize.leak.records.pin.value = 2297
+sanitize.leak.records.pin.unit = leak records the allowlist tolerates in total
+sanitize.leak.records.pin.polarity = exact-pin
+sanitize.leak.records.pin.provenance = derived
+sanitize.leak.records.pin.authority = tests/sanitize/LEAK_ALLOWLIST.txt column 2 — the sum of every `<top-frame>*<records>` signature; LEAK_RECORDS is a hand-kept pin of that sum
+sanitize.leak.records.pin.regen = awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; n=s; sub(/^.*\*/,"",n); if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} pairs++; records+=n+0}} END{print "leak-allowlist census: rows=" rows+0 " pairs=" pairs+0 " records=" records+0 " loose=" loose+0 " (scanned " NR " lines)"}' tests/sanitize/LEAK_ALLOWLIST.txt
+sanitize.leak.records.pin.regen_extract = census: rows=[0-9]+ pairs=[0-9]+ records=(?P<value>[0-9]+) loose=
+sanitize.leak.records.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
+sanitize.leak.records.pin.regen_env = none
+sanitize.leak.records.pin.instrument = the awk census over tests/sanitize/LEAK_ALLOWLIST.txt (shares one run with the other three HEAD-side leak rows)
+sanitize.leak.records.pin.measured_at = dc0b0024b
+sanitize.leak.records.pin.home = tests/lints.rs:LEAK_RECORDS
+sanitize.leak.records.pin.scan = standard
+sanitize.leak.records.pin.caveat = the `*N+` signatures are counted at their FLOOR — a `+` means at-least-N and switches that row's count check off, so this total is a lower bound on what the concurrency rows may actually leak; see sanitize.leak.loose_signatures.pin for how many rows are in that state
+sanitize.leak.records.pin.cost_secs = 30
+sanitize.leak.records.pin.mirror = tests/lints.rs:LEAK_RECORDS
+sanitize.leak.records.pin.input = none
+
+row = sanitize.leak.records.round_open
+sanitize.leak.records.round_open.value = 2297
+sanitize.leak.records.round_open.unit = leak records tolerated at the declared round-open anchor
+sanitize.leak.records.round_open.polarity = exact-pin
+sanitize.leak.records.round_open.provenance = derived
+sanitize.leak.records.round_open.authority = tests/sanitize/LEAK_ALLOWLIST.txt column 2 as of the commit named by `ROUND-OPENED-BY:` in tests/integration.rs
+sanitize.leak.records.round_open.regen = git show "$(grep -m1 -oE 'ROUND-OPENED-BY: [0-9a-f]+' tests/integration.rs | cut -d' ' -f2)":tests/sanitize/LEAK_ALLOWLIST.txt | awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; n=s; sub(/^.*\*/,"",n); if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} pairs++; records+=n+0}} END{print "leak-allowlist census: rows=" rows+0 " pairs=" pairs+0 " records=" records+0 " loose=" loose+0 " (scanned " NR " lines)"}'
+sanitize.leak.records.round_open.regen_extract = census: rows=[0-9]+ pairs=[0-9]+ records=(?P<value>[0-9]+) loose=
+sanitize.leak.records.round_open.regen_fires = \(scanned [1-9][0-9]* lines\)
+sanitize.leak.records.round_open.regen_env = none
+sanitize.leak.records.round_open.instrument = the same awk census, fed by `git show` at the declared anchor
+sanitize.leak.records.round_open.measured_at = dc0b0024b
+sanitize.leak.records.round_open.home = scripts/figures.db (DB-native)
+sanitize.leak.records.round_open.scan = none
+sanitize.leak.records.round_open.caveat = mirror = none, no automatic gate, and nothing re-seeds it at round open — the same reading as sanitize.leak.rows.round_open. ⚠ scan = none additionally because a round-open value, once it diverges from its pin, is a HISTORICAL number that the constant's own re-seed log spells (`306 -> 293`), so scanning it would demand a waiver per historical step
+sanitize.leak.records.round_open.cost_secs = 60
+sanitize.leak.records.round_open.mirror = none
+sanitize.leak.records.round_open.input = none
+
+row = sanitize.leak.class_pairs.pin
+sanitize.leak.class_pairs.pin.value = 501
+sanitize.leak.class_pairs.pin.unit = (fixture, leak-class) pairs the allowlist names
+sanitize.leak.class_pairs.pin.polarity = exact-pin
+sanitize.leak.class_pairs.pin.provenance = derived
+sanitize.leak.class_pairs.pin.authority = tests/sanitize/LEAK_ALLOWLIST.txt column 2 — one pair per comma-separated signature; LEAK_CLASS_PAIRS is a hand-kept pin of that count
+sanitize.leak.class_pairs.pin.regen = awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; n=s; sub(/^.*\*/,"",n); if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} pairs++; records+=n+0}} END{print "leak-allowlist census: rows=" rows+0 " pairs=" pairs+0 " records=" records+0 " loose=" loose+0 " (scanned " NR " lines)"}' tests/sanitize/LEAK_ALLOWLIST.txt
+sanitize.leak.class_pairs.pin.regen_extract = census: rows=[0-9]+ pairs=(?P<value>[0-9]+) records=
+sanitize.leak.class_pairs.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
+sanitize.leak.class_pairs.pin.regen_env = none
+sanitize.leak.class_pairs.pin.instrument = the awk census over tests/sanitize/LEAK_ALLOWLIST.txt (shares one run with the other three HEAD-side leak rows)
+sanitize.leak.class_pairs.pin.measured_at = dc0b0024b
+sanitize.leak.class_pairs.pin.home = tests/lints.rs:LEAK_CLASS_PAIRS
+sanitize.leak.class_pairs.pin.scan = standard
+sanitize.leak.class_pairs.pin.caveat = the PAIR is the citation unit precisely because the ROW is not: most rows carrying multiple mechanisms would leave the majority of pairs unobliged under a per-row rule. This count says how many obligations exist, never whether any is discharged — that is sanitize.leak.uncited_class_pairs.pin
+sanitize.leak.class_pairs.pin.cost_secs = 30
+sanitize.leak.class_pairs.pin.mirror = tests/lints.rs:LEAK_CLASS_PAIRS
+sanitize.leak.class_pairs.pin.input = none
+
+row = sanitize.leak.class_pairs.round_open
+sanitize.leak.class_pairs.round_open.value = 501
+sanitize.leak.class_pairs.round_open.unit = (fixture, leak-class) pairs at the declared round-open anchor
+sanitize.leak.class_pairs.round_open.polarity = exact-pin
+sanitize.leak.class_pairs.round_open.provenance = derived
+sanitize.leak.class_pairs.round_open.authority = tests/sanitize/LEAK_ALLOWLIST.txt column 2 as of the commit named by `ROUND-OPENED-BY:` in tests/integration.rs
+sanitize.leak.class_pairs.round_open.regen = git show "$(grep -m1 -oE 'ROUND-OPENED-BY: [0-9a-f]+' tests/integration.rs | cut -d' ' -f2)":tests/sanitize/LEAK_ALLOWLIST.txt | awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; n=s; sub(/^.*\*/,"",n); if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} pairs++; records+=n+0}} END{print "leak-allowlist census: rows=" rows+0 " pairs=" pairs+0 " records=" records+0 " loose=" loose+0 " (scanned " NR " lines)"}'
+sanitize.leak.class_pairs.round_open.regen_extract = census: rows=[0-9]+ pairs=(?P<value>[0-9]+) records=
+sanitize.leak.class_pairs.round_open.regen_fires = \(scanned [1-9][0-9]* lines\)
+sanitize.leak.class_pairs.round_open.regen_env = none
+sanitize.leak.class_pairs.round_open.instrument = the same awk census, fed by `git show` at the declared anchor
+sanitize.leak.class_pairs.round_open.measured_at = dc0b0024b
+sanitize.leak.class_pairs.round_open.home = scripts/figures.db (DB-native)
+sanitize.leak.class_pairs.round_open.scan = none
+sanitize.leak.class_pairs.round_open.caveat = mirror = none, no automatic gate, nothing re-seeds it at round open — the same reading as its two sibling anchors, and scan = none for the same historical-number reason
+sanitize.leak.class_pairs.round_open.cost_secs = 60
+sanitize.leak.class_pairs.round_open.mirror = none
+sanitize.leak.class_pairs.round_open.input = none
+
+row = sanitize.leak.loose_signatures.pin
+sanitize.leak.loose_signatures.pin.value = 8
+sanitize.leak.loose_signatures.pin.unit = `*N+` signatures — allowlist rows whose record COUNT check is switched off
+sanitize.leak.loose_signatures.pin.polarity = exact-pin
+sanitize.leak.loose_signatures.pin.provenance = derived
+sanitize.leak.loose_signatures.pin.authority = tests/sanitize/LEAK_ALLOWLIST.txt column 2 — the signatures carrying a trailing `+`; LEAK_LOOSE_SIGNATURES is a hand-kept pin of that count
+sanitize.leak.loose_signatures.pin.regen = awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; n=s; sub(/^.*\*/,"",n); if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} pairs++; records+=n+0}} END{print "leak-allowlist census: rows=" rows+0 " pairs=" pairs+0 " records=" records+0 " loose=" loose+0 " (scanned " NR " lines)"}' tests/sanitize/LEAK_ALLOWLIST.txt
+sanitize.leak.loose_signatures.pin.regen_extract = census: .* loose=(?P<value>[0-9]+) \(scanned
+sanitize.leak.loose_signatures.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
+sanitize.leak.loose_signatures.pin.regen_env = none
+sanitize.leak.loose_signatures.pin.instrument = the awk census over tests/sanitize/LEAK_ALLOWLIST.txt (shares one run with the other three HEAD-side leak rows)
+sanitize.leak.loose_signatures.pin.measured_at = dc0b0024b
+sanitize.leak.loose_signatures.pin.home = tests/lints.rs:LEAK_LOOSE_SIGNATURES
+sanitize.leak.loose_signatures.pin.scan = none
+sanitize.leak.loose_signatures.pin.caveat = a single-digit value the uniqueness scanner structurally cannot police — 8 has over fifteen hundred unmasked spellings in the roots — so figures_db_mirrors_agree plus this regen are the whole enforcement. ⚠ NOT a debt-magnitude number: it is an ADMISSION count, and each `+` is a row whose record count no longer gates. Earned only by a row the sweep's own count-drift census has named
+sanitize.leak.loose_signatures.pin.cost_secs = 30
+sanitize.leak.loose_signatures.pin.mirror = tests/lints.rs:LEAK_LOOSE_SIGNATURES
+sanitize.leak.loose_signatures.pin.input = none
+
+row = sanitize.leak.uncited_class_pairs.pin
+sanitize.leak.uncited_class_pairs.pin.value = 494
+sanitize.leak.uncited_class_pairs.pin.unit = (fixture, leak-class) pairs with no citation naming a todo/ item that exists AND names the pair's top frame
+sanitize.leak.uncited_class_pairs.pin.polarity = exact-pin
+sanitize.leak.uncited_class_pairs.pin.provenance = derived
+sanitize.leak.uncited_class_pairs.pin.authority = tests/sanitize/LEAK_ALLOWLIST.txt columns 2 and 3, joined against todo/<id>.md — a pair counts as CITED only when its column-3 entry names an item that EXISTS and whose body CONTAINS the pair's top-frame symbol
+sanitize.leak.uncited_class_pairs.pin.regen = awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s!="") pr++}} END{print "leak-allowlist pairs scanned=" pr+0}' tests/sanitize/LEAK_ALLOWLIST.txt; awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; nc=split($3,C,","); ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; sym=s; sub(/\*[^*]*$/,"",sym); ids=""; for(j=1;j<=nc;j++){e=C[j]; gsub(/^[ \t]+|[ \t]+$/,"",e); p=index(e,"="); if(p==0) continue; k=substr(e,1,p-1); v=substr(e,p+1); gsub(/^[ \t]+|[ \t]+$/,"",k); gsub(/^[ \t]+|[ \t]+$/,"",v); if(k==sym) ids=(ids=="")?v:ids "," v} print sym "|" ids}}' tests/sanitize/LEAK_ALLOWLIST.txt | while IFS='|' read -r sym ids; do c=0; for id in $(printf '%s' "$ids" | tr ',' ' '); do grep -qF -- "$sym" "todo/$id.md" 2>/dev/null && c=1; done; [ "$c" = 0 ] && echo u; done | wc -l | awk '{print "leak-allowlist uncited pairs=" $1}'
+sanitize.leak.uncited_class_pairs.pin.regen_extract = leak-allowlist uncited pairs=(?P<value>[0-9]+)
+sanitize.leak.uncited_class_pairs.pin.regen_fires = leak-allowlist pairs scanned=[1-9][0-9]*
+sanitize.leak.uncited_class_pairs.pin.regen_env = none
+sanitize.leak.uncited_class_pairs.pin.instrument = an awk + grep join over the allowlist and todo/, reproducing tests/lints.rs::sanitize_allowlists_shrink_only's own two-part citation test (the item must EXIST and must NAME the symbol)
+sanitize.leak.uncited_class_pairs.pin.measured_at = dc0b0024b
+sanitize.leak.uncited_class_pairs.pin.home = tests/lints.rs:UNCITED_LEAK_CLASS_PAIRS
+sanitize.leak.uncited_class_pairs.pin.scan = standard
+sanitize.leak.uncited_class_pairs.pin.caveat = TARGET IS 0, so this number is EVIDENCE OF A GAP, not of health. ⚠ AND THE TOKEN CHECK IS A FLOOR, NOT A LOCK: two frames account for the majority of rows, so one item naming both would satisfy a pair on every one of them. What stops that is the pair granularity plus a reviewer reading the row's ⚖ ADMITTED block — the number says how much is uncited, the block says whether the citation is true
+sanitize.leak.uncited_class_pairs.pin.cost_secs = 120
+sanitize.leak.uncited_class_pairs.pin.mirror = tests/lints.rs:UNCITED_LEAK_CLASS_PAIRS
+sanitize.leak.uncited_class_pairs.pin.waiver = tests/lints.rs 1 declared the constant's own SEEDED-AT note, which spells the value directly above the declaration as the evidence for not seeding at the pre-edit number
+sanitize.leak.uncited_class_pairs.pin.input = none
+
+# ── grow-only × policy — THE SECOND CELL `policy` OCCUPIES ─────────────────
+# ⛔ AND IT IS `policy`, NOT `measured`, THOUGH THE REGEN RUNS A SWEEP. This is
+# exactly the inference this file exists to refuse: `regen` here measures the
+# thing the choice CONSTRAINS (how much of the corpus ran), not the choice
+# itself. Read the constant's own block — the section is TITLED "WHY IT IS NOT
+# RE-PINNED TIGHT TO THE MEASURED `covered`", and it explains that the slack is
+# DELIBERATE, to absorb a load-induced BUILD_FAIL on a busy box. THE VALUE WAS
+# CHOSEN. It is the `agents_md.size_ceiling` shape, not the
+# `parity.c_emit.match_floor` shape.
+# ⇒ THE GENERAL RULE: provenance is decided by WHERE THE VALUE CAME FROM, never
+# by what the regen happens to run. A `measured` cell here would also FORBID
+# `authority` and so delete the pointer to where the choice is recorded.
+row = sanitize.coverage_floor
+sanitize.coverage_floor.value = 1743
+sanitize.coverage_floor.unit = corpus fixtures that produced a RUN verdict under the sanitizer
+sanitize.coverage_floor.polarity = grow-only
+sanitize.coverage_floor.provenance = policy
+sanitize.coverage_floor.authority = scripts/sanitize_sweep.sh:COVERAGE_FLOOR — the choice, and the reason for the slack, are recorded in the comment block titled "WHY IT IS NOT RE-PINNED TIGHT TO THE MEASURED `covered`" directly above it
+sanitize.coverage_floor.regen = cargo build && bash scripts/sanitize_sweep.sh
+sanitize.coverage_floor.regen_extract = covered:\s+(?P<value>[0-9]+) \(floor [0-9]+\)
+sanitize.coverage_floor.regen_fires = === sanitize sweep ===
+sanitize.coverage_floor.regen_env = FIXLIST=unset REPS=unset COVERAGE_FLOOR=unset UNKNOWN_CEILING=unset
+sanitize.coverage_floor.regen_forbids = no gg at .* run cargo build first|refusing to measure a poisoned box
+sanitize.coverage_floor.instrument = scripts/sanitize_sweep.sh
+sanitize.coverage_floor.measured_at = dc0b0024b
+sanitize.coverage_floor.home = scripts/sanitize_sweep.sh:COVERAGE_FLOOR
+sanitize.coverage_floor.scan = standard
+sanitize.coverage_floor.caveat = ⛔ THIS ROW IS BLIND TO ITS OWN CONSTANT. `mirror = none` is FORCED, not chosen: the constant is a shell `${VAR:-N}` default, and figures_db_mirrors_agree's `literal_of` returns None for that shape and PANICS the lint rather than reading it. So if someone weakens COVERAGE_FLOOR in the script, NOTHING here goes red — the waiver below is the only thing that even notices the spelling exists. The regen measures `covered`, which is what the floor constrains, never the floor itself
+sanitize.coverage_floor.cost_secs = 3600
+sanitize.coverage_floor.mirror = none
+sanitize.coverage_floor.waiver = scripts/sanitize_sweep.sh 1 declared the `${VAR:-N}` default that IS the constant; mirror = none is forced for that shape, so this waiver is the row's only declaration of the spelling
+sanitize.coverage_floor.input = none
+sanitize.coverage_floor.note = FIXLIST is in regen_env for the same reason GG_BACKEND is on the parity rows — a restricted FIXLIST captures a tiny `covered` under the very same regex, with the mechanism nominally green
+
+# ── shrink-only × measured — the instrument's own blind spot, ratcheted ────
+# ⚠ ADOPTED AFTER READING THE CONSTANT AT dc0b0024b, NOT ITS REPUTATION. Its
+# comment block opened "IT IS A CENSUS, NOT A CEILING" until R48 close, thirteen
+# lines above the sentence saying it had become a ratchet; that opening was
+# corrected, and the block now says plainly that it is enforced fatally at the
+# measured value. It qualifies for this table on every clause of the criterion.
+# ⚠ `measured`, NOT `policy`, and the difference from its neighbour is the whole
+# point: COVERAGE_FLOOR carries deliberate SLACK below the measurement, this one
+# is pinned EXACTLY AT it (R47 close, three full-corpus sweeps agreeing, one
+# fixture: `test_timeout`). Nothing was chosen except the polarity.
+row = sanitize.unknown_ceiling
+sanitize.unknown_ceiling.value = 1
+sanitize.unknown_ceiling.unit = corpus fixtures whose outcome the sweep's classifier cannot determine
+sanitize.unknown_ceiling.polarity = shrink-only
+sanitize.unknown_ceiling.provenance = measured
+sanitize.unknown_ceiling.regen = cargo build && bash scripts/sanitize_sweep.sh
+sanitize.unknown_ceiling.regen_extract = unknown:\s+(?P<value>[0-9]+) \(classifier could not tell
+sanitize.unknown_ceiling.regen_fires = === sanitize sweep ===
+sanitize.unknown_ceiling.regen_env = FIXLIST=unset REPS=unset COVERAGE_FLOOR=unset UNKNOWN_CEILING=unset
+sanitize.unknown_ceiling.regen_forbids = no gg at .* run cargo build first|refusing to measure a poisoned box
+sanitize.unknown_ceiling.instrument = scripts/sanitize_sweep.sh
+sanitize.unknown_ceiling.measured_at = dc0b0024b
+sanitize.unknown_ceiling.home = scripts/sanitize_sweep.sh:UNKNOWN_CEILING
+sanitize.unknown_ceiling.scan = none
+sanitize.unknown_ceiling.caveat = ⛔ THIS ROW IS BLIND TO ITS OWN CONSTANT, exactly as sanitize.coverage_floor is: `mirror = none` is FORCED by the `${VAR:-N}` shape, so weakening the constant in the script reds NOTHING here. And scan = none is forced too — the value is a single digit — so unlike its neighbour it does not even get a waiver noticing the spelling. ⚠ WHAT IT COUNTS IS NOT A COMPILER DEFECT: every other ceiling in that script counts one, this counts a LIMITATION OF THE INSTRUMENT, and raising it is an admission that the blind spot grew
+sanitize.unknown_ceiling.cost_secs = 3600
+sanitize.unknown_ceiling.mirror = none
+sanitize.unknown_ceiling.input = none
+sanitize.unknown_ceiling.note = shares its regen command and env with sanitize.coverage_floor, so figures.py's (command, env) memo spends ONE sweep on both
+
+# ── exact-pin × derived — the soundness list next door ─────────────────────
+row = sanitize.corruption.pin
+sanitize.corruption.pin.value = 1
+sanitize.corruption.pin.unit = rows in tests/sanitize/CORRUPTION_ALLOWLIST.txt
+sanitize.corruption.pin.polarity = exact-pin
+sanitize.corruption.pin.provenance = derived
+sanitize.corruption.pin.authority = tests/sanitize/CORRUPTION_ALLOWLIST.txt — the lint counts its non-comment, non-blank lines; CORRUPTION_CEILING is a hand-kept pin of that count
+sanitize.corruption.pin.regen = awk '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++} END{print "corruption-allowlist census: rows=" rows+0 " (scanned " NR " lines)"}' tests/sanitize/CORRUPTION_ALLOWLIST.txt
+sanitize.corruption.pin.regen_extract = corruption-allowlist census: rows=(?P<value>[0-9]+)
+sanitize.corruption.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
+sanitize.corruption.pin.regen_env = none
+sanitize.corruption.pin.instrument = an awk row census over the allowlist, applying the same filter as tests/lints.rs::sanitize_allowlists_shrink_only's `read()` helper
+sanitize.corruption.pin.measured_at = dc0b0024b
+sanitize.corruption.pin.home = tests/lints.rs:CORRUPTION_CEILING
+sanitize.corruption.pin.scan = none
+sanitize.corruption.pin.caveat = a single-digit value the uniqueness scanner structurally cannot police, so figures_db_mirrors_agree plus this regen are the whole enforcement. ⚠ THE ONE ROW IS NOT A DEFECT: it is stack_guard_deep_recursion, whose entire purpose is to prove the stack guard fires, so the honest target here is 1 and not 0 — a SECOND row would ship a known use-after-free class
+sanitize.corruption.pin.cost_secs = 30
+sanitize.corruption.pin.mirror = tests/lints.rs:CORRUPTION_CEILING
+sanitize.corruption.pin.input = none
+
+# ── informational × derived — B2, the trend a human actually reads ────────
+# ⛔ ONE DELTA IS NOT THE READING, AND THE LINT SAYS SO IN ITS OWN WORDS: fewer
+# rows tolerating more records is exactly why three totals exist. So this row's
+# extracted integer is the RECORD total — the debt magnitude — and its regen
+# prints the whole census, which `check` echoes underneath the delta line for an
+# informational row. Read the printed census, not the single number.
+# ⚠ AND DO NOT CLAIM THE TREND IS REPORTED EVERY ROUND CLOSE. `figures.py report`
+# is wired into NO round-close step (regenerate: grep -rn 'figures.py' scripts/
+# AGENTS.md TODO.md). The LIVE anti-forgetting mechanism for this family is
+# figures_db_mirrors_agree, which runs in the battery — and it does not cover
+# this row, whose `mirror` is `none`. todo/t0860 owns the missing trigger.
+row = sanitize.leak.debt.trend
+sanitize.leak.debt.trend.value = 2297
+sanitize.leak.debt.trend.unit = leak records tolerated at the declared round-open anchor, against which `check` prints the current total and the delta
+sanitize.leak.debt.trend.polarity = informational
+sanitize.leak.debt.trend.provenance = derived
+sanitize.leak.debt.trend.authority = sanitize.leak.records.round_open — this row carries that anchor's value as its `prev`, and its regen reads tests/sanitize/LEAK_ALLOWLIST.txt at HEAD for `now`
+sanitize.leak.debt.trend.regen = awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; n=s; sub(/^.*\*/,"",n); if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} pairs++; records+=n+0}} END{print "leak-allowlist census: rows=" rows+0 " pairs=" pairs+0 " records=" records+0 " loose=" loose+0 " (scanned " NR " lines)"}' tests/sanitize/LEAK_ALLOWLIST.txt
+sanitize.leak.debt.trend.regen_extract = census: rows=[0-9]+ pairs=[0-9]+ records=(?P<value>[0-9]+) loose=
+sanitize.leak.debt.trend.regen_fires = \(scanned [1-9][0-9]* lines\)
+sanitize.leak.debt.trend.regen_env = none
+sanitize.leak.debt.trend.instrument = the awk census over tests/sanitize/LEAK_ALLOWLIST.txt (the same run the four HEAD-side leak rows share)
+sanitize.leak.debt.trend.measured_at = dc0b0024b
+sanitize.leak.debt.trend.home = scripts/figures.db (DB-native)
+sanitize.leak.debt.trend.scan = none
+sanitize.leak.debt.trend.caveat = NEVER RED by definition, and `mirror = none`, so this row has NO automatic gate whatsoever — nothing in the battery evaluates it, and `figures.py report` is in no round-close procedure (todo/t0860). ⚠ A SINGLE DELTA IS A MISREADING: rows and records legitimately move in OPPOSITE directions inside one round, so read the census the instrument prints beneath the delta, not the delta
+sanitize.leak.debt.trend.cost_secs = 30
+sanitize.leak.debt.trend.mirror = none
+sanitize.leak.debt.trend.input = none
+sanitize.leak.debt.trend.note = re-seed this value at round open, together with the three `.round_open` anchors; the four move as one and nothing enforces that
