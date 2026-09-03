@@ -505,6 +505,41 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **✅ C · OUTPUT-REVIEW: INTEGRATE — all three mandatory gates PASS; 2 record errata sent to the executor.**
+  Gates bare at `3fb8d6276`: build clean · `--lib` **1185/0** · `--test lints` **218/0/1** · `-p ggdef`
+  **187 + all 7 targets** · `spec_conformance` 3/0 · `security` 213/0 ·
+  **`self_host_bootstrap_fixed_point` converged at stage-2** · `robustness_map --lanes c` **842/1009,
+  exit 0** · LLVM at parity on all 7 new cells. **Every positive RED-verified by the reviewer against a
+  compiler it built at `4b0b2ed23`.**
+  ⭐⭐ **BOUNDEDNESS ADJUDICATED BY TOTAL ENUMERATION, NOT SAMPLING.** All **148** fixtures containing any of
+  the four names, build+run+stdout-md5 on both compilers: **11 rows move, 10 are the track's OWN new
+  fixtures**, and the single pre-existing row is **`t0947`'s own `#[ignore]`d repro, RED before and after.**
+  The **4368-fixture** check sweep gives exactly 5 differing rows, **all the track's own**, with **ZERO**
+  pre-existing fixture changing rc *or* diagnostic text. ⊕ It chased `lib/xtd/p2p.gg:351` **specifically**
+  because `t0947` says the shape is live in shipped stdlib — **it is a FREE call, so no peel**, and `:361`
+  already uses the explicit binding. **57 stdlib-importing fixtures: NO DELTA.**
+  ⚡ **THE HONEST DISPOSITION, and it belongs in the record:** the class is bounded **in KIND, not
+  enumerable in count** — **and every such program was ALREADY miscompiled**, so **no previously-correct
+  program regresses**; the failure moves from silent wrong output to a loud build failure, **DOWN the
+  owner's severity ranking.**
+  ⭐ **CORE #8 IS WHAT THIS TRACK RETIRES:** pre-fix, **C AND LLVM both printed `false|false|false`** — the
+  literal *"both backends agree on the wrong answer"* red flag — and **two independent oracles adjudicate
+  the new answer** (ggdef in-subset, plus the SH lane MATCHing post-fix Rust on all 5 new corpus fixtures).
+  ⊕ **ASan is STRUCTURALLY BLIND to the return-type axis** — rc 0 clean on **both** the broken and the fixed
+  program — so the stdout compare is the only instrument (Core #13).
+  ⊕ **ZERO runtime-diff inflow from the Core #9 divergence**: `integration.rs:40060-40064` short-circuits a
+  Rust-rejecting fixture as `RustRejected` **before** the self-host runs. **No ceiling or floor is touched
+  anywhere in the diff.**
+  ⛔ **ERRATUM A — `integration.rs:1357-1365` STILL SHIPS THE REFUTED PREDICTION** (*"under the wrong edit
+  these two print HEAD's output byte for byte"*, and *"AND NOTHING ELSE CAN BE"*), **contradicting
+  `methods.rs:1655-1668` IN THE SAME COMMIT SERIES**, which is correct. ⛔ **ERRATUM B — `DONE.md` claims
+  "3 differing rows, all three PROVEN NONDETERMINISTIC" and names only TWO** (Core #15(b): a set claim owes
+  a disposition per row).
+  ⊕ **My `doc_b09_optional_chaining` claim is CONFIRMED WRONG** — `t0015:11` names it verbatim.
+  ⚠ **INTEGRATION: C branched at `4b0b2ed23`, BEFORE E and H landed ⇒ a MERGE, not a fast-forward**, and the
+  `figures.db` `roundish_headlines` line conflicts with every other track's `DONE.md` entry. **At round
+  close take `scripts/clone_meter_check.sh --round-close-census`'s number rather than hand-merging.**
+
 - **⛔ A1-I · PASS 2 — 3 BLOCKING, 6 SCOPE. THE CENSUS CLOSES; THE PRESCRIBED RATCHET IS DEMONSTRATED
   USELESS.** Folded as ADDENDUM 2; streak stays 0, **pass 3 launched to decide whether an executor runs.**
   ✅ **THE CENSUS CLOSES — AND IT IS SIX CONVENTIONS, NOT THREE.** The fix was to stop post-filtering a
