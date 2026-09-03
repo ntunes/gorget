@@ -76,7 +76,8 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   - **A4 · FIELD-CALL RESOLUTION.** `s.f(1)` resolves to method symbol `S__f`. Owns `t0939`. Small, disjoint.
   ⚠ **MY LEAK FIGURE WAS MISLABELLED AND IS CORRECTED HERE.** I wrote *"56 of the 754 rows"*; **754 is
   `wc -l` including comments.** Regenerated at `a1eaba9c1`: **294 DATA rows**, of which `__gorget_closure_env_alloc`
-  is the sole frame on **56** and appears in **81** (not 80), covering **320 of 2297 records**.
+  is the sole frame on **56** and appears in **81** (not 80), covering **320 records** of the total pinned
+  by `sanitize.leak.records.pin` (`scripts/figures.db` — cite the row, never re-spell its value).
   ⛔ **AND THE CLASS IS NOT A1's.** Root A's signature is that the env is **never allocated**; an allowlist
   row exists because the fixture ran and leaked with that frame on the stack — i.e. it **was** allocated.
   **A1 and the 56-row leak class are DISJOINT BY CONSTRUCTION.** The leak class is **A3's** in full.
