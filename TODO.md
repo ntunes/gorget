@@ -72,6 +72,32 @@ owes a note + a filed subset gap.
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
 
+### ⛔ R49's ROSTER MISSED THE CRITICAL SET — TRACK K OPENED 2026-09-03 (owner-directed)
+**Owner asked: *"Is there any other critical item in `todo/` not being fixed in this round?"* The answer was
+YES, and the count is stark: `grep -l 'severity = "CRITICAL"' todo/*.md` returns **TWELVE**, and R49's roster
+was aimed at exactly ONE (`t0937`, via A1-M).**
+⛔ **AND `todo/t0871` CARRIED A STANDING OWNER DIRECTION THE ORCHESTRATOR NEVER READ:** *"The `s[a:b]`
+soundness fix opens in **R49**, not R48 (owner: the round is already full)."* It was not a candidate to
+weigh — **it was already assigned to this round.**
+⇒ **THE ROSTER-LEVEL FAILURE IS THE SAME ONE THE REVIEWERS CAUGHT SEVEN TIMES INSIDE THE TRACKS: an
+ENUMERATION replaced by a SELECTION.** The roster was built from the ease assessment + R48's own debt +
+what the handover foregrounded, and **`grep severity = "CRITICAL"` was never run.** ⭐ **A ROUND'S ROSTER
+OWES THE SAME WITNESS DISCIPLINE AS A TRACK'S FIXTURE AXIS — enumerate the severity field, do not select
+from the narrative.**
+✅ **TRACK K OPENED**, headlined on `t0871` (⭐ *a GUARD was enforcing migration onto the broken spelling* —
+the damage grows while it sits), with `t0697` as a single secondary probe to decide same-root-or-separate.
+**ID block `t1048`–`t1057`. First unissued is now `t1058`.**
+**THE EIGHT CRITICALS NO R49 TRACK TOUCHES**, for whoever plans R50 — `t0011` (`Box[T](struct …)`) ·
+`t0036` (memory safety from a plain READ of safe syntax) · `t0045` (from SAFE SPEC-DOCUMENTED syntax) ·
+`t0680` (live miscompile at clean HEAD: silent wrong value on C, hard `llc` error on LLVM) · `t0697`
+(reachable by changing ONE TOKEN in a committed PASSING fixture) · `t0703` (which NAME a view is spelled
+through decides memory safety, and the CoW rescue itself reads the freed buffer) · `t0709`
+(`Vector[Box[Trait]]` returned from a helper → rc 139 both backends) · `t0871` (now Track K).
+⊕ **`t0704`/`t0771` are CITED by A1-M and explicitly HANDED OFF, not fixed** — do not read A1-M's citation
+as coverage. ⊕ **`t0988` was FILED this round and F confirmed it does NOT fix it.**
+⚠ **ASan IS STRUCTURALLY BLIND to `t0871`'s class** — the custom `__gorget_current_alloc` pool emits no
+report. **stdout is the only instrument.** Do not read a green sanitize sweep as coverage of it.
+
 ### 🔢 R49 ID BLOCKS — orchestrator-allocated per AGENTS.md multi-agent rule **MA-3b** (owner 2026-09-03)
 **A TRACK NEVER PICKS ITS OWN `todo/` ID.** Each executor gets a private disjoint block in its brief and
 asks the orchestrator to extend it if exhausted. This retires the collision that forced the Track P/R
