@@ -209,11 +209,28 @@ BUILD_REJECT_MARKERS = (
 )
 # "the compiler said yes and then failed to deliver a binary" — a
 # miscompile-class signal that must NEVER share a bucket with a rejection.
+# EVERY spelling of "the compiler accepted the program and then failed to
+# deliver a binary". THE TABLE IS THE CONTRACT: this classifier reads gg's
+# stderr across a process boundary, so it cannot consult typed metadata — an
+# unlisted spelling does not degrade gracefully, it lands in the
+# `build_rc1_unmarked` ambiguity cell and reports UNKNOWN for a cause that is
+# perfectly discriminable. Measured: the four C-backend rows were listed and
+# the ENTIRE LLVM pipeline was not, so `gg build --backend=llvm` on a program
+# whose generated C is rejected read as UNKNOWN while the identical C-lane
+# failure read as BUILD-FAIL — five robustness-map cells diverged across lanes
+# on nothing but this table, and the c,llvm gate has been RED since 2026-08-31
+# (t0863 read that divergence as classification granularity; it was a missing
+# row). `build_message_markers_are_complete` in tests/lints.rs holds the line.
 BUILD_DELIVER_FAIL_MARKERS = (
     "C compiler exited with:",       # C backend, incl. the freestanding arm
     "Failed to run C compiler '",    # cc could not be spawned at all
     "Linking failed:",               # LLVM backend
     "for linking:",                  # the linker could not be spawned
+    "Runtime compilation failed:",   # LLVM backend, the runtime .c leg
+    "llc compilation failed:",       # LLVM backend, .ll -> .o
+    "Guest compilation failed:",     # freestanding/split arm, guest half
+    "Host compilation failed:",      # freestanding/split arm, host half
+    "Failed to run '",               # cc/llc unspawnable (runtime, llc, guest, host)
 )
 # t0646: usage errors collapse into 1 instead of the ratified 2. Two of the 79
 # `process::exit(1)` sites in src/main.rs print something recognisable; the rest
@@ -573,6 +590,18 @@ def prove_exclusive(verbose=False) -> int:
     on an under-determined tuple, which is the defect this file exists to make
     impossible.
     """
+    # THE VOCABULARY IS DERIVED FROM THE TABLES, NOT HAND-LISTED BESIDE THEM.
+    # It used to be a literal list of 14 strings maintained by hand next to the
+    # marker tuples it was meant to exercise — a parallel list kept in sync by
+    # memory, and memory failed: `Failed to run C compiler '`, `for linking:`
+    # and every LLVM-pipeline delivery-failure spelling were in a table and
+    # absent from this list, so the proof never touched them and could not have
+    # noticed the LLVM rows were missing entirely. Deriving means a new row in
+    # ANY table is exercised here on the next run, with no second edit.
+    #
+    # The literals below stay because they witness channels no substring table
+    # owns — the sanitizer regexes and the trap regex — so the vocabulary is
+    # (derived ∪ hand-written witnesses), strictly wider than either.
     markers = [
         "",                                   # silence
         "error[E_TypeMismatch]: nope",        # coded semantic diagnostic
@@ -589,6 +618,13 @@ def prove_exclusive(verbose=False) -> int:
         "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior",
         "x.c:1:1: runtime error: signed integer overflow",
     ]
+    markers = sorted(set(markers) | {
+        m
+        for table in (BUILD_REJECT_MARKERS, BUILD_ICE_MARKERS,
+                      BUILD_DELIVER_FAIL_MARKERS, BUILD_USAGE_MARKERS,
+                      LSAN_MARKERS, UBSAN_MARKERS)
+        for m in table
+    })
     rcs = sorted(set(list(RATIFIED_EXIT_CODES) + [124, 125, 126, 127, 99, 134, 139, 7, -11]))
     bad = 0
     checked = 0
@@ -624,8 +660,9 @@ def prove_exclusive(verbose=False) -> int:
                             if verbose:
                                 print(phase, rc, combo, v.findings)
     print(f"exclusivity: {checked} tuples checked, {bad} violations")
-    print("  (subsets of size 0..2 over a 14-marker vocabulary: every PAIR of "
-          "channels is exercised, which is what an overlap needs)")
+    print(f"  (subsets of size 0..2 over a {len(markers)}-marker vocabulary, "
+          f"DERIVED from the marker tables: every PAIR of channels is "
+          f"exercised, which is what an overlap needs)")
 
     # Rule 3's other half: every DECLARED ambiguity cell must actually resolve to
     # UNKNOWN. Without this, deleting rule 3 and guessing a verdict leaves the
