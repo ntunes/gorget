@@ -192,9 +192,9 @@ use ggdef::{parse_frontmatter, Expect};
 // — which reads the `error[E_..]` marker — cannot own it. Those five cells are
 // pinned two-lane in tests/integration.rs instead; do not "complete" this list
 // by adding them here without a code.
-const C_MATCH_FLOOR: usize = 235;
-const LLVM_MATCH_FLOOR: usize = 235;
-const SELFHOST_MATCH_FLOOR: usize = 234;
+const C_MATCH_FLOOR: usize = 237;
+const LLVM_MATCH_FLOOR: usize = 237;
+const SELFHOST_MATCH_FLOOR: usize = 236;
 // SH lane doesn't yet reproduce d22_slice_clamp.gg — SH lowerer needs the
 // Range-in-index lowering wired (parser mirror lands the syntax, but the
 // lowerer's SIndex arm at self_host_lowerer/lower_expr.gg doesn't yet
@@ -208,7 +208,7 @@ const SELFHOST_MATCH_FLOOR: usize = 234;
 /// It equals the C and LLVM MATCH floors. The SELF-HOST floor sits ONE BELOW,
 /// on `d22_slice_clamp.gg` (see `SELFHOST_MATCH_FLOOR`); adding a fixture
 /// raises all four constants together.
-const MIN_FIXTURES: usize = 235;
+const MIN_FIXTURES: usize = 237;
 
 // ─────────────────────────── infrastructure ────────────────────────────
 // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs

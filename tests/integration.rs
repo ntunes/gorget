@@ -31902,8 +31902,8 @@ fn self_host_bootstrap() {
     // `--clones=sites-tsv=PATH` — which is what resolved the 294 — dumps EVERY
     // CloneId with file:line, type and reason, and is the instrument to reach
     // for instead.
-// PINNED-BY: 4c473a88 VALUE: 13_150_071
-const SELF_COMPILE_ARRAY_CLONE_PIN: u64 = 13_150_071;
+// PINNED-BY: 886e5f032 VALUE: 13_192_153
+const SELF_COMPILE_ARRAY_CLONE_PIN: u64 = 13_192_153;
 // ⚠ THE BAND'S ANCHOR — ONE PER METER, ALL FOUR FROM THE SAME ROUND-OPEN
 // MEASUREMENT, RE-SEEDED ONCE PER ROUND AT ROUND OPEN. The date below is what
 // `scripts/clone_meter_check.sh --anchor-age` reads, and that mode's caller is
@@ -31917,9 +31917,15 @@ const SELF_COMPILE_ARRAY_CLONE_PIN: u64 = 13_150_071;
 // and it fails GREEN. `todo/t0851` is re-opened on it; the loud half is
 // `tests/lints.rs::done_md_round_close_shapes_are_pinned`, which pins both
 // populations so a close in an unseeable shape cannot pass silently.
-// ROUND-OPEN-DATE: 2026-08-31
-// ROUND-OPENED-BY: 4c473a88 VALUE: 13_150_071
-const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_150_071;
+// ROUND-OPEN-DATE: 2026-09-03
+// ⚖ OWNER-AUTHORIZED RE-ANCHOR AT R48 CLOSE (2026-09-03), not a routine round-open
+// reset: stage-1 array_clone measured +1.016%, past the ~1% band, and the owner
+// authorized it on the attribution that Track U's self-host lowerer edits ARE the
+// stage-1 meter's workload. Both .pin and .round_open moved because the band is
+// computed FROM the anchor — pinning .pin alone would have left the gate red
+// against a stale anchor, i.e. the authorization would have been inert.
+// ROUND-OPENED-BY: 886e5f032 VALUE: 13_192_153
+const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_192_153;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
 // the array ceiling above. string_clone (calls to
@@ -32006,10 +32012,16 @@ const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_150_071;
     // The pin below is the value in an agent worktree 59 characters deep; the
     // gate prints `[clone-meter] root_len=` beside every reading so two are
     // never silently compared across checkouts.
-// PINNED-BY: 4c473a88 VALUE: 31_490_366
-const SELF_COMPILE_STRING_CLONE_PIN: u64 = 31_490_366;
-// ROUND-OPENED-BY: 4c473a88 VALUE: 31_490_366
-const SELF_COMPILE_STRING_CLONE_ROUND_OPEN: u64 = 31_490_366;
+// PINNED-BY: 886e5f032 VALUE: 31_635_281
+const SELF_COMPILE_STRING_CLONE_PIN: u64 = 31_635_281;
+// ⚖ OWNER-AUTHORIZED RE-ANCHOR AT R48 CLOSE (2026-09-03), not a routine round-open
+// reset: stage-1 array_clone measured +1.016%, past the ~1% band, and the owner
+// authorized it on the attribution that Track U's self-host lowerer edits ARE the
+// stage-1 meter's workload. Both .pin and .round_open moved because the band is
+// computed FROM the anchor — pinning .pin alone would have left the gate red
+// against a stale anchor, i.e. the authorization would have been inert.
+// ROUND-OPENED-BY: 886e5f032 VALUE: 31_635_281
+const SELF_COMPILE_STRING_CLONE_ROUND_OPEN: u64 = 31_635_281;
 
 // ── Shared clone-ceiling machinery ─────────────────────────────────────────
 // Core invariant #4 (one fix, all siblings): both clone-ceiling ratchets —
@@ -32707,10 +32719,17 @@ fn self_host_clone_ceiling() {
     // ⊕ The counters ride the runtime PREAMBLE, prepended from the
     // --clones=stats driver's emitted C, so a `src/backend/c/` change moves this
     // number with `stage1.c` byte-identical.
-// PINNED-BY: 4c473a88 VALUE: 1_130_449_295
-const STAGE1_ARRAY_CLONE_PIN: u64 = 1_130_449_295;
-// ROUND-OPENED-BY: 4c473a88 VALUE: 1_130_449_295
-const STAGE1_ARRAY_CLONE_ROUND_OPEN: u64 = 1_130_449_295;
+// ⚖ OWNER-AUTHORIZED over-band move (+1.016%, past the ~1% band) at R48 close.
+// PINNED-BY: 886e5f032 VALUE: 1_141_929_646
+const STAGE1_ARRAY_CLONE_PIN: u64 = 1_141_929_646;
+// ⚖ OWNER-AUTHORIZED RE-ANCHOR AT R48 CLOSE (2026-09-03), not a routine round-open
+// reset: stage-1 array_clone measured +1.016%, past the ~1% band, and the owner
+// authorized it on the attribution that Track U's self-host lowerer edits ARE the
+// stage-1 meter's workload. Both .pin and .round_open moved because the band is
+// computed FROM the anchor — pinning .pin alone would have left the gate red
+// against a stale anchor, i.e. the authorization would have been inert.
+// ROUND-OPENED-BY: 886e5f032 VALUE: 1_141_929_646
+const STAGE1_ARRAY_CLONE_ROUND_OPEN: u64 = 1_141_929_646;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -32873,10 +32892,16 @@ const STAGE1_ARRAY_CLONE_ROUND_OPEN: u64 = 1_130_449_295;
     // marks are ROOT-granular rather than PATH-granular (`todo/t0715`). Read it
     // together with `STAGE1_ARRAY_CLONE_PIN`: the two are re-pinned from ONE
     // measurement run and mean nothing apart.
-// PINNED-BY: 4c473a88 VALUE: 2_372_992_131
-const STAGE1_STRING_CLONE_PIN: u64 = 2_372_992_131;
-// ROUND-OPENED-BY: 4c473a88 VALUE: 2_372_992_131
-const STAGE1_STRING_CLONE_ROUND_OPEN: u64 = 2_372_992_131;
+// PINNED-BY: 886e5f032 VALUE: 2_394_484_334
+const STAGE1_STRING_CLONE_PIN: u64 = 2_394_484_334;
+// ⚖ OWNER-AUTHORIZED RE-ANCHOR AT R48 CLOSE (2026-09-03), not a routine round-open
+// reset: stage-1 array_clone measured +1.016%, past the ~1% band, and the owner
+// authorized it on the attribution that Track U's self-host lowerer edits ARE the
+// stage-1 meter's workload. Both .pin and .round_open moved because the band is
+// computed FROM the anchor — pinning .pin alone would have left the gate red
+// against a stale anchor, i.e. the authorization would have been inert.
+// ROUND-OPENED-BY: 886e5f032 VALUE: 2_394_484_334
+const STAGE1_STRING_CLONE_ROUND_OPEN: u64 = 2_394_484_334;
 
 #[test]
 #[serial(self_host_lowerer_driver)]
@@ -40271,7 +40296,7 @@ fn self_host_runtime_diff() {
     // move a borderline shape). Slack drops 70 → 9: the gate can now notice a
     // 10-fixture MATCH regression where it previously would have missed 69.
     // Non-MATCH ceiling untouched at 151 — owner ruling, and MATCH did not move.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1476;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1527;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \

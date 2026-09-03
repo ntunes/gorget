@@ -170,7 +170,7 @@ row = clone.stage1.array.round_open
 row = clone.stage1.string.pin
 row = clone.stage1.string.round_open
 
-clone.self_compile.array.pin.value = 13150071
+clone.self_compile.array.pin.value = 13192153
 clone.self_compile.array.pin.unit = array_clone calls, stage-0 self-compile
 clone.self_compile.array.pin.polarity = exact-pin
 clone.self_compile.array.pin.provenance = measured
@@ -191,7 +191,7 @@ clone.self_compile.array.pin.waiver = tests/integration.rs 2 declared the PINNED
 clone.self_compile.array.pin.input = none
 clone.self_compile.array.pin.note = the array axis is checkout-invariant; only the string axis carries the root-path input
 
-clone.self_compile.array.round_open.value = 13150071
+clone.self_compile.array.round_open.value = 13192153
 clone.self_compile.array.round_open.unit = array_clone calls, stage-0 self-compile
 clone.self_compile.array.round_open.polarity = exact-pin
 clone.self_compile.array.round_open.provenance = measured
@@ -208,7 +208,7 @@ clone.self_compile.array.round_open.cost_secs = 1800
 clone.self_compile.array.round_open.mirror = tests/integration.rs:SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN
 clone.self_compile.array.round_open.input = none
 
-clone.self_compile.string.pin.value = 31490366
+clone.self_compile.string.pin.value = 31635281
 clone.self_compile.string.pin.unit = string_clone calls, stage-0 self-compile
 clone.self_compile.string.pin.polarity = exact-pin
 clone.self_compile.string.pin.provenance = measured
@@ -236,7 +236,7 @@ clone.self_compile.string.pin.input.root_path_len.at = 59
 clone.self_compile.string.pin.input.root_path_len.law = value + 7 * (root_path_len - 59)
 clone.self_compile.string.pin.input.root_path_len.regen = pwd | tr -d '\n' | wc -c
 
-clone.self_compile.string.round_open.value = 31490366
+clone.self_compile.string.round_open.value = 31635281
 clone.self_compile.string.round_open.unit = string_clone calls, stage-0 self-compile
 clone.self_compile.string.round_open.polarity = exact-pin
 clone.self_compile.string.round_open.provenance = measured
@@ -256,7 +256,7 @@ clone.self_compile.string.round_open.input.root_path_len.at = 59
 clone.self_compile.string.round_open.input.root_path_len.law = value + 7 * (root_path_len - 59)
 clone.self_compile.string.round_open.input.root_path_len.regen = pwd | tr -d '\n' | wc -c
 
-clone.stage1.array.pin.value = 1130449295
+clone.stage1.array.pin.value = 1141929646
 clone.stage1.array.pin.unit = array_clone calls, stage-1 self-compile
 clone.stage1.array.pin.polarity = exact-pin
 clone.stage1.array.pin.provenance = measured
@@ -276,7 +276,7 @@ clone.stage1.array.pin.band_anchor = clone.stage1.array.round_open
 clone.stage1.array.pin.waiver = tests/integration.rs 2 declared the PINNED-BY / ROUND-OPENED-BY provenance lines
 clone.stage1.array.pin.input = none
 
-clone.stage1.array.round_open.value = 1130449295
+clone.stage1.array.round_open.value = 1141929646
 clone.stage1.array.round_open.unit = array_clone calls, stage-1 self-compile
 clone.stage1.array.round_open.polarity = exact-pin
 clone.stage1.array.round_open.provenance = measured
@@ -293,7 +293,7 @@ clone.stage1.array.round_open.cost_secs = 2400
 clone.stage1.array.round_open.mirror = tests/integration.rs:STAGE1_ARRAY_CLONE_ROUND_OPEN
 clone.stage1.array.round_open.input = none
 
-clone.stage1.string.pin.value = 2372992131
+clone.stage1.string.pin.value = 2394484334
 clone.stage1.string.pin.unit = string_clone calls, stage-1 self-compile
 clone.stage1.string.pin.polarity = exact-pin
 clone.stage1.string.pin.provenance = measured
@@ -313,7 +313,7 @@ clone.stage1.string.pin.band_anchor = clone.stage1.string.round_open
 clone.stage1.string.pin.waiver = tests/integration.rs 2 declared the PINNED-BY / ROUND-OPENED-BY provenance lines
 clone.stage1.string.pin.input = none
 
-clone.stage1.string.round_open.value = 2372992131
+clone.stage1.string.round_open.value = 2394484334
 clone.stage1.string.round_open.unit = string_clone calls, stage-1 self-compile
 clone.stage1.string.round_open.polarity = exact-pin
 clone.stage1.string.round_open.provenance = measured
