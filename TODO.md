@@ -673,30 +673,15 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   `hof_call_env_leak_unbounded` REWIRE + the orphan filing) · **H5** (the `convergence.sh` bare-directory
   over-count of 5) · **H6** (two unwired `known_gaps` fixtures).
 
-  **[superseded — the hold's own text, kept for provenance]**
-- **⏸ H · WAS ON HOLD** ⛔ (lifted; do not action this paragraph) Its brief-review pass 1 was STOPPED mid-flight rather than allowed to
-  finish, deliberately: `H4` rests on `t0824`'s battery-membership premises, and an external fix landing
-  would decay them, so a completed review would have to be discarded anyway.
-  ⚠ **ON RESUME, RE-VERIFY BEFORE RE-REVIEWING — do not restart from this brief as written.** The external
-  `t0824` fix may have moved: whether `known_gaps_census.sh --check` is still RED at HEAD; whether any of
-  the three absent CI steps (`ci.yml:131` · `:153` · `:163`) are now in the round-close battery; and whether
-  `AGENTS.md:325`'s *"the full battery covers every target CI runs"* still needs correcting. **Re-measure
-  each, then re-brief, then run the ≥3 fresh sequential reviews from pass 1.** A stopped review is not a
-  passed review; the streak is ZERO.
-  ✅ **WHAT IS UNAFFECTED BY THE t0824 FIX AND SURVIVES THE HOLD INTACT** — `H1` (`t0966`, the `gg run`
-  scratch-dir leak: mechanism confirmed, all three arms, fix AND guard prototyped and RED in both
-  directions) · `H2` (`catch_binding_throw_in_match_arm_ice` graduation, both assertion halves shown
-  load-bearing) · `H3` (`hof_call_env_leak_unbounded` REWIRE + the orphan filing) · `H5` (the
-  `convergence.sh` bare-directory over-count of 5) · `H6` (two unwired `known_gaps` fixtures). **Only `H4`
-  is entangled with the incoming fix.** If the hold runs long, splitting `H1`/`H3` out as their own track
-  is the reference-grade move — a split is division, never deferral.
-  ⚠ **CROSS-TRACK DEBT THE HOLD LEAVES OUTSTANDING:** Track **E** was briefed that **H owns the assertion**
-  at `tests/integration.rs:6532` while E owns the `hof_call_env_leak_unbounded.gg` body. With H held, **that
-  assertion stays as-is and the leak stays unpinned** — E must NOT silently take it. And the orphan filing
-  (no todo item cites that fixture) is still owed from H's block.
+  ⚠ **LIVE CROSS-TRACK DEBT (carried forward from the lifted hold):** Track **E** was briefed that **H owns
+  the assertion** at `tests/integration.rs:6532` while E owns the `hof_call_env_leak_unbounded.gg` body.
+  **H is now EXECUTING and does own it** — `/tmp/brief_H.md` ADDENDUM 3 erratum **E3** assigns it explicitly,
+  including the `#[ignore]` string at `:6529-6531` that H3's own rewire makes false. **E must NOT silently
+  take it.**
 
   ---
-  **[HELD — the scoped work below is preserved verbatim for resume; do not action it while the hold stands.]**
+  **[H's scoped work, now LIVE — the executor is running against `/tmp/brief_H.md`, whose ADDENDA 1-3
+  supersede everything below. Kept here for the retraction lesson it carries.]**
 - **H · GRADUATIONS + HYGIENE. ⚠ RE-SCOPED BY ITS OWN SCOUT — AND MY CENSUS CLAIM WAS FALSE.**
   ⛔ **RETRACTED: I wrote that `known_gaps_census.sh --check` "prints ✗ and then exits 0" and therefore
   "cannot gate anything." THAT IS WRONG — it exits 1 and gates correctly.** Re-measured bare:
