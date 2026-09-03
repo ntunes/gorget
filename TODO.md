@@ -461,6 +461,43 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **⛔ K · PASS 1 — 4 BLOCKING, 5 SCOPE. Root cause, layer and direction RIGHT; the ENUMERATION, the
+  "already correct" list, the COST claim and the FIGURES all fail.** Folded as ADDENDUM 1; **streak reset to
+  0, pass 2 launched.** ✅ **Independently confirmed:** both-backend repro · **`ggdef run` → `abcde`**
+  (Core #8 satisfied) · **ASan blindness VERIFIED, not assumed** (`--sanitize` + `detect_leaks=1` → rc 0, no
+  report, garbage stdout) · prototype fixes all 6 cells on C AND LLVM · **readiness item 4 PASSES** ·
+  the cited repro **resolves nowhere** · the self-host mirror is real and at the same layer.
+  1. ⛔ **THE TOTALITY WITNESS IS OVER THE WRONG POPULATION.** It counts **runtime functions**
+     (`gorget_str_view_region` sites vs `returns_view` entries) while **the fix is at a LOWERING site**, so
+     it **structurally cannot see a second lowering site reaching the same helper** — and there is one:
+     **`for c in s:` binds via `index_load_borrow` (`for_loops.rs:940`, `.enumerate()` sibling `:1166`) with
+     NO `set_view_of`.** Broken at baseline **and still broken under the prototype**, both backends;
+     `ggdef` prints the right answer. **Not in the changed set, not in the "already correct" list, not filed
+     anywhere.** ⚡ **Core #4: the changed set EXTENDS to those siblings.** ⊕ And the count is **14, not 16**
+     (a forward declaration and a definition were double-counted).
+  2. ⛔⛔ **THE `&`-ROUTE CELLS ARE NOT "ALREADY CORRECT" — THEY ARE GREEN BECAUSE OF A LEAK** (SIX Q#6, the
+     round's sharpest). `--clones=stats` on the `&` route: **`string_clone=0, string_cow=64,
+     live_bytes=32640`** ⇒ **nothing is materialized; the bind is the SAME untagged dangling view, and it
+     prints correctly ONLY because the 64 superseded buffers are NEVER FREED.** ⚠ **Given owner-binding
+     leak-freedom, fixing that leak turns EVERY `&` cell into a UAF.** The leak is separate (reproduces with
+     **no slice at all**) and **UNFILED** ⇒ **`todo/t1048` from K's block.**
+  3. ⛔ **THE COST CLAIM IS WRONG, AND MY DIRECTIVE WOULD HAVE RE-CORRECTED A SETTLED RECORD.** `.slice()`
+     is **FREE at a TEMP (0 clones)** and materializes only at the **bind** — so "same cost as `.slice()`"
+     holds only for binds, and **the reclaim yield after the fix is EXACTLY ZERO at every measured
+     position.** And `t0850:113-117` / `t0316:55-59` **already carry the correction verbatim**; my §4 order
+     to "correct that line" is **STRUCK** — it would have made a third dated layer on a settled point.
+  4. ⚡ **A RATIFIED-LEDGER CONTRADICTION → OWNER ASK (below).**
+  ⛔ **S3 · the prototype's view-source provenance is WRONG for a field-rooted base** — it records the ROOT
+  LOCAL (`h`), not the field path, while **the sibling five lines away (`methods.rs:4766-4773`) already uses
+  `extract_field_path_string`.** Safe today only because the bind clones eagerly; wrong under Layering
+  rule 3 and **must not be inherited.**
+  ⛔ **S4 · the Core #14 finding is UNDER-scoped — there are TWO unguarded comments**, and the second
+  (`methods.rs:4659-4665`, *"even a NAMED bind … would dangle"*) **is made false by the fix.**
+  ⛔ **S1 · `slice 421/0` IS A MISLABELLED SUM** (189 string + 222 cow + 10 slice); the slice suite is
+  **10/0/1**, and `--lib` is **1183**, not 1185. ⛔ **S2 · the `clone_meter_*` worktree trap again.**
+  ⚠ **S5 · the SH obligation is too weak** — §6's fixtures GRADUATE, so the owner's 2026-08-10 rule binds:
+  **compile + MATCH on the SH lane the SAME ROUND; raising the ceiling for own inflow is forbidden.**
+
 - **⚡ E · EXECUTOR RETURNED — 3 commits on `worktree-agent-a0f9f2926c665565b`, 91 files, +589/−1917.
   OUTPUT-REVIEW LAUNCHED; NOT YET INTEGRATED.** `13793b85b` removes the implicit `it` closure parameter
   (`Keyword::It` / `Expr::It` / `Expr::ImplicitClosure` gone; **207 self-host lines across 25 files**, all
