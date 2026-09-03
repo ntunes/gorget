@@ -461,6 +461,32 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **✅ H · PASS 3 SIGNED OFF THE DESIGN (0 blocking, 8 scope + 6 errata). EXECUTOR LAUNCHED.** Folded as
+  `/tmp/brief_H.md` ADDENDUM 3. **Both ADDENDUM 2 blockers are closed, and the termination-spelling
+  enumeration is now TOTAL with independent witnesses per row** — `process::exit` (18) · `-> !` helper (3,
+  and `grep -rn -- "-> !" src/` finds **exactly two** such fns repo-wide) · `abort`/`libc::_exit`/`.exec()`/
+  `into_path()`/`mem::forget` all **0**, and `Cargo.toml` has no `panic="abort"` so `panic!` unwinds and
+  Drop runs. ⇒ **21 of 21 caught today.**
+  ⭐ **THE CONTROL IS NOW PROVABLY FALSIFIABLE, AND ITS SHAPE IS LOAD-BEARING:** the leaked artifact is a
+  **HIDDEN** dir (`/tmp/…/.tmplhc6AG`), so the decoy must be **dot-prefixed** — a visible-named decoy passes
+  a counter that skips dotdirs and catches nothing. Measured against two deliberately-broken counters: the
+  dot-prefixed decoy reds both. **All three arms leak exactly 1 dir at HEAD; `gg build` produces not even a
+  FILE** (readiness item 4, independently measured).
+  ⭐ **`main.rs:3714`'s comment is FALSE ON TWO COUNTS** — `trace_filename` comes from
+  `input_path.parent()`, i.e. beside the SOURCE, never inside `tmp_dir`.
+  ⚡ **DECIDED AND SHIPPED TO THE EXECUTOR:** widen the lint's subject to the repo-wide `-> !` inventory +
+  a closed literal set + an expected-count assertion (else factoring the helper elsewhere greens the guard)
+  · **no ctor-closure exemption — convert all three, zero-tolerance** · **one ERROR-PATH cell per arm**
+  (all four prototyped cells assert success, so **18 of 21 sites never execute**, and the `return n` failure
+  mode is pinned by nothing) · the TUI's hand-rolled `env::temp_dir().join("gorget_tui")` at `main.rs:2147`
+  is **not** the `t0966` class but the `grep tempfile` witness is blind to it — state its disposition ·
+  bound the leak-gap pass to the two named rows and **file the other 21 as `t0997`** · the SH fallback is
+  file-a-subset-gap + `#[ignore]` + citation · the census regex needs a **terminating boundary** (`*`/`{`)
+  or `known_gaps/beginner_map*` in prose would silently exempt a real unit — **the guard green-lighting its
+  own class**.
+  ⚠ **Two readiness gaps handed to the executor:** H2/H3's byte-and-rc figures are **pass-0 numbers no later
+  pass regenerated** (Core #5); and H1's conversion has 21 changed / 3 pinned at runtime.
+
 - **⛔ F · PASS 4 — 3 BLOCKING, 7 SCOPE. DESIGN SIGNED FOR A THIRD CONSECUTIVE PASS; MY OWN FOLD IS WHAT
   BROKE.** Folded as `/tmp/brief_F_v2.md` ADDENDUM 6 (precedence 6 > 5 > … > BODY). **Streak reset to 0;
   pass 5 launched.**
