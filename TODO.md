@@ -95,7 +95,51 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   `elem_drop`, leaking every element) · `t0955` (`flat_map` leaks the callee's `Vector` per input element)
   · `t0952` (`DictIter.next()` deep-clones the WHOLE Dict 4× per call and frees none) · `t0951` (`^self`
   never emits the callee-side drop). ⚠ **`t0963` MOVES TO TRACK E — see the interaction note below.**
-- **C · AUTO-PROPAGATION SILENT STATEMENT DROP.** `t0947` + the family it discriminates itself from
+- **C · ✅ SCOUTED — THE CLEANEST RESULT OF THE ROUND, and it CORRECTS MY LEDGER READING.**
+  **WRITE SITE: `src/ir/lowering/context.rs:2121`** — `infer_type_from_expr`'s `_ => I64_TYPE`. The function
+  has 10 arms and **no `MethodCall` arm**, so a method call falls through; `stmts/mod.rs:613` writes that
+  GUESS as `expected_type`; `maybe_auto_propagate` reads it, concludes "destination is not a Result", and
+  peels. ⭐ **The sharper framing is LAYERING RULE 3/4, not just Core #10: `infer_type_from_expr` is a
+  SECOND, WEAKER, INDEPENDENT type inference that lowering runs after the typechecker already resolved the
+  expression.** Measured proof they disagree: `bool j = s.join(g); j.is_error()` is REJECTED, but
+  `auto j = s.join(g); j.is_error()` is **`gg check` CLEAN** — the typechecker says `Result[bool,String]`,
+  the lowering says `bool`. ⚠ The guess is wrong CONSTANTLY: **1194 type disagreements across 4312
+  fixtures**; the corpus is green only because the reader usually does not care.
+  ⛔ **I BRIEFED THAT D45 PIN 6 "LEANS (b)" — I HAD IT BACKWARDS. PIN 6 MANDATES (a), so there is NO OWNER
+  ASK.** `decisions.md:2069-2072`: *"propagation happens at `!`-marked calls only"*; `auto` is not a `T`
+  position and `s.join(g)` carries no `!` ⇒ no propagation ⇒ it binds the `Result`. Corroborated four ways,
+  each measured: **ggdef RUN and adjudicates (a)** (`handled`/`custom message`, while Rust gg pre-fix fails
+  to COMPILE the same program) · D23's subject is a **`throws`** call, not a `Result`-returning one
+  (SIX QUESTIONS #4) · `book/02-types.md:35` (*"`auto` … infers and locks"* — from the RHS) · D29's own
+  diagnostic already names *"an explicitly `Result`-typed binding"*.
+  ⭐ **SEPARATE ROOT from `t0050`/`t0101`/`t0105`/`t0434` — MEASURED, not argued:** the prototype fixes the
+  repro and moves **none** of their fixtures. Four write sites on one machinery; D45 pin 6's **E0**
+  subsumes all four, and this fix is a strict, zero-blast-radius SUBSET of E0 in the shape E0 mandates.
+  ⭐ **BLAST RADIUS MEASURED OVER THE WHOLE CORPUS, not spot-checked:** `SWEPT=4312 · CHANGED=1 ·
+  POST_FAIL_ONLY=0 · PRE_FAIL_ONLY=0`. **14 lines, one file**, reusing the EXISTING typed
+  `suppress_auto_prop` one-shot. `--lib` 1185/0; the `#[ignore]`d test RED at HEAD and GREEN with the fix;
+  **LLVM measured too** — the fix is in GIR, so no backend-specific path.
+  ⭐ **SEVEN UNFILED CELLS, ALL FIXED BY THE SAME ONE-SITE FIX — they are the FIXTURE SET OWED, NOT
+  FILINGS.** Witness: **rustc E0004** — deleting the `_` arm names *"37 of 47 `Expr` variants"* uncovered.
+  Broken beyond the filed method-call cell: **generic free call** (contradicting `t0947`'s own *"FREE call
+  is safe"* row) · chained method · static/assoc · closure-var call · `T f() throws E` context · and two
+  consumer modes that are HARD failures rather than silent (`match x: case Error(e)` → C-emit error;
+  `.unwrap_error()` → link error). ⚠ **READINESS ITEM 3 FAILS TODAY: |pinned| = 1, |changed| ≥ 8.**
+  ⊕ `!`-marked calls peel CORRECTLY today and are **ACCIDENTALLY CORRECT** (SIX Q#6) — the fix must
+  preserve that, and does.
+  ⊕ **SH port required and NOT a copy:** `self_host_lowerer/lower_stmt.gg:135-153` sets `expected_type`
+  only when the declared type is neither `I64_TYPE` nor `UNIT_TYPE`, so for `auto` it leaves the AMBIENT
+  value and still calls `maybe_auto_propagate` at `:153`. Probe before porting.
+  ⊕ **Guard: an arm-count ratchet on `infer_type_from_expr`** (precedent `container_literal_arms_count`,
+  `tests/lints.rs:1268`). The IDEAL guard — assert lowering's local type equals `expr_types[span]` — is
+  `t0434`/D45-E0 work; say so rather than half-building it.
+  ⊕ **Stdlib CLEAN** (3 `lib/` sites, all the safe cell, instrument-verified). **But `cli_basic.gg:16,34`
+  and `cli_advanced.gg` carry 7 live sites green ONLY because `main` is `void`** — move any into a
+  `Result`-returning helper and it silently miscompiles. That is the idiomaticity argument for the DONE entry.
+  ⚠ My `auto`-usage figures were stale: **604** in fixtures ex-self-host (not ~450) · **19** in self-host
+  (not 4) · **80** in `lib/`.
+
+  **[superseded framing kept for provenance]** — **C · AUTO-PROPAGATION SILENT STATEMENT DROP.** `t0947` + the family it discriminates itself from
   (`t0050` · `t0101` · `t0105` · `t0434`). `auto x = <METHOD call returning Result>` binds the Ok payload
   and **silently discards the user's whole `if x.is_error():` block**; it was LIVE in shipped
   `lib/xtd/p2p.gg` with 13 fixtures passing BY LUCK. ⚡ **POSSIBLE OWNER ASK, not yet raised:** the item
