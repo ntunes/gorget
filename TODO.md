@@ -490,6 +490,38 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **⛔ A1-M · OUTPUT-REVIEW: RESERVATIONS (5 blocking). *"The compiler fix is sound and I would integrate it
+  as-is; the RECORD that ships with it is not, and one live sibling of the fixed class was missed."***
+  All three mandatory gates PASS; `src/` needs **no rework**. Returned to the executor; **NOT integrated.**
+  ⭐ **B1 · A LIVE SIBLING, `gg check`-CLEAN, rc 139 ON BOTH BACKENDS, UNFIXED AND UNFILED.**
+  `Callable[int(int)] mk() throws String: return (int x): x + 1`. The emitted C is **exactly `t0937`'s
+  signature** — `memcpy(__v7, __v2, sizeof(GorgetClosure))` with **no `__gorget_closure_env_alloc` and no
+  `.fn_ptr =` anywhere in `mk`**. The site is the **`throws` auto-`Ok` wrap** (`functions.rs:215`), which
+  routes through **A1M-PACK-SITE (3/5)** and the packer does not fire. Not a registration-order artifact.
+  **Same class, different site ⇒ FIX INLINE** (SIX Q#3 — the enumeration was a selection).
+  ⛔ **B2 · SITE 3/5 HAS ZERO BEHAVIOURAL COVERAGE.** Deleting `context.rs:1765` leaves **both** fixtures
+  fully green — prelude `Some`/`Ok`/`Error` are already packed by 5/5 before reaching it. **Readiness #4
+  holds for 1/2/4/5 and NOT for 3**, and **B1 is the shape that should have covered it.**
+  ⛔⛔ **B3 · THE LEAK ROW'S ATTRIBUTION CONTROL IS FALSIFIED AND ITS RETIREMENT CONDITION WILL NOT HOLD.**
+  The block tells the owner the enum-payload cells are ASan-clean and the row retires with `t0948`.
+  Measured: that control holds for **ONE cell only**; `Some(Some(<lit>))` leaks **8 B / 1** (the outer
+  generic enum's drop is emitted and never called) and `Ok(<lit>)` **returned and matched on the CALL
+  RESULT** leaks **8 B / 1** (the match arm `memset`s the payload slot; the moved-out binding is never
+  dropped — discriminator is **call-result-vs-local**, not Option-vs-Result). ⇒ **≥2 of the 16 records are
+  NOT `t0948`; landing `t0948` leaves the row non-empty.** Two unfiled mechanisms.
+  ⛔ **B4 · A WRONG COUNT IN THE TEXT THE OWNER WOULD RULE ON** — the block says "20 records"; measured on
+  both lanes it is **144 bytes in 16 allocations**. The constants are right; the prose is not.
+  ⚖ **LEAK ADJUDICATION: GENUINELY NEW INFLOW, NOT A GRADUATION — the executor was RIGHT to escalate.**
+  At `dc29f0faf~1` the fixture is rc 139 with **empty stdout on both backends**; it dies before those
+  allocations ever run, and the retired predecessor allocated nothing either. **Class old, bytes new.**
+  ⛔ **BUT IT DOES NOT REACH THE OWNER UNTIL B3/B4 ARE CORRECTED** — the attribution and the retirement
+  condition are precisely what the owner would be ruling on. **A1's block extended to `t0971`–`t0976`.**
+  ✅ **RE-VERIFIED AND CONFIRMED:** every fixture rc 139 on both backends pre-fix · guard RED at
+  `4 vs expected 5` · the **B3 cell's honesty on all three legs** (ggdef `7`/`7`, the test asserting the
+  CORRECT value, ASan naming the UAF) · the nested-`Some` diagnosis at `exprs/mod.rs:1900-1917` with the
+  prelude sibling set **TOTAL** · `t0968`'s two-profile split · **the SH lane byte-identical, zero parity
+  inflow** · and neither `t0938` nor `t0873(a)` closed.
+
 - **✅ H · OUTPUT-REVIEW: INTEGRATE — all three mandatory gates PASS; 4 marked errata sent to the executor.**
   The reviewer **re-verified rather than trusted** every load-bearing claim: the leak guard goes RED pre-fix
   **naming all six real cells** with the `gg build` control at 0 throughout · the axis is **rc 101 with
