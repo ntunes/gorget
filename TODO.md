@@ -461,6 +461,69 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **⛔ F · PASS 4 — 3 BLOCKING, 7 SCOPE. DESIGN SIGNED FOR A THIRD CONSECUTIVE PASS; MY OWN FOLD IS WHAT
+  BROKE.** Folded as `/tmp/brief_F_v2.md` ADDENDUM 6 (precedence 6 > 5 > … > BODY). **Streak reset to 0;
+  pass 5 launched.**
+  1. ⛔ **Addendum 5's R2 placement is MEASURED-FATAL.** It told the executor to set the closure hints
+     **after** `lower_call_arg` in the arg-map body. **In all six M1 cells the closure IS arg index 0** —
+     only `fold` has an arg before it. Prototyped: that placement is **byte-identical to HEAD, 0 of 6
+     fixed**; the top-of-body placement is **6/6 correct**, whole C lane **0 REGRESSION, 0 NEW DIVERGENCE,
+     EXIT=0, WORKS 842→848**. ADDENDUM 6 folds the corrected placement **AS CODE**, so the executor never
+     has to know the closure's index — the ambiguity that has now misfired three times.
+  2. ⛔ **`t0988` is wrong for the THIRD time.** A 24-cell grid at HEAD finds a shape that **compiles and
+     does NOT double-free**: `match v.find((s): s.len() == 3): case Some(s):` with the `std.iter` import
+     builds, prints `abc`, rc 0 — and under `--sanitize` **leaks 8 B at `__gorget_closure_env_alloc`**,
+     `t0953`'s class. **The refuting cell is one the item's OWN AXIS omits** (`match`-scrutinee and
+     `if … is` are absent from its shape list). SIX Q#3, verbatim, for the third version of one item.
+  3. ⛔ **The owed fixture set does not pin what it claims.** 13 green + 5 RED = **18**, not the stated
+     19-20 · `Dict.fold`/`Dict.filter` **as written are green at HEAD** (controls, not pins — the pinning
+     spelling is `d.fold(0, (acc,k,v): acc + k.len())`) · `reduce` on String has **NO filed item** and joins
+     `t0068` (no new id) · "Deque HOF" is too wide (only `.map` fails; cite `t0058`) · **HashSet HOF is
+     probably not RED at all** — an `#[ignore]`d cell there would pin a PASSING program · and **the five
+     cells the carrier swap most needs are ABSENT** (`map`/`filter`/`any`/`all`/`count` untyped on
+     `Vector[String]` — the ONLY witness for the `protocol_for_mangled_name` swap).
+  ✅ **CORE #9 FOR M1 IS ANSWERED — note-and-cite, not port.** The six cells fail on the SH lane for four
+  reasons, **none of them the closure hint**, and `grep -rn "param_type_hint" tests/fixtures/self_host_*/`
+  returns **ZERO** — there is no hint mechanism to mirror. Both blockers already filed (`t0166` S-D,
+  `t0167` S-B(b)). ⊕ **S1 DECISION: map cells + `known_gaps/` ONLY** — a new top-level `tests/fixtures/*.gg`
+  auto-joins `self_host_runtime_diff`, which is F's own inflow against a ceiling forbidden to raise.
+  ⊕ **S3 DECISION: M3 SPLITS OUT to the F-G track (same round).** It has no write site, no diagnostic text
+  and no floor plan; S-i's two live findings move with it. **F ships M1 + the report-only scorer.**
+
+- **✅ C · PASS 3 — DESIGN SIGNED OFF, AND THE HEADLINE RISK IS DEAD.** The `t1019` check-side rule was
+  BUILT and swept check-only over **all 4348 fixtures**: **exactly ONE changed row**, and it is
+  `known_gaps/equip_paren_trait_spelling_silently_dropped.gg` — **`t0025`'s own repro, whose filed INTENDED
+  is "`gg check` REJECTS"**. **Zero healthy rejections; zero of mechanism 5's 57.** 17 lines at one site;
+  **no split needed.** The discriminator mechanism 5 lacked is **`DefKind::GenericParam`** — scoping to
+  `Struct|Enum|Newtype` at `typecheck.rs:3528` leaves all 26 `iter_*` fixtures unchanged (independent
+  witness). Folded as ADDENDUM 3; **pass 4 launched as the confirming pass** after 3 blocking CLAIM
+  corrections:
+  1. ⛔ **ADDENDUM 2's R8 IS FALSE — and it was the brief's only answer to its own §2b.** Under the pair
+     `t0947` is **still a raw linker error with no diagnostic**, not `E_NoMethodFound`. **No
+     method-existence rule can ever reach it:** the CHECKER binds `j` as `Result[bool,String]` while
+     LOWERING binds it as `bool` — a check-vs-lowering **type DISAGREEMENT**, not a missing method.
+     §3's original disposition (`t0434`'s `expr_types` plumbing) **was right, and my fold overturned it
+     without measuring**. ⊕ **This corroborates the `t0947` header errata at `7275d56f9`:** the checker
+     already binds the `Result`, which is the direction D45 pin 6's re-gate mandates.
+  2. ⛔ **The pair does NOT close "all six residue cells".** `Callable` param and `Callable &` param still
+     print `0` — the two cells the brief ranks WORST. They belong to `t0942`; owe both as RED-verified
+     `known_gaps` citing it, and correct the verdict sentence.
+  3. ⛔ **The row-4 instrument was unavailable AND unnecessary.** `Plain`/`Color` is check-rejected under
+     the pair so it cannot be a runnable fixture — and the wrong edit was built: `MyOpt` `true|false|false`
+     and `OptionalConfig` `true`, **both identical to HEAD**. The two positives the track already owes
+     discriminate it perfectly; readiness row 4 is satisfied by them.
+  ⭐ **A TOTAL PARTITION replaces the sampled table:** receivers reaching the gate with `opt=false` are
+  exactly (1) user type with no equip → `t1019` rejects, (2) user type WITH the method → step 1 dispatches,
+  (3) no usable type name → `t0942`/`t0947`, out of reach. **The compiler's own existing `E_NoMethodFound`
+  is the independent witness that (1)-with-equip is unreachable — totality PROVABLE, not sampled.**
+  ⊕ **Attack #4 DECIDED: the re-infer predicate is `Type::Inferred`** (`context.rs:2044-2047`), not
+  `actual != UNIT_TYPE` — the latter is a read-site shape test that lets an inferred type override a type
+  the user WROTE (Layering 1, Core #2). Prototyped: three cells fixed, two unchanged BY CONSTRUCTION.
+  ⊕ **`t1018` contamination NARROWED:** only trait-provenance cells need the multi-line workaround; the two
+  fixtures C owes are bare-equip and may use natural single-line bodies.
+  ⚠ **STILL UNVERIFIED AFTER THREE PASSES:** LLVM · `-p ggdef` · `spec_conformance` · `security` ·
+  `--sanitize` · SH driver-embedded copies · `robustness_map.py`. **The executor runs these.**
+
 - **⛔ H · PASS 2 RETURNED 2 BLOCKING + 7 SCOPE — STREAK RESET TO 0; pass 3 launched.** Both blocking
   findings are **SIX Q#2 — a guard that cannot catch its own class**, folded as `/tmp/brief_H.md`
   ADDENDUM 2 (precedence: 2 > 1 > LATE CORRECTION > BODY).
