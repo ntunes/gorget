@@ -58,6 +58,76 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   ⛔ **DO NOT BRIEF "the Callable cluster" AS ONE TRACK.** The scout measured **FOUR** roots with four fix
   sites and no implication between them: its prototype moved every Root-A cell and moved **nothing** in
   B, C or D. A split is division, never deferral — all four are R49 tracks.
+  - ⛔ **A1 IS SPLIT AGAIN (2026-09-03) — THREE DESIGN REFUTATIONS, AND THE THIRD REVIEW GAVE THE ANSWER.**
+    v1 (pack at birth + delete the name-matchers) and v2 (typed GIR pack + keep the escape condition) were
+    BOTH refuted by execution. **v2's fatal flaw: §2.1 and §2.3 are MUTUALLY UNIMPLEMENTABLE.** There is
+    **NO escape analysis in the tree** (`grep -rni escape src/ir/ src/lir/` → only arena prose), and the
+    only pack implementation (`operands.rs:1444-1476`) allocates **unconditionally**. Measured allocs in
+    `main` at HEAD: `((int x): x*x)(5)` → **0** · `v.map((int x): x*2)` → **0** ·
+    `Callable c = literal; c(1)` → **1**. ⇒ pack-at-birth makes the IIFE **and every HOF closure argument**
+    allocate — the charter breach v2 itself forbade. ⊕ And what v2 called *"the escape condition"* is a
+    **REPRESENTATION check** (`operands.rs:1384-1392`, destination slot is a `GorgetClosure` struct), not
+    escape analysis — an executor told to "keep it" would believe it had analysis it does not have.
+    ⭐ **THE SPLIT THAT WORKS — separate the two facts the word "pack" conflates. NEITHER NEEDS AN ESCAPE
+    ANALYSIS, and BOTH have shipped precedent in the files they touch:**
+    - **A1-IDENTITY (the Core #2 half) — resolve once, write through, at THREE carriers.** One typed field
+      on GIR `Local` (`ir/mod.rs:700-733`, precedent `deref_of_owning_param: Option<LocalId>`), written by
+      `lower_closure` — retires the 13 GIR/LIR-lower sites. Plus **`StructDef.closure_call_fn`**
+      (`lir/mod.rs:1554`), populated exactly as `elem_drop_fn` (`:1576`) and `elem_clone_fn` (`:1584`)
+      already are — both documented as *"Replaces the c_lir `elem_drop_fn_for_c_type` name-prefix
+      matching"*. ⭐ **THIS EXACT FIX HAS SHIPPED TWICE IN THAT FILE FOR THIS EXACT REASON.** Plus
+      `LirFunction.takes_env: bool` for `lir/lower/mod.rs:257` and `bir/synth.rs:72` — a per-FUNCTION fact,
+      not a per-value one. ⚠ **A per-value carrier alone CANNOT reach 6 of the 19 sites — and v2's own
+      argument against `GirType` (it cannot reach the backends) kills v2's chosen carrier for the same 3.**
+    - **A1-MATERIALIZATION (the `t0937` half) — keep it demand-driven; make the SET total at ONE
+      chokepoint.** ⭐ **The reference-grade shape ALREADY EXISTS and no draft cited it:**
+      `pack_closure_for_smart_ptr_ctor` (`calls.rs:863-895`) reads `TypeDef.metadata.c_runtime_alias ==
+      "GorgetClosure"` — typed metadata, its own comment saying *"not by name — per CLAUDE.md 'no name
+      matching'"* — and already has **seven** call sites. **Hoist it to the single consuming-position
+      chokepoint** (the move AGENTS.md prescribes verbatim: *"prefer centralizing at the producer … e.g.
+      `maybe_auto_propagate` hoisted to the `lower_expr` exit"*) so StructInit / EnumInit / TupleInit /
+      projection-assign / CallByValueArg all route through one packer; **delete `wrap_single_closure_arg`'s
+      duplicate**; pin with an arm-count lint on the `container_literal_arms_count` precedent
+      (`tests/lints.rs:1268`). Closes `t0937`, `t0938`, TupleInit, `s.f = literal` and the SIGBUS cell.
+    ⭐ **AND THE THREE-PASS MYSTERY IS SOLVED: there are TWO pack implementations.** `try_closure_pack`
+    (`operands.rs:1357`, one caller) and `wrap_single_closure_arg` Case 2 (`:1703-1780`) are near-duplicate
+    alloc+memcpy+`ClosurePack` sequences; `Inst::ClosurePack` is emitted from **4** sites
+    (orchestrator-verified). **That is why `fs[0] = literal` is GREEN (prints `3`, both backends) while
+    `s.f = literal` SEGVs** — index-store routes through `wrap_single_closure_arg`, and `try_closure_pack`
+    is gated on `dst.projections.is_empty()` (`insts.rs:43`). The control carried UNVERIFIED for three
+    passes is now explained.
+    ⚠ **THE CENSUS WAS A SELECTION FOR THE FOURTH TIME — and the PATTERN is the finding.**
+    `lookup_closure_info` has **11 references across 4 files** (orchestrator-verified); every draft counted
+    2. Each pass found one more instance *by reading around the previous one*; **nobody ran the total
+    grep.** ⊕ A whole SECOND runtime-symbol convention is absent from every draft: `__callable_N` /
+    `__gorget_closure_call_N`, minted by `format!` at `calls.rs:1898/1993/2340`, `methods.rs:3829`, decoded
+    by `starts_with` at `insts.rs:3892/3895`, `validate.rs:420/428`, `llvm/mod.rs:1792/1975`, plus
+    `optimize.rs:218` and `insts.rs:551`. **Draw the A1/A2 boundary explicitly or count them.**
+    ⚠ **THE GATES ARE STRUCTURALLY BLIND TO THE HAZARD A1 MUST PREVENT (Core #13).** `Holder(^c)` under
+    `--sanitize` prints `42` then **leaks 16 bytes** — it does NOT double-free, because
+    `field_is_transitively_droppable` requires `GirType::Named` so an FnPtr field never drops. ⇒ **the
+    double-free A1 must prevent cannot be observed by ANY gate at HEAD.** **MANDATORY POSITIVE CONTROL:
+    locally patch that predicate to return `true` for FnPtr, run the whole cell battery under `--sanitize`
+    on BOTH backends, confirm no double-free, revert.** ✅ A1 and A3 ARE separable (with A3 unlanded,
+    birth-registration degrades to today's leak, never a double-free) — **but that safety is exactly what
+    hides the gap, so the control is not optional.**
+    ⚠ **`ConsumeSiteClass` CANNOT DISCRIMINATE TupleInit** — `validate.rs:2641-2651` bins it under
+    `StructInit { type_name: "<tuple>" }`. So *"a disposition per row over the nine arms"* is satisfiable
+    **with TupleInit still broken** (SIX QUESTIONS #6). Add the discriminator or pin TupleInit's own cell.
+    ⚠ **`todo/t0681` IS UNOWNED AND A1 WALKS INTO IT.** `methods.rs:276` is in every census AND is the exact
+    site `t0681` blames for `Box[Callable[int(int)]](literal)` ICE-ing while `Box.new(literal)` prints `42`.
+    Deleting that early-return drops `Box.new(closure)` into the consuming shim whose own comment warns of
+    the double-free A3 makes real. **Claim it or state the carve-out is rewritten-not-deleted.** ⊕ This
+    RETIRES the *"whether `Box[Callable]` shares the root"* line carried unverified for three passes: it has
+    a filed item, a mechanism and a durable repro.
+    ⚠ **UNGUARDED MIRROR HAZARD:** if the closure's GIR type stops being `Named("__Closure_N")`,
+    `insts.rs:3305`'s `wrappable` gate goes false and the HOF wrapper stops firing, and `methods.rs:5110`
+    returns `None` so `map`/`flat_map` lose return-type inference. **`v.map((int x): x*2)` works TODAY
+    BECAUSE it keeps the raw env and passes it by pointer.** v2 warned against creating reachability; the
+    mirror — LOSING it — was unguarded.
+    ⊕ **`t0967` FILED** (from A1's block) for the disjoint D10(b) finding this review turned up.
+
+  **[superseded — v1/v2 framing kept for provenance]**
   - **A1 · PACK-AT-BIRTH (⭐ the CRITICAL one; wave 1).** `src/ir/lowering/closures.rs:360` returns the raw
     `Named("__Closure_N")` capture ENV, not the `GorgetClosure` fat pointer `Callable[T]` denotes, so
     materialization is deferred to consumers that each re-recognise a closure BY NAME PREFIX. Owns
@@ -740,6 +810,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t0951`](todo/t0951.md) **MED** — 🆕🐛 [MED — a LEAK from ordinary safe syntax, BOTH backends, gg check clean; found 2026-09-03 by R48 Track T-a1 while ASan…
 - [`t0952`](todo/t0952.md) **MED** — 🆕🐛 [MED — a LEAK *and* an O(n) deep copy per iteration step, from ordinary safe syntax, BOTH backends, gg check clean; f…
 - [`t0953`](todo/t0953.md) **MED** — 🆕🐛 [MED — a LEAK from the most ordinary syntax in the language, BOTH backends, gg check clean; found 2026-09-03 by R48 T…
+- [`t0967`](todo/t0967.md) **MED** — 🆕⚖️ [MED — A RATIFIED REJECT IS UNIMPLEMENTED, *and* the measurement the ruling rests on did not
 ### Low
 
 - [`t0142`](todo/t0142.md) **LOW** — 🆕📋 [LOW — GUARD SHAPE, measured four times in one track; filed 2026-08-19 by R43 Track G] doc_source_citations_name_the_…
