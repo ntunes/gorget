@@ -101,14 +101,29 @@ report. **stdout is the only instrument.** Do not read a green sanitize sweep as
 ### 🔢 R49 ID BLOCKS — orchestrator-allocated per AGENTS.md multi-agent rule **MA-3b** (owner 2026-09-03)
 **A TRACK NEVER PICKS ITS OWN `todo/` ID.** Each executor gets a private disjoint block in its brief and
 asks the orchestrator to extend it if exhausted. This retires the collision that forced the Track P/R
-renumber. Blocks issued for R49 — **first unissued id is `t1048`** (`t1047` is the owner's, below):
+renumber.
 
-| A | E | F | H | B | C | D | G |
+| A(-M) | E | F | H | B | C | D | G |
 |---|---|---|---|---|---|---|---|
 | `t0967`–`t0976` | `t0977`–`t0986` | `t0987`–`t0996` | `t0997`–`t1006` | `t1007`–`t1016` | `t1017`–`t1026` | `t1027`–`t1036` | `t1037`–`t1046` |
 
 ⭐ **`t1047` IS ALLOCATED TO THE OWNER (2026-09-03, owner request).** RESERVED — ⛔ no track may use it,
-and the orchestrator must not re-issue it. **First unissued id is now `t1048`.**
+and the orchestrator must not re-issue it.
+
+⛔ **SECOND-WAVE BLOCKS, ISSUED AFTER THE TABLE ABOVE — READ THIS BEFORE ALLOCATING ANYTHING.**
+**A's original block is FULLY CONSUMED by A1-M**, so the tracks split out mid-round got fresh blocks:
+
+| K (`t0871`) | A1-I |
+|---|---|
+| **`t1048`–`t1057`** | **`t1051`–`t1060`** ⚠ overlaps K's tail — see below |
+
+⚠ **THE OVERLAP IS REAL AND IS RESOLVED THIS WAY: K holds `t1048`–`t1050` ONLY** (issued for the `&`-route
+CoW leak, the String `.enumerate()` byte/codepoint defect, and the string-iteration torn read); **A1-I holds
+`t1051`–`t1060`.** If K needs more, it gets `t1061`+, never `t1051`–`t1057`.
+⚡ **FIRST UNISSUED ID IS NOW `t1061`.**
+⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
+what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
+exactly the collision MA-3b exists to prevent.**
 
 ⚠ A block is a CEILING on collision, not a filing quota — R49's mandate is burn-down, and an unused block
 is the good outcome. **Wave 1 in flight: A · E · F · H** (scouts launched 2026-09-03). Wave 2 launches one
