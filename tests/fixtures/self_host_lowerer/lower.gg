@@ -291,6 +291,17 @@ struct LowerCtx:
     # determine alone (the variant name does not carry the parent enum's
     # full monomorphised name, etc.). `-1` is the sentinel for "no
     # expectation set". See `the self-host SSA-cleanup brief (git history)` §7.
+    #
+    # ⚠ ONE PLACE PARKS THIS FIELD RATHER THAN SETTING IT: `comp_reserve`
+    # saves it into the `CompSave` and clears it to `-1` for the duration of a
+    # comprehension body, and `comp_close` restores it. A comprehension exists
+    # to LEARN its element type from the materialized local, so an expectation
+    # in scope while it is learned is circular — and the expectation is the
+    # DESTINATION's type (a `Vector[U]`), not a `U`, so a reader that adopts it
+    # adopts a container where an element belongs. That is not hypothetical:
+    # `Vector[int] ys = xs.map(if it > 1: 7 else: 0)` typed its body local
+    # `Vector__int64_t` and minted `ys` as `Vector[Vector[int]]`, while the
+    # same body under `auto` was correct throughout.
     int expected_type
     # `on error:` cleanup blocks registered in the current function, in
     # source order. Mirrors Rust gg's

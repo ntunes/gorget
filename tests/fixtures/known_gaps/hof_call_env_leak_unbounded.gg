@@ -1,0 +1,39 @@
+# KNOWN GAP (todo/t0953) — the UNBOUNDEDNESS cell of the closure-literal
+# argument env leak.
+#
+# `todo/t0953` owns the class and proves the WRITE SITE with a negative
+# control: a plain user function taking a `Callable` leaks the same frame with
+# no builtin HOF in the program, and the same program with a NAMED callee
+# leaks nothing. What its repro does not show — because two calls cannot show
+# it — is that the leak is UNBOUNDED PER CALL rather than a fixed cost.
+#
+# This one does: twenty calls, twenty records. Measured 2026-09-03,
+# `gg build --sanitize` + `ASAN_OPTIONS=detect_leaks=1:exitcode=0
+# LSAN_OPTIONS=use_stacks=0` — `160 byte(s) leaked in 20 allocation(s)`, all
+# `__gorget_closure_env_alloc`. Change the trip count and the record count
+# follows it. That is the property that makes the class a resource bug in a
+# loop rather than a constant overhead, and it is what the allowlist's
+# big-groups table means by "UNBOUNDED per call".
+#
+# HEAP-FORCED: the env is a real `malloc`, so LeakSanitizer sees it under the
+# sweep's own conservative-root setting.
+#
+# NOT A SECOND FILING: `todo/t0953` owns this: this is one more cell of its
+# evidence, cited from it. It is deliberately the IMPLICIT-`it` spelling, which
+# that item's own probes do not use, so the two together show the class spans
+# both the explicit closure literal and the synthesised implicit one.
+#
+# INTENDED (asserted by the #[ignore]d wired test): prints `120` and runs
+# ASan-CLEAN. The stdout is already correct today — the LEAK is the gap, so
+# this repro means nothing outside the sanitizer.
+
+void main():
+    Vector[int] xs = [1, 2]
+    int total = 0
+    int i = 0
+    while i < 20:
+        Vector[int] doubled = xs.map(it * 2)
+        for d in doubled:
+            total = total + d
+        i = i + 1
+    print(total)

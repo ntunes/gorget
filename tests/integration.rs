@@ -5394,6 +5394,35 @@ fn sh_closure_literal_ok_body_typed_int() {
     );
 }
 
+/// KNOWN GAP `t0959`, SELF-HOST lane — an INDIRECT call with a `&`-sigil
+/// argument forwards the argument BY VALUE and the callee dereferences it.
+/// SIGSEGV with `gg check` clean, on every callee shape.
+///
+/// The callee here is a BARE IDENTIFIER, deliberately: that discriminates this
+/// defect from the non-identifier-callee class R48 Track U closed
+/// (`callable_callee_shape_axis.gg`). Arg-0 gets the `__callable_N` pointer
+/// carve-out; every later argument is forwarded by value because the dispatch
+/// site has no signature to consult — the callable's type is the erased
+/// `Callable__GorgetClosure`. Rust `gg` prints 101 on both backends; this
+/// asserts the same on the SELF-HOST lane.
+///
+/// The class's four live top-level fixtures (`callable_amp_arr_indexed_callee`
+/// and siblings, `callable_amp_fntype_writethrough`) assert the RUST lane, so
+/// the self-host redness was visible only through the aggregate non-MATCH
+/// ceiling. This is the durable repro.
+#[test]
+#[ignore = "KNOWN GAP t0959: the self-host forwards a `&`-sigil argument BY VALUE at an \
+indirect call (no per-param ownership sig at the __callable_N dispatch), so the callee \
+dereferences an integer. Asserts the intended 101 on the self-host lane; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn sh_callable_amp_arg_by_value() {
+    sh_known_gap_expect(
+        "known_gaps/sh_callable_amp_arg_by_value.gg",
+        "sh_callable_amp_arg_by_value",
+        "101",
+    );
+}
+
 /// KNOWN GAP `t0879`, SELF-HOST lane — a USER-DEFINED generic method taking a
 /// callable (`U transform[U, F](self, F f)`) cannot be compiled on the
 /// self-host lane on ANY spelling of the argument: top-level fn, closure
@@ -6443,6 +6472,80 @@ Track R's Core #10 guard this is a LOUD lowering rejection instead of a silent r
 Asserts the intended output (2\\n2\\n2)."]
 fn callable_unit_form_clone_segv() {
     run_gg("known_gaps/callable_unit_form_clone_segv.gg", "2\n2\n2");
+}
+
+/// KNOWN GAP `todo/t0963` — ⭐ THE REFERENCE LAGS THE SELF-HOST. `flat_map`
+/// with an implicit-`it` body zeroes every element after the first of each
+/// inner vector on Rust `gg` (`1 0 2 0`), while the explicit-closure and
+/// named-function spellings of the SAME program are correct and the self-host
+/// prints `1 1 2 2` for all three. Right element COUNT, wrong values — the
+/// failure mode any length assertion sleeps through.
+///
+/// Asserts the CORRECT output, never the reference's current answer: per the
+/// succession plan the Rust side is fixed as oracle hygiene and the self-host
+/// is never dumbed down to match. NOT `todo/t0878` (that is the `Callable`
+/// PARAMETER monomorph gap, a link failure). Un-ignore when Rust prints
+/// `1 1 2 2` for all three spellings.
+#[test]
+#[ignore = "todo/t0963 — Rust gg miscompiles `flat_map(it)` (1 0 2 0); the explicit-closure and \
+named-fn spellings are correct and the SELF-HOST is right. Reference lags the self-host. \
+Asserts the intended 1 1 2 2 on all three spellings."]
+fn flat_map_implicit_it_zeroes() {
+    run_gg(
+        "known_gaps/flat_map_implicit_it_zeroes.gg",
+        "closure 1\nclosure 1\nclosure 2\nclosure 2\nnamed 1\nnamed 1\nnamed 2\nnamed 2\nit 1\nit 1\nit 2\nit 2",
+    );
+}
+
+/// KNOWN GAP `todo/t0962`, SELF-HOST lane — a comprehension-bodied
+/// implicit-`it` argument is REJECTED by the self-host and accepted by Rust
+/// `gg`, which runs it correctly. `expr_has_it` has no `EListComp` /
+/// `ESetComp` / `EDictComp` arm, so the body is treated as a CALLABLE and the
+/// `ECall` callee dispatcher refuses the synthesized
+/// `([z * 2 for z in it])(__hofp0)`. LOUD, so nothing is miscompiled — a
+/// Core #9 lane divergence, not a Core #10 hole. Asserts the intended output
+/// on the SELF-HOST lane.
+#[test]
+#[ignore = "KNOWN GAP t0962: the self-host rejects a comprehension-bodied implicit-`it` argument \
+that Rust gg accepts and runs (expr_has_it has no EListComp/ESetComp/EDictComp arm). Asserts the \
+intended 2/4/6/8 on the self-host lane; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn sh_comprehension_bodied_implicit_it() {
+    sh_known_gap_expect(
+        "known_gaps/sh_comprehension_bodied_implicit_it.gg",
+        "sh_comprehension_bodied_implicit_it",
+        "a 2\na 4\na 6\na 8",
+    );
+}
+
+// `todo/t0953` (Track T-a1's item, owned there) — the UNBOUNDEDNESS cell of
+// the closure-literal-argument env leak, which that item's own two-call repro
+// cannot show: twenty `map` calls leak twenty records (160 bytes), so the cost
+// scales with trip count rather than being a constant. Deliberately the
+// IMPLICIT-`it` spelling, which t0953's probes do not use, so the two together
+// show the class spans the explicit literal and the synthesised one. stdout is
+// already correct; the gap is visible only under the sanitizer.
+#[test]
+#[ignore = "todo/t0953 — a closure-literal argument leaks its env, UNBOUNDED per call: 20 map \
+calls leak 20 records. stdout is already correct; the gap is the leak, visible only under \
+`gg build --sanitize` + LeakSanitizer. Asserts the intended output (120)."]
+fn hof_call_env_leak_unbounded() {
+    run_gg("known_gaps/hof_call_env_leak_unbounded.gg", "120");
+}
+
+// `todo/t0957` — an indexed callee with a VARIABLE index (`fs[n](21)`) is
+// REJECTED as `E_NotAFunction`, while `fs[0](21)` and `fs[n + 0](21)` both
+// print 42. A bare identifier inside the brackets parses as a type NAME, so
+// the generic-call reading wins and the `EIndex` is deleted from the AST
+// before the typechecker sees it. The settled spellings are pinned by
+// `callable_callee_shape_axis.gg`; this cell waits on a ratified rule for
+// `expr[ident](args)`. Asserts the INTENDED output.
+#[test]
+#[ignore = "todo/t0957 — `fs[n](21)` with a variable index is rejected as E_NotAFunction because \
+a bare identifier parses as a type name and the generic-call reading wins, deleting the EIndex. \
+Un-ignore when the disambiguation is resolution-aware. Asserts the intended output (42)."]
+fn indexed_callee_variable_index() {
+    run_gg("known_gaps/indexed_callee_variable_index.gg", "42");
 }
 
 // `todo/t0947` — `auto x = <METHOD call returning Result>` auto-propagates,
@@ -40291,6 +40394,27 @@ fn self_host_runtime_diff() {
     // bound rather than an optimistic one. If this ever reds by exactly one on
     // an otherwise-unchanged tree, check that row before believing in new
     // inflow.
+    //
+    // 2026-09-03 (R48 Track U): the backlog had GROWN to 149 — Track R's own
+    // two new corpus rows, exactly the inflow this ceiling exists to catch.
+    // Owner ruling: *"fix the SH and the non-Match"*. Both rows are now MATCH
+    // and the count is back at 147; the ceiling is NOT lowered because it did
+    // not go below its standing value. The COMPOSITION did move, so re-read it
+    // before triaging a future +1:
+    //   WRONG-OUTPUT 29 + CC-FAIL 67 + CRASH 36 + DRIVER-FAIL 15 = 147,
+    //   MATCH 1532 of 2209 fixtures.
+    // (Was 30/66/36/15 = 147 with MATCH 1505.) `callable_clone_value_form_axis`
+    // left WRONG-OUTPUT and `callable_vector_element_plain_sig_call_segv` left
+    // CRASH, both to MATCH; `shared_callable` moved WRONG-OUTPUT -> CC-FAIL
+    // (its `Shared[Callable].get()()` invoke is now EMITTED rather than
+    // discarded, and hits an unresolved inner C type — `todo/t0612`, corrected
+    // there). Track U's own two new fixtures add ZERO inflow: BOTH are
+    // top-level, BOTH are in this auto-scanned corpus, and BOTH MATCH —
+    // measured, not asserted (`callable_callee_shape_axis`,
+    // `hof_implicit_it_collection_axis`). The second carries a declared row in
+    // `tests/sanitize/LEAK_ALLOWLIST.txt` for a PRE-EXISTING closure-env leak
+    // it makes visible (`todo/t0953`); that is a sanitizer matter and has no
+    // bearing on this count.
     const RUNTIME_DIFF_NONMATCH_CEILING: usize = 147;
     // ⛔ THIS GATE NO-OPS IN THE PROFILE PEOPLE ACTUALLY RUN, AND THAT IS A
     // COVERAGE HOLE, NOT A DESIGN. `cargo test --test integration self_host` is
@@ -48435,6 +48559,68 @@ fn callable_amp_dict_indexed_callee() {
 #[test]
 fn callable_bang_arr_indexed_callee() {
     run_gg("callable_bang_arr_indexed_callee.gg", "hi\n101");
+}
+
+/// AXIS (R48 Track U) — the CALLEE SHAPE of an indirect call, nine cells over
+/// one `Callable[int(int)]`: bare identifier and closure-literal IIFE
+/// (controls), Vector index, Dict subscript, non-type-parseable index
+/// (`fs[n + 0]`), call result, `.clone()` result, `.unwrap()` result, and a
+/// field chain then index (`h.fs[0]`).
+///
+/// The reference lane was already green on all nine; the SELF-HOST lane was
+/// RED on seven, from two stacked defects — the generic-call-vs-index
+/// disambiguation DELETED the `[0]` before lowering saw it (three
+/// backtracking sites x three parser copies), and the `ECall` callee
+/// dispatcher discarded every unenumerated callee shape through an
+/// `else: pass`. Each cell was RED-verified against the pre-fix self-host
+/// driver: cells 3/4 exited 139, cells 5/6/7/8 printed `0`, cell 9 failed to
+/// link (`undefined reference to Holder__fs__void`).
+#[test]
+fn callable_callee_shape_axis() {
+    run_gg(
+        "callable_callee_shape_axis.gg",
+        "1 22\n2 42\n3 42\n4 42\n5 42\n6 42\n7 22\n8 42\n9 42",
+    );
+}
+
+/// REGRESSION (R48 Track U) — an implicit-`it` body handed to a COLLECTION
+/// higher-order method is a closure BODY, not a callable value. The HOF
+/// extractor wrapped it as `(it * 2)(__hofp0)` — a call whose callee is a
+/// BinaryOp — which the self-host lowerer then discarded silently, filling the
+/// accumulator with unmapped, uninitialized elements. RED-verified: exit 139
+/// on the pre-fix self-host driver.
+///
+/// TWO axes, eleven cells, so a partial regression at any one trips it. AXIS 1
+/// is the HOF ARM (map, filter, any, all, Set.any). AXIS 2 is the BODY SHAPE —
+/// how the body reaches `it`: arithmetic (`it * 2`), field and index
+/// projection (`it.n`, `it[0]`), projection under a comparison
+/// (`it.n > 1`), and three `if` forms. Axis 2 failed two different ways: a
+/// non-exhaustive `expr_has_it` never recognised the projection bodies as
+/// implicit-`it` bodies at all (SEGV, or a silently EMPTY vector), and the
+/// DECLARED destination type leaked into the `if`-bodied ones so the
+/// accumulator was minted `Vector[Vector[int]]` (silent garbage, while `auto`
+/// was correct). It carries a `tests/sanitize/LEAK_ALLOWLIST.txt` row — Rust `gg`
+/// leaks one closure env per implicit-`it` HOF call, a PRE-EXISTING class this
+/// fixture makes VISIBLE rather than one it introduces, owned by `todo/t0953`
+/// and cited on the row. `closure_mixed_implicit_explicit_wiring.gg` below
+/// carries the same defect's `map` cell and was green throughout it.
+#[test]
+fn hof_implicit_it_collection_axis() {
+    run_gg(
+        "hof_implicit_it_collection_axis.gg",
+        "proj 1\nproj 2\nproj 3\nprojfilt 2\nprojfilt 3\nidx 10\nidx 20\ncond 0\ncond 7\ncond 7\ncond 7\nbranch 1\nbranch 2\nbranch 3\nbranch 4\nboth 0\nboth 2\nboth 3\nboth 4\nmap 2\nmap 4\nmap 6\nmap 8\nfilter 2\nfilter 4\nany true\nall true\nset_any true",
+    );
+}
+
+/// The `closure Phase 2 Step A` wiring proof, which had NO wired assertion at
+/// all — it was only ever exercised by the auto-scanned self-host parity
+/// corpus. It also now reads the mapped VALUES, not just the length: it stayed
+/// green right through the miscompile `hof_implicit_it_collection_axis` pins,
+/// because `map`'s accumulator had the right element COUNT and only the values
+/// were garbage.
+#[test]
+fn closure_mixed_implicit_explicit_wiring() {
+    run_gg("closure_mixed_implicit_explicit_wiring.gg", "3\n2\n4\n6\n6");
 }
 
 /// KNOWN GAP (Track K residual) — RETURNED-CALL-RESULT cell of the

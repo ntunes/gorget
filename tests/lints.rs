@@ -5380,6 +5380,135 @@ fn self_host_param_ctor_site_count() {
     );
 }
 
+/// Sibling-site ratchet (CLAUDE.md rule 4) over the self-host VALUE-CALLEE
+/// dispatch, plus the Core #10 lower-or-reject guard at the same match.
+///
+/// `f(args)` where the callee is a callable VALUE — a bare identifier bound to
+/// a closure local, a collection read (`fs[0](21)`, `d["f"](x)`), a call
+/// result (`mk()(1)`), a method result (`c.clone()(1)`), an
+/// immediately-invoked closure literal — all dispatch identically: closure
+/// value as arg-0, args borrowed, `__callable_<arity>`. That dispatch used to
+/// be written out at TWO sites and MISSING at the rest, and the missing ones
+/// fell through an `else: pass` that discarded the whole call, arguments
+/// included: `fs[0](21)` dispatched the Vector itself as a function pointer
+/// and `c.clone()(1)` printed `0`. It is now ONE producer,
+/// `lower_callable_value_call`, with one caller per callee shape.
+///
+/// THREE assertions, and each says exactly what it can and cannot see:
+///
+/// 1. `EXPECTED_ARMS` — the number of `case` arms in the `ECall` callee match.
+///    This is the one that sees a NEW CALLEE SHAPE, however it is written: an
+///    arm that open-codes the dispatch instead of calling the producer still
+///    adds a `case`, so it still moves this number and still has to be
+///    defended in review. (The `container_literal_arms_count` shape.)
+///
+/// 2. `EXPECTED_CONSUMERS` — the number of `lower_callable_value_call` call
+///    sites. ⚠ THIS ONE CANNOT SEE AN OPEN-CODED ARM: an arm that duplicates
+///    the dispatch inline adds ZERO call sites and leaves this number alone.
+///    What it DOES catch is a consumer being deleted or silently re-pointed —
+///    i.e. an existing shape drifting OFF the shared path. Pairing it with (1)
+///    is what closes the gap: a new arm moves (1), and if it did not also move
+///    (2) it is not going through the producer.
+///
+/// 3. The `ECall` callee match's fall-through REJECTS. Its `else:` arm must
+///    call `lower_abort`, never `pass`: `Expr` has 44 variants and that match
+///    names seven, so a shape nobody thought about must FAIL THE BUILD rather
+///    than compile to a fresh unit local. This is the narrow, site-specific
+///    guard; the general `.gg`-aware silent-fallthrough ratchet — which needs
+///    a scope narrow enough that its allowlist cannot swallow this very arm —
+///    is `todo/t0958`.
+#[test]
+fn self_host_value_callee_producer_is_the_only_dispatch() {
+    // The identifier-bound-callable arm, the EFieldAccess (method-style) arm,
+    // the immediately-invoked closure literal, `None()`, and the three
+    // non-identifier value-callee shapes (EIndex, ECall result, EMethodCall
+    // result). Five of the seven dispatch through the producer; EFieldAccess
+    // and ENoneLiteral do not (they route to `lower_call` or return unit).
+    const EXPECTED_ARMS: usize = 7;
+    const EXPECTED_CONSUMERS: usize = 5;
+
+    let path = "tests/fixtures/self_host_lowerer/lower_expr.gg";
+    let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+
+    // The `case` arms of the callee match, counted between the `ECall` arm
+    // header and the next arm at ITS indent. Line-based and indent-keyed —
+    // the same robustness note the other `.gg` scanners carry.
+    const CALLEE_MATCH_OPEN: &str = "        case ECall(callee_box, args, targs):";
+    const CALLEE_ARM_INDENT: &str = "                case ";
+    let open = content.find(CALLEE_MATCH_OPEN).unwrap_or_else(|| {
+        panic!(
+            "cannot find the ECall callee match in {path}. If the arm was renamed or \
+             re-indented, re-anchor this lint; do NOT delete it — it is the only guard \
+             that sees a new callee shape."
+        )
+    });
+    let rest = &content[open + CALLEE_MATCH_OPEN.len()..];
+    let mut arms = 0usize;
+    for line in rest.lines() {
+        // Stop at the next arm of the OUTER match (8-space `case `/`else:`).
+        let t = line.trim_start();
+        let indent = line.len() - t.len();
+        if indent == 8 && (t.starts_with("case ") || t.starts_with("else:")) {
+            break;
+        }
+        if line.starts_with(CALLEE_ARM_INDENT) {
+            arms += 1;
+        }
+    }
+    assert_eq!(
+        arms, EXPECTED_ARMS,
+        "The `ECall` callee match now has {arms} `case` arms, the pinned count is \
+         {EXPECTED_ARMS}.\n\n\
+         A new CALLEE SHAPE is a semantic addition: route it through \
+         `lower_callable_value_call` if it evaluates to a callable value (and bump \
+         EXPECTED_CONSUMERS with it), or give it a real lowering of its own. Then bump \
+         this number. If you removed an arm, lower both. ⚠ If this number moved and \
+         EXPECTED_CONSUMERS did not, the new arm is OPEN-CODING the dispatch — that is \
+         the drift that let `fs[0](21)` and `c.clone()(1)` be silently discarded."
+    );
+
+    let mut defs = 0usize;
+    let mut calls = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            continue; // .gg comments
+        }
+        if trimmed.starts_with("int lower_callable_value_call(") {
+            defs += 1;
+            continue;
+        }
+        calls += line.matches("lower_callable_value_call(").count();
+    }
+
+    assert_eq!(defs, 1, "expected exactly ONE `lower_callable_value_call` definition in {path}, found {defs}");
+    assert_eq!(
+        calls, EXPECTED_CONSUMERS,
+        "Self-host value-callee dispatch call-site count changed: {calls} vs \
+         {EXPECTED_CONSUMERS}.\n\n\
+         Every callee shape that evaluates to a callable VALUE routes through \
+         `lower_callable_value_call` — closure value as arg-0, args borrowed, \
+         `__callable_<arity>`, and the typed return-type ladder. A DROP here means \
+         a shape that used to go through the producer no longer does. If you added \
+         a callee shape, CALL the producer and bump this with EXPECTED_ARMS. ⚠ This \
+         count alone cannot see an arm that open-codes the dispatch — the arm count \
+         above is what catches that, which is why both are asserted.",
+    );
+
+    // The `ECall` callee match must lower-or-REJECT (Core #10). Find the arm's
+    // `else:` — the one immediately followed by a `lower_abort` call naming the
+    // callee — and assert it is still there.
+    assert!(
+        content.contains("lower_abort(\"cannot lower a call whose callee is a \""),
+        "The `ECall` callee dispatcher in {path} no longer REJECTS its unhandled \
+         callee shapes. That `else:` arm previously `pass`ed and returned a fresh \
+         UNIT local, discarding the whole call — arguments included — for every \
+         shape the match does not name. `Expr` has 44 variants and the match \
+         names seven. Restore the `lower_abort`, or add a real lowering arm for \
+         the shape you are handling (Core #10: lower-or-reject).",
+    );
+}
+
 /// Sibling-site ratchet (CLAUDE.md rule 4 / "Sibling-site drift") over the
 /// self-host param-ownership registration sites in `lower.gg`. The pre-scan
 /// builds three PARALLEL per-fn Dicts — `fn_borrow_params`, `fn_move_params`,
@@ -8820,7 +8949,14 @@ fn sanitize_allowlists_shrink_only() {
     // ⚠ RECORDS WENT *UP* WHILE ROWS WENT DOWN — see `LEAK_RECORDS` below. That
     // is not a contradiction: the 16 deleted rows tolerated 22 records between
     // them and the 3 admitted rows tolerate 46.
-    const LEAK_CEILING: usize = 293;
+    // ⚖ And 306 -> 307 with R48 Track U's ONE admitted row
+    // (`hof_implicit_it_collection_axis`): a pre-existing per-HOF-call closure-env
+    // leak, `todo/t0953`, made VISIBLE by the regression fixture for a self-host
+    // miscompile — not introduced by it. The track's other new fixture,
+    // `callable_callee_shape_axis`, is CLEAN and owes no row. Both counts taken
+    // from the sweep's own `verdicts.tsv` column 4 under a restricted `FIXLIST`.
+    // See the `⚖ ADMITTED (R48 Track U)` block in the allowlist.
+    const LEAK_CEILING: usize = 294;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -8977,8 +9113,14 @@ fn sanitize_allowlists_shrink_only() {
     // reader who watched only `LEAK_CEILING` would score this round as a pure
     // burn-down; a reader who watched only `LEAK_RECORDS` would score it as a
     // regression. Both readings are wrong on their own.
-    const LEAK_CLASS_PAIRS: usize = 500;
-    const LEAK_RECORDS: usize = 2286;
+    // ⚖ And 511 -> 512 / 2262 -> 2273 with R48 Track U's ONE admitted row: 1 new
+    // (fixture, class) pair tolerating 11 leak records, class
+    // `__gorget_closure_env_alloc`, count EXACT (single-threaded, stable — no
+    // `*N+` marker, so LEAK_LOOSE_SIGNATURES is unchanged). Measured, not counted
+    // by hand: the sweep's `verdicts.tsv` column 4 reads
+    // `hof_implicit_it_collection_axis  LEAK  -  __gorget_closure_env_alloc*11`.
+    const LEAK_CLASS_PAIRS: usize = 501;
+    const LEAK_RECORDS: usize = 2297;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────

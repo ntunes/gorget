@@ -1009,6 +1009,13 @@ struct Parser:
     # name+value shape EStructLiteral already uses), so `cap=`/`alloc=`
     # survive to lowering instead of being discarded.
     Vector[String] last_arg_names
+    # Failure channel for `parse_type`. `parse_type` returns a
+    # `SpannedType` unconditionally (its fallback reports and skips a
+    # token), so a speculative caller has no way to tell a real type from a
+    # recovered one. The fallback sets this; `try_generic_call_type_args`
+    # clears it before speculating and reads it after. Rust's `parse_type`
+    # returns `Result`, which is the same signal carried in the return type.
+    bool type_parse_failed
 
 # MAX nesting for a single expression's AST tree (parens/unary recursion OR
 # a flat operator chain's left spine). 128 ≈ 2.46× the deepest real-code
@@ -1371,6 +1378,11 @@ equip Parser:
         # type vs primitive disambiguation) don't pollute the typed
         # diagnostic stream when their speculation fails. See
         # `enter_speculation` doc-comment.
+        # The typed failure flag is raised UNCONDITIONALLY — the
+        # `speculation_depth` gate below only silences the user-facing
+        # diagnostic, and a speculative caller still has to learn that the
+        # type parse failed. See `try_generic_call_type_args`.
+        self.type_parse_failed = true
         if self.speculation_depth == 0:
             self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "expected type"))
         self.advance()
@@ -1434,6 +1446,48 @@ equip Parser:
             self.advance()
             return OWN_MOVE
         return OWN_BORROW
+
+    # ── Generic-call-vs-index backtracking chokepoint (Core #4 class fix) ──
+    # `expr[...]` is ambiguous: a generic call `Name[T](args)` or an index
+    # read `fs[0]`. Rust resolves it with a real backtracking combinator —
+    # `try_parse(|p| { p.parse_generic_type_args().ok()?;
+    # p.check(&Token::LParen).then_some(type_args) })` in
+    # `src/parser/expr.rs` — which REQUIRES the type-arg parse to have
+    # SUCCEEDED before it commits to the call reading.
+    #
+    # `parse_type_args` returns a plain `Vector`, so it has no failure
+    # channel of its own, and `parse_type`'s fallback both reports AND
+    # ADVANCES. The ADVANCE is what produced the misparse: `fs[0](21)`
+    # consumed the `0` as a "type", left the parser sitting on `(`, and the
+    # whole `EIndex` was DELETED from the AST — the Vector itself was then
+    # dispatched as the closure. `d["a"](1)` died the same way.
+    #
+    # `type_parse_failed` is the missing channel: typed metadata written at
+    # the producer (`parse_type`'s fallback) and read here through one
+    # accessor — no name matching, no shape heuristic
+    # (docs/devbook/24-layering-discipline.md, rules 2-4). ONE producer for
+    # all three `[`-backtracking sites (postfix generic call, method-level
+    # turbofish, keyword-constructor turbofish): fix the class, not the
+    # instance.
+    #
+    # A speculation that loses must be SILENT, exactly as `.ok()?` is, so
+    # the failure path rolls back the position and the diagnostics it
+    # speculatively produced.
+    #
+    # This copy already suppresses the fallback's diagnostic while
+    # `speculation_depth > 0`, so the rollback here is position-only — but
+    # that suppression is exactly why the fallback needed a SEPARATE typed
+    # signal: with the push gated away there was nothing left to observe.
+    Option[Vector[SpannedType]] try_generic_call_type_args(&self):
+        int saved_pos = self.pos
+        self.type_parse_failed = false
+        self.enter_speculation()
+        Vector[SpannedType] targs = self.parse_type_args()
+        self.exit_speculation()
+        if not self.type_parse_failed and self.check_tok(TOK_LPAREN):
+            return Some(targs)
+        self.pos = saved_pos
+        return None
 
     Vector[SpannedType] parse_type_args(&self):
         Vector[SpannedType] args = Vector[SpannedType]()
@@ -1728,22 +1782,17 @@ equip Parser:
                 # If lhs is an identifier, try to parse as generic type args + call
                 String ident_name = expr_ident_name(lhs.expr)
                 if ident_name != "":
-                    int saved = self.pos
-                    self.enter_speculation()
-                    Vector[SpannedType] targs = self.parse_type_args()
-                    if self.check_tok(TOK_LPAREN):
+                    Option[Vector[SpannedType]] targs_opt = self.try_generic_call_type_args()
+                    if targs_opt.is_some():
                         # Generic constructor: Name[T](args)
+                        Vector[SpannedType] targs = targs_opt.unwrap()
                         Vector[SpannedExpr] call_args = self.parse_call_args()
                         Vector[String] call_names = self.last_arg_names
-                        self.exit_speculation()
 
                         lhs = SpannedExpr(ECall(Box(lhs), call_args, call_names, targs), Span(bp_start, self.peek().lex_start))
                         continue
-                    # Not a generic constructor — restore and parse as index.
-                    # Failed speculation is silent — mirrors Rust's
-                    # `try_parse(... .ok()?)`.
-                    self.exit_speculation()
-                    self.pos = saved
+                    # Not a generic constructor — the speculation already
+                    # restored the position; parse as an index read.
                 self.advance()
                 # D22 (ratified 2026-07-06): colon-slice `v[a:b]` is
                 # canonical. Four accept-forms + two parse rejects for the
@@ -2002,17 +2051,13 @@ equip Parser:
             # `(v.hash)[FxHasher]` then `(&h)` — the EMethodCall arm never
             # fires and the type-args vanish from the format output.
             if self.check_tok(TOK_LBRACKET):
-                int saved = self.pos
-                self.enter_speculation()
-                Vector[SpannedType] mtargs = self.parse_type_args()
-                if self.check_tok(TOK_LPAREN):
+                Option[Vector[SpannedType]] mtargs_opt = self.try_generic_call_type_args()
+                if mtargs_opt.is_some():
+                    Vector[SpannedType] mtargs = mtargs_opt.unwrap()
                     Vector[SpannedExpr] call_args = self.parse_call_args()
                     Vector[String] call_names = self.last_arg_names
-                    self.exit_speculation()
                     return SpannedExpr(EMethodCall(Box(lhs), name, call_args, call_names, mtargs), Span(start, self.peek().lex_start))
-                # Restore — wasn't a method-level turbofish.
-                self.exit_speculation()
-                self.pos = saved
+                # Wasn't a method-level turbofish — position already restored.
             if self.check_tok(TOK_LPAREN):
                 Vector[SpannedExpr] call_args = self.parse_call_args()
                 Vector[String] call_names = self.last_arg_names
@@ -2567,17 +2612,12 @@ equip Parser:
             SpannedExpr callee = SpannedExpr(EIdentifier(ctor_name), Span(kw_tok.lex_start, kw_tok.lex_end))
             if self.check_tok(TOK_LBRACKET):
                 # Generic constructor: Option[int]()
-                int saved = self.pos
-                self.enter_speculation()
-                Vector[SpannedType] targs = self.parse_type_args()
-                if self.check_tok(TOK_LPAREN):
+                Option[Vector[SpannedType]] targs_opt = self.try_generic_call_type_args()
+                if targs_opt.is_some():
+                    Vector[SpannedType] targs = targs_opt.unwrap()
                     Vector[SpannedExpr] call_args = self.parse_call_args()
                     Vector[String] call_names = self.last_arg_names
-                    self.exit_speculation()
                     return SpannedExpr(ECall(Box(callee), call_args, call_names, targs), Span(start, self.peek().lex_start))
-                # Restore — wasn't a generic constructor.
-                self.exit_speculation()
-                self.pos = saved
             if self.check_tok(TOK_LPAREN):
                 Vector[SpannedExpr] call_args = self.parse_call_args()
                 Vector[String] call_names = self.last_arg_names
@@ -4112,6 +4152,6 @@ ParseResult parse_source(String source):
         if tag != TOK_COMMENT and tag != TOK_DOCCOMMENT:
             tokens.push(tok)
         ti = ti + 1
-    Parser p = Parser(tokens, 0, Vector[Diagnostic](), 0, 0, 0, Vector[String]())
+    Parser p = Parser(tokens, 0, Vector[Diagnostic](), 0, 0, 0, Vector[String](), false)
     Module m = p.parse_module()
     return ParseResult(m, p.diagnostics)
