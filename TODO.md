@@ -1537,6 +1537,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t1017`](todo/t1017.md) **HIGH** — 🆕🚨 [HIGH — TWO SILENT WRONG-ANSWER PATHS ON THE SAME TEN LINES, gg check CLEAN, BOTH BACKENDS; found
 - [`t1018`](todo/t1018.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT on ordinary safe syntax, gg check CLEAN, both backends; found
 - [`t0989`](todo/t0989.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT on the most ordinary syntax in the language, gg check CLEAN, rc 0, both
+- [`t1019`](todo/t1019.md) **HIGH** — 🆕🚨 [HIGH — Core #10 lower-or-reject, gg check CLEAN on a method that does not exist; both backends;
 ### Medium
 
 
