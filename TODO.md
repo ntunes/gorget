@@ -490,6 +490,57 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **✅ H · INTEGRATED — `cacd3dfce`. Worktree pruned.** Squash-merged (8 commits). Closes **`t0966`,
+  `t0054`, `t0824`**; files `t0997`. Gates at the integrated state, bare: build 0 · `--lib` 1181/0 ·
+  `--test lints` **220/0/1** · **`known_gaps_census.sh --check` rc 0, "PASS set matches
+  `PASSING_ALLOWLIST.txt` exactly"**. ⊕ `AGENTS.md`'s round-close battery gained the three missing CI legs,
+  and the **measured-false** sentence claiming it covered every CI target is replaced by a **lint that
+  reconciles the list against `ci.yml`**.
+  ⭐ **THE EXECUTOR IMPROVED ON AN ERRATUM RATHER THAN OBEYING IT.** Told to restate a stale ggdef offset,
+  it chose the *other* option and said why: *"an absolute offset into a file whose header I just edited will
+  rot on the next header edit too"* — so the fixture now carries **the COMMAND plus the construct**, not a
+  number. **Quote the command, never the value** — the same rule the handover lives under.
+  ⭐ **AND IT REFUSED A ONE-LINE SIMPLIFICATION BY MEASURING IT.** Asked to pin `t0997`'s "39" with a script,
+  it tried the obvious contiguous-`#[…]`-block matcher first: **it returns 16, not 39**, because a multi-line
+  `#[ignore = "… \` continuation does not start with `#[`, silently ending the attribute block. ⇒ it
+  shipped the 32-line walker instead. **A scanner that under-counts by 59% while looking correct is worse
+  than the prose it replaces.**
+
+- **✅ K · PASS 4 — THE WITNESS CLOSES. DESIGN SOUND A FOURTH TIME. EXECUTOR LAUNCHED (no pass 5).**
+  Folded as ADDENDUM 5. Pass 4's own ruling: every finding is scope growth or a figure correction, **none
+  resets the streak.**
+  ⭐⭐ **THE INDEPENDENT WITNESS WAS IN THE TREE THE WHOLE TIME.** `src/ir/lowering/context.rs:3981-3992`
+  carries a pre-existing enumeration — *"FOUR call sites, the complete view-producer read set … walk each
+  hit to its GIR producer before adding a sibling"* — whose **W3c row literally states this defect**:
+  *"`lower_index_access` place-arm — never consult `returns_view`, carry NO View tag."* **Three passes hunted
+  for a witness that was written down in-source.**
+  ✅ **PRODUCER POPULATION TOTAL AT THREE**, closed two ways: all **12** `returns_view` methods plus 14 other
+  String-producing spellings run through the 64-realloc probe (**only index/slice break**), and **one**
+  view-returning callee among all **70** `call_extern` sites in `src/ir/lowering/`.
+  ⛔ **`|changed| = 12, NOT 6** — and the axis was mis-named. ADDENDUM 4 used **a different second axis per
+  site**, so it was not a product. The honest decomposition is **{producer} × {CONSUMING POSITION}**, whose
+  witness is **AGENTS.md's own consuming-position list**. **Six cells appear in NO earlier addendum**:
+  field-assign, `v.set`, `v[0] =`, `v.insert`, field-rooted for-source, and for-element field-assign.
+  ⭐ **AND THEY REFUTE THE CORE #14 COMMENT FURTHER THAN §2a ADMITTED** — the collection-put hooks cover
+  `push`/`put`/ctor-init and **NOT** `set`/`insert`/`v[i]=`/field-assign ⇒ **at least FIVE resting positions
+  unimplemented, not 2.** ⊕ **Rule 3's "five boundaries" is itself a SELECTION used as a TOTAL** (its own
+  text says *"a local bind, a field init, a closure capture, a collection `push`, a `return`-as-owned"* —
+  illustrative). ⊕ Its path is `docs/internals/`, not `docs/devbook/`.
+  ✅ **S-D CLOSED AT ZERO — the premise was FALSE.** The self-host does **not** scan character-by-character
+  for this construct; an env-gated counter gives **0 for-string sites across all six drivers**, and the
+  emitted C is **byte-identical with and without the tag** (lexer 1,013,393 B; lowerer 34,872,774 B).
+  ⭐ **A FOURTH ACCIDENTALLY-CORRECT CELL, AND IT IS A LIVE SILENT MISCOMPILE → `t1050`.** `for c in s:`
+  where `s` is **reassigned inside the loop** reads a **torn string**: `len` is snapshotted once while
+  `iter_local` is a Ptr to `s`'s slot whose `->data` is re-read every iteration. Rust prints **`aZZ`**;
+  **ggdef prints `abc`** — definitive (Core #8). ⚡ **SIX Q#4: the case has NO SUBJECT.**
+  `E_MutationWhileBorrowed` **does** guard this class — but **only in the mutating-METHOD-CALL arm**, so a
+  plain **reassignment**, the only way to mutate a String, reaches no rule at all; **and the collection
+  sibling it does cover is already correct.** ⊕ Same filing: the two emissions of `gorget_str_codepoint_at`
+  **disagree** — the helper form bounds-checks, **the INLINE form does not, and the inline form is the one
+  used** (verified reading `data[19]` off a 1-byte buffer). A heap OOB read and a Layering-rule-3 break.
+  ⚠ **ADDENDUM 4's "exactly FOUR runtime call sites" was the THIRD different wrong number** for that figure
+  (the truth: **14 static + 2 emitted**, 22 grep hits). Every figure now carries its profile and bare command.
+
 - **⛔ A1-M · OUTPUT-REVIEW: RESERVATIONS (5 blocking). *"The compiler fix is sound and I would integrate it
   as-is; the RECORD that ships with it is not, and one live sibling of the fixed class was missed."***
   All three mandatory gates PASS; `src/` needs **no rework**. Returned to the executor; **NOT integrated.**
