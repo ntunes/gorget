@@ -212,7 +212,7 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   the wrongly-ACCEPTED direction `t0015` feared).
   **Regenerated at HEAD (map is green, so baseline == measurement):** `t0015` **239/288 = 83.0%** (exact
   match to the item) · book 202/231 · language-design 23/36 · language-reference 14/21. ⚠ **`t0018`'s
-  corpus has DOUBLED since filing — 617/721 = 85.6%, not 354 cells @ 87.3%.** Whole map 842/1009 = 83.4%,
+  corpus has DOUBLED since filing — 617/721 = 85.6%, not 354 cells @ 87.3%.** ⚠ **CORRECTED: whole map is 856/1009 = 84.8% under the map's own `good` rule** (my earlier *842/1009 = 83.4%* was inconsistent — 1009−842=167, not 153; state the rule with the figure). Thesis line *"one in eight"* is really ~1 in 6.6.
   **153 failing cells** (85 REJECTED · 32 WRONG · 25 BUILD-FAIL · 6 CRASH · 3 ICE · 1 TIMEOUT · 1 UNKNOWN).
   ⭐ **ESSENTIALLY ALL 153 ARE ALREADY HOMED at MECHANISM level** — this is CLOSURE work, not filing work.
   The three to spend the track on, costed end-to-end:
