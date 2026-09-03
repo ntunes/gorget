@@ -851,7 +851,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t0873`](todo/t0873.md) **HIGH** — 🆕🚨 [HIGH — TWO defects on Vector[Callable], found 2026-08-31 by the R48 Track-B1 brief-review pass 1 while probing the r…
 - [`t0907`](todo/t0907.md) **HIGH** — 🆕🚨💥 [HIGH — MEMORY-UNSAFE, gg check rc 0, and BOTH VALUE LANES PRINT THE RIGHT ANSWER; found 2026-08-31 by R48 Track D2…
 - [`t0963`](todo/t0963.md) **HIGH** — 🆕🐛 [HIGH — ⭐ THE REFERENCE LAGS THE SELF-HOST: Rust gg MISCOMPILES flat_map(it) and the self-host gets it RIGHT. Silent…
-- [`t0988`](todo/t0988.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — MEMORY UNSAFETY from ordinary safe syntax, gg check CLEAN, BOTH BACKENDS; found
+- [`t0988`](todo/t0988.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — MEMORY UNSAFETY from ordinary safe syntax, gg check CLEAN, both backends.
 ### Medium
 
 - [`t0115`](todo/t0115.md) **MED** — 🆕🐛 [MED — COMMENT MISATTRIBUTION, PRE-EXISTING on both lanes; found 2026-08-19 by the R43 Track G output review, executo…
@@ -1536,6 +1536,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 
 - [`t1017`](todo/t1017.md) **HIGH** — 🆕🚨 [HIGH — TWO SILENT WRONG-ANSWER PATHS ON THE SAME TEN LINES, gg check CLEAN, BOTH BACKENDS; found
 - [`t1018`](todo/t1018.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT on ordinary safe syntax, gg check CLEAN, both backends; found
+- [`t0989`](todo/t0989.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT on the most ordinary syntax in the language, gg check CLEAN, rc 0, both
 ### Medium
 
 
