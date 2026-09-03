@@ -242,7 +242,7 @@ When you launch sub-agents via the `Agent` tool, the following rules are **non-n
 
    ⊕ **The orchestrator's OWN hands:** fix a typo, a stale figure or a one-line correction in place, never on a TRACK's behalf. Inside a track the TRACK fixes what its passes find, through its executor. *"Fix inline unless really disjoint"* binds the **ROUND**, not the orchestrator's hands.
 
-0b. **Orchestrator is branch-agnostic.** Stay in the launch worktree — that *is* the session integration branch. Never hardcode a branch name and never check a track branch out there. Subagents always get their own worktree; parent integrates back.
+0b. **Orchestrator is branch-agnostic. WORK ALWAYS LANDS ON THE WORKTREE CLAUDE WAS INVOKED FROM** (owner 2026-09-03) — that *is* the session integration branch. Never hardcode a branch name, never check a track branch out there, and never commit to `main`: `main` moving is the OWNER's sync, not a place to land. Subagents always get their own worktree; parent integrates back. ⚠ **A handover bullet contradicting a rule in this file is STALE BY CONSTRUCTION — this file wins.** (`TODO.md`'s handover is rewritten every round close; its 2026-07-07 "land on `main`" bullet contradicted this rule for two months and misled R49's orchestrator.)
 
 1. **Always pass `isolation: "worktree"`.** No exceptions; applies to NESTED forks too. **Every track runs on its own worktree** — its EXECUTOR's. Other agents on the track get throwaway worktrees and ship no diff.
 

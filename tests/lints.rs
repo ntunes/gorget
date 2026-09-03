@@ -9753,7 +9753,7 @@ const AGENTS_MD_HEADING_INVENTORY: &[(&str, &str)] = &[
     ("H-TC", "## Task Continuity"),
     ("H-MA", "## Multi-agent orchestration"),
     ("MA-0", "0. **THE ORCHESTRATOR DOES NOT TOUCH THE CODE — IT LAUNCHES TRACKS THAT DO.**"),
-    ("MA-0b", "0b. **Orchestrator is branch-agnostic.**"),
+    ("MA-0b", "0b. **Orchestrator is branch-agnostic. WORK ALWAYS LANDS ON THE WORKTREE CLAUDE WAS INVOKED FROM**"),
     ("MA-1", "1. **Always pass `isolation: \"worktree\"`.**"),
     ("MA-2", "2. **Brief the agent to verify its worktree on entry.**"),
     ("MA-3", "3. **Stage explicitly by file name.**"),
