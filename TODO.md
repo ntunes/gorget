@@ -490,6 +490,47 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **⭐⭐ A1-I · SCOUT FOUND A LIVE MEMORY-UNSAFETY MISCOMPILE, UNFILED AND UNCOVERED. Brief written
+  (`/tmp/brief_A1I.md`); pass 1 launched.**
+  **`src/lir/lower/insts.rs:551` tests `!func.contains("__call")` — a SUBSTRING match against a MANGLED USER
+  METHOD NAME (`{Type}__{method}`) — so ANY user method whose name starts with `call` COLLIDES.**
+  `equip Runner: int call(self, Callable[int(int)] f, int x)` → **rc 139 on BOTH backends, `gg check` clean**;
+  rename it `apply` and it works; **ggdef prints `80`/`done` and adjudicates.** A **named function** instead
+  of a closure literal is also a working control.
+  **MECHANISM PROVEN IN THE EMITTED C, NOT INFERRED:** the control emits `__gorget_closure_env_alloc` +
+  `memcpy` + a `GorgetClosure` initialiser and passes `&__s10`; **the `call` spelling emits NONE of it** and
+  passes the raw 8-byte env. **ASan names frame, object and offset exactly.**
+  ⇒ **MEMORY-UNSAFETY FROM SAFE, SPEC-DOCUMENTED SYNTAX — the top severity rank — and grepping all 827
+  `todo/` items on symptom AND mechanism finds NOTHING.** ⚡ **In A1-I's SCOPE, not a new filing.**
+  ⭐ **AND IT IS CORE #2's RATIONALE DEMONSTRATED IN USER CODE: the no-name-matching rule exists to prevent
+  exactly this, and here the violation SIGSEGVs a user program.**
+  ⭐ **CENSUS FINALLY MECHANICAL: 41 SITES ACROSS THREE CONVENTIONS** (drafts said 3 → 6 → 19), with four
+  reproducible `git grep … HEAD` witnesses. **`lookup_closure_info` = 11 — the handover's figure CONFIRMED.**
+  ⛔ **THE GUARD IS BLIND TO ITS OWN CLASS (SIX Q#2), AND IT WAS MEASURED:** the repo's name-prefix ratchets
+  compile `starts_with\("({MANGLED_PREFIXES})__"\)`, which matches **0 of the 12** closure-identity
+  predicate shapes — `__Closure_` is `__X_` not `X__`, and `contains(…)` is not `starts_with` at all.
+  **`--test lints` stayed 218/0 GREEN while the prototype DELETED 12 name-match sites.** ⇒ **A1-I owes a NEW
+  ratchet covering `src/` AND `tests/fixtures/self_host_*`.**
+  ⚡ **CARRIER CORRECTION: `TypeMetadata`, NOT GIR `Local`** — identity is a property of the TYPE, and
+  **`TypeMetadata.is_closure_env` already exists there with a single writer.** ⭐ **Totality witness for the
+  `takes_env` carrier is rustc E0063, not a reading:** adding the field names **exactly 21 sites, EVERY ONE
+  `#[cfg(test)]`** ⇒ **exactly ONE production construction of `ir::Function`.** ✅ And the
+  "backends unreachable from GIR" argument is now cited: `grep -rn "ir::Module\|TypeRegistry" src/backend/`
+  → **ZERO**.
+  **MEASURED YIELD:** 12 of 20 convention-1 sites retired · **rc 139 → rc 0 on C AND LLVM** · `--lib` 1181/0
+  · targeted 164/0 (C) and 108/0 (LLVM). ⚠ The full C sweep **autoscaled to one thread under load** and was
+  killed at 1460/0 — **the executor and I still owe the full battery.**
+  ⛔ **THE HANDOVER WAS WRONG THREE MORE WAYS:** `bir/synth.rs:72` is **`#[cfg(test)]`** · **"A1's SH lane is
+  NONE" is right for A1-M and WRONG here — 7 mirror sites, one a VERBATIM mirror of `optimize.rs:218`** ·
+  and ⭐ **a typed carrier for convention 2 ALREADY EXISTS** — `ClosureDispatchKind` (`lir/mod.rs:445-455`)
+  **whose doc-comments literally read *"Originally `__callable_N`"***, leaving `insts.rs:3892/3895` the sole
+  surviving name-decode. ⊕ **`t0681` already owns `methods.rs:276` and already prescribes this fix — CLAIM,
+  do not duplicate.** ⊕ `c_lir/emit_types.rs:24` emits `/* UNKNOWN_CLOSURE_CALL */` **into the generated C**
+  — a silent codegen failure dressed as a comment.
+  ⚡ **SPLIT ON THE MECHANISM BOUNDARY: convention 2 → A2, for a STRUCTURAL reason** — the synthetic name is
+  **a MAP KEY into four sidecar tables**, and **the convention exists BECAUSE of A2's erasure**
+  (`calls.rs:1897` is gated on `local_type_id == UNIT_TYPE`). **Fix A2 and that arm becomes unreachable.**
+
 - **⚡ C · EXECUTOR RETURNED — 3 commits on `worktree-agent-a5ae02a1866616051`, 39 files / +2034.
   OUTPUT-REVIEW LAUNCHED; NOT INTEGRATED.** The name-match is **deleted**; `t1019`'s check-side rule lands
   at `typecheck.rs:3528`; the `shared auto` re-infer is gated on `Type::Inferred`. **Closes `t1017` + `t1019`.**
