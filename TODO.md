@@ -490,6 +490,52 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **⛔ F · OUTPUT-REVIEW: 2 BLOCKING (both foldable) + 10 SCOPE. ALL THREE MANDATORY GATES PASS.** Returned
+  to the executor; **not integrated.** Gates re-run bare at `22b8dec2f`: build 0 · `--lib` **1187/0** ·
+  `--test lints` **218/0/1** · `robustness_map --lanes c,llvm` **rc 0, no REGRESSION line, ZERO PROGRESS
+  lines** (⇒ the committed baselines are exactly what the compiler produces). **All 8 PINs RED-verified by
+  the reviewer itself** against a compiler built at `a534fbe3d`.
+  ⛔⛔ **B1 · SIX Q#2 LANDS ON THE FIX'S OWN GUARD — and four rows are ALREADY WRONG.**
+  **The defect F fixed was a missing METHOD in a hand-maintained list; `closure_shape_rows_are_total`
+  catches a missing PROTOCOL. It cannot catch its own class**, and the proof is in the diff:
+  **`Dict.update` is a map MERGE, not a callback method** (`gorget_map_update(void*, GorgetMap)`, **no HofOp
+  arm**) and **`for_each`/`find`/`find_index` on `Set` DO NOT EXIST** (`E_NoMethodFound`; `SET.methods` ends
+  at `filter/fold/each/any/all`, and there is no `equip Set`). ⭐ **The bad rows came from
+  `BuiltinMethodDecl`'s `key_val_params` + its "// Higher-order" banner — THE VERY SOURCE THE COMMIT MESSAGE
+  SAYS IT DELIBERATELY DID NOT REUSE.** All four are inert today, **but a table sold as the single typed
+  source of truth, green-lit by its own totality test while carrying four fabricated rows, is exactly what
+  this gate exists to catch.** ⚡ **Remedy ordered: delete the four AND ship a cross-check against THREE
+  INDEPENDENT WITNESSES** — `protocol.methods` ∪ the LIR HofOp dispatch arms ∪ the `equip [T] Vector[T]`
+  block — **feasibility already checked: that union covers every legitimate row and flags all four bad ones.**
+  ⛔ **B2 · `t0993`'s CAUSAL ATTRIBUTION IS FALSE; THE CONCLUSION SURVIVES, THE ARGUMENT DOES NOT.** The
+  seven `TRAP → CRASH:sig11` drifts cannot be today's `verdict.py` change — **its only functional delta is
+  BUILD-phase, while both classifications are RUN-phase and untouched.** The real cause is **`efaabeadc`
+  "ONE verdict classifier"**: the previous adjudicator returned `TRAP` for **any** non-zero run exit, those
+  baselines were written under it, and afterwards **no `--accept` could move a non-good → non-good bucket**,
+  so the stale label persisted. ⇒ **the item's own open question is DECIDABLE and the answer is YES** — as
+  written it points the disposition at the softer hypothesis on a false premise. ⊕ Its *"not one drifted
+  cell contains a collection HOF closure"* is also false. ⊕ **The conclusion is right and the reviewer
+  verified it EMPIRICALLY, which the item did not.**
+  ⭐ **S3 · THE EXECUTOR UNDER-CLAIMED — readiness #4's "stated hole" is CLOSED.** Perturbing to the 2-arg
+  `infer_operand_type` flips `hof_fold_nonconstant_accumulator` on **LLVM** from `WORKS` to BUILD-FAIL,
+  which the map scores a **REGRESSION**. **There IS a gated fixture witness.**
+  ⛔ **S1 · 23 of the 29 new cells are UNGATED ON LLVM, including all 8 PINs** — an empty baseline is
+  unregressable (`robustness_map.py:629`), and **all 23 empty-`llvm` rows in the file are this commit's**.
+  **Readiness #3 holds on C and FAILS on LLVM.** Remedy is one **scoped** `--accept`.
+  ⚖ **DIVERGENCE ADJUDICATED — TWO DIFFERENT ANIMALS, and my framing merged them.**
+  **`find_index` bound is the silent-wrong one**: C accept-then-cc-fail, **LLVM builds and prints `none`
+  where the answer is `1`** — and the recorded INTENDED (`1`) is right, because `lib/std/iter.gg:427`
+  declares `Option[int] find_index`, so `builtins.rs`'s `ret_int` is the side that must move. **Neither lane
+  is accidentally correct; the LOW → HIGH raise is justified.** **`fold_nonconstant` is NOT silent-wrong** —
+  **LLVM's `<abc` is the CORRECT answer**, hand-derivable; it is a **C-emit defect**, filed correctly.
+  ✅ **S7 · G'S BLOCKER DISCHARGES** — the `for_each` cell genuinely pins the no-import trigger, and the
+  third correction means **the defect SURVIVES G**. ⚠ **But the corner G will actually flip —
+  `for_each` + NAMED fn + NO import — HAS NO CELL**, so once `std.iter` is preluded the import half loses
+  its only possible witness. **Two cheap cells close it.**
+  ⛔ **S8 · `Set[String].for_each` WITH the import fabricates `gorget_set_for_each`** — **`t0987`'s class on
+  a SECOND protocol**, which its "specific to Vector-without-the-import" narrowing does not cover.
+  **A fourth correction to that item; state the whole axis this time.**
+
 - **⛔ A1-I · PASS 1 — 2 BLOCKING, 6 SCOPE. Headline REPRODUCES; carrier #1's host SIGNED OFF; the split
   VERIFIED STRUCTURAL. Folded as ADDENDUM 1; streak reset, pass 2 launched, SCOPED to closing the census.**
   ⭐ **THE CAUSAL CHAIN IS NOW PROVEN, NOT INFERRED** — a **LINE-ANCHORED** probe (the Core #13 rule added
