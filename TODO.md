@@ -490,6 +490,34 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **✅ H · OUTPUT-REVIEW: INTEGRATE — all three mandatory gates PASS; 4 marked errata sent to the executor.**
+  The reviewer **re-verified rather than trusted** every load-bearing claim: the leak guard goes RED pre-fix
+  **naming all six real cells** with the `gg build` control at 0 throughout · the axis is **rc 101 with
+  exactly 7 violations vs 1** for the single filed cell, and the seven are named · **the `int` cells BUILD
+  against the broken compiler, so they are CONFIRMED negative controls, not assumed** · `case [s]:` is a
+  parse error, so the two omitted cells genuinely **have no subject** · the `-> !` inventory really is **1**
+  · the battery lint names **exactly the three** absent CI legs and reds when one is removed.
+  ⭐ **THE DOT-PREFIX IS LOAD-BEARING, AND THE REVIEWER PROVED IT THE ONLY WAY THAT COUNTS:** against a
+  seeded `.tmpDECOY` the correct counter reads 1 while a skips-dot-dirs variant and a files-only variant
+  both read **0** — and **against a VISIBLE decoy the broken counter reads 1 and the control passes
+  silently.** The instrument choice, not just the instrument, is what makes the guard real.
+  ✅ **CONVERGENCE 21→16 BANKED CORRECTLY AS A COUNTING FIX:** old vs new recogniser on ONE identical tree
+  gives exactly five newly-exempt units, **zero newly open**, all directories, all cited bare —
+  and `snag52b` is **LIVE-wired** at `integration.rs:7301`; the old regex could not see it because the
+  string has no `.gg`.
+  ✅ **CORE #9 ⊕ SATISFIED BY HAND-REGENERATION, NOT ASSERTION:** both new top-level fixtures are
+  `runtime_parity_corpus` inflow, and the reviewer ran the SH lane itself (`driver --emit-c` → `cc` → run) —
+  **byte-identical to the Rust oracle on both**, so no ceiling was raised for own inflow. ⚠ **Confirm the
+  release `self_host_runtime_diff` line at round-close; the floors are release-only.**
+  ⊕ **`t0054`'s over-specified bisection CONFIRMED** — `if` cells fail too (three of the seven). The filed
+  *"the `match` arm is the discriminator"* **was a selection reported as a discriminator.**
+  ⊕ **ERRATA (non-blocking, with the executor):** a doc comment detached from its function by an inserted
+  test · a lint message still naming `propagate_child_status()`, **which this diff deletes** · the axis
+  header's ggdef offset is **body-relative** (318) where the committed file yields `4102..4146` · `DONE.md`'s
+  census figures predate H's own `beginner_map` wiring (roster 196 / FAIL 190, not 195 / 189).
+  ⚠ **Cross-track checked and CLEAR:** no other agent branch has touched `todo/t0018.md` since
+  `74fc27705`; H's edit is a 2-line append, and the annotation is honest — **18 repros, one wired, 17 owed.**
+
 - **🆕 A1-I · SCOUT LAUNCHED (the Core #2 half; A1-M's `t0937` half already shipped as `dc29f0faf`).**
   Three carriers, each with **shipped precedent in the file it touches**: a typed field on GIR `Local`
   (precedent `deref_of_owning_param`) · **`StructDef.closure_call_fn`**, populated exactly as `elem_drop_fn`
