@@ -25,15 +25,18 @@ crossed with PROVENANCE — where the number CAME FROM. Subject ("clones",
                   records who chose it and where the choice is recorded.
 
   ⛔ `policy` is NOT a fifth polarity — and the proof is NOT "it crosses more
-    than one polarity". It does not: `policy` occupies exactly one cell today
-    (shrink-only), because `SHAPE_MAX_DEPTH`, the row that would have given it a
-    second, is correctly excluded. THE TRUE PROOF IS THAT NEITHER AXIS IS A
-    FUNCTION OF THE OTHER: `exact-pin` carries both `measured` and `derived`,
-    `shrink-only` carries both `measured` and `policy`, and `measured` carries
-    four different polarities. Two independent questions about one row.
+    than one polarity". That claim shipped once and was false when made
+    (`SHAPE_MAX_DEPTH`, the row it counted on, is correctly excluded); the
+    census that replaced it — a claim about how many cells `policy` occupies —
+    shipped and was falsified in turn. NO CENSUS HERE: a cell tally is the one
+    part of this paragraph no lint can police, and the argument never needed it.
+    THE TRUE PROOF IS THAT NEITHER AXIS IS A FUNCTION OF THE OTHER:
+    `exact-pin` carries both `measured` and `derived`, `shrink-only` carries
+    both `measured` and `policy`, and `measured` carries four different
+    polarities. Two independent questions about one row.
     `tests/lints.rs::figures_db_axes_are_occupied` fails if that stops holding —
-    an earlier revision of this docstring asserted the crossing claim and it was
-    simply false, which is why the fact is now a lint and not a sentence.
+    it asserts OCCUPANCY and INDEPENDENCE, and deliberately no count, which is
+    why the fact is a lint now and not a sentence.
 
 ═══════════════════════════════════════════════════════════════════════════
 THE VALUE IS THE GUARD, NOT THE FILE
