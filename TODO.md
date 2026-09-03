@@ -505,6 +505,52 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **⛔ A1-I · PASS 2 — 3 BLOCKING, 6 SCOPE. THE CENSUS CLOSES; THE PRESCRIBED RATCHET IS DEMONSTRATED
+  USELESS.** Folded as ADDENDUM 2; streak stays 0, **pass 3 launched to decide whether an executor runs.**
+  ✅ **THE CENSUS CLOSES — AND IT IS SIX CONVENTIONS, NOT THREE.** The fix was to stop post-filtering a
+  hand-written keyword list and **derive the literal set from the side that CANNOT be a selection: every
+  closure-identity name must first be MINTED.** W-PRODUCER gives **29 mint spellings**; the consumer sweep
+  gives **99 decision rows, EVERY ONE ASSIGNED, and the per-convention totals SUM.** Two conventions no
+  draft had (`__adapt_`, and the spawn/async family) plus **C6, a `contains("Callable")` on a type name with
+  NO `__` at all that DECIDES A LOAD WIDTH** — **invisible to every witness including ADDENDUM 1's own
+  proving command.** ⚖ Honest limit, the reviewer applying my S5 distinction to itself: **NO EXPLOIT
+  DEMONSTRATED — a census row, not a claimed defect.**
+  ⊕ ⭐ **A DEAD ARM PROVEN MECHANICALLY:** `__spawn_thread_wrap_` has **two lines in the whole tree, both
+  predicates, ZERO producers** — its doc already confesses *"kept for backwards compatibility"* with no
+  guard. **Core #14: delete it, and the deletion is one command to prove.**
+  ⛔⛔ **B4 · THE RATCHET I PRESCRIBED CANNOT CATCH ITS OWN CLASS, AND IT WAS DEMONSTRATED, NOT ARGUED.**
+  Prototyped and driven LINE-anchored: it goes RED in both directions on the INLINE spelling — **and then a
+  one-line `const CALL_MARK: &str = concat!("__", "call")` hoist leaves it `test result: ok`, `cargo build`
+  rc 0, and THE BINARY AT rc 139. The miscompile live, the guard green.**
+  ⭐⭐ **AND THE REPO ALREADY SAID SO — I CITED THE WRONG PRECEDENT.** `assert_exact_ratchet`'s own doc:
+  *"this is a BOOKKEEPING guard, not a class-retiring one… a site respelled outside its pattern is
+  invisible… Retiring a class takes a guard that cannot be respelled around — a type whose misuse fails to
+  COMPILE."* ⚡ **DECISION: carriers #1/#3 ARE the class-retiring form** (they make the fact unavailable
+  except through the accessor), **and the ratchet ships EXPLICITLY LABELLED BOOKKEEPING THAT BACKSTOPS THE
+  CARRIER.** ⛔ **Its literal set derives from W-PRODUCER, never a hand list — otherwise a future `__thunk_`
+  enters invisible on day one, which is EXACTLY how C4, C5 and C6 got here.**
+  ⛔ **B5 · THE CARRIER'S OWN DOC-COMMENT IS FALSE.** `mod.rs:114-119` says `closure_call_sigs` is *"indexed
+  by the full call-function name"* — **it is keyed by EVERY GIR fn name, and that false belief is exactly
+  what makes `contains_key` look like a discriminator.** Core #14, **sitting on the carrier the executor
+  must use.** ✅ The route itself is confirmed end-to-end.
+  ⛔ **S7 · THE FIXTURE NET OMITS THE CELL THAT MAY TURN A CRASH INTO SILENT WRONG OUTPUT.** Every probe so
+  far uses a **ZERO-CAPTURE** closure — ASan's object is a **1-byte** env. **A CAPTURING closure has a real
+  env and MAY PRINT A WRONG NUMBER INSTEAD OF CRASHING.** Pass 3 is measuring it; **if it miscompiles
+  silently the severity framing changes.** ⊕ Six further named omissions, incl. **a FREE function named
+  `call` as a GREEN control** — without it the fixture NAME over-claims scope, since only MANGLED METHODS
+  collide.
+  ⚡ **S8 DECIDED — AND THE CLAIM CHANGES.** `struct_aliases` keys are **type-alias names, never method
+  names**, so `contains_key` alone already discriminates and **the ~50 predicates are DEAD WEIGHT.**
+  ⚠ **But that is an ACCIDENT, not a guarantee** — a user-struct element *would* produce `Vector__setting`,
+  containing `__set`. **`t1051` is filed as "not currently reachable — the gate is sufficient — the 50
+  predicates are dead weight whose REMOVAL is the fix", NOT "no exploit demonstrated".**
+  ⛔ **S9 · A SEPARATE UNFILED DEFECT ON BOTH BACKENDS → `t1052`:** `Vector[UserStruct](capacity)` is
+  **C rc 101 ICE** (*"Ptr ABI received scalar value"*) and **LLVM build-fail**; the callee reaches the
+  backend as **`gorget_array_tally`** — `Vector__Tally` name-stripped and re-prefixed. `Vector[int](4)` is
+  fine.
+  ⊕ **S1 is BIGGER THAN 7: 55 SH rows across FOUR driver dirs** — the `Callable|MutCallable|ConsumeCallable`
+  block is duplicated in `self_host_{check,lowerer,resolver,typechecker}`. **Fix primitives in ALL copies.**
+
 - **⚡ A1-M · FOLD LANDED (`364a24a14`) — FRESH CONFIRMING OUTPUT-REVIEW LAUNCHED.** All five blocking items
   answered. Gates bare: build 0 · `--lib` **1185/0** · `--test lints` **219/0** · `-p ggdef` 0 ·
   `spec_conformance` 3/0 · `security` 213/0; targeted `--release` **12 C filters and 5 LLVM filters, every
