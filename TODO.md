@@ -172,17 +172,60 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
-- **H · GRADUATIONS + HYGIENE — the convergence ballast.** ⭐ **TWO `#[ignore]`d tests now PASS
-  un-allowlisted**, measured 2026-09-03 by `scripts/known_gaps_census.sh --check`:
-  `catch_binding_throw_in_match_arm_ice` and `hof_call_env_leak_unbounded` — adjudicate each by MECHANISM
-  (break the cited fix site, watch it go red) then graduate or rewire; a PASS is a FINDING, not an
-  automatic graduation. · `t0966` (NEW, filed at R49 open) · bulk graduation out of `known_gaps/` (**215
-  of the 820 items cite a repro there**; census roster is 195, PASS 8, FAIL 187).
-  ⚠ **AND A CORRECTION TO `t0824`:** that item says `known_gaps_census.sh --check` *"is a CI step, is RED"*.
-  Re-measured 2026-09-03: it prints `known_gaps_census: ✗ …` **and then exits 0**. A `--check` that reports
-  failure through stdout while exiting 0 **cannot gate anything** — that is the defect, and it is a
-  different one from the item's "absent from the round-close battery" claim. Fix the exit code first, or
-  adding it to the battery is inert.
+- **H · GRADUATIONS + HYGIENE. ⚠ RE-SCOPED BY ITS OWN SCOUT — AND MY CENSUS CLAIM WAS FALSE.**
+  ⛔ **RETRACTED: I wrote that `known_gaps_census.sh --check` "prints ✗ and then exits 0" and therefore
+  "cannot gate anything." THAT IS WRONG — it exits 1 and gates correctly.** Re-measured bare:
+  `REAL_EXIT=1`. The `exit 0` I reported came from my own wrapper ending in a PIPE, so `$?` was the
+  pipe's — **the `${PIPESTATUS[0]}` trap from devbook/30 §21, which bit THREE TIMES in this session
+  alone** (this claim; my `cargo test … | tail` gate, which committed a RED lint; and the scout's own
+  task notification). ⇒ **Read an exit code off the BARE command, never through a pipe.** Nothing in the
+  script masks it: `exit $rc` at `:343`, `set -uo pipefail` without `-e`, EXIT trap only `rm -f`.
+  ⇒ **`t0824`'s battery ask is NOT inert — it works today. And `t0824` UNDERCOUNTS BY 3×:** three CI
+  `run:` steps are absent from the round-close battery (`grep -c <name> AGENTS.md` → 0 for each) —
+  `known_gaps_census.sh --check` (`ci.yml:131`, **rc 1, RED right now**) · `staging_move_burndown.sh
+  --check` (`:153`, rc 0) · `cargo test --test c_runtime` (`:163`, rc 0). CI invokes the census BARE, so
+  **CI is red at HEAD while the documented battery can be all-green.** ⊕ The sibling `--check` audit found
+  NO other script with the defect I hypothesised — `convergence.sh` and `resolver_totality.sh` exit 0 **by
+  documented design**, so do NOT "fix" them. ⊕ One real, small census defect: `--check <name>` does not
+  drop unrun rows from the expected side the way `--fast` does, so a filtered check reports 6 phantom rows.
+  **THE TWO PASSING ROWS, adjudicated by MECHANISM (fix sites broken, both directions watched):**
+  - **`catch_binding_throw_in_match_arm_ice` → GRADUATE.** Not accidentally green: both assertion halves
+    are load-bearing. No-op'ing `ctx.set_owned` (`exprs/mod.rs:4864`) returns the filed ICE (rc 101,
+    *"untracked source consumed"*); no-op'ing `drops.register_local` (`:4871`) returns the leak (LSAN 2 B).
+    LLVM lane green. ⚠ **The graduation OWES `t0054`'s axis fixtures (Core #12)** — live pins are only 2
+    droppable-enum cells, while `t0054` promises `{int, String, droppable enum, Vector[String]}` ×
+    `{bare, if, match arm, nested match}`. Six cells verified clean at HEAD and ready to become them.
+    ⚠ UNVERIFIED: `t0054`'s *"`throw e` inside an `if` → OK"* did not reproduce in the scout's spelling
+    (`E_TypeMismatch` — an `if/else` block is not an expression there); use `t0054`'s OWN spelling.
+  - **`hof_call_env_leak_unbounded` → REWIRE, NOT graduate.** ⭐ **SIX QUESTIONS #6, confirmed by
+    measurement: it is green for a reason unrelated to what it tests.** It is `run_gg(…, "120")` — a
+    STDOUT assertion for a LEAK gap — and was GREEN ON ARRIVAL; its own text says so. **The leak is LIVE
+    at HEAD: 160 bytes in 20 allocations, all `__gorget_closure_env_alloc`.** Sibling-site drift inside
+    one item's own evidence set: `t0953`'s other repro 174 lines away (`:6706`) already uses
+    `assert_gg_sanitize_clean`. One-line rewire to match; demonstrated RED. **`t0953` stays OPEN** — this
+    fixes the EVIDENCE, not the bug. ⊕ **Fold in `t0620`'s twin**: its own text says wiring an ASan twin
+    IS its graduation signal, and its 40 B `gorget_weak_upgrade` leak is live. Same class, same helper —
+    do ONE pass over *"leak gaps pinned only on the value lane."*
+  - **`t0966`** — mechanism CONFIRMED, all three arms leak, and the fix AND guard are already prototyped
+    and measured by the scout. **The item has been corrected in place** (its first exit-site set was wrong).
+  ⛔ **THERE IS NO BULK-GRADUATION HARVEST — DO NOT BRIEF ONE.** The census IS that instrument and it has
+  already run the whole population: roster 195, **PASS 8 · FAIL 187**, `SKIPPED_SH 0`; of the 8 PASS, 6 are
+  adjudicated allowlist rows and 2 are the rows above. The scout then attacked the 76 units the census is
+  structurally blind to (live-only wiring) and checked nine items by hand — `t0009` `t0132` `t0139` `t0338`
+  `t0474` `t0620` `t0462` `t0463` `t0532` — **all OPEN, zero graduations.** *A live-only fixture means one
+  CELL was fixed, not that the item closed.* Regenerated: 820 items, **226** cite `known_gaps` (not my 215).
+  ⭐ **REAL FINDING — `scripts/convergence.sh` OVER-COUNTS `known_gaps` BY 5.** Its citation grep is
+  `known_gaps/[A-Za-z0-9_/]+\.gg`, so it **cannot see a bare-directory citation**, while
+  `known_gaps_census.sh`'s enumerator explicitly recognises both spellings. Measured **23 → 18**; the five
+  are `beginner_map`, `gorget_arena_snag_1_llvm_ffi_only_typedef`, `manifest_malformed`, `snag52b`,
+  `snag58_private_int_import`. `snag52b` is doubly wrong — it is LIVE-wired at `tests/integration.rs:6884`.
+  ⛔ **THE −5 IS A COUNTING CORRECTION AND MUST NOT BE BANKED AS R49 CONVERGENCE** — `convergence.sh`'s own
+  header rules that it *"lands BETWEEN rounds and belongs to the NEXT baseline."*
+  ⊕ **Two `known_gaps` fixtures have NO wired test**, violating the durable-repro contract:
+  `known_gaps/beginner_map/` — a SCOUT CORPUS (`FINDINGS.md` + 32 KB `MANIFEST.tsv` + 18 programs)
+  committed to the repo, which AGENTS.md keeps `/tmp`-only and `git rm`s on sight (`t0018` owns it and its
+  own text says the wiring is OWED) — and `known_gaps/sh_targ_recorder_pregate_nested_positions.gg`, which
+  appears only as a bare string in a `tests/lints.rs:23790` membership list.
 
 ### 🧹 R49 OPEN — WORKTREE / DISK STATE (done 2026-09-03, supersedes R48's carry-forward block)
 The 14 carried-forward agent worktrees are **PRUNED**. Each one's uncommitted work was COMMITTED to its
