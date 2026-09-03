@@ -461,6 +461,24 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **📋 F-2 · SEEDED at `/tmp/brief_F2_seed.md` (M1b · M2 · M4 · M5). ⛔ NOT A BRIEF — a SCOUT runs first.**
+  Every premise dates from F's ADDENDUM 2 or earlier and must be re-verified at HEAD (Core #5).
+  ⭐ **M1b IS THE HIGHEST-VALUE HALF AND IS THE REFERENCE-GRADE VERSION OF WHAT F JUST SHIPPED.** An
+  **untyped** closure param gets `self.fresh_type_var()` at `typecheck.rs:4460` and **is never unified**, so
+  **the whole body escapes type checking**: `Callable[int(int,int)] f = (a, b): a.age - b.age` is
+  **`OK: no semantic errors`**, builds, and **prints `0`** — while the annotated twin correctly gives
+  `E_NoFieldFound` ×2. **F's M1 fixes six cells and leaves this class fully live** for every untyped closure
+  whose hint is absent or wrong. Core #1 names the write site: **the CHECKER owns a parameter's type**;
+  `closure_param_type_hints` is a sidecar reconstructing downstream what the checker should have resolved.
+  ⭐ **`devbook/25` ALREADY DOCUMENTS THIS CLASS — with a guard SCOPED TO `clone`. SIX Q#2: it green-lights
+  the class it was written to retire. WIDEN IT; do not invent a new mechanism.**
+  ⚠ **Sequencing:** **M4 collides with F's landed M1 on 3 of its 25 census rows**, so F-2 re-measures the
+  census **AFTER F integrates**, and retires those rows. ⚠ **M2's `pair_joinwords_c_fold` is a CoW
+  consume-site defect, not an iterator one — and its `v[1:3]` shape is now Track K's neighbourhood**, so the
+  scout checks whether K's landing moves it. ⛔ **The MANIFEST `actual` column is NOT evidence** (it names
+  the wrong error for `doc_b04_ownership_modes`); every M2 cell is re-measured BY BUILDING IT.
+  ⛔ **M3 and the two live ggdef findings went to F-G, not here.**
+
 - **✅ C · PASS 5 SIGNED OFF (THIRD CONSECUTIVE) — EXECUTOR LAUNCHED.** Folded as ADDENDUM 5.
   ⛔⛔ **AND IT FOUND A ROUND-LEVEL RED THAT IS NOT TRACK C's.** `known_gaps_census.sh --check` run in full:
   **the gate is ALREADY RED on the integration branch at `908ea0ad6`** — **two pre-existing unallowlisted
