@@ -490,6 +490,18 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **⚡ G's BLOCKER HAS A NAMED DISCHARGE, NOT AN OPEN-ENDED ONE.** G must not land before `t0987`'s repro
+  exists, because **G's prelude of `std.iter` erases that defect's only trigger and there is no fallback**
+  (Deque rejects cleanly — measured). ⇒ **Track F ships that repro**: its owed-cell set carries
+  *"`for_each` WITHOUT the import → stays RED, cites `t0987`"* (`/tmp/brief_F_v2.md` S-vi, re-verified
+  end-to-end at pass 4). **So G becomes eligible the moment F INTEGRATES — not on a judgement call.**
+  ⛔ **If F's diff arrives without that RED cell, G stays blocked and F owes it before integration.**
+
+- **🧹 WORKTREE HYGIENE (rule 6):** E's and H's output-review worktrees pruned at their tracks' integration;
+  two further clean ones are **harness-LOCKED** (`cannot remove a locked working tree`) and will release on
+  their own — **do NOT `remove -f -f`**. One carries 23 uncommitted files and is **not** prunable
+  (*"branches survive a removal, uncommitted work does not"*). **Disk 58G/453G = 14%, no pressure.**
+
 - **✅ H · INTEGRATED — `cacd3dfce`. Worktree pruned.** Squash-merged (8 commits). Closes **`t0966`,
   `t0054`, `t0824`**; files `t0997`. Gates at the integrated state, bare: build 0 · `--lib` 1181/0 ·
   `--test lints` **220/0/1** · **`known_gaps_census.sh --check` rc 0, "PASS set matches
