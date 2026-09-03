@@ -40296,6 +40296,24 @@ fn self_host_runtime_diff() {
     // move a borderline shape). Slack drops 70 → 9: the gate can now notice a
     // 10-fixture MATCH regression where it previously would have missed 69.
     // Non-MATCH ceiling untouched at 151 — owner ruling, and MATCH did not move.
+    // ⚠ RAISED AGAIN at R48 close (2026-09-03), 1476 → 1527. The post-integration
+    // battery — all 23 track integrations in, including P (the clone regression),
+    // Q (D53 on three lanes), R (the Callable clone producer), U (the self-host
+    // non-identifier-callee class) and T-a1 — printed **MATCH = 1532** at
+    // `886e5f032`, and the re-run at final HEAD `d7d899c9b` printed 1532 again.
+    // Floor 1476 → 1527 (−5 jitter from 1532; the discount this log's own history
+    // uses). ⭐ MATCH 1485 → 1532 is +47, the largest single-round gain this log
+    // records — the previous best is +16 (1052 → 1068).
+    // Slack drops 56 → 5: the gate can now notice a 6-fixture MATCH regression
+    // where it would have missed 55. That slack is DELIBERATELY TIGHT, so a red
+    // here is more likely to be real than jitter — but re-run once on a QUIET
+    // tree before triaging, because `t0924` measured this test's counts to be
+    // timeout-flip sensitive under load.
+    // Non-MATCH ceiling untouched at 147 for the WHOLE round: it grew to 149 on
+    // Track R's own two fixtures, and per the owner ruling (*"if the release
+    // parity run shows the non-MATCH backlog went up, fix the SH and the
+    // non-Match"*) Track U fixed the self-host and ported the rows rather than
+    // raising it. See the ceiling's own block below for the composition.
     const RUNTIME_DIFF_MATCH_FLOOR: usize = 1527;
     if cfg!(debug_assertions) {
         eprintln!(

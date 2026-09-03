@@ -192,6 +192,20 @@ use ggdef::{parse_frontmatter, Expect};
 // — which reads the `error[E_..]` marker — cannot own it. Those five cells are
 // pinned two-lane in tests/integration.rs instead; do not "complete" this list
 // by adding them here without a code.
+// R48 close (+2, RESEEDED 2026-09-03): `reject_partial_move_field.gg` and
+// `reject_partial_move_self.gg` — the D10 no-partial-moves class (`todo/t0437`,
+// `todo/t0438`). ⚠ THESE TWO SAT UNRATCHETED, AND THE REASON IS THE LESSON: the
+// D10 work was owner-directed and landed DIRECTLY ON MAIN rather than through a
+// gauntlet track, so no output-review ever asked "did you ratchet the floors?".
+// The paragraph above says ratcheting is PART OF ADDING A FIXTURE; that duty
+// does not attach to the track pipeline, it attaches to the fixture.
+// Nothing detected the drift for two fixtures, exactly as that paragraph warns:
+// the floors are `matched >= FLOOR` and the glob guard is `len() >= MIN_FIXTURES`,
+// both `>=`, so a corpus that grows without a ratchet leaves every assert GREEN.
+// Measured at final HEAD `d7d899c9b` (`--test-threads=1 --nocapture`, rc=0):
+// C 237/237 · LLVM 237/237 · self-host 236/237, so both new fixtures MATCH on
+// all three lanes and the sole SH mismatch remains `d22_slice_clamp.gg` below.
+// 235/235/234/`MIN` 235 → 237/237/236/`MIN` 237.
 const C_MATCH_FLOOR: usize = 237;
 const LLVM_MATCH_FLOOR: usize = 237;
 const SELFHOST_MATCH_FLOOR: usize = 236;
