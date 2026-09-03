@@ -2,23 +2,107 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS CLOSED (2026-09-03). ⛔ NO NEW ROUND — owner instruction 2026-09-02: *"once the round is
-closed, do not start a new one this time."* This SUSPENDS Round-lifecycle step 7 ("Open the next round
-autonomously") for this close. R49's scope stays FILED as pending work; it is not an opened round.**
+**▶ ROUND XLIX IS OPEN (2026-09-03), owner-authorised — the R48-close suspension of Round-lifecycle
+step 7 is SPENT. Headline: THE `Callable` VALUE FORM CARRIES LOSSY TYPE METADATA — a memory-safety
+class fix, plus the owner's ease ruling.** No track has been scouted or briefed yet; the roster below
+is the ROSTER, not a set of signed-off designs. Every track still owes scout → brief → ≥3 fresh
+sequential brief-reviews → executor → fresh output-review before it integrates.
 
-Next free todo id is **`t0965`** (`t0946` is an unused gap from the Track P/R collision renumber and stays
+Next free todo id is **`t0967`** (`t0946` is an unused gap from the Track P/R collision renumber and stays
 unused). `AGENTS.md` is **36,186 bytes** against the 49,400 ceiling — **`t0714` and `t0577` are UNBLOCKED**;
 the headroom is DELIBERATE (the lint says compact a neighbouring rule rather than raise it), so do NOT
 lower the ceiling to "lock in" Track S's compaction.
 
-### 🔻 WHAT THE NEXT ROUND SHOULD BE — BURN-DOWN, NOT DISCOVERY
+### 🔻 THE ROUND'S SHAPE — BURN-DOWN, NOT DISCOVERY
 R48 closed at **net +47** (`scripts/convergence.sh 22 771 60`): 60 filed, 13 closed, the worst ratio the
-log records. The discovery was real and the instruments are sharper for it, but the arrow points the wrong
-way and under the owner's own trend rule that must drive the next headline. **The items `t0936`–`t0964`
-are R48's own debt** and most carry a durable RED-verified repro, so they are cheap to take. Bias
-bulk-graduation out of `known_gaps/` over new scouting.
-⭐ **Highest-value single item: `t0947`** — `auto x = <method call returning Result>` **silently discards
-the entire `if x.is_error():` block**. It is LIVE in shipped `lib/xtd/p2p.gg` with 13 tests passing by luck.
+log records. **The items `t0936`–`t0964` are R48's own debt** and most carry a durable RED-verified repro,
+so they are cheap to take. Bias bulk-graduation out of `known_gaps/` over new scouting.
+⚠ **THE ONE TRACK THAT CAN BLOW CONVERGENCE IS F** (the `t0015`/`t0018` corpus gates): wiring ~90 failing
+cells files ~90 items if each is filed separately. **It is convergence-SAFE only if each failing cell lands
+as a `known_gaps/*.gg` fixture CITED BY `t0015`/`t0018`** — the metric counts an UNCITED gap and nothing
+else (`scripts/convergence.sh` header, owner ruling 2026-08-23). Brief Track F with that constraint
+explicitly; it is the difference between −2 and +90.
+
+### 🧭 R49 ROSTER — 8 TRACKS (owner-selected 2026-09-03; sizing answer was "6 + graduations", then the
+### `it` ruling landed and E/F/G split out of the ease pick — a SPLIT, never a deferral)
+- **A · `Callable` VALUE-FORM CLASS FIX — the headline, and the biggest track.** `t0937` (⭐CRITICAL,
+  ASan `stack-buffer-overflow`: a closure LITERAL at a constructor / enum-init arg is NEVER CONSTRUCTED)
+  · `t0942` · `t0927` · `t0938` · `t0939` · `t0948` · `t0949` · `t0953` · `t0959` (self-host lane of the
+  same class). **Three separate items name the same root in their own words** — *"the value form of
+  `Callable` carries lossy type metadata"* (GIR local type erased to unit; the dispatch site sees the
+  signature-ERASED `Callable__GorgetClosure`). **The reference-grade fix shape is already written down in
+  `t0959`**: extend the FnPtr GIR type with a `param_ownerships` axis, populate a `callable_alias_sigs`
+  sidecar where the `Type::Function` inner is still in scope, teach the container-element inferrer to look
+  it up, route each arg through standard call-arg lowering **per param, not uniform**. Core #1 + #2 + #4.
+  ⭐ **MEASURED SCALE, regenerated 2026-09-03:** `__gorget_closure_env_alloc` is the sole frame on **56 of
+  the 754 `tests/sanitize/LEAK_ALLOWLIST.txt` rows and appears in 80** — the largest single class in that
+  file, which is what `t0953` claims and it checks out.
+- **B · HOF ACCUMULATOR / ITERATOR OWNERSHIP.** `t0954` (`map` mints the accumulator with a NULL
+  `elem_drop`, leaking every element) · `t0955` (`flat_map` leaks the callee's `Vector` per input element)
+  · `t0952` (`DictIter.next()` deep-clones the WHOLE Dict 4× per call and frees none) · `t0951` (`^self`
+  never emits the callee-side drop). ⚠ **`t0963` MOVES TO TRACK E — see the interaction note below.**
+- **C · AUTO-PROPAGATION SILENT STATEMENT DROP.** `t0947` + the family it discriminates itself from
+  (`t0050` · `t0101` · `t0105` · `t0434`). `auto x = <METHOD call returning Result>` binds the Ok payload
+  and **silently discards the user's whole `if x.is_error():` block**; it was LIVE in shipped
+  `lib/xtd/p2p.gg` with 13 fixtures passing BY LUCK. ⚡ **POSSIBLE OWNER ASK, not yet raised:** the item
+  says either direction is legal (run the block, OR auto-propagate + REJECT `.is_error()` on the
+  payload-typed local, which is where D45 pin 6 leans) — but *accepting the block and discarding it* is
+  legal under neither. Default to the first, which needs no ruling and matches the explicit binding.
+- **D · SELF-HOST LANE PORTS (Core #9).** `t0941` · `t0944` · `t0962` · `t0958` · `t0961`. (`t0959` sits in
+  Track A, because it is that class, not a separate port.) Under the owner's 2026-08-08 standing
+  obligation: parity is no longer the north star, but SH stays in sync.
+- **E · REMOVE THE IMPLICIT `it` CLOSURE PARAMETER — ⚡ OWNER-RULED 2026-09-03: REMOVE.** *"Remove it. Do
+  not rename"* — every structural cost (body scan, third closure spelling, shadowing trap, lane
+  divergence) survives a rename. Scope is in the ease assessment's §OPEN, with **TWO CORRECTIONS measured
+  2026-09-03 that the assessment got wrong and a brief must not inherit**:
+  - ⚠ **The self-host is NOT untouched.** The assessment's *"self-host: 0"* counted USAGE. The self-host
+    **IMPLEMENTS** `it` in **91** places (`EIt` / `KwIt` / `expr_contains_it` across
+    `tests/fixtures/self_host_*/*.gg`). That is the removal work, and it is the larger half.
+  - ⚠ **Fixture usage is 12 code lines in 3 files, not 4 in 2.** The miss is
+    `hof_implicit_it_collection_axis.gg` (**8** lines) — the file `t0963` names as *"written to catch this
+    shape on the self-host lane"*.
+  - ⭐ **THEREFORE `t0963` IS DISSOLVED BY THIS TRACK, NOT FIXED BY TRACK B.** Rust `gg` miscompiles
+    `flat_map(it)` (`1 0 2 0` vs the self-host's correct `1 1 2 2`) — remove the construct and the defect
+    has no spelling. Same for `known_gaps/flat_map_implicit_it_zeroes.gg` and
+    `known_gaps/sh_comprehension_bodied_implicit_it.gg`. **Sequence E BEFORE B closes `t0963`, or B wastes
+    a fix on a construct that is leaving.** Rust footprint: 22 files, `src/parser/expr.rs` alone is 99
+    occurrences; rustc exhaustiveness is the independent witness (delete the variants, follow the errors).
+- **F · GATE THE TWO ROBUSTNESS CORPORA IN CI — ⚡ owner-selected.** `t0015` (288 doc-derived cells, 83%
+  behave as documented) · `t0018` (354 beginner cells, 87.3% WORKS). Wire both as real gates and drive to
+  green. **Read the convergence warning above before briefing this one.**
+- **G · EASE: PRUNE THE SHOWCASE + PRELUDE THE COLLECTIONS — ⚡ owner-selected.** `CLAUDE.md`
+  § "Self-host as the elegance showcase" already MANDATES the prune and it has not happened: 822 `bool` +
+  `match` + `else: pass` arms where `if d.kind is DkVariable():` exists · 356 `x = x + 1` where `+=` does
+  · 228 copy-mutate-write-back `.set(` rituals where `v[i].x = 99` works in 21 fixtures · 4 `auto` in 97k
+  lines against 450 in ordinary fixtures · sentinels (`-1` × 178 returns, `""` × 433 compares)
+  outnumbering real `Option` (461). Plus: `Vector`/`Dict`/`Set`/iteration in the prelude, retiring 254
+  hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
+  workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
+  tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **H · GRADUATIONS + HYGIENE — the convergence ballast.** ⭐ **TWO `#[ignore]`d tests now PASS
+  un-allowlisted**, measured 2026-09-03 by `scripts/known_gaps_census.sh --check`:
+  `catch_binding_throw_in_match_arm_ice` and `hof_call_env_leak_unbounded` — adjudicate each by MECHANISM
+  (break the cited fix site, watch it go red) then graduate or rewire; a PASS is a FINDING, not an
+  automatic graduation. · `t0966` (NEW, filed at R49 open) · bulk graduation out of `known_gaps/` (**215
+  of the 820 items cite a repro there**; census roster is 195, PASS 8, FAIL 187).
+  ⚠ **AND A CORRECTION TO `t0824`:** that item says `known_gaps_census.sh --check` *"is a CI step, is RED"*.
+  Re-measured 2026-09-03: it prints `known_gaps_census: ✗ …` **and then exits 0**. A `--check` that reports
+  failure through stdout while exiting 0 **cannot gate anything** — that is the defect, and it is a
+  different one from the item's "absent from the round-close battery" claim. Fix the exit code first, or
+  adding it to the battery is inert.
+
+### 🧹 R49 OPEN — WORKTREE / DISK STATE (done 2026-09-03, supersedes R48's carry-forward block)
+The 14 carried-forward agent worktrees are **PRUNED**. Each one's uncommitted work was COMMITTED to its
+own `worktree-agent-*` branch first (rule 6: *branches survive a removal, uncommitted work does not*), then
+all 14 were correlated against pending items. **13 carried nothing that is not already on main and their
+branches are deleted.** ⭐ **ONE IS KEPT: `worktree-agent-a4a5d1e5b9113c3e5`** — 5 fixtures that exist
+nowhere on main (`known_gaps/unsafe_equip_lane_divergence.gg`, `known_gaps/sh_parse_errors_discarded_where.gg`,
+`reject_use_after_unsafe_scope.gg`, `sh_unsafe_block_is_not_a_drop_zone.gg`,
+`sh_unsafe_block_tail_and_nesting.gg`), against **PENDING `t0727`–`t0732`**. Spend it before re-deriving.
+✅ **R48's flagged `agent-aa19c1e589090caae` is RESOLVED, not lost:** its `sanitize_empty_sort_*` set is
+SUPERSEDED — `t0780` closed 2026-08-31 with a better artifact (`security/sort_empty_collection_no_ub.gg`
++ the `emitted_qsort_is_guarded` lint, which catches its own class). Do not re-derive it.
+**Disk: `/tmp` 79 GB → 2.9 GB, overlay 122 G → 45 G used.** 93% of that was `t0966`'s leak.
 
 ### ✅ OWNER RULINGS — do not re-litigate
 - **No partial moves (2026-09-02):** only whole-value `^m`; field/index `^` is `E_PartialMove`.
