@@ -33,7 +33,70 @@
 # remains an OWNER ASK, and a row with no `⚖ ADMITTED` block remains outside
 # both rulings.
 #
+# ⚖ EXTENDED A SECOND TIME (owner, 2026-09-02), recorded verbatim: *"There must
+# be a tendency to fix all leaks, even if we admit these 3. How do we avoid
+# forgetting about them in future rounds if we admit them? These must be burnt
+# down and fixed at some point. Not only these 3 but all of them!"* That covers
+# the THREE rows R48 Track T-a1 admitted — `iter_trait_default_trait_args`,
+# `self_whole_move_ok` and `vector_hof_cross_type_map` — which are NEITHER of the
+# two earlier cases: they are not baseline undercounts and they did not graduate
+# out of `known_gaps/`.
+# ⚠ THE FIXTURES ARE THIS ROUND'S; THE MECHANISMS ARE NOT, and the write sites'
+# OWN HISTORY is the evidence rather than an assertion. All three fixtures were
+# ADDED by R48 — `iter_trait_default_trait_args` and `vector_hof_cross_type_map`
+# at `4e0dc7811` (2026-08-31), `self_whole_move_ok` at `a9f6d4db3` (2026-09-02) —
+# so this is the graduation shape one more time: a corpus that can now SEE leaks
+# it could not see before. Every write site those leaks trace to predates the
+# round, and each line is checkable:
+#   git log -1 -L 2069,2075:src/ir/lowering/functions.rs   -> 14bf64e4a 2026-03-06
+#       (the `if p.node.name.node == "self" { continue; }` carve-out, todo/t0951)
+#   git log -1 -L 863,880:lib/std/iter.gg                  -> 815173bb8 2026-04-26
+#       (`DictIter`'s `Ref[Dict[K, V]] source` field, todo/t0952)
+#   git log -1 -L 3140,3155:src/ir/lowering/context.rs     -> e9f559e52 2026-08-19
+#       (`auto_clone_if_ptr`'s Clone arm, todo/t0952)
+# ⚠ AND `vector_hof_cross_type_map` READ "CLEAN" WHEN FIRST SWEPT ONLY BECAUSE IT
+# CRASHED FIRST — a `heap-buffer-overflow` R48 Track γ fixed, so LSan never got to
+# report the leaks the program always had (measured by the R48 scout). SIX
+# QUESTIONS #6: a green cell can be green for a reason unrelated to the question.
+# The admission comes WITH the mechanism: the ruling's second half is the
+# CITATION RATCHET below, so admitting a leak and putting it in the work queue are
+# now the same act.
+#
+# ⚠ SO THE THIRD COLUMN IS NOT OPTIONAL DECORATION — IT IS THE RULING.
+# `UNCITED_LEAK_CLASS_PAIRS` in tests/lints.rs is an EXACT pin on how many
+# (fixture, class) pairs still lack one, and it may only fall. A pair counts as
+# CITED only when its column-3 entry names a `todo/` item that EXISTS **and**
+# whose body CONTAINS that pair's top-frame symbol — a token the INSTRUMENT
+# produced, never one the author chose (`todo/t0875`: a textual guard's reach is
+# the TOKEN, never the CONCEPT, and writing `t0000` in a comment defeats a check
+# that only greps for a shape).
+# ⚠ AND THE UNIT IS THE PAIR, NOT THE ROW. 120 of these rows carry two to five
+# mechanisms and 327 of the pairs live on them, so a per-ROW citation would
+# oblige 120 pairs and leave 207 with no obligation at all — verbatim the
+# bare-stem defect the class column was added to fix, one level up.
+# `vector_hof_cross_type_map` is the live example: 3 classes, 3 SEPARATE filed
+# items, and one of those classes splits between two. Recount with:
+#   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -v '^$' | cut -f2 \
+#     | awk -F, '{n[NF]++; p+=NF} END{for (k in n) print k, n[k]; print "pairs", p}'
+#
 # FORMAT:  <fixture-stem> TAB <top-frame>*<records>[,<top-frame>*<records>...]
+#                         TAB <class>=<todo-id>[,<class>=<todo-id>...]
+#
+# The THIRD column is the per-class citation, and it is CLASS-KEYED because the
+# ratchet is: `str_alloc_copy=t0954` says which item owns THAT mechanism in THIS
+# fixture. A class MAY REPEAT when more than one filed item owns records of it —
+# `str_alloc_copy=t0954,str_alloc_copy=t0955` is how a row whose DIRECT and
+# INDIRECT records of one frame have different owners is spelled honestly.
+# ⚠ THE CITATION GOES IN COLUMN 3, NEVER INSIDE COLUMN 2. `str_alloc_copy*4@t0790`
+# PANICS the Rust lint (`rsplit_once('*')` then a parse of `4@t0790`) while the
+# sweep's awk silently reads `kv[2]+0` as `4` and tolerates it — a divergence
+# between the two readers of the same field. A third TAB column is already
+# tolerated by every consumer: tests/lints.rs asserts `cols.len() >= 2`, the
+# sweep's malformed check is `NF < 2`, the adjudicator reads `$1`/`$2` only, and
+# `CORRUPTION_ALLOWLIST.txt` has been 3-column with a justification assert since
+# it was written.
+# A row with no third column is UNCITED, not malformed: the backlog it names is
+# real and it is counted, which is the whole point of pinning the number.
 #
 # A trailing `+` on a count — `__gorget_spawn_worker*2+` — means "at least this
 # many; the COUNT is not pinned". It is for the handful of concurrency fixtures
@@ -72,7 +135,11 @@
 #
 # ONE ROW PER FIXTURE. The classes are columns, not extra rows, so the ceiling
 # in tests/lints.rs keeps counting FIXTURES and stays comparable to every value
-# it has ever held. `scripts/sanitize_sweep.sh` reads column 1 only.
+# it has ever held. `scripts/sanitize_sweep.sh` reads columns 1 and 2 — the
+# membership set from `$1`, the per-class tolerances from `$2` — and IGNORES the
+# citation column entirely, which is deliberate: a missing citation is a
+# bookkeeping debt for `tests/lints.rs` to pin in a second, never a reason for
+# the 25-minute gate to withhold a memory verdict.
 #
 # To regenerate a row after a deliberate change, take column 4 of the sweep's
 # own verdicts.tsv. Widening a row is an admission, not a fix, and the sweep
@@ -211,16 +278,6 @@ closure_mixed_implicit_explicit_wiring	__gorget_closure_env_alloc*1
 closure_multiline_return	__gorget_closure_env_alloc*2,gorget_string_format*2
 closure_mutable_capture	__gorget_closure_env_alloc*3
 closure_tuple_destructure	__gorget_closure_env_alloc*5,gorget_map_clone*12,gorget_string_format*1,str_alloc_copy*1
-combinator_and_then_money_local	gorget_array_push*2
-combinator_flat_map_money_local	gorget_array_push*1
-combinator_map_err_money_local	gorget_array_push*1
-combinator_map_money_param_and_field	gorget_array_push*1
-combinator_result_and_then_money_passthrough	gorget_array_push*1
-combinator_result_map_err_money_passthrough	gorget_array_push*1
-combinator_result_map_money_passthrough	gorget_array_push*1
-combinator_result_ok_money_map	gorget_array_push*1
-combinator_result_or_else_money_passthrough	gorget_array_push*1
-combinator_unwrap_or_else_money_local	gorget_array_push*1
 concurrency_params	gorget_channel_new*2
 const_match_pattern	gorget_string_format*1
 const_match_shadow	gorget_string_format*3
@@ -275,15 +332,11 @@ dict_values_lazy	__gorget_closure_env_alloc*1,gorget_map_clone*18
 dict_values_lazy_resource	gorget_map_clone*9,str_alloc_copy*4
 dop_throw_rhs	str_alloc_copy*1
 drop_dict_loop	str_alloc_copy*1
-drop_enum_consume	gorget_str_cat*1
 ecs_advanced	__gorget_closure_env_alloc*1
 ecs_basics	__gorget_closure_env_alloc*1,gorget_array_reserve*1
-error_catch_in_loop	gorget_string_format*1
-error_rethrow_transform	gorget_string_format*1
 fallback_basic	gorget_arena_new*2,gorget_fba_new*1
 fallback_composable	gorget_arena_new*2,gorget_fallback_new*1,gorget_fba_new*1
 fba_composable	gorget_fba_new*1
-fmt_catch_rethrow_single_stmt_terminal_axis	gorget_str_cat*1
 fn_mut_once	__gorget_closure_env_alloc*5
 fn_trait	__gorget_closure_env_alloc*2
 fstring_method_chain	__gorget_closure_env_alloc*2
@@ -328,6 +381,35 @@ io_input	gorget_readline*2
 # R47. Under a ruling whose entire content is per-row citations, the citation
 # is the deliverable: check the next one by EXPERIMENT too.
 iter_terminal_stmt_positions	gorget_array_reserve*1,str_alloc_copy*1
+# ⚖ ADMITTED (R48 Track T-a1, 2026-09-03; covered by the third ⚖ EXTENDED
+# paragraph in this file's header). THE FIXTURE IS R48's (added `4e0dc7811`,
+# 2026-08-31); THE MECHANISM IS NOT — `DictIter`'s `Ref[Dict[K, V]] source` field
+# has been there since `815173bb8` (2026-04-26) and `auto_clone_if_ptr`'s Clone
+# arm since `e9f559e52` (2026-08-19), both before this round opened.
+# MECHANISM, ATTRIBUTED BY EXPERIMENT AND FILED AS `todo/t0952`: `DictIter[K, V]`
+# declares its source field a BORROW (`Ref[Dict[K, V]] source`,
+# lib/std/iter.gg:863-866) and `next()` reads it FOUR times, once per
+# `__dict_iter_*` extern — every one of which also declares its parameter
+# `Ref[Dict[K, V]]`. Each read deep-copies the whole map (`gorget_map_clone` <-
+# `DictIter__GorgetString__int64_t__next` <- `…__count` <- `main`) into a temp no
+# `gorget_map_free` ever reaches. The fixture's last line, `m.iter().count()` over
+# a three-entry Dict, is the whole leak.
+# THE TWO CLASSES ARE ONE MECHANISM, MEASURED, NOT ASSUMED: the four
+# `str_alloc_copy` records are INDIRECT (`str_alloc_copy` <-
+# `gorget_string_clone_to_owned` <- `gorget_string_clone_inplace` <-
+# `gorget_map_clone`) — the String KEYS the leaked clones own. The int-keyed
+# control leaks `gorget_map_clone*12` and nothing else, which is what proves it.
+# 12, NOT 4, AND IT IS NOT A DICT-SIZE ARTEFACT: 4 clone SITES x 3 allocations
+# inside `gorget_map_clone`. A two-entry Dict leaks the same 12 RECORDS in 27
+# rather than 39 allocations — the bytes scale, the record count does not.
+# NEAREST FILED FAMILY IS `todo/t0164` (the Json accessors' `gorget_map_clone`),
+# and it is a DIFFERENT CALL SITE: same frame, `is_object`/`get`/`has` on the
+# self-host lane. Closing t0164's Json bullet does not touch lib/std/iter.gg.
+# RETIRES with `todo/t0952`, which ships
+# `known_gaps/dict_iter_ref_field_read_clone_temp_leak.gg` — a five-line for-loop
+# whose signature is byte-identical to this row's — and the `#[ignore]`d
+# `known_gap_dict_iter_ref_field_read_clone_temp_leak` asserting the clean run.
+iter_trait_default_trait_args	gorget_map_clone*12,str_alloc_copy*4	gorget_map_clone=t0952,str_alloc_copy=t0952
 iterator_adapters	__gorget_closure_env_alloc*4
 iterator_lazy_chain	__gorget_closure_env_alloc*6
 json_edge_cases	str_alloc_copy*9
@@ -401,6 +483,38 @@ readdir	gorget_readdir*1
 regex_basic	gorget_array_reserve*2,str_alloc_copy*3
 regex_corpus	gorget_array_reserve*102,str_alloc_copy*63
 regex_extended	gorget_array_reserve*4,str_alloc_copy*2
+# ⚖ ADMITTED (R48 Track T-a1, 2026-09-03; covered by the third ⚖ EXTENDED
+# paragraph in this file's header). THE FIXTURE IS R48's (added `a9f6d4db3`,
+# 2026-09-02); THE MECHANISM IS NOT — the carve-out below has been in place since
+# `14bf64e4a` (2026-03-06), five months before this round
+# (`git log -1 -L 2069,2075:src/ir/lowering/functions.rs`).
+# MECHANISM, FILED AS `todo/t0951`: a consuming `^` PARAMETER emits the
+# callee-side drop and a consuming `^self` RECEIVER never does.
+# `register_owning_param` is reached for a `Move`-ownership resource parameter at
+# four sites in `src/ir/lowering/functions.rs`; the two METHOD sites sit inside a
+# loop whose first statement is `if p.node.name.node == "self" { continue; }`
+# (`:2071-2073` and `:2831-2833`), so `self` never reaches it whatever sigil it
+# carries. This fixture is the D35 whole-value-`^self` POSITIVE case —
+# `void give(^self): take_bag(^self)` — and the one leaked record is the `Bag`'s
+# three-element `Vector[int]`, 64 bytes, that nobody drops.
+# ⚠ THE ATTRIBUTION THIS BLOCK CORRECTS. The brief that admitted this row carried
+# a control — *"a `^self` method that forwards nothing is CLEAN"* — which appeared
+# to refute the mechanism. Measured: that control was MIS-DESIGNED. Its body was
+# `print(self.items.len())`, and a field projection inside a `^self` method moves
+# the field out into a local (`__s2 = *self->items` then
+# `memset(&self->items, 0, 64)`) and THAT local IS drop-registered. It was clean
+# because it emptied the struct's only heap field, not because the receiver was
+# handled. A `^self` body that touches NOTHING leaks; so does a two-heap-field
+# `^self` that projects only one. Five cells, in the item's durable repro.
+# A SECOND OBSERVABLE OF THE SAME CARVE-OUT: `take_bag(^self)` emits
+# `Bag__clone(...)` and hands the CLONE to the callee, which drops it — so `^`,
+# the user's explicit move opt-in, is silently a copy for `self`. Either half
+# alone leaks; the no-forward cell leaks with no clone anywhere.
+# RETIRES with `todo/t0951`, which ships
+# `known_gaps/self_consuming_receiver_no_callee_drop.gg` (5 cells, 192 bytes in 3
+# allocations at HEAD on C and LLVM) and the `#[ignore]`d
+# `known_gap_self_consuming_receiver_no_callee_drop` asserting the clean run.
+self_whole_move_ok	gorget_array_push*1	gorget_array_push=t0951
 semaphore_amp_param	gorget_semaphore_new*1
 semaphore_basic	__gorget_spawn_limited_work*3+
 serialize_collections	str_alloc_copy*7
@@ -534,7 +648,6 @@ test_method_chaining	__gorget_closure_env_alloc*12
 test_multiline_closures	__gorget_closure_env_alloc*1
 test_process_timeout	gorget_process_spawn*8
 test_result_advanced	str_alloc_copy*7
-test_result_chaining	gorget_str_cat*3,str_alloc_copy*3
 test_set_all	__gorget_closure_env_alloc*11
 test_set_string	__gorget_closure_env_alloc*4,str_alloc_copy*3
 test_should_panic	gorget_format*2,str_alloc_copy*4
@@ -552,10 +665,39 @@ toml_edge	str_alloc_copy*3
 toml_parse	str_alloc_copy*13
 toml_stringify	gorget_array_push*1,gorget_dict_new*9,gorget_map_clone*9,str_alloc_copy*21
 tracking_composable	gorget_tracking_new*1
-trait_method_throws	gorget_string_format*1
 vector_any_all_bool	__gorget_closure_env_alloc*6
 vector_callable_two_locals	__gorget_closure_env_alloc*2
 vector_higher_order	__gorget_closure_env_alloc*4
+# ⚖ ADMITTED (R48 Track T-a1, 2026-09-03; covered by the third ⚖ EXTENDED
+# paragraph in this file's header). THE FIXTURE IS R48's (added `4e0dc7811`,
+# 2026-08-31) and it read "clean" when first swept ONLY BECAUSE IT CRASHED FIRST —
+# a `heap-buffer-overflow` R48 Track γ fixed, so LSan never got to report the
+# leaks the program always had. SIX QUESTIONS #6: a green cell can be green for a
+# reason unrelated to what you think it tests.
+# THREE CLASSES, THREE DIFFERENT MECHANISMS, THREE DIFFERENT ITEMS — each isolated
+# in a 5-line probe, not grouped by top frame:
+#   * `__gorget_closure_env_alloc*10` -> `todo/t0953`. A closure LITERAL at a
+#     call-argument position leaks its environment. This fixture passes exactly
+#     ten inline literals to map/flat_map/filter and all ten records allocate
+#     directly in `main`. ⚠ WIDER THAN THIS FILE'S OWN big-groups prose, which
+#     calls the frame "every builtin HOF call": a plain USER function taking
+#     `Callable[int(int)]` leaks the same frame with no HOF in the program.
+#   * `gorget_array_push*6` -> `todo/t0955`. The `Vector[U]` a `flat_map` CALLEE
+#     returns is never freed once its elements are drained into the accumulator:
+#     one husk per input element (2 via `fan <- __adapt_fan`, 2 via
+#     `fan_box <- __adapt_fan_box`, 1 each via `__Closure_5__call` and
+#     `__Closure_6__call`).
+#   * `str_alloc_copy*13` -> SPLIT, and the DIRECT/INDIRECT distinction is what
+#     splits it. 8 are INDIRECT, reachable from the leaked husks above, so they
+#     are `todo/t0955`. 5 are DIRECT (2 via `label <- __adapt_label`, 3 via
+#     `__Closure_0/1/8__call <- main`) and belong to `todo/t0954`: the accumulator
+#     array a builtin Vector HOF mints carries a NULL `elem_drop`, so the array is
+#     freed and its heap elements are not.
+# RETIRES only when ALL THREE of `todo/t0953`, `todo/t0954` and `todo/t0955` have
+# landed; each one alone TIGHTENS this row's counts. All three ship a durable
+# heap-forced `known_gaps` repro with a NAMED callee where the isolation needs one,
+# and an `#[ignore]`d `assert_gg_sanitize_clean` test asserting the clean run.
+vector_hof_cross_type_map	__gorget_closure_env_alloc*10,gorget_array_push*6,str_alloc_copy*13	__gorget_closure_env_alloc=t0953,gorget_array_push=t0955,str_alloc_copy=t0954,str_alloc_copy=t0955
 vector_methods2	__gorget_closure_env_alloc*4,gorget_array_push*1
 vector_sort_by	__gorget_closure_env_alloc*3
 vector_sort_by_key	__gorget_closure_env_alloc*3,str_alloc_copy*2

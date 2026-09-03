@@ -6535,6 +6535,91 @@ fn known_gap_vector_callable_index_read_clone_temp_leak() {
     );
 }
 
+// ── R48 Track T-a1: the three LEAK_ALLOWLIST rows this round admitted, one
+// #[ignore]d ASan test per FILED MECHANISM. Every one asserts the INTENDED
+// ASan-CLEAN run, so it is RED at HEAD.
+//
+// ⚠ ALL FIVE ARE WIRED TO `assert_gg_sanitize_clean`, NEVER TO `run_gg`. A
+// LEAKING PROGRAM PRINTS CORRECT STDOUT, so a stdout assertion on any of these
+// is structurally blind and would be green on arrival, for ever (SIX QUESTIONS
+// #6). Each header records the exact record signature measured at HEAD, on C
+// AND on LLVM — `scripts/sanitize_sweep.sh` is C-only (`todo/t0731`), so the
+// LLVM lane was checked by hand with `gg build --backend=llvm --sanitize`.
+
+// `todo/t0951` — a consuming `^` PARAMETER emits the callee-side drop; a
+// consuming `^self` RECEIVER never does (`register_owning_param` is reached for
+// `^` params and skipped for `self` at two sites in
+// `src/ir/lowering/functions.rs`). Five cells: A the `^` PARAM control (clean —
+// it emits `Bag__drop`), B a `^self` that touches nothing (LEAKS), C a `^self`
+// that forwards `take_bag_reads(^self)` (LEAKS), D a `^self` that PROJECTS the
+// struct's sole heap field (CLEAN AT HEAD FOR AN UNRELATED REASON — the
+// projection moves the field into a drop-registered local), and E a two-heap-
+// field `^self` projecting one (LEAKS the other). D is in the net precisely
+// because it is the green-on-arrival trap: the control this defect was first
+// briefed with was that shape, and its cleanliness reads as a refutation of the
+// mechanism until you see cell B. 192 bytes in 3 allocations at HEAD, C and
+// LLVM.
+#[test]
+#[ignore = "todo/t0951 — a consuming `^self` receiver never emits the callee-side drop, so the \
+receiver's heap fields leak. Asserts the intended ASan-clean run."]
+fn known_gap_self_consuming_receiver_no_callee_drop() {
+    assert_gg_sanitize_clean(
+        "known_gaps/self_consuming_receiver_no_callee_drop",
+        "3\n3\n3\n3\n3",
+    );
+}
+
+// `todo/t0952` — `DictIter[K, V].next()` reads its `Ref[Dict[K, V]] source`
+// BORROW field four times per call and each read deep-clones the whole Dict into
+// a temp that is never freed (`auto_clone_if_ptr`,
+// `src/ir/lowering/context.rs`, does not consult the callee's declared `Ref[T]`
+// parameter). 10062 bytes in 78 allocations at HEAD, C and LLVM;
+// `gorget_map_clone*12` + `str_alloc_copy*4`, the latter INDIRECT.
+#[test]
+#[ignore = "todo/t0952 — a Ref[T] struct-field read at a Ref[T] parameter position deep-clones \
+instead of passing the pointer through, and the clone leaks. Asserts the intended ASan-clean run."]
+fn known_gap_dict_iter_ref_field_read_clone_temp_leak() {
+    assert_gg_sanitize_clean("known_gaps/dict_iter_ref_field_read_clone_temp_leak", "6");
+}
+
+// `todo/t0953` — a closure LITERAL at a call-argument position mints a heap
+// environment nothing frees after the call. Two cells, and the second is the
+// discriminator: a plain USER function taking `Callable[int(int)]` leaks the
+// same frame, so this is wider than the "every builtin HOF call" wording
+// `tests/sanitize/LEAK_ALLOWLIST.txt` inherited for it. Both closures CAPTURE,
+// so the envs are real 16-byte mallocs. 32 bytes in 2 allocations, C and LLVM.
+#[test]
+#[ignore = "todo/t0953 — a closure literal at a call-argument position leaks its environment, at \
+a builtin HOF and at a plain user call alike. Asserts the intended ASan-clean run."]
+fn known_gap_closure_literal_call_arg_env_leak() {
+    assert_gg_sanitize_clean("known_gaps/closure_literal_call_arg_env_leak", "41\n41");
+}
+
+// `todo/t0954` — the accumulator array a builtin Vector HOF mints carries a NULL
+// `elem_drop`, so the backing array is freed and the heap elements it held are
+// not. The callee is a NAMED function so `todo/t0953`'s env leak cannot
+// contaminate the record set. 9 bytes in 3 allocations, C and LLVM.
+#[test]
+#[ignore = "todo/t0954 — the Vector-HOF accumulator is minted without elem_drop, so every heap \
+element the callee produces leaks. Asserts the intended ASan-clean run."]
+fn known_gap_vector_hof_accumulator_elem_drop_missing() {
+    assert_gg_sanitize_clean(
+        "known_gaps/vector_hof_accumulator_elem_drop_missing",
+        "10\n30",
+    );
+}
+
+// `todo/t0955` — the `Vector[U]` a `flat_map` callee RETURNS is never freed once
+// its elements have been drained into the accumulator: one leaked backing array
+// per input element, plus the Strings those husks still own. Named callee, for
+// the same isolation reason as `t0954`. 777 bytes in 6 allocations, C and LLVM.
+#[test]
+#[ignore = "todo/t0955 — a flat_map callee's returned Vector is never freed after its elements \
+are appended. Asserts the intended ASan-clean run."]
+fn known_gap_flat_map_callee_result_vector_leak() {
+    assert_gg_sanitize_clean("known_gaps/flat_map_callee_result_vector_leak", "10\n3");
+}
+
 // SELF-HOST-LANE gap (surfaced Round R40, Track-J review): `for (i, b) in
 // s.bytes().enumerate()` MISCOMPILES on the self-host lane — it prints
 // `0,16961,1,66` (the i64-slot over-read) instead of the correct `0,65,1,66`.
@@ -38525,9 +38610,11 @@ fn assert_self_host_stdout(fixture_rel: &str, tag: &str, expected: &str) {
 // Top-level enrolment is automatic and directory-driven, so 39 new cells
 // would land at once in: `runtime_parity_corpus` and its
 // `RUNTIME_DIFF_NONMATCH_CEILING` (Core #9 ⊕ forbids raising that for a
-// round's OWN inflow); the `-maxdepth 1` sanitize sweep; and the shrink-only
-// leak allowlist, where a leaking top-level cell cannot be allowlisted at
-// all. A subdirectory also makes SELF-HOST-ONLY wiring expressible, which is
+// round's OWN inflow); the sanitize sweep, whose corpus is the top-level
+// `*.gg` plus every directory `tests/sanitize/CORPUS_MANIFEST.txt` marks `IN`
+// (this directory's row is `OUT`, and it cites this reason); and the
+// shrink-only leak allowlist, where a leaking top-level cell cannot be
+// allowlisted without an owner ruling. A subdirectory also makes SELF-HOST-ONLY wiring expressible, which is
 // what the lane disposition below needs. ⚠ This is a property of THESE cells,
 // not a general rule — decide per fixture.
 //

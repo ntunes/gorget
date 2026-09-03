@@ -1,0 +1,30 @@
+# todo/t0952 — `DictIter[K, V].next()` reads its `Ref[Dict[K, V]] source` field
+# four times per call, and EACH read materializes by a full `gorget_map_clone`
+# deep copy into a temp that is never freed.
+#
+# `lib/std/iter.gg` declares the field a BORROW (`Ref[Dict[K, V]] source`) and
+# the four consumers as externs taking `Ref[Dict[K, V]] m`, so the correct answer
+# at every one of those argument positions is PASS THE POINTER THROUGH. Instead
+# `auto_clone_if_ptr` deep-copies the whole Dict — a view-vs-owned invariant
+# dropped at a call boundary (Layering rule 1), and then the copy leaks.
+#
+# HEAP-FORCED: a three-entry `Dict[String, int]`, so each cloned map carries real
+# bucket, order and key allocations.
+#
+# INTENDED: prints 6 and is ASan-clean under `detect_leaks=1`, on C and LLVM.
+# At HEAD it prints 6 and leaks 10062 bytes in 78 allocations —
+# `gorget_map_clone*12` (4 clone SITES x 3 allocations inside `gorget_map_clone`;
+# the RECORD count is independent of the Dict's size, only the BYTES scale) plus
+# `str_alloc_copy*4`, which are INDIRECT: the String keys the leaked clones own.
+# The int-keyed control in `todo/t0952` leaks `gorget_map_clone*12` and NOTHING
+# else, which is what proves the four `str_alloc_copy` records are a consequence
+# rather than a second mechanism.
+#
+# The leak is stdout-invisible, so this is wired to `assert_gg_sanitize_clean`.
+
+void main():
+    Dict[String, int] m = {"x": 1, "y": 2, "z": 3}
+    int total = 0
+    for k, v in m.iter():
+        total = total + v
+    print(f"{total}")

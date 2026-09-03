@@ -1,0 +1,29 @@
+# todo/t0955 — the `Vector[U]` a `flat_map` callee RETURNS is never freed after
+# its elements have been appended to the accumulator.
+#
+# `flat_map` is `(T) -> Vector[U] ⇒ Vector[U]`: the callee mints a fresh vector
+# per input element, the expander drains it into the result, and nobody owns the
+# drained husk afterwards. One leaked backing array per input element.
+#
+# The callee is a NAMED FUNCTION on purpose, so `todo/t0953`'s closure-literal
+# environment leak cannot contaminate the record set.
+#
+# INTENDED: prints 10 and 3, and is ASan-clean under `detect_leaks=1`, on C and
+# LLVM. At HEAD it prints both correctly and leaks 777 bytes in 6 allocations:
+# `gorget_array_push*1` (the three husks share one allocation stack, so ASan
+# reports one RECORD) plus `str_alloc_copy*1`, which is INDIRECT — the Strings
+# those husks still own. Stdout-invisible, so this is wired to
+# `assert_gg_sanitize_clean`.
+
+from std.conv import int_to_str
+
+Vector[String] fan(int n):
+    Vector[String] out = []
+    out.push(int_to_str(n * 10))
+    return ^out
+
+void main():
+    Vector[int] nums = [1, 2, 3]
+    auto out = nums.flat_map(fan)
+    print(out.get(0).unwrap())
+    print(f"{out.len()}")

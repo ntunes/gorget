@@ -1,0 +1,35 @@
+# todo/t0954 — the accumulator array a builtin Vector HOF mints is created with a
+# NULL `elem_drop`, so every heap element the callee produces leaks when the
+# result vector is freed.
+#
+# The emitted C is the witness: the runtime's own `gorget_str_chars` does
+#     GorgetArray arr = gorget_array_new(sizeof(Str));
+#     arr.elem_drop = (__gorget_drop_fn)gorget_string_free;
+# while the `map` accumulator for the SAME element type does
+#     __v69 = gorget_array_new(__v68);        /* sizeof(Str) == 32, no elem_drop */
+# The backing array IS freed at scope exit — there is no `gorget_array_push`
+# record — and the `Str` payloads it held are not.
+#
+# The callee is a NAMED FUNCTION on purpose: a closure literal would add
+# `todo/t0953`'s environment leak on top and the two mechanisms would be reported
+# as one row. With `label` there is no closure anywhere, so the only records are
+# the leaked elements.
+#
+# HEAP-FORCED: `int_to_str` returns a real heap `String` per element.
+#
+# INTENDED: prints 10 and 30, and is ASan-clean under `detect_leaks=1`, on C and
+# LLVM. At HEAD it prints both correctly and leaks 9 bytes in 3 allocations, one
+# `str_alloc_copy` record (ASan merges the three identical allocation stacks into
+# one record; the ALLOCATION count is what scales with the element count).
+# Stdout-invisible, so this is wired to `assert_gg_sanitize_clean`.
+
+from std.conv import int_to_str
+
+String label(int n):
+    return int_to_str(n * 10)
+
+void main():
+    Vector[int] nums = [1, 2, 3]
+    auto out = nums.map(label)
+    print(out.get(0).unwrap())
+    print(out.get(2).unwrap())

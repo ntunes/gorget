@@ -1,0 +1,115 @@
+# SANITIZE CORPUS MANIFEST — which fixture directories the sweep walks.
+#
+# WHAT THIS REPLACES, and why. `scripts/sanitize_sweep.sh` used to enumerate its
+# corpus with `find tests/fixtures -maxdepth 1 -name '*.gg'`. That depth limit
+# was DELIBERATE and load-bearing — the gate's own positive controls live in
+# `sanitize_selftest/`, one leaks BY DESIGN, and a naive recursive walk ingests
+# them as findings and destroys the Core #13 self-test — but it was an ACCIDENT
+# OF DEPTH, not a decision. Nothing recorded WHY each directory was unwatched,
+# and a new directory joined the unwatched set silently.
+#
+# This file is that decision, written down. Every first-level directory under
+# `tests/fixtures/` carries exactly one row: `IN` (walked recursively, its
+# `*.gg` join the corpus) or `OUT` plus the reason it is not swept.
+# `sanitize_corpus_manifest_is_declared` (tests/lints.rs) set-equals this census
+# against disk, so a NEW directory with no row REDS the cheap lint on the next
+# commit, and the sweep itself refuses to report a verdict against an incomplete
+# manifest (exit 2 — the instrument is broken, not the tree).
+#
+# ⛔ DECLARE, DO NOT RELOCATE. The owner offered "move them under /skip" as one
+# option; a manifest is better precisely because moving files changes paths and
+# breaks citations in `todo/` items, fixture headers and tests.
+#
+# FORMAT:  <directory> TAB IN|OUT TAB <reason, and what would change it>
+# A reason naming a `todo/` item must name one that EXISTS — the lint checks it,
+# so a deferral cannot rot into a dangling pointer.
+#
+# CENSUS, measured 2026-09-03: 69 first-level directories, 84 directories
+# recursively (15 nested). The manifest declares the FIRST level; an `IN`
+# directory is walked recursively, so a nested directory inherits its parent's
+# row and cannot join the corpus on its own.
+#
+# ⚠ EVERY ROW IS `OUT` TODAY, AND THE WALK IS THEREFORE BYTE-IDENTICAL TO THE
+# `-maxdepth 1` IT REPLACES. That is the intended landing state, not an
+# oversight: the deliverable is DECLARED, EVIDENCED and CITED membership, and a
+# corpus expansion is a separate act with its own measurements and, for
+# `security/`, its own owner ruling (`todo/t0956`). `COVERAGE_FLOOR` therefore
+# stays where it was — see the note on it in `scripts/sanitize_sweep.sh`.
+#
+# ⚠ AN `OUT` ROW IS NOT A CLAIM THAT THE DIRECTORY CANNOT LEAK. Read each
+# reason: some are STRUCTURAL and permanent (no binary is ever produced, there
+# is no standalone program, the directory holds the gate's own controls), and
+# some are DEFERRALS of a real corpus candidate, each citing the item that owns
+# the work. Flipping a deferred row to `IN` is a future round's job — it will
+# surface findings that already exist and are merely unseen, and the count going
+# UP before it goes down is the correct outcome.
+#
+box_trait_cross_module	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+break_value_removed_error	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+catch_binding_drop	OUT	2 fixtures ALREADY sanitize-covered by dedicated `assert_gg_sanitize_clean` tests in tests/integration.rs; sweeping them would duplicate a tighter instrument
+d10b_place_overlap	OUT	D10(b) place-overlap checks: 5 `*_reject` (a rejected program never produces a binary) plus 2 `*_accept` that DO run -- the accept cells are corpus candidates, queued on todo/t0956
+d12_drop_purity	OUT	D12 drop-purity checks driven by check_gg_fails / check_gg_ok / run_gg: 18 reject, 11 accept-or-run -- the run cells are corpus candidates, queued on todo/t0956
+d23_traitdefault_xmod_handled	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+d23_traitkey_extends_missing_method	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+d23_traitkey_extends_provided	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+d23_unhandled_method_traitdefault_xmod	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+d23_unhandled_method_xmod	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+d27_caret_fn_type_sigil_before_type_error	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+d35_fn_type_sigil_before_type_error	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+d53_unique_lock	OUT	D53 unique-lock corpus, 51 of 59 cells named `*_reject` and driven by check_d53_unique_lock_reject / check_gg_fails (a rejected program never produces a binary); the 8 run cells are queued on todo/t0956
+enum_variant_name_collision	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+equip_method_no_shadow_extern	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+exhaustiveness	OUT	16 match-exhaustiveness cells (9 `neg_*` reject, 7 `pos_*`) consumed by tests/lints.rs; the `pos_*` cells are corpus candidates, queued on todo/t0956
+expr_nesting_max_depth	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+expr_nesting_too_deep_error	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+fmt_author_parens	OUT	`gg fmt` input/expected pairs -- the formatter never builds or runs them, so there is no binary to sanitize
+fmt_author_rows	OUT	`gg fmt` input/expected pairs -- the formatter never builds or runs them, so there is no binary to sanitize
+fmt_blank_lines	OUT	`gg fmt` input/expected pairs -- the formatter never builds or runs them, so there is no binary to sanitize
+fmt_fill_pack	OUT	`gg fmt` input/expected pairs -- the formatter never builds or runs them, so there is no binary to sanitize
+fmt_form_preservation	OUT	`gg fmt` input/expected pairs -- the formatter never builds or runs them, so there is no binary to sanitize
+fmt_magic_comma	OUT	`gg fmt` input/expected pairs -- the formatter never builds or runs them, so there is no binary to sanitize
+fmt_parse_errors	OUT	`gg fmt` input/expected pairs -- the formatter never builds or runs them, so there is no binary to sanitize
+fmt_silent_drops	OUT	`gg fmt` input/expected pairs -- the formatter never builds or runs them, so there is no binary to sanitize
+fmt_suite_layout	OUT	`gg fmt` input/expected pairs -- the formatter never builds or runs them, so there is no binary to sanitize
+fmt_tail_reserve	OUT	`gg fmt` input/expected pairs -- the formatter never builds or runs them, so there is no binary to sanitize
+fstring_cross_module	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+generic_method_callable_param	OUT	a single runnable `run_gg` fixture kept in its own directory -- a genuine corpus candidate, queued on todo/t0956
+guard_trait_named_box_dispatch	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+imported_body_type_error	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+imported_call_arg_type_check	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+imported_nonexhaustive_match	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+iterator_map_callable_param	OUT	a single runnable `run_gg` fixture kept in its own directory -- a genuine corpus candidate, queued on todo/t0956
+known_gaps	OUT	310 fixtures BROKEN BY CONSTRUCTION: each asserts the INTENDED output the compiler does not yet produce, so a leak here IS the filed defect rather than a new finding. WHAT WATCHES THEM: nothing automatic -- scripts/robustness_map.py walks only robustness_map/, and known_gaps_passing_allowlist_shrink_only (tests/lints.rs) notices only when an #[ignore]d test starts PASSING. The deliberate instrument is the #[ignore]d sanitize roster: the per-item `assert_gg_sanitize_clean` tests each todo item cites from its `repro` field
+lints	OUT	an enumerate-on-Set before/after PAIR consumed by tests/integration.rs as lint-suggestion input; corpus candidate, queued on todo/t0956
+liveness	OUT	23 liveness cells (13 reject, 8 accept, 2 other) consumed by tests/integration.rs, tests/lints.rs and tests/spec_conformance.rs; the accept cells are corpus candidates, queued on todo/t0956
+modules_auto	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+modules_basic	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+modules_chain	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+modules_derive_clone	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+modules_derive_multi	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+modules_enum	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+modules_from	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+modules_import_shadow	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+modules_nested	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+modules_pkg	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+modules_pkg_dep	OUT	a package DEPENDENCY (gorget.toml + greeter.gg) resolved by modules_pkg/, with no entry point of its own -- there is no program here to build
+modules_struct	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+modules_struct_return	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+modules_trait	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+mutarg_import_probe	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+mutex_bare_trait_xmod_reject	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+mutex_box_trait_ok	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
+robustness_map	OUT	1011 generated cells with their OWN five-lane harness (scripts/robustness_map.py) and hand-written expectations; folding them in adds 1011 builds to the sweep's current 2207, about half again -- queued on todo/t0956
+runtime_snapshots	OUT	1377 `.out` snapshot files and ZERO `.gg` sources -- there is nothing here for the sweep to build
+rvd_safety_walk	OUT	17 RVD safety-walk cells consumed by tests/integration.rs; corpus candidates, queued on todo/t0956
+sanitize_selftest	OUT	THE GATE'S OWN POSITIVE CONTROLS. One leaks BY DESIGN and one alternates BY DESIGN; ingesting them reports the gate's controls as findings and destroys the Core #13 self-test that run_selftest performs before any corpus verdict. LOAD-BEARING -- do not flip this row
+security	OUT	246 adversarial memory-safety programs, and the best corpus candidate in the tree -- but folding it in needs an OWNER RULING first. A 4-minute FIXLIST sweep measured 23 corruption findings against a CORRUPTION_CEILING of 1 (a large share of them the D10 exclusivity holes tests/security.rs:2268 already documents in its own voice as passing `gg check` then tripping ASan -- that comment says ELEVEN, the scout note said twelve, so re-measure before quoting either), 19 ASAN_heap-use-after-free, 21 leaks, 29 BUILD_FAIL_BOTH reject-only fixtures, 6 stem collisions with top-level fixtures, and security/'s own by-design leaking positive control. run_one keys its scratch dir on `basename`, so those collisions make parallel workers truncate each other's rep files and FLAKY is fatal at ceiling 0: a stem-to-path re-key is a precondition. FILED AS todo/t0956
+self_host_check	OUT	self-host compiler SOURCE, built as a package by the bootstrap and parity lanes -- not standalone programs the sweep can build one at a time
+self_host_comprehension	OUT	39 comprehension cells, each with a `<stem>.expected` sidecar, enrolled DIRECTORY-DRIVEN and wired SELF-HOST-ONLY; tests/integration.rs names this sweep as one of the automatic top-level enrolments the subdirectory exists to avoid. They ARE runnable programs, so this is a corpus candidate, queued on todo/t0956
+self_host_gaps	OUT	2 runnable Rust-lane `run_gg` cells parked in a subdirectory so they stay OUT of the auto-scanned runtime_parity_corpus (Core #9 exclusion; the self-host lane cannot link them -- todo/t0922, todo/t0923). ALREADY ASan-covered: twin copies live in tests/fixtures/security/ and tests/security.rs runs both through security_safe, so sweeping them here would duplicate a live instrument
+self_host_lexer	OUT	self-host compiler SOURCE, built as a package by the bootstrap and parity lanes -- not standalone programs the sweep can build one at a time
+self_host_lowerer	OUT	self-host compiler SOURCE, built as a package by the bootstrap and parity lanes -- not standalone programs the sweep can build one at a time
+self_host_parser	OUT	self-host compiler SOURCE, built as a package by the bootstrap and parity lanes -- not standalone programs the sweep can build one at a time
+self_host_resolver	OUT	self-host compiler SOURCE, built as a package by the bootstrap and parity lanes -- not standalone programs the sweep can build one at a time
+self_host_typechecker	OUT	self-host compiler SOURCE, built as a package by the bootstrap and parity lanes -- not standalone programs the sweep can build one at a time
+type_alias_struct_dir	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program

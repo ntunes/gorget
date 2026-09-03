@@ -1,0 +1,71 @@
+# todo/t0951 — a consuming `^` PARAMETER emits the callee-side drop; a consuming
+# `^self` RECEIVER never does. Five cells, because the naive net for this defect
+# is green on arrival twice over (Core #12).
+#
+# HEAP-FORCED: every `Bag` owns a `Vector[int]` with three elements, i.e. a real
+# 64-byte array allocation. A struct of scalars would leak nothing to see.
+#
+#   A  `^` PARAM, body touches nothing        CONTROL — clean at HEAD (emits Bag__drop)
+#   B  `^self`,   body touches nothing        LEAKS 64 B at HEAD
+#   C  `^self`, forwards `take_bag(^self)`    LEAKS 64 B at HEAD
+#   D  `^self`, PROJECTS the sole heap field  TRAP — clean at HEAD, for an
+#                                             UNRELATED reason: the projection
+#                                             moves `items` out into a local
+#                                             (`memset(&self->items, 0, 64)`) and
+#                                             THAT local is drop-registered. A net
+#                                             built only from this shape proves
+#                                             nothing.
+#   E  `^self`, TWO heap fields, projects one LEAKS the un-projected one
+#
+# INTENDED: prints 3 3 3 3 3 and is ASan-clean under `detect_leaks=1`, on C and
+# LLVM. At HEAD it prints the right numbers and leaks 4 x 64 bytes (cells B, C,
+# E's spare, and E is one record) — a leak is stdout-invisible, which is why this
+# fixture is wired to `assert_gg_sanitize_clean` and not to `run_gg`.
+
+struct Bag:
+    Vector[int] items
+
+struct TwoBag:
+    Vector[int] items
+    Vector[int] spare
+
+void take_bag(Bag ^b):
+    print(3)
+
+void take_bag_reads(Bag ^b):
+    print(b.items.len())
+
+equip Bag:
+    # B — consumes self, forwards nothing, touches nothing.
+    void drop_it(^self):
+        print(3)
+
+    # C — consumes self and forwards it to a consuming PARAMETER.
+    void give(^self):
+        take_bag_reads(^self)
+
+    # D — consumes self and projects its sole heap field.
+    void project(^self):
+        print(self.items.len())
+
+equip TwoBag:
+    # E — consumes self and projects ONE of two heap fields.
+    void project_one(^self):
+        print(self.items.len())
+
+void main():
+    # A — the PARAM control.
+    Bag a = Bag([1, 2, 3])
+    take_bag(^a)
+
+    Bag b = Bag([1, 2, 3])
+    b.drop_it()
+
+    Bag c = Bag([1, 2, 3])
+    c.give()
+
+    Bag d = Bag([1, 2, 3])
+    d.project()
+
+    TwoBag e = TwoBag([1, 2, 3], [4, 5, 6])
+    e.project_one()
