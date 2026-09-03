@@ -461,6 +461,42 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **⛔ F · PASS 5 — 3 BLOCKING, 5 SCOPE. DESIGN HOLDS FOR A FOURTH PASS; ALL THREE BLOCKERS ARE IN MY
+  FOLD.** Folded as ADDENDUM 7. **Streak reset to 0; pass 6 launched, SCOPED to confirming the fold, not
+  re-litigating the design.**
+  ⛔ **THE PATTERN IS NOW THE ORCHESTRATOR'S, NOT THE TRACK'S — three folds this round shipped the defect
+  the next pass had to catch.** ADDENDUM 6's code block **does not compile**: `infer_operand_type_full`
+  (`type_reg.rs:263`) takes **THREE** params and the fold passed two. ⛔⛔ **And the natural repair is the
+  silently-wrong sibling** — the two-arg `infer_operand_type` (`:285`) scans only `ctx.locals_iter()` and
+  returns **`I64_TYPE` for a builder-only temp**, i.e. **exactly the `fold("",…) → a` silent-wrong class the
+  whole carrier redesign exists to prevent.** I promoted the prescription to code *because prose had
+  misfired three times* — and then did not compile it. **ROOT CAUSE: I folded pass 4's ILLUSTRATION (with
+  `…` elisions) AS A PRESCRIPTION.** ⇒ **AGENTS.md's FOLD VERBATIM rule is SHARPENED IN PLACE: a fold that
+  prescribes a WRITE SITE or ships CODE cites the reviewer's MEASURED PROTOTYPE, never a retyped snippet.**
+  2. ⛔ **Readiness gate #1's FIRE COUNT is a wrong number** (Core #5): the post-fix symbol is
+     `__gg_synth_sort_impl_s8_pp_i64`, **not `_vv_`** — an executor grepping the brief's value finds nothing
+     and concludes the mechanism did not fire.
+  3. ⛔ **The DEQUE hazard is understated and READINESS #2 AND #3 BOTH FAIL.** `builtins.rs:441` aliases
+     `DEQUE.methods = VECTOR.methods`, so a base-name-keyed table silently drops Deque. Measured:
+     `Deque[String].each` is **green at HEAD** (a silent-regression cell) and `Deque[String].sort_by_key`
+     goes **BUILD-FAIL → green** (an UNPINNED progress cell) — while
+     `grep -l Deque tests/fixtures/robustness_map/cells/*.gg` returns **ZERO**, so the whole-C-lane evidence
+     **cannot witness Deque in either direction.**
+     ⭐ **AND THE BRIEF THREW AWAY AN AVAILABLE WITNESS.** B-4's arm-count retirement does **not** transfer:
+     it retired six tables with six domains; this one has **one** domain, and **`ALL_PROTOCOLS`
+     (`builtins.rs:1167-1176`, 30 entries) is an independent in-repo witness.** The repo already carries the
+     pattern to mirror — **`collection_protocols_have_full_metadata` (`builtins.rs:1285`)**, whose own
+     doc-comment describes this exact failure mode. ⇒ **Remedy folded: an `ALL_PROTOCOLS`-iterating unit
+     test + a Deque control + a Deque pin** (Core #6, SIX Q#2).
+  ✅ **Independently reconfirmed, no Core #5 finding against pass 4:** closure is arg 0 in all six cells ·
+  top-of-body placement **6/6** · `robustness_map.py --lanes c` **rc 0, 6 PROGRESS · 0 REGRESSION · WORKS
+  848/1009** · the one-reader claim holds (2 setters, **1 reader**, 1 field decl) · every B3 classification
+  reproduces · **the five new cells DO discriminate the carrier swap** (rebuilt with BR2-3's exact wrong
+  binding they go BUILD-FAIL) — **label them CONTROLS, not pins** · `t0988`'s refutation reproduces exactly.
+  ⚡ **S2 DECIDED — genuinely disjoint, so FILE don't fix:** `Deque[String].push_back(…)` →
+  `E_NoMethodFound`, because the aliasing gives Deque **no end-specific API at all**. **`todo/t0990` from
+  F's block.**
+
 - **✅ K · SCOUT RETURNED — BRIEF WRITTEN (`/tmp/brief_K.md`), PASS 1 LAUNCHED. It is a ONE-LANE fix.**
   Repro CONFIRMED at HEAD both backends; **ggdef prints the correct answer on every row** and `.slice()` is
   out of its subset, so **ggdef covers only the colon form — the broken one — and adjudicates both Rust
