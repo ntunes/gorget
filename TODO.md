@@ -8,6 +8,20 @@ class fix, plus the owner's ease ruling.** No track has been scouted or briefed 
 is the ROSTER, not a set of signed-off designs. Every track still owes scout → brief → ≥3 fresh
 sequential brief-reviews → executor → fresh output-review before it integrates.
 
+### 🔢 R49 ID BLOCKS — orchestrator-allocated per AGENTS.md multi-agent rule **MA-3b** (owner 2026-09-03)
+**A TRACK NEVER PICKS ITS OWN `todo/` ID.** Each executor gets a private disjoint block in its brief and
+asks the orchestrator to extend it if exhausted. This retires the collision that forced the Track P/R
+renumber. Blocks issued for R49 — **first unissued id is `t1047`**:
+
+| A | E | F | H | B | C | D | G |
+|---|---|---|---|---|---|---|---|
+| `t0967`–`t0976` | `t0977`–`t0986` | `t0987`–`t0996` | `t0997`–`t1006` | `t1007`–`t1016` | `t1017`–`t1026` | `t1027`–`t1036` | `t1037`–`t1046` |
+
+⚠ A block is a CEILING on collision, not a filing quota — R49's mandate is burn-down, and an unused block
+is the good outcome. **Wave 1 in flight: A · E · F · H** (scouts launched 2026-09-03). Wave 2 launches one
+track at a time as each wave-1 track INTEGRATES; **B must not launch before E integrates** (E dissolves
+`t0963`, which would otherwise be B's work).
+
 Next free todo id is **`t0967`** (`t0946` is an unused gap from the Track P/R collision renumber and stays
 unused). `AGENTS.md` is **36,186 bytes** against the 49,400 ceiling — **`t0714` and `t0577` are UNBLOCKED**;
 the headroom is DELIBERATE (the lint says compact a neighbouring rule rather than raise it), so do NOT
