@@ -490,6 +490,45 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **⚡ A1-M · FOLD LANDED (`364a24a14`) — FRESH CONFIRMING OUTPUT-REVIEW LAUNCHED.** All five blocking items
+  answered. Gates bare: build 0 · `--lib` **1185/0** · `--test lints` **219/0** · `-p ggdef` 0 ·
+  `spec_conformance` 3/0 · `security` 213/0; targeted `--release` **12 C filters and 5 LLVM filters, every
+  one exit 0** — including `throws`/`autoprop`/`rethrow` **run specifically for B1's blast radius**, since
+  the return-`Ok` path is shared with every `throws` function in the corpus.
+  ⭐⭐ **B1 · THE REVIEWER WAS RIGHT ABOUT THE DEFECT AND WRONG ABOUT THE SITE — AND THE DISTINCTION IS THE
+  WHOLE FINDING.** The `throws` auto-`Ok` wrap has **TWO write sites**, and only one reaches the chokepoint:
+
+  | `throws` body form | wrap path | at `dc29f0faf` |
+  |---|---|---|
+  | **expression body** | `wrap_expr_tail_in_ok` → `emit_enum_init_owned` → **site 3/5** | **prints `2`** |
+  | **`return <literal>`** | raw `builder.enum_init`, its own `assign_mode(Move)` | ⛔ **rc 139** |
+
+  ⇒ the live site is **`stmts/mod.rs:2036`**, not `functions.rs:215`. ⭐ **"The GREEN TWIN is exactly what
+  made the position look enumerated — SIX QUESTIONS #3 AND #6 IN ONE CELL."** Fixed as **site 6/6**, with
+  the packed temp becoming the `returned_local` so `move_zero` targets the operand actually consumed
+  (GIR-verified).
+  ⭐ **B2 · REFUTED BY MEASUREMENT, AND THAT IS WHAT CLOSES IT.** Site 3/5 is **not** uncovered — deleting it
+  makes the **expression-body `throws`** cell go **rc 139**. It was simply **not in the fixture.** Both body
+  forms are now cells ⇒ **all SIX sites behaviourally pinned (readiness #4)**; guard bumped 5→6 and
+  re-RED-verified.
+  ⭐ **B3 · REPRODUCED, THEN PUSHED ONE STEP FURTHER — AND BOTH MECHANISMS ARE `Callable`-SPECIFIC.**
+  `Option[Option[String]]` is **CLEAN** and `Result[String,String]` on a call result is **CLEAN**, so the
+  filings are sharp: **`t0971`** — the outer `Option__Option__Callable__GorgetClosure__drop` **does not exist
+  in the emitted file** while the inner one is correct · **`t0972`** — the arm `memset`s the payload slot and
+  *then* frees the zeroed slot, **and the LOCAL-scrutinee form emits `gorget_closure_free` while the
+  CALL-RESULT form does not.** Attribution was **measured, not assumed** (deleting the nested cell takes the
+  fixture 16 → 15). **Retirement now gated on all THREE of `t0948`/`t0971`/`t0972`** — landing `t0948` alone
+  only tightens it.
+  ⭐ **AND THE EXECUTOR LEFT THE FALSIFIED CONTROL IN THE BLOCK, WITH THE FOUR MEASURED ROWS BENEATH IT** —
+  *"it is the reasoning the owner would otherwise have been ruling on."* **That is the right instinct: an
+  owner-facing block should show the refuted claim, not quietly replace it.**
+  ⊕ **B4 corrected: 144 bytes in 16 allocations** (the constants were already right). ⚠ The two new `throws`
+  cells add **ZERO** net records — both ASan-CLEAN in isolation, itself an attribution datum.
+  ⚖ **THE LEAK ESCALATION IS NOW FIT FOR THE OWNER** — three mechanisms named and individually measured,
+  retirement gated on three items, count verified on both lanes. **Goes up once the confirming review signs.**
+  ✅ **The handover's `t0938`/`t0873(a)` claims were already corrected** (the executor flagged them twice;
+  the correction landed at `522a89bd9`).
+
 - **⛔ F · OUTPUT-REVIEW: 2 BLOCKING (both foldable) + 10 SCOPE. ALL THREE MANDATORY GATES PASS.** Returned
   to the executor; **not integrated.** Gates re-run bare at `22b8dec2f`: build 0 · `--lib` **1187/0** ·
   `--test lints` **218/0/1** · `robustness_map --lanes c,llvm` **rc 0, no REGRESSION line, ZERO PROGRESS
