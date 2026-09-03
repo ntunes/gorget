@@ -465,6 +465,47 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **✅ E · OUTPUT-REVIEW: INTEGRATE, WITH TWO PRECONDITIONS — both sent back to E's executor.**
+  All THREE mandatory gates PASS. Every gate re-run bare by the reviewer: `check --all-targets` · `--lib` ·
+  `--test lints` · `spec_conformance` · `security` · `-p ggdef` · `build --release` ·
+  **`self_host_bootstrap_fixed_point`** · `resolver_comparison` · `c_emit_comparison` · the three new
+  fixtures · `fmt_` 183/0 — **all exit 0.**
+  ✅ **THE EDIT I FLAGGED AS HIGHEST-RISK IS CLEARED.** `ex_shopping_cart`'s `expected` string is
+  **byte-identical to the fixture's BIRTH COMMIT `86feb444a`**, to the deleted fossil companion's MANIFEST
+  row, and to hand-derivation (150×2 + 250×1 = 550). The `.gg` file is untouched by the diff. ⇒ **derived
+  from the record, then confirmed — NOT fitted to the binary. `t0934` satisfied.**
+  ✅ **REMOVAL TOTALITY REGENERATED:** across **4685** committed `.gg` files with comments stripped, a bare
+  `it` token survives in exactly **7** — the 2 new fixtures, `ex_shopping_cart.gg`'s loop variable, and 4
+  hits **inside string literals**. Zero in `docs/`, `lib/`, `spec/prose`. No symlink converted to a real file.
+  ✅ **`t0977` PROVEN NOT INTRODUCED BY THIS DIFF, by construction** — its repro contains no `it` token, and
+  every `src/` hunk removes only `Expr::It`/`ImplicitClosure` arms. ⊕ It is **mutually consistent** with
+  `t0954`, whose own example IS `t0977`'s cell 4.
+  ✅ **ALL THREE RATCHETS MOVED DOWN** (`LEAK_CEILING` 294→293, `CLASS_PAIRS` 501→500, `RECORDS` 2297→2286),
+  `figures.py --validate` 0 errors, `--scan` 0 discrepancies. ⊕ **The reviewer ran the two grow-only floors
+  the executor did NOT re-measure** — `resolver_comparison` 1957 vs floor 1865, `c_emit_comparison` 1629 vs
+  1283 — because deleting a MATCHING fixture lowers them, unlike the ceiling.
+  ⛔ **PRECONDITION 1 — cite **D54**.** The lint `ratified_decisions_are_cited_in_the_spec` reds at 26 vs
+  `BUDGET = 25`, which **already sits at ZERO headroom** (the reviewer re-implemented the population parse
+  and reproduced the 25-name roster exactly). Citation goes in E's own paragraph at
+  `language-reference.md:2039-2044` **and** at `language-design.md:1550`, where E wrote D54's rationale.
+  **Conflict-free — only E's branch touches those files, and its docs diff adds/removes no `D<N>` token.**
+  ⛔ **BUDGET STAYS 25.** ⚠ **A STANDING CONSEQUENCE FOR THE HANDOVER: with uncited pinned at the ceiling,
+  EVERY future ratification must ship its spec citation IN THE SAME COMMIT or this lint reds.**
+  ⛔ **PRECONDITION 2 (BLOCKING) — the tenth lint's finding is named in `DONE.md` but NEITHER GUARDED NOR
+  FILED.** `self_host_cow_write_walkers_share_one_root_peel` (`tests/lints.rs:7076-7084`) computes
+  `decided = NO_MUTABLE_PATH ∪ write_arms` and asserts only `undecided.is_empty()` — **a STALE name in the
+  hardcoded roster only GROWS `decided`, so it can never fail.** Core #6 (both directions) + SIX Q#2.
+  **The round fixed the INSTANCE and left the CLASS open.** ⚡ **Discharge = the 4-line reverse assertion**
+  (every `NO_MUTABLE_PATH` name must appear in `variants`); **verified green today and RED on the pre-clean
+  tree — its own Core #13 demonstration.**
+  ⚠ **Commit `13793b85b` is RED IN ISOLATION** (`todo_index_is_current`). **I SQUASH-MERGE at integration** —
+  fixes the bisect hazard without rewriting E's branch; E adds the preconditions as a new commit on top.
+  ⊕ **SCOPE carried:** `figures.db:930`'s caveat still justifies **294** while the row now reads 293
+  (`--where 294` → 33 spellings, `--where 293` → 7) — **one row got Core #5, its neighbour didn't** ·
+  **the NEW doc example at `language-design.md:1557` is itself a live `t0977` instance** (prints a raw
+  pointer), which is the strongest argument for that item's HIGH severity — cross-reference it ·
+  `beginner_map`'s retired rows still read `bucket = WORKS` (Track F's call).
+
 - **⛔ K · PASS 3 — 2 BLOCKING. DESIGN SOUND A THIRD TIME; BOTH MY FOLDS NAME THE WRONG WRITE SITE.**
   Folded as ADDENDUM 4; **streak reset, pass 4 launched.** ⛔ **THE ENUMERATION HAS NOW FAILED THREE TIMES,
   EACH TIME BECAUSE THE WITNESS WAS OVER THE WRONG POPULATION** — runtime functions (pass 1) · `index_load`
