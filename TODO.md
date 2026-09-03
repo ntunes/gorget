@@ -461,6 +461,30 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **⚖ OWNER RULING 2026-09-03 — ALL THREE LIVE ASKS ANSWERED: *"Take the reference grade (starred) option
+  on each ask."*** The parked three (`t0844` · `t0842`(A) · `t0863`) stay parked; `t0947`'s direction needed
+  no ruling (Track C pass 5 confirmed `decisions.md:2081-2093` already answers it).
+  1. ✅ **THE `s[a:b]` CEILING IS RETIRED AND REPLACED BY AN EQUIVALENCE GUARD (option C).** Track K
+     **deletes** the `CEILING = 0` lint at `tests/lints.rs:18406-18410` — not merely leaves it `#[ignore]`d
+     — because its premise is measurably dead (the clone reclaim it existed to drive measures **ZERO**), it
+     **fights D22 Rider 2**'s permanent aliases, and as a shrink-only ratchet it **cannot go RED on a
+     shrink** (Core #6 needs both directions). In its place: **assert `s[a:b]` and `.slice(a,b)` cost the
+     SAME — both `string_clone == 0` at a TEMP, both `== 1` at a BIND — failing in EITHER direction**,
+     instrumented with `--clones=stats` (**never** stdout, **never** ASan — blind here). **Verify the
+     verifier: revert the tag on ONE spelling and show the guard fire.** Folded as brief_K ADDENDUM 3;
+     supersedes §7's "report, do not decide".
+  2. ✅ **THE `it`-REMOVAL LEDGER ENTRY IS RATIFIED AS DRAFTED (option A) — it becomes D54.** The
+     `E_UndefinedName` retirement note stays IN the entry: it is the migration path, and in a comment it
+     would rot.
+  3. ✅ **D22's FIRST RIDER IS AMENDED IN PLACE (option A) — conclusion stands, mechanism refuted.**
+     `.slice()` is **FREE at a temp** and materializes only at the **bind**; the "1,002 vs 2" figure was
+     bind-vs-bind and **its "2" IS the dangling-view defect**. ⇒ the migration's clone-reclaim yield is
+     **ZERO**, which is why `t0316`/`t0850` withdrew the 205-site recommendation.
+  ⛔ **BOTH LEDGER EDITS ARE PREPARED, NOT APPLIED — `docs/define-gorget/decisions.md` IS OWNER-EDIT-ONLY.**
+  Ready to paste verbatim at **`/tmp/owner_ledger_drafts_2026-09-03.md`** (D54 goes at the TOP of `## LOG`,
+  ~line 519; the D22 amendment goes INSIDE the first rider at `:1310` — **amend in place, never a second
+  dated copy**).
+
 - **📋 F-2 · SEEDED at `/tmp/brief_F2_seed.md` (M1b · M2 · M4 · M5). ⛔ NOT A BRIEF — a SCOUT runs first.**
   Every premise dates from F's ADDENDUM 2 or earlier and must be re-verified at HEAD (Core #5).
   ⭐ **M1b IS THE HIGHEST-VALUE HALF AND IS THE REFERENCE-GRADE VERSION OF WHAT F JUST SHIPPED.** An
