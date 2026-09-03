@@ -571,7 +571,37 @@ fi
 [ -f "$MANIFEST" ] || { echo "no corpus manifest at $MANIFEST"; exit 2; }
 awk -F'\t' '!/^#/ && NF {print $1"\t"$2}' "$MANIFEST" | sort -u > "$OUT/manifest_rows"
 cut -f1 "$OUT/manifest_rows" | sort -u > "$OUT/manifest_dirs"
-find tests/fixtures -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -u > "$OUT/disk_dirs"
+# THE POPULATION IS WHAT GIT SEES, NOT WHAT `find` SEES, and the difference is a
+# defect this guard shipped with. A bare disk walk also returns BUILD ARTEFACTS:
+# `tests/fixtures/.gorget/` is a directory of `*.test-results.json` files written
+# by running the fixture suite, so the manifest was complete in a fresh checkout
+# and INCOMPLETE on every machine that had actually run the tests — a guard green
+# exactly where nothing has happened and red where work does.
+#
+# ⚠ `git check-ignore` IS THE WRONG INSTRUMENT HERE, measured: `tests/fixtures/.gitignore`
+# is deny-all plus an extension allowlist, and its line 19 `!*/` UN-IGNORES every
+# directory so the file rules can match inside them. So `.gorget` the DIRECTORY is
+# NOT ignored (exit 1) even though every file in it is (exit 0), and an
+# ignore-based filter excludes nothing.
+# ⚠ TRACKED-NESS ALONE IS ALSO WRONG: a stray directory of real `.gg` fixtures
+# that nobody has `git add`ed has no tracked files either, and that one MUST still
+# red — it is precisely the undeclared corpus this manifest exists to catch.
+# `--cached --others --exclude-standard` is the union that separates them: it
+# lists TRACKED files plus UNTRACKED-BUT-NOT-IGNORED ones, so a directory appears
+# iff it holds at least one file git would consider part of this tree. `.gorget`
+# contributes none and vanishes; the stray contributes its `.gg` and stays.
+# ⚠ RESIDUAL, stated rather than papered over: a directory holding ONLY files the
+# fixtures allowlist drops (or no files at all) is invisible to this walk. `.gg`
+# is allowlisted, so no real fixture directory can hide there — but that IS the
+# same silent-skip hazard `tests/fixtures/.gitignore`'s own header warns about.
+git ls-files --cached --others --exclude-standard tests/fixtures 2>/dev/null \
+  | awk -F/ 'NF>3 {print $3}' | sort -u > "$OUT/disk_dirs"
+if [ ! -s "$OUT/disk_dirs" ]; then
+  echo "cannot enumerate tests/fixtures via git — is this a checkout, and is git on PATH?"
+  echo "The corpus population is defined by git, not by a disk walk; without it this"
+  echo "sweep cannot tell a fixture directory from a build artefact."
+  exit 2
+fi
 undeclared=$(comm -13 "$OUT/manifest_dirs" "$OUT/disk_dirs")
 stale=$(comm -23 "$OUT/manifest_dirs" "$OUT/disk_dirs")
 baddisp=$(awk -F'\t' '$2 != "IN" && $2 != "OUT" {print $1" -> "$2}' "$OUT/manifest_rows")
@@ -585,6 +615,18 @@ if [ -n "$undeclared" ] || [ -n "$stale" ] || [ -n "$baddisp" ]; then
 fi
 # Top-level `*.gg` is the base corpus; each IN directory is walked RECURSIVELY,
 # so a nested directory inherits its parent's row and cannot join on its own.
+#
+# ⚠ THE ASYMMETRY BELOW IS CHECKED, NOT AN OVERSIGHT: the DIRECTORY census above
+# asks git, while this FILE walk asks the disk. Measured — they agree exactly
+# (2207 = 2207), because `.gg` is on the fixtures allowlist so every `.gg` on
+# disk is git-visible; a build artefact cannot wear that extension. Regenerate:
+#   find tests/fixtures -maxdepth 1 -name '*.gg' | wc -l
+#   git ls-files --cached --others --exclude-standard 'tests/fixtures/*.gg' \
+#     | grep -c '^tests/fixtures/[^/]*\.gg$'
+# Keeping the disk walk here is also what makes a fixture you have JUST WRITTEN
+# and not yet committed get swept, which is the behaviour you want from a local
+# memory gate. A DIRECTORY is different: it must be DECLARED, and declaring is a
+# deliberate act, so its population is the one git will actually hand to CI.
 corpus_paths() {
   find tests/fixtures -maxdepth 1 -name '*.gg'
   awk -F'\t' '$2 == "IN" {print $1}' "$OUT/manifest_rows" | while IFS= read -r _d; do

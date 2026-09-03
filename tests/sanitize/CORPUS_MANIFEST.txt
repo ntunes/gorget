@@ -24,10 +24,49 @@
 # A reason naming a `todo/` item must name one that EXISTS — the lint checks it,
 # so a deferral cannot rot into a dangling pointer.
 #
-# CENSUS, measured 2026-09-03: 69 first-level directories, 84 directories
-# recursively (15 nested). The manifest declares the FIRST level; an `IN`
-# directory is walked recursively, so a nested directory inherits its parent's
-# row and cannot join the corpus on its own.
+# THE POPULATION IS WHAT GIT SEES, NOT WHAT A DISK WALK SEES — and this file
+# shipped with the disk walk, which was WRONG in the worst direction a guard can
+# be wrong. `tests/fixtures/.gorget/` is a directory of `*.test-results.json`
+# files that RUNNING THE FIXTURE SUITE creates, so the census matched in a fresh
+# checkout and drifted on every machine that had actually done work. A guard
+# green where nothing has happened and red where work does is worse than none.
+#
+# The census is therefore the directories git considers part of this tree:
+#
+#   git ls-files --cached --others --exclude-standard tests/fixtures \
+#     | awk -F/ 'NF>3 {print $3}' | sort -u | wc -l          # -> 69
+#
+# `--cached --others --exclude-standard` = TRACKED plus UNTRACKED-BUT-NOT-IGNORED,
+# so a directory counts iff it holds at least one file git would consider part of
+# this tree. `.gorget` contributes none and vanishes; a STRAY directory of real
+# `.gg` fixtures that nobody has `git add`ed still counts, and still reds — which
+# is the whole point, and is why tracked-ness alone would have been the wrong fix.
+# ⚠ `git check-ignore` would NOT have worked, measured: line 19 of
+# `tests/fixtures/.gitignore` is `!*/`, which UN-IGNORES every directory so the
+# file rules can match inside them, so `.gorget` the DIRECTORY is not ignored even
+# though every file in it is. `scripts/sanitize_sweep.sh` and
+# `sanitize_corpus_manifest_is_declared` both run the command above, and the lint
+# parses the sweep's spelling of it from SOURCE so the two cannot drift apart.
+#
+# NO RECURSIVE COUNT IS PRINTED HERE, DELIBERATELY. It was `84 (15 nested)`, and
+# it was measured with a bare `find` on a machine that had never run the suite;
+# a naive walk now answers 85/15 and git's population answers 83/14. A number
+# whose value depends on whether you have run the tests cannot be maintained in
+# prose — the same lesson `tests/sanitize/LEAK_ALLOWLIST.txt`'s big-groups table
+# records. Run this instead:
+#
+#   find tests/fixtures -mindepth 1 -type d | wc -l          # incl. artefacts
+#
+# ⚠ And note the two answers differ for a SECOND reason worth knowing: git's
+# population is derived from FILE paths, so an intermediate directory holding
+# only other directories (`known_gaps/manifest_malformed/`, whose four tracked
+# files live one level deeper) never appears in it. That does not affect this
+# manifest, which declares the FIRST level only — but do not use the git command
+# above as a general recursive directory census.
+#
+# The manifest declares the FIRST level; an `IN` directory is walked recursively,
+# so a nested directory inherits its parent's row and cannot join the corpus on
+# its own.
 #
 # ⚠ EVERY ROW IS `OUT` TODAY, AND THE WALK IS THEREFORE BYTE-IDENTICAL TO THE
 # `-maxdepth 1` IT REPLACES. That is the intended landing state, not an
@@ -79,7 +118,7 @@ imported_body_type_error	OUT	multi-file module/package bundle (`main.gg` + sibli
 imported_call_arg_type_check	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
 imported_nonexhaustive_match	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
 iterator_map_callable_param	OUT	a single runnable `run_gg` fixture kept in its own directory -- a genuine corpus candidate, queued on todo/t0956
-known_gaps	OUT	315 fixtures BROKEN BY CONSTRUCTION: each asserts the INTENDED output the compiler does not yet produce, so a leak here IS the filed defect rather than a new finding. WHAT WATCHES THEM: nothing automatic -- scripts/robustness_map.py walks only robustness_map/, and known_gaps_passing_allowlist_shrink_only (tests/lints.rs) notices only when an #[ignore]d test starts PASSING. The deliberate instrument is the #[ignore]d sanitize roster: the per-item `assert_gg_sanitize_clean` tests each todo item cites from its `repro` field
+known_gaps	OUT	315 fixtures BROKEN BY CONSTRUCTION (recount: git ls-files --cached --others --exclude-standard 'tests/fixtures/known_gaps/*.gg' | wc -l): each asserts the INTENDED output the compiler does not yet produce, so a leak here IS the filed defect rather than a new finding. WHAT WATCHES THEM: nothing automatic -- scripts/robustness_map.py walks only robustness_map/, and known_gaps_passing_allowlist_shrink_only (tests/lints.rs) notices only when an #[ignore]d test starts PASSING. The deliberate instrument is the #[ignore]d sanitize roster: the per-item `assert_gg_sanitize_clean` tests each todo item cites from its `repro` field
 lints	OUT	an enumerate-on-Set before/after PAIR consumed by tests/integration.rs as lint-suggestion input; corpus candidate, queued on todo/t0956
 liveness	OUT	23 liveness cells (13 reject, 8 accept, 2 other) consumed by tests/integration.rs, tests/lints.rs and tests/spec_conformance.rs; the accept cells are corpus candidates, queued on todo/t0956
 modules_auto	OUT	multi-file module/package bundle (`main.gg` + siblings) -- the sweep builds ONE .gg at a time, so no member is a standalone program
