@@ -644,7 +644,7 @@ clone.waste.attributed_site_hits.note = regenerated TWICE at 3b8a5561, bit-ident
 #    cost of an unenforced convention, and its remedy is a 30-second
 #    adjudication and a number bump, never a band re-seed.
 row = done_md.round_close.anchor_age_matched
-done_md.round_close.anchor_age_matched.value = 3
+done_md.round_close.anchor_age_matched.value = 4
 done_md.round_close.anchor_age_matched.unit = DONE.md entries matched by --anchor-age's round-close predicate
 done_md.round_close.anchor_age_matched.polarity = exact-pin
 done_md.round_close.anchor_age_matched.provenance = measured
@@ -653,7 +653,7 @@ done_md.round_close.anchor_age_matched.regen_extract = anchor-age-matched: (?P<v
 done_md.round_close.anchor_age_matched.regen_fires = round-close census over DONE.md
 done_md.round_close.anchor_age_matched.regen_env = none
 done_md.round_close.anchor_age_matched.instrument = scripts/clone_meter_check.sh --round-close-census (the ONE place the predicate is spelled)
-done_md.round_close.anchor_age_matched.measured_at = c31b0ad0
+done_md.round_close.anchor_age_matched.measured_at = ea527a19b
 done_md.round_close.anchor_age_matched.home = scripts/figures.db (DB-native; the predicate lives in the script, the count has no code literal)
 done_md.round_close.anchor_age_matched.scan = none
 done_md.round_close.anchor_age_matched.caveat = a single-digit value the uniqueness scanner cannot police; and the number itself is EVIDENCE OF A GAP, not of health — 3 of ~38 closes, an 8% reach whose failure direction is a FALSE GREEN
@@ -663,7 +663,7 @@ done_md.round_close.anchor_age_matched.mirror = none
 done_md.round_close.anchor_age_matched.note = when this moves WITH roundish, a close landed in the shape the predicate sees — confirm the anchors were re-seeded, then re-pin both
 
 row = done_md.round_close.roundish_headlines
-done_md.round_close.roundish_headlines.value = 80
+done_md.round_close.roundish_headlines.value = 81
 done_md.round_close.roundish_headlines.unit = DONE.md entries whose headline begins ROUND / Round / Rn
 done_md.round_close.roundish_headlines.polarity = exact-pin
 done_md.round_close.roundish_headlines.provenance = measured
@@ -672,7 +672,7 @@ done_md.round_close.roundish_headlines.regen_extract = round-ish headlines: (?P<
 done_md.round_close.roundish_headlines.regen_fires = round-close census over DONE.md
 done_md.round_close.roundish_headlines.regen_env = none
 done_md.round_close.roundish_headlines.instrument = scripts/clone_meter_check.sh --round-close-census (the ONE place the predicate is spelled)
-done_md.round_close.roundish_headlines.measured_at = f5cea100
+done_md.round_close.roundish_headlines.measured_at = ea527a19b
 done_md.round_close.roundish_headlines.home = scripts/figures.db (DB-native)
 done_md.round_close.roundish_headlines.scan = none
 done_md.round_close.roundish_headlines.caveat = a SUPERSET, not an enumeration — it contains mid-round entries (R42 Phase 4b, R41 T-FMT-A, ROUND-33 rolling item 4, R43 Track C), which is exactly why the predicate is not widened to it

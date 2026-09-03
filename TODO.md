@@ -2,422 +2,134 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN — all launched tracks INTEGRATED. Owner-directed D10 work landed on main (`t0438`, `t0437`). NEXT is the round-close battery.
-⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A, β, γ, S, E).
-⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST.**
-**D53 is implemented** (unique lock + consume-position reject; diagnostic `^source` / `Shared[Mutex[T]]`).
-Opened 2026-08-31 (owner: *"open next round"*). Headline: **the six CRITICAL memory-safety defects** —
-`t0841`, `t0763`+`t0134`, `t0840`+D53, `t0770`/`t0772`, `t0825`, and the γ nondeterminism
-write sites are CLOSED and integrated; `t0771` moved to R49 — with the owner-directed burn-down
-campaign in parallel and `t0861` (the figures DB) early at the owner's explicit request
-(*"please do not forget t0861, the figures DB. It should go in early this round."*).
+**▶ R48 IS CLOSED (2026-09-03). ⛔ NO NEW ROUND — owner instruction 2026-09-02: *"once the round is
+closed, do not start a new one this time."* This SUSPENDS Round-lifecycle step 7 ("Open the next round
+autonomously") for this close. R49's scope stays FILED as pending work; it is not an opened round.**
 
-**⭐ R48 OPENED ON A RECOVERED HEAD START — do not re-derive it.** The kept worktree
-`agent-a619349ec03b80e93` (flagged at R47 close as the F3 scout lost to the disk crash) holds an
-**env-gated prototype diagnosing THREE of the six CRITICALs**, never measured or reported, based
-68 commits behind main. **Preserved at `/tmp/r48_recovered_f3_scout.patch`** — `GG_FIX_A` (t0770:
-read `ctx.callable_return_type` instead of the `I64_TYPE` fall-through) · `GG_FIX_B`/`GG_FIX_B2`
-(t0771: the closure-env `TypeDef` is built with `..TypeMetadata::default()`, so `drop: None` on a
-struct holding owned resource fields — the root of BOTH the UAF and the leak face) · `GG_FIX_C`
-(t0763: **the five per-function prescans run at only TWO of the FOUR function-lowering paths**, so
-`cow_reassigned_after` is EMPTY for every generic function). The F2 worktree
-`agent-aa19c1e589090caae` is preserved at `/tmp/r48_recovered_f2_sanitize.patch` (seven
-`sanitize_empty_sort_*.gg` fixtures + a `tests/lints.rs` addition).
-⚠ **All three are HYPOTHESES, not answers** — each track's scout verifies end-to-end at current HEAD.
-⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
-§ Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
+Next free todo id is **`t0965`** (`t0946` is an unused gap from the Track P/R collision renumber and stays
+unused). `AGENTS.md` is **36,186 bytes** against the 49,400 ceiling — **`t0714` and `t0577` are UNBLOCKED**;
+the headroom is DELIBERATE (the lint says compact a neighbouring rule rather than raise it), so do NOT
+lower the ceiling to "lock in" Track S's compaction.
 
-### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-02, main `a9f6d4db3`)
+### 🔻 WHAT THE NEXT ROUND SHOULD BE — BURN-DOWN, NOT DISCOVERY
+R48 closed at **net +47** (`scripts/convergence.sh 22 771 60`): 60 filed, 13 closed, the worst ratio the
+log records. The discovery was real and the instruments are sharper for it, but the arrow points the wrong
+way and under the owner's own trend rule that must drive the next headline. **The items `t0936`–`t0964`
+are R48's own debt** and most carry a durable RED-verified repro, so they are cheap to take. Bias
+bulk-graduation out of `known_gaps/` over new scouting.
+⭐ **Highest-value single item: `t0947`** — `auto x = <method call returning Result>` **silently discards
+the entire `if x.is_error():` block**. It is LIVE in shipped `lib/xtd/p2p.gg` with 13 tests passing by luck.
 
-**All launched tracks INTEGRATED.** After E, the owner ruled no partial moves on main (not a gauntlet track): `t0438` then `t0437` as `E_PartialMove` (`a9f6d4db3`).
-**NEXT: the round-close battery.** ⚠ THIS LINE IS MID-SESSION STATE, NOT THE HANDOVER — the full rewrite lands at close. Tracks **P** (clone regression, INTEGRATED `3d5f34c3f`), **Q** and **R** opened 2026-09-02 after the owner lifted the agent hold. Next free todo id is **`t0951`** (t0936–t0945, t0947–t0950 filed; `t0946` is an unused gap from the Track P/R collision renumber and stays unused).
-Briefs at `/tmp/r48briefs/trackE_B{1,2,3}.md` (not durable).
-Lifts spent: C, D2, F, A, β, γ, S, E. D53 unique-lock reject and the figures DB are **on main**.
-A's capture residual is `t0927`; β's are `t0928`–`t0930`; γ's are `t0931`–`t0933`; F's adoption is `t0926`; main's `t0876` remains C-emit jitter.
+### ✅ OWNER RULINGS — do not re-litigate
+- **No partial moves (2026-09-02):** only whole-value `^m`; field/index `^` is `E_PartialMove`.
+- **D53 (2026-09-01):** `Mutex`/`RWLock` are unique locks; share via `Shared[Mutex[T]]`; reject at assign,
+  init AND consuming positions; the diagnostic names `^source`, never `.clone()`.
+- **⭐ THE LEAK RATCHET (2026-09-02):** ADMIT THE SIX. The R47 ruling ("four rows … and ONLY those") is
+  EXTENDED to cover **pre-existing leaks newly made VISIBLE by a graduation out of `known_gaps/`, and to
+  those only**. A row whose leak is genuinely NEW inflow is still an owner ask. Grounds: all six verified
+  pre-existing against a pre-fix compiler; the count grew only because two fixtures stopped SEGV-ing;
+  deleting the cells would delete regression coverage of the defect R48 fixed.
+  ⊕ **The long-term intent is to fix ALL of them, not just these** (owner: *"These must be burnt down and
+  fixed at some point. Not only these 3 but all of them!"*).
+- **⭐ LEAK DEBT IS MEASURED AS A TREND, NOT AN EXPIRY (2026-09-02):** **DOWN is silent; UP must be
+  acknowledged (owner ask).** Pair with a coverage floor so a fall achieved by DELETING a fixture is visible.
+- **⭐ THE PARITY CEILING IS NEVER RAISED (2026-09-02):** if the non-MATCH backlog grows, **FIX the
+  self-host and PORT the rows** — do not raise `RUNTIME_DIFF_NONMATCH_CEILING`. R48 did exactly this
+  (Track U) and the ceiling is untouched at 147 for the whole round. Lowering it when the backlog shrinks
+  remains REQUIRED and needs no sign-off.
+- **The clone re-anchor (2026-09-03):** stage-1 `array_clone` moved **+1.016%**, past the ~1% band, and the
+  owner AUTHORIZED it on the attribution that Track U's lowerer edits ARE the stage-1 meter's workload.
+  Both `.pin` AND `.round_open` moved, because the band is computed FROM the anchor — pinning `.pin` alone
+  leaves the gate red against a stale anchor and the authorization would be inert. The four anchors record
+  this as an owner-authorized re-anchor, **NOT a routine round-open reset**; do not "correct" them.
+- **ggdef stays simple (2026-08-31):** out-of-model surface ABSTAINS loudly. ⚠ But see the trap below.
 
-| track | items | branch tip | ahead | merge | OWED STEP |
-|---|---|---|---|---|---|
-| **D1** | `t0841` | — | — | — | **INTEGRATED** `3b8a5561` |
-| **C** | `t0763` `t0134` | — | — | — | **INTEGRATED** `329ad020` |
-| **D2** | `t0840` D53 | — | — | — | **INTEGRATED** `d5707a77` |
-| **A** | `t0770` `t0772` | — | — | — | **INTEGRATED** (residuals `t0877`–`t0880`, `t0872`, `t0927`) |
-| **β** | `t0825` | — | — | — | **INTEGRATED** `35037071` (residuals `t0928`–`t0930`) |
-| **γ** | nondeterminism | — | — | — | **INTEGRATED** `abd1d79a2` (residuals `t0931`–`t0933`; CEILING 147; `t0204`/`t0267` closed) |
-| **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
-| **S** | guard simplification | — | — | — | **INTEGRATED** `5cb547e7e` (clause probes retired; heading-id inventory; AGENTS.md 35971 bytes) |
-| **E-B1** | census + 4 dirty PASSers + leak | — | — | — | **INTEGRATED** `280a0cf49` + `45c76794b` (`PHASE_D_PROXY_BUDGET` 89→91). Awk attribution; catch/rethrow drop-register; LSAN 2B→0; `--check` still RED on catch_binding (honest); sibling `t0935` |
-| **E-B2** | `t0828` 11 untriaged | — | — | — | **INTEGRATED** `04408c66d` (11 MATCH; `UNTRIAGED_CEILING` 24→13; MATCH_FLOOR untouched; t0828 stays open for 13 httpserver rows) |
-| **E-B3** | membership + robustness scorer | — | — | — | **INTEGRATED** `74622b945` (M4/M5; membership lint; `UNTRIAGED_CEILING` stayed **13**; remaining 85-cell adjudication is `t0934`) |
-| **D10** | `t0438` `t0437` | — | — | — | **LANDED ON MAIN** `9ab93c997` + `87824d0bf` + `a9f6d4db3` (owner-directed, no gauntlet). `E_PartialMove`; whole-value `^m` only. Spectests `reject_partial_move_{field,self}` |
-| **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
-| **G** | `t0304` oracle hygiene | — | — | — | **SCOPED, NEVER LAUNCHED** this round |
-| **α** | `t0823` | — | — | — | **R49** by owner call |
+### ⛔ THE TRAP THIS ROUND PAID FOR TWICE — RUN ggdef, NEVER ASSERT ITS ABSTENTION
+Two briefs claimed "ggdef: out of model, ABSTAIN", each citing a grep for a DIFFERENT type than the one at
+issue (`Mutex|RWLock` while the subject was `Callable`). Both were false and ggdef was RIGHT both times:
+`ggdef run` prints `2` on the `Callable` `.clone()` repro while BOTH production compilers SEGV'd; and
+ggdef's D53 exclusion comment rested on *"measured: accepted on both compilers"*, a premise that DECAYED
+the moment D53 landed, leaving ggdef divergent at 7 consuming positions.
+⇒ **Core #13 says ask ggdef FIRST. `cargo build -p ggdef --bin ggdef` then `./target/debug/ggdef run <f>`
+costs seconds. A grep for another type is not evidence about abstention.**
 
-⚠ **Briefs + all fold addenda live in `/tmp/r48briefs/*.md` and are NOT durable.** Each carries its
-review history as precedence-ordered addenda (`PRECEDENCE: A3 > A2 > A1 > BODY`). **Re-materialise before
-relying on them.**
+### ⛔ INSTRUMENT FINDINGS THAT OUTLIVE THIS ROUND
+- **`t0924`:** ALL SIX assertions in `self_host_runtime_diff` are `cfg!(debug_assertions)`-skipped, so the
+  round-close C sweep arms NONE of them. Only `--release GG_RUNTIME_DIFF=1 … -- --nocapture` does.
+  ⊕ Both horns of the timeout conflict were measured: `GG_TEST_TIMEOUT_SECS=600` (step 4's mandate) makes
+  the allowlisted `async_select` hang stall a worker 20x; the default false-REDs `lowerer_comparison` when
+  other work shares the box. **A round-close sweep must run on a QUIET tree — AGENTS.md does not say so.**
+- **`t0925`:** `scripts/run_integration.sh` puts `"$@"` before cargo's `--`, so a harness arg becomes a
+  filter and the sweep reports a GREEN ZERO.
+- **`t0824`:** `known_gaps_census.sh --check` is a CI step, is RED, and is **ABSENT from the round-close
+  battery** — so AGENTS.md's *"The full battery covers every target CI runs"* is **measured false**.
+- **`t0870`:** `RustRejected` rows return before the self-host is invoked, so a self-host OVER-ACCEPTANCE
+  is structurally invisible to the parity gate. Five live instances named in the item.
+- **`sanitize_sweep.sh` had NEVER been run during R48** — which is why three leaks sat unnoticed from
+  Aug 31 to the close. It is in the battery; run it *during* the round, not only at the end.
 
-**THE INTEGRATION RECIPE THAT WORKED FOR C — follow it, it was bought twice:**
-1. Merge the branch; expect `TODO.md` to conflict (the handover block moves under every track).
-2. Resolve `TODO.md` with **`git checkout --ours`**, then **`python3 scripts/todo_index.py --write`** —
-   the generated index picks up the track's filed/closed items automatically.
-3. ⛔ **Run the SEPARATE targets AT INTEGRATION, not at close:** `-p ggdef` · `--test spec_conformance` ·
-   `--test security` · `--test lints` · `--lib`. **`--test integration` never touches the first three, and
-   skipping `-p ggdef` after D1 left main RED for hours.**
-4. Prune the worktree AND its isolation clones the moment the track INTEGRATES (`git worktree unlock`
-   then `remove --force`; `rm -rf` the matching `~/.grok/worktrees/.../subagent-*` clones). **Safe iff
-   CLEAN.** Branches survive. Keep pending-track and recovered-scout worktrees.
+### ⚠ ORCHESTRATOR ERRATA — MINE, THIS ROUND, DO NOT REPEAT
+- **Three framings of `t0936` died before one survived**, the first two mine, each reached by RESEMBLANCE
+  and killed by a cheap NON-MEMBER PROBE. The survivor came from a reviewer who APPLIED the prescribed fix
+  and measured it INERT (fire count 0). **Before stating a class, probe a non-member.**
+- **I promoted a ONE-CELL probe to "verdict preserved EXACTLY — do not re-derive"** in a brief. It
+  under-rejected on tuple-field places. A selection cannot show you what it omits.
+- **I merged Track R without its output review**, and Track T-a1 with `git merge --no-edit` (which
+  AUTO-COMMITS) before running the separate targets — `--test lints` then came back RED, so main briefly
+  carried a red commit. ⇒ **`git merge --no-commit` → run the targets → `git commit` only if green.**
+- **I gave two CONCURRENT tracks the same "next free todo id" TWICE** (P vs main; T-a1 vs U), costing a
+  renumber of four items and ~20 cross-references. ⇒ **Give each concurrent track a DISJOINT RANGE**
+  ("your ids are t0951–t0960"), never a shared next-free id.
+  ⊕ The collision had a sharp edge: resolving it the other way would have left an allowlist citation
+  pointing at a DIFFERENT item whose only occurrence of that token says it is NOT that class — and the new
+  `UNCITED_LEAK_CLASS_PAIRS` lint would still PASS. **A token check is a FLOOR, not a LOCK.**
+- **`$?` after a pipeline is the LAST stage's status** — I read a census as rc=0 when it is rc=1 because
+  `| tail` swallowed it. Use `${PIPESTATUS[0]}`.
+- **`git add <explicit paths>` silently omits**, and a persisting `cd` into an agent worktree misroutes
+  commits — use `git -C <path>`.
+- **A guard whose blind spot is its own execution environment is green exactly where nothing has
+  happened.** T-a1's manifest lint passed FIVE gauntlet passes because every one ran in a FRESH worktree,
+  where the `tests/fixtures/.gorget` build artifact does not exist. Only integration could find it.
 
-⛔ **ID COLLISIONS (`t0910`).** F's figures-DB adoption is `t0926` (was colliding `t0876`). Main's
-`t0876` is C-emit jitter. A's capture residual is `t0927` (was colliding `t0876`; landed, not a live
-add/add). β's residuals landed as `t0928`–`t0930`. γ's residuals landed as `t0931`–`t0933`
-(was colliding `t0902`–`t0904`; not a live add/add). **Renumber the LATER track above the current
-max and fix every citation. Never take a side on add/add todo ids.**
-
-### ⛔ WHAT MUST HAPPEN BEFORE R48 CAN CLOSE
-1. **THE BATTERY.** All launched tracks + the D10 owner work are on `main`. Round-close is still owed on this tree: C sweep · LLVM sweep (sequential) · `scripts/sanitize_sweep.sh` · full `python3 scripts/robustness_map.py` · the cargo targets `--test integration` never touches (`-p ggdef` · `--test spec_conformance` · `--test security` · `--test lints` · `--lib`). Commands live in AGENTS.md § Round lifecycle step 4. (D2's C sweep green was on ITS branch, not the integrated tree.)
-2. **`RUNTIME_DIFF_MATCH_FLOOR` reseed** is a ROUND-CLOSE action on the post-integration number with the jitter discount — **never mid-round**. Const at HEAD is still 1476 (`tests/integration.rs`; `rg RUNTIME_DIFF_MATCH_FLOOR`). `RUNTIME_DIFF_NONMATCH_CEILING` is already **147** at HEAD (γ lowered it; `rg RUNTIME_DIFF_NONMATCH_CEILING`). Two new `spectests/run/reject_partial_move_*.gg` landed after the last floor reseed — `MIN_FIXTURES` is `>=` so they do not red the glob; reseed C/LLVM/SH/`MIN_FIXTURES`/`GGDEF_MATCH_FLOOR` together at close if they MATCH. Regen: `ls spectests/run/*.gg | wc -l` and `cargo test --test spec_conformance -- --test-threads=1 --nocapture`.
-3. **Filed E residuals stay filed** (not launched; they do not hold the battery): `t0824` (`known_gaps_census.sh --check` RED on catch_binding) · `t0828` (remaining untriaged httpserver; `UNTRIAGED_CEILING` 13 at `tests/lints.rs`) · `t0934` (85 robustness cells, adjudicate not decrement) · `t0935` (lints.rs enumerator sibling of the awk fix).
-4. **E-B3's `robustness_map` scorer fix LANDED** `74622b945` (`good` from `COL_EXPECTED.startswith("REJECTED")`; `--accept` refuses to write on regressions/new_div). Round-close `robustness_map` can now be read as a gate rather than a launderer.
-5. **KEEP worktrees** `agent-a619349ec03b80e93` (F3) and `agent-aa19c1e589090caae` (F2) until R49 looks at them. Do not run `scripts/round_cleanup.sh` without a keep-list.
-
-### ⛔ TWO GATES THAT REPORT SUCCESS WITHOUT EVALUATING ANYTHING — R48's sharpest instrument finding
-- **`t0925`** — `scripts/run_integration.sh:66` puts `"$@"` BEFORE cargo's `--`, so a harness arg is eaten
-  as a cargo filter: `--skip self_host` → **`0 passed; 2748 filtered out`, exit 0.** This is the wrapper
-  Round-lifecycle step 4 names as the round-close C sweep. **A green zero.**
-- **`t0924`** — the parity non-MATCH ceiling assert is wrapped in `if cfg!(debug_assertions)`, so it
-  **no-ops in the profile executors actually run.** Track C's family run passed **vacuously**.
-⇒ **Both were found by executors noticing something odd, never by the gates. Weigh round-close green
-accordingly.** ⊕ Related: `t0875` — four counting assertions were each evaded by respelling what they
-counted, the last in **seven** costumes. **A textual guard's reach is the TOKEN, never the CONCEPT.**
-
-### ✅ OWNER RULINGS THIS ROUND — do not re-litigate
-- **No partial moves (2026-09-02):** only whole-value moves (`^m`). No field/index
-  moves, no unpack (`f(^m.a, ^m.b)` is `E_PartialMove`). Closes the D10(a)
-  addendum's "Rust-style destructuring remains undecided." `t0438` and `t0437`
-  (`take(^self.items)`) closed. Ledger entry still owner-written (`decisions.md`).
-- **D53 (2026-09-01, sharpened in place the same day, implemented on D2 `d5707a77`):**
-  `Mutex`/`RWLock` are **unique locks**. Share via `Shared[Mutex[T]]`. `E_MoveWithoutOperator` at
-  assign, init, **and consuming positions**. Diagnostic names `^source` or `Shared[Mutex[T]]` —
-  **not** `.clone()`. Channel stays multi-owner. `t0908` closed. `AGENTS.md` compacted (49396).
-- **`t0771` (B1+B2) → R49**; **`t0823` (α) → R49**; the D22 canonical-spelling migration **STOPPED** and
-  `no_dot_slice_after_d22` **suspended** (`t0871`: `s[a:b]` is silently wrong — the migration target was
-  broken and the removal clause had been withdrawn by D22 Rider 2).
-
-### ⚠ ORCHESTRATOR ERRATA — bought expensively, do not repeat
-- **A persisting `cd` into an agent worktree misrouted three commits.** The Bash tool keeps cwd between
-  calls. **Use `git -C <path>`, never `cd`, outside the orchestrator worktree.**
-- **Integrating without `-p ggdef` turned main RED** — `t0801`'s glob-minus-exclusions class recurred in
-  the round that closed it.
-- **A figure confirmed by re-running the enumerator's own regex is NOT confirmed** — "3 round closes" was
-  the predicate's own output; the truth is ~38 (`t0851`, re-opened).
-- **`git add <explicit paths>` silently omits** — D53 sat uncommitted through a later commit because only
-  `TODO.md`/`todo/` were staged. Lints verify content, nothing verifies it was committed.
-- **Three of my own probes misled me** (wrong flag · a syntax error read as a result · a non-reallocating
-  mutation). **MIND THE PROBE: check `rc`, and confirm the probe reaches the mechanism.**
-
-### ⚠ R48 SCOUT CORRECTIONS — MEASURED, SUPERSEDE THE FIGURES ABOVE (2026-08-31)
-
-- **THE BURN-DOWN WAS SIZED WITH A BROKEN GREP.** `grep -c '#\[ignore'` counts PROSE. Anchored
-  (`grep -cE '^\s*#\[ignore'`): integration **183** (not 230) · security **28** (not 32).
-  `known_gaps`: **238** top-level `*.gg` · **271** recursive · **327** entries · 12 subdirs — quote the
-  COMMAND, not one of the three numbers.
-  ⇒ **15 of 183 ignored integration tests PASS at HEAD; 0 of 28 security. 6 of the 15 are already
-  adjudicated. THE REAL TARGET IS 9 ROWS, NOT 211.** Regen:
-  `cargo test --test integration -- --ignored --test-threads=4`.
-- **⛔ `AGENTS.md` HAS EXACTLY 0 BYTES OF HEADROOM.** `wc -c AGENTS.md` = 49400 = `AGENTS_MD_SIZE_CEILING`
-  (`tests/lints.rs:8714`), assert is `<=` (`:8793`). **Any track adding one byte reds `agents_md_size_ratchet`
-  on arrival.** This is BY DESIGN — the lint says *"compact a NEIGHBOURING rule rather than raising this."*
-  Every AGENTS.md edit this round is byte-neutral-or-smaller.
-- **✅ `^` IS THE RATIFIED MOVE SIGIL — `AGENTS.md` IS CORRECT, DO NOT "FIX" IT.** D27
-  (`decisions.md:1191`): *"`^` = the MOVE sigil, replacing `!`"*. The ledger's surviving `!` spellings are
-  PRE-D27 entries awaiting the `!`→`^` sweep (`:2241`, `:2499`, `:2816`). A scout reported this inverted;
-  both spellings still parse at HEAD, which is what makes the drift invisible.
-- **`sanitize_sweep.sh:539` uses `find tests/fixtures -maxdepth 1`** ⇒ **all 238 `known_gaps` fixtures are
-  invisible to the leak gate.** A graduated fixture stays green while leaking.
-- **`fmt_suite_layout_census_is_complete` EXISTS** at `tests/integration.rs:55849` (a scout reported it
-  absent, having grepped only `tests/lints.rs`). It is the model for the membership guard.
-- **The figures-DB census is ≈130 (tests) + 14 (src) + ~15 (scripts), not 54** — the item's suffix regex
-  over-counts 22 vendored SQLite macros and misses every `EXPECTED_*` arm pin.
-- **⚠ COLLISION, resolved by swap:** Scout E's parity track owes `RUNTIME_DIFF_MATCH_FLOOR` 1476→**1503**
-  (full run 765.98s rc=0; non-MATCH exactly 151, the frozen ceiling) — and Scout F's figures-DB pilot used
-  that same const as its grow-only row. **F swaps to `C_EMIT_MATCH_FLOOR` or `RESOLVER_MATCH_FLOOR`.**
-
-### ⛔ OWNER RULING 2026-08-31 — ggdef STAYS SIMPLE. NO THIRD PRODUCTION COMPILER.
-
-Asked directly whether ggdef had become a liability, the owner ruled:
-> *"What I don't want is a third production compiler. ggdef is there to be **VERY** simple to
-> write and understand."*
-
-⇒ **THE DEFAULT DISPOSITION FOR OUT-OF-MODEL SURFACE IS *REFUSE LOUDLY*, NOT *IMPLEMENT*.**
-Implementing is the EXCEPTION, taken only when the semantics fit in a few lines of the existing
-eval style. **A design whose answer to "ggdef gets this wrong" is "teach ggdef the feature" must
-justify itself against this ruling explicitly.** This IS ggdef's own `classify.rs` invariant #8
-and its charter (`decisions.md:489` *"clarity and simplicity, not speed"*; MiniRust-style single
-fuel-indexed eval; never imports `src/ir/`/`src/semantic/`). ⚠ **The charter guards ggdef against
-IMPORTING the compiler; NOTHING guards it against GROWING into one** — Track G owes that guard.
-⊕ **Corollary, under test by Track G:** ratcheting `GGDEF_ADJUDICATED_FLOOR` (443) **upward**
-rewards an oracle that ANSWERS MORE — the exact failure mode. The information is in the
-DISAGREEMENTS, not the agreements.
-⚠ **This ruling is NOT yet in `decisions.md`** (⛔ no agent edits it). It merits an owner-written
-entry; until then this block and the `t0304` item are its only durable home.
-
-⚠ **SCOUT-G CORRECTIONS TO FIGURES THIS SESSION QUOTED (Core #5):** ADJ-MATCH is **469**, not 443 (443 is
-the FLOOR CONSTANT, `tests/integration.rs:38308`, not the measurement); the denominator is **MATCH 1485**,
-not ~1654 ⇒ **31.6%**, not 26.8%. `corpus_b.rs`'s `EXCLUDE` holds **85 LIVE** rows, not 114 — the 114
-counted quoted strings inside COMMENT lines (`corpus_b1.rs` has a separate 45).
-⛔ **`drop_value_transitively` DOES NOT EXIST.** D37's closing line — *"ggdef's `drop_value_transitively`
-helper walks elements FORWARD"* — describes a helper that **never landed** (`grep -rn` in
-`spec/ggdef/src/` → nothing), and D37's *"row 2 is unblocked and mechanical"* is **measured false**.
-⚠ **OWNER NOTE ONLY — no agent edits `decisions.md`.**
-
-⊕ **TRACK G ADDED (owner-directed, 2026-08-31): `t0304` — ORACLE HYGIENE.** Zone `spec/ggdef/`,
-disjoint from every other track. The two `EXPECTED_BOTH_WRONG` rows are a ggdef defect, not a
-production bug (measured; see the corrected hot-list line). Deliverables: invariant-#8 enforcement,
-a **complexity ratchet in ggdef's OWN test target** (`cargo test -p ggdef`, NOT `tests/lints.rs` —
-Track F owns that EOF), and the **poisoning audit**: how many of the 443 ADJ-MATCH rows involve a
-user `Drop`, a droppable element, or a resource field, i.e. are certified by an oracle that runs no
-destructors. If that fraction is non-trivial, the succession plan's truth axis is partly fictional.
-
-⚠ **E and F both touch `tests/lints.rs`** — both scouts were briefed to name their exact edit regions.
-⚠ **Sequence memory-safety FIRST**: A–D's fixes retire `known_gaps` fixtures and leak-allowlist rows that
-E is adjudicating. E was briefed to list those rows so it does not adjudicate one out from under a track.
-
-**R47's record is in `DONE.md` (2026-08-31). Do not recap it here.** Battery at close, all green:
-C sweep 2533/0/182 · LLVM sweep 2533/0/182 · `spec_conformance` 3/0 · `security` 189/0/28 ·
-`sanitize_sweep` **rc=0** · `robustness_map` five lanes, **0 REGRESSIONS**.
-⚠ **Convergence was net +49, not the −179 first posted** — 59 filed against 10 closed, gap count flat at
-22→22. The round found far more than it fixed, which is what better instruments do. Regen:
-`scripts/convergence.sh 22 722 59`.
-
-### ⚠ STATE A NEXT SESSION MUST NOT RE-DERIVE
-
-- **`RUNTIME_DIFF_NONMATCH_CEILING` is a SHRINK-ONLY RATCHET, not "immovable".** Const at HEAD:
-  `rg RUNTIME_DIFF_NONMATCH_CEILING tests/integration.rs` (currently **147**, lowered by γ). The owner
-  ruling froze it against **RAISING** only. Its own text: *"Reseed DOWN in the same commit whenever the
-  backlog shrinks"* · *"lowering needs no sign-off; raising is the owner ask."* **Lowering it when the
-  backlog shrinks is REQUIRED, not optional.** ⛔ Core #9 ⊕ still forbids raising it for the round's OWN inflow.
-- **⚠ `RUNTIME_DIFF_MATCH_FLOOR` (1476) IS A ROUND-CLOSE RESEED, NEVER MID-ROUND.** Its own comment
-  (`tests/integration.rs:38570-38586`): raising is *"A ROUND-CLOSE ACTION, on the number the
-  post-integration battery prints, with the usual jitter discount"*, because *"a mid-round ratchet from one
-  worktree is how a round close false-reds"* — written when FIVE tracks were in flight. **R48 has ELEVEN.**
-  Raised 1415 → 1476 at R47 close on a re-measured post-integration MATCH of 1485, −9 jitter. Slack 70 → 9.
-- **⚠ `UNTRIAGED_CEILING` LIVES IN `tests/lints.rs:26507`, NOT `tests/integration.rs`** — i.e. inside the
-  EOF region Track F and Track E-B3 both append to. Any track editing it collides there.
-- **The clone ratchet's shape is RATIFIED (owner, 2026-08-30/31):** the pin is the **exact** last measured
-  value; **~1% is an AUTHORIZATION THRESHOLD, not headroom** — below → re-pin down (automatic); ≤1% over →
-  re-pin up to exact (implicit); >1% over → **STOP, owner ask**; per meter. **Accumulation is UNBOUNDED —
-  a cumulative cap was explicitly REJECTED**, with a periodic audit instead (`t0860`).
-- **⛔ NO AGENT EDITS `docs/define-gorget/decisions.md`** — owner-asked changes only (AGENTS.md § Documentation).
-- **The clone meter has DECLARED INPUTS** (`scripts/clone_meter.spec`): the meter varies with the absolute
-  path length of the checkout — `string_clone = 31,474,093 + 7 × len(root)`. A worktree measures a different
-  number than main **by design**; that is not a regression. `t0850`.
-- **Four leak rows are ADMITTED with per-row citations** (owner, 2026-08-31) — inherited debt, not R47's.
-  `sanitize_sweep.sh` was **already RED at the round-open commit**; R47 made it green.
-
-### ▶ R48 SCOPE (OPENED 2026-08-31 — the constraints below are LIVE, not a proposal)
-
-**Headline: the six CRITICAL memory-safety defects** — `t0770` (rc 139 SIGSEGV) · `t0771` (heap-UAF, silent
-wrong output, no crash) · `t0763` (`&self` mutator on a generic equip is a UAF) · `t0840` (`Vector[Shared[T]]`
-segfaults) · `t0841` (`[s for i in 0..3]` double-frees and `gg check` passes) · `t0772`.
-⚠ **CORRECTED 2026-08-31 by the Track-D scout, and the item still carries the false claim:
-`t0840` is NOT a documented book idiom.** `grep -rn "Vector\[Shared" docs/` returns **NOTHING**;
-Ch16's actual `Shared` examples (`Shared[int]`, `Shared[Callable[...]]`) are GREEN at HEAD. The
-"the Book Ch16 idiom segfaults" framing — in `t0840`, in R48's opening handover and relayed to the
-owner — is unsupported. It is a synthesized shape, still CRITICAL, but the round must not sell it
-as a documented-idiom failure. **D2's executor owes the item correction.**
-
-**⊕ Owner-directed 2026-08-31: run a BURN-DOWN campaign in parallel.** Zones are naturally disjoint from the
-memory-safety work (`src/` vs `tests/`). Surface, measured 2026-08-31: **230** `#[ignore]`d integration tests
-· **32** ignored security tests · **238** `known_gaps` files (**22** open gaps by the metric) · **304** leak
-allowlist rows (21 over-stating by 85 records, `t0572`) · **94** parity exclusions of which **24 UNTRIAGED**
-(`t0828`) · robustness C lane **169 non-WORKS cells**.
-⚠ **ADJUDICATE, DO NOT DECREMENT.** A track measured by count optimises for cheap rows. Every row disposed as
-*fixed*, *legitimately permanent with its reason*, or *a real defect now filed* — the ratchet moving as a
-consequence, never as the goal. `t0828` and `t0572` already carry procedures.
-⚠ **Sequence memory-safety FIRST within the round**: its fixes retire `known_gaps` fixtures and allowlist
-rows the burn-down tracks are adjudicating.
-
-**⊕ `t0861` (the generic figures DB) is R48's FIRST TRACK, split** — schema + one pilot meter lands first and
-blocks nobody's start; migration is absorbed by the burn-down tracks. Pilot **must** be the clone meters (the
-hard case) and **must** include a non-shrink-only polarity. Sequencing recorded in the item.
-
-### ✅ R47-QUEUE DISPOSITION (owner asked 2026-08-31: what fits R48, what waits) — TOTAL, per row
-
-| item | disposition |
-|---|---|
-| `t0770` `t0771` `t0763` `t0840` `t0841` `t0772` | **IN** — Tracks A/B/C/D1/D2 |
-| `t0801` | **CLOSED** at R48 open (stale; gate green) |
-| `t0861` figures DB | **IN** — Track F (owner: "should go in early") |
-| burn-down campaign | **IN** — Tracks E-B1/B2/B3 (Scout E's split) |
-| `t0304` ggdef hygiene | **IN** — Track G (owner-directed, this session) |
-| `t0823` + `t0825` | ⚠ **RE-SEQUENCED — the premise was DISPROVED end-to-end by Scout H.** `t0823` does **NOT** unblock the parity instrument: a prototype removing **90.6%** of the corpus's int→pointer emits (19,835 → 1,855; **three of the four rows drop to ZERO**) leaves **all four rows still printing 7 distinct outputs over 7 runs.** The `EXPECTED_NONDETERMINISTIC` comment's *"ALL FOUR are cause (b), one mechanism, one filed item: `todo/t0823`"* (`tests/integration.rs:38140`) is **false**. Real causes are **three separate mechanisms** (γ1 `.map()` result-element collapse, axis = closure return type · γ2 CoW materialize emitted AFTER the derived view, **ASan reports nothing** · γ3 generic `T` lost, not isolated). ⇒ **Split into THREE tracks: α `t0823` (type fidelity) · β `t0825` (accept/reject, Core #9) · γ (the nondeterminism — the one that actually unblocks the instrument).** |
-| `t0862` slice | **SCOUTED, GATED** — the item forbids scoping before the method-call materialization site is pinned. Scout I is running; track opens only if it pins the site AND the `Vector` view flip does not create a fourth dangling-view UAF. |
-| `t0851` anchor-age wiring · `t0860` clone audit trigger | **FOLDED into Track F** — same subject (ratchet plumbing), same zone (`scripts/`). Not separate tracks. |
-| `t0829` bare `:NNNN` cites | **LATE** — rides the doc-write-through track, which cannot open until A–D land (a round that changes behaviour owes one). |
-| `t0850` `parent_dir` per-char clone | **R49** — MED perf; already declared as the clone meter's path-length input, so nothing is blocked on it. |
-| `t0844` Ctrl-C · `t0842`(A) `wait_timeout` | **STAY PARKED** — no R48 track touches them; the rule is ask when the work is SCHEDULED. |
-
-### ✅ D22 MIGRATION STOPPED + LINT SUSPENDED (owner-directed 2026-08-31, DONE this session)
-
-Owner: *"suspend the lint now, and open the soundness fix in R49"* · *"Stop the canonical-spelling
-migration too. That is not urgent."*
-- **`tests/lints.rs::no_dot_slice_after_d22` is `#[ignore]`d**, both reasons inline. Suite green:
-  **197 passed / 0 failed / 1 ignored.** ⚠ **Track E-B1 must NOT burn this row down** — it is deliberate.
-- **The 205-site canonical-spelling migration is WITHDRAWN** from `todo/t0850` and `todo/t0316`; their
-  clone-reclaim MEASUREMENT is explicitly preserved (it is **soundness, not waste**).
-- ▶ **`t0871` (the `s[a:b]` soundness fix) opens in R49**, not R48 — the round is full.
-⚠ **Do NOT restore the ceiling when the fix lands:** D22 Rider 2 keeps `.slice()`/`.substring()` as
-documented aliases **permanently**, so whether a ceiling is wanted at all is a **separate OWNER ASK**.
-⭐ **THE LESSON WORTH KEEPING:** a `CEILING = 0` shrink-only ratchet was enforcing a clause the owner had
-withdrawn **the same day**, and driving 205 sites from a CORRECT spelling onto a SILENTLY BROKEN one under
-a *"MEASURED FREE"* banner. It was free because it did not do the work. **A guard is only as good as the
-ruling it encodes — re-verify the ruling, not just the count.**
-
-### ▶ DEFERRED TO R49 BY OWNER DECISION (2026-08-31): `t0771` — BOTH HALVES
-
-Owner: *"B2 in R49, after B1 has been integrated"* then *"Can B1 be postponed to R49 too?"* — **yes, and it
-is the better call.** Briefs preserved at `/tmp/r49briefs/trackB1.md`, `trackB2.md`, and the pre-split
-history + 4 review passes at `SPLIT_trackB_history.md`. ⚠ **`/tmp` is not durable — re-materialise these
-into the R49 round-open before relying on them.**
-
-**WHY IT IS RIGHT, not just accepted:** B1's ENTIRE same-round justification was unblocking B2. With B2 in
-R49, **nothing in R48 depends on B1** — Track C's semantic interaction is with **B2**, not B1 — and B1 is
-**not** fixing a new regression (the 40 B/call arg-temp leak is pre-existing and allowlisted). Against that,
-B1's pass 1 **falsified its own premise, put its design at the wrong layer, and GREW its scope**. ⊕ Bonus:
-B1 owned four sites in `src/lir/lower/operands.rs` and needed `insts.rs` — **both contended with Track D2;
-that contention is now gone.**
-
-**WHAT R49 INHERITS (do not re-derive):**
-- **THE ORDERING ARGUMENT IS INVERTED FROM THE ONE FIRST WRITTEN.** B1 precedes B2 **because B2's E1
-  CREATES the field leak** by transferring ownership into a box nobody frees — **NOT** because the field
-  already leaks. ⚠ Track B pass 4 reported an `Indirect leak … gorget_str_cat` at HEAD; **B1 pass 1 probed
-  four shapes and it did NOT reproduce** (`closures.rs:322-333`'s last-use arm never fires;
-  `drop_if_alive _2` survives the `struct_init`, so the frame still owns the capture). **Do not re-assert it.**
-- **The typed discriminator ALREADY EXISTS: `AbiKind::VoidElem` (`src/lir/runtime.rs`) — 26 rows**, chosen
-  per `operands.rs:1490-1494` *precisely to avoid "a brittle allow-list"*. ⛔ **Do NOT add a per-decl bool to
-  `BuiltinMethodDecl`** — `src/ir/lowering/builtins.rs:136-142` calls that *"exactly the hand-synced
-  parallel-list smell Core #2 forbids"*.
-- **`VoidElem` is NOT a retains predicate:** 13 of its 26 rows retain, **12 use the element as a KEY**.
-- **The decision belongs in the six `src/lir/lower/insts.rs` callers** (`:552`, `:680`, `:794`, `:2655`,
-  `:2822`, `:3393`), not in `wrap_single_closure_arg`, which **receives no callee identity at all**.
-- **Yield is 53 deletable allowlist rows, not 77** (24 need editing); `LEAK_CEILING` **304 → 251**.
-- **ERRATUM that recurred across the split:** the escape-path owner is **`src/lir/lower/drops.rs:110-114`**
-  (+ `:784`), **not** `src/ir/lowering/drops.rs:107-114`.
-- **B2 carries a CROSS-TRACK HAZARD with Track C** (landing in R48): C **enables auto-move inside closure
-  bodies** — harmless while the `is_borrow` co-gate holds, **a DOUBLE FREE once B2 gives env fields real
-  ownership.** ⇒ **R49's B2 must re-run its §8 matrix against a tree that already contains C.**
-- ⊕ Two defects found while scouting B1 are **filed separately as `t0873`** and are NOT closed by B1/B2.
-
-⚠ **R48's headline was six CRITICAL memory-safety defects. `t0771` moves to R49; the other five landed:**
-`t0770`+`t0772` (Track A) · `t0763` (Track C) · `t0840` (Track D2) · `t0841` (Track D1).
-
-### ⚠ RED-VERIFY PROBE TRAP — BINDS EVERY EXECUTOR (found 2026-08-31, R48 Track D1)
-
-**Once your own fix is committed, `git checkout HEAD -- src/…` reverts to YOUR FIX.** The "pre-fix"
-compiler it builds is the **fixed** one, so the cell comes back **rc 0 — a false GREEN** that, taken at face
-value, *confirms* whatever the header claims.
-✅ **THE PRE-FIX BLOB MUST COME FROM THE BASE COMMIT: `git show <base-sha>:<path>`.**
-⚠ D1 hit this while re-measuring a cell it was in the middle of *correcting*; the false GREEN would have
-"verified" the very miscount being fixed. **RED-verify is only evidence if the compiler under test is
-genuinely the pre-fix one — state which blob you built.**
-
-⊕ **AND ONE RED DEMO IS NOT A CLASS DEMO.** D1's lint had been demonstrated RED on a *renamed* map and I
-read that as proof it caught its class. The output-review then broke it with the **type-elided** spelling
-(`let mut d = FxHashMap::default();`) and **all three asserts stayed GREEN**. A RED demo proves the guard
-catches **the evasion you thought of** — enumerate the evasions, or say in the doc comment what the guard
-still cannot see (which is what D1's fixed comment now does, instead of re-asserting totality).
-
-### ⛔⛔ ROUND-CLOSE TRAP — `robustness_map.py` WILL REPORT THIS ROUND'S FIXES AS REGRESSIONS
-
-Orchestrator-verified 2026-08-31 (found by Track E-B3 brief-review pass 1):
-- **`scripts/robustness_map.py:617`** — `good = "REJECTED" if row[COL_C] == "REJECTED" else "WORKS"`. The
-  "correct state" is derived from the **C-lane BASELINE BUCKET**, never from `COL_EXPECTED`. ⇒ **FIXING a
-  C-lane cell scores as a REGRESSION**, and on the **43** cells where self-host is WORKS, **a self-host
-  REGRESSION scores as PROGRESS.** The baseline records what the compiler PRINTED — the exact thing
-  § Don't redesign around compiler gaps forbids — and the comment above the line argues *for* it.
-- **`:715-723`** — `--accept` writes `MANIFEST.tsv` **unconditionally, BEFORE** the
-  `if regressions or new_div: return 1`, and `:623-624` folds every row regardless. ⇒ **exit 1 but the file
-  is already overwritten; the next run is clean.** A **one-shot regression launderer**. Its help text
-  (`:503`) claims it folds "PROGRESS rows" — false.
-
-⚠ **R48's memory-safety tracks (A/B/C/D1/D2) WILL fix C-lane cells.** At round close this gate will call
-those fixes REGRESSIONS. ⛔ **Do NOT "resolve" that with `--accept`.** Track E-B3 owns the fix (folded into
-its brief as M4/M5); the round-close battery must not be read as green or red on this gate until it lands.
-
-### ⛔ OWED ROUND-OPEN ACTION — THE CLONE BAND ANCHORS WERE NOT RE-SEEDED AT R48 OPEN
-
-**This is the ORCHESTRATOR's omission, not a track's.** `bash scripts/clone_meter_check.sh --anchor-age`
-is **RED at HEAD**: `ROUND-OPEN-DATE 2026-08-29` (R47's open, `f3feea79`) against `DONE.md` newest
-`2026-08-31`. The script's own words: *"a round has CLOSED since this band anchor was set… Leaving them is
-not conservative: **the band stops meaning 'per round' and starts accumulating across rounds, which is the
-shape the owner rejected.**"*
-
-⇒ **Until this is done, every ~1% band check this round is measured against R47's anchor, so R47's drift
-and R48's drift are being summed.** The owner explicitly REJECTED a cumulative cap in favour of a per-round
-band + periodic audit (`t0860`), which this silently defeats.
-
-**THE FOUR CONSTANTS + 2 comment lines** (`tests/integration.rs`): `SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN`
-(`:30525`) · `SELF_COMPILE_STRING_CLONE_ROUND_OPEN` (`:30615`) · `STAGE1_ARRAY_CLONE_ROUND_OPEN` (`:31309`)
-· `STAGE1_STRING_CLONE_ROUND_OPEN` · `// ROUND-OPEN-DATE:` (`:30523`) · `// ROUND-OPENED-BY:` (`:30524`).
-
-⚠ **DO NOT set ROUND_OPEN := PIN by inference.** It is *tempting* — **zero `src/` commits have landed since
-R48 opened** (`git log --oneline 2d4098bd..HEAD -- src/ | wc -l` → 0), so the meters cannot have moved —
-but Core #5 requires a figure REGENERATED this session, and `clone_meter_check.sh:111-113` deliberately
-fails any diff that moves a PIN or ROUND-OPEN constant without one. **Measure it.**
+### 🔁 THE ROUND-CLOSE BATTERY — COMMANDS, NOT NUMBERS (regenerate every figure; Core #5)
 ```
-# regen (expensive: four full self-compiles; run when the box is not loaded)
-bash scripts/clone_meter_check.sh            # then re-seed the 4 constants + both comment lines
-bash scripts/clone_meter_check.sh --anchor-age   # must exit 0
+scripts/run_integration.sh                                    # C sweep (GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600)
+GG_BACKEND=llvm scripts/run_integration.sh --release          # LLVM sweep — SEQUENTIALLY, never parallel
+cargo test --test spec_conformance -- --test-threads=1 --nocapture   # ⚠ --nocapture or the lane counts are swallowed
+cargo test --lib && cargo test -p ggdef && cargo test --test security && cargo test --test lints
+scripts/sanitize_sweep.sh                                     # ~25 min; ASan leak + corruption allowlists
+python3 scripts/robustness_map.py --lanes all                 # five lanes; never edit an expectation to match
+GG_RUNTIME_DIFF=1 cargo test --test integration --release self_host_runtime_diff -- --nocapture
+                                                              # the ONLY invocation that arms the parity floor/ceiling (t0924)
+bash scripts/clone_meter_check.sh --anchor-age                # must exit 0
+scripts/convergence.sh <prev_kg> <prev_todo> <filed>          # MEASURES, does not gate
 ```
-⚠ **Track F's `t0851` lint would be RED ON ARRIVAL until this lands** — F's brief is told not to re-seed it.
-⊕ **Silver lining, and F should use it:** this is a **live, unplanted RED** — better Core #13 evidence for
-the `--anchor-age` guard than any planted one.
+⚠ **Run these on a QUIET tree** — no agents building. R48 paid for this twice with false REDs.
 
-### ⛔ THE PARITY GATE CANNOT CATCH ITS OWN CLASS (Scout H, 2026-08-31 — six-questions #2)
+### ⚖ PARKED OWNER ASKS — ask when the work is SCHEDULED, not before
+- **`t0844`** — `process_group(0)` + SIGINT forwarding: user-visible Ctrl-C semantics in the shipped
+  compiler.
+- **`t0842`(A)** — `wait_timeout` returns `-2` and does **not** kill the child, so a Gorget program leaks
+  a timed-out child *by design*. Unratified language surface.
+- **`t0863`** — robustness divergences left **UNACCEPTED** (5 more added at R48 close, all one signature:
+  C and self-host agree on accept-then-build-fail, LLVM merely unclassifiable via `t0646`). Verify the
+  prior per-lane grade before folding.
 
-`RustRejected` rows **return before the self-host is ever invoked** (`tests/integration.rs:37943-37960`) and
-are excluded from the denominator. ⇒ **a self-host OVER-ACCEPTANCE — it runs a program Rust correctly
-rejects, printing ASLR pointers — is STRUCTURALLY INVISIBLE to `self_host_runtime_diff`.** A corpus-wide
-sweep found **11** nondeterministic rows, not 4; the extra **five** (`catch_recovery_type_unchecked` ·
-`missing_return_no_return_error` · `rwlock_read_annotation_less_binding_check` ·
-`snag11_cross_error_propagation` · `supertrait_default_throws_unhandled`) are all Rust-rejected /
-self-host-accepted. **None is filed as an SH over-acceptance** (per-stem `todo/` grep done; three stems
-appear for unrelated reasons). This is exactly `t0825`'s class, and it is the same blind spot.
-
-⚠ **THE R47 BURN-DOWN FIGURES ARE SUPERSEDED** — see the scout-corrections block above. The surface is
-roughly a QUARTER of what it was scoped at: **183/28** anchored (not 230/32), only **9 rows genuinely
-unadjudicated** (not 211), and parity floor slack is **27** (1476 → measured 1503), not 70.
-
-### ⚖ PARKED OWNER ASKS — ask when the work is scheduled, not before
-
-- **`t0844`** — `process_group(0)` + SIGINT forwarding: user-visible Ctrl-C semantics in the shipped compiler.
-- **`t0842`(A)** — `wait_timeout` returns `-2` and does **not** kill the child, so a Gorget program leaks a
-  timed-out child *by design*. Unratified language surface.
-- **`t0863`** — six robustness divergences left **UNACCEPTED**: verify the prior per-lane grade before folding.
-
-### 🗂 13 AGENT WORKTREES DELIBERATELY KEPT (R47 close, 1.2G)
-
-`ls .claude/worktrees/agent-*` — all 13 are **DIRTY with real uncommitted work**, checked file-by-file at
-close, so rule 6 keeps them: *branches survive a removal, uncommitted work does not.* They are **not**
-build artefacts. Samples: one holds modified `docs/book/` chapters; `agent-aa19c1e589090caae` holds four
-new `sanitize_empty_sort_*.gg` fixtures; **`agent-a619349ec03b80e93` holds edits to
-`src/ir/lowering/{closures,functions}.rs` and `exprs/methods.rs`** — that is the **F3 scout, lost to the
-disk crash**, and F3 was the three-CRITICAL-UAF track that R48's headline proposes.
-⇒ **Before opening R48's memory-safety track, LOOK IN THAT WORKTREE FIRST** — it may be a head start, or
-it may be an abandoned dead end, but re-deriving it blind would waste the crash twice. Same for
-`agent-aa19c1e589090caae` (F2's sanitize fixtures) against `t0863`/`t0572`.
+### 🗂 14 AGENT WORKTREES CARRIED FORWARD (R47 keep-list, verified at R48 close)
+All of R48's OWN track/review worktrees were pruned at integration (clean). What remains is the R47
+keep-list, still DIRTY with real uncommitted work — rule 6 keeps them: *branches survive a removal,
+uncommitted work does not.*
+⚠ **THE TWO FLAGGED ENTRIES ARE NOW SPENT and no longer block anything:**
+- `agent-a619349ec03b80e93` — the F3 scout lost to the disk crash. **Its head start WAS used**: the
+  recovered prototype seeded R48's memory-safety tracks and `t0770`/`t0772`/`t0763`/`t0134` are closed.
+- `agent-aa19c1e589090caae` — F2's `sanitize_empty_sort_*.gg` fixtures, against `t0863`/`t0572`. Still
+  unspent; check before re-deriving.
+⚠ Verified at R48 close: `agent-a0e6b997f0aec720a`'s staged work (`todo/t0727`–`t0732` plus their
+fixtures) is **ALREADY ON MAIN** — so at least one is a stale duplicate and the set is smaller than 14 in
+substance. A future close may dispose of them, but only file-by-file.
+⚠ **58 leftover BRANCHES** (`git branch | grep worktree-agent`) are the residue of every agent this round
+and prior; they cost nothing and hold the only copy of some captured work. Not cleaned at this close.
 ⚠ **Do not run `scripts/round_cleanup.sh` without a keep-list** — it prunes EVERY `agent-*` worktree.
-
-### ⚠ STALE-SCAN FIRST, BEFORE ANY SELECTION
-
-- ✅ **`t0801` STALE-SCANNED AND CLOSED at R48 open** (gate green at `2d4098bd`; fixture in `EXCLUDE`
-  `spec/ggdef/tests/corpus_b.rs:318`; subset gap filed as `t0753`). **Its reusable finding survives it and is
-  burn-down material:** `corpus_b` membership is glob-minus-exclusions, so a track can add a `cow_*` fixture
-  and redden a lane it never ran. Nothing guards that yet.
-- **`t0862`** forbids scoping the `slice` work until the method-call materialization site is located.
-- The `??` self-host lane gap cost **4 DRIVER-FAILs** in the close parity run — filed shape, cleanly
-  diagnosed, four fixtures' parity behind one feature.
 
 ## ⏱ NEXT 1–3 ROUNDS (hot-list)
 

@@ -1,3 +1,140 @@
+- [2026-09-03] **ROUND XLVIII (R48) CLOSED — SIX CRITICAL MEMORY-SAFETY DEFECTS, AND A ROUND-CLOSE THAT BECAME A ROUND.**
+  24 track integrations · 183 commits · 23 touching `src/`.
+
+  **Landed.** D1 (`t0841`) · C (`t0763`+`t0134` — five per-function prescans ran on 2 of ELEVEN
+  paths) · D2 (`t0840` + D53) · A (`t0770`/`t0772`) · β (`t0825`) · γ (the nondeterminism write
+  sites) · F (`t0861`, the figures DB) · S (AGENTS.md compaction) · E-B1/B2/B3 (the burn-down) ·
+  D10 (`t0438`/`t0437`, owner-directed) — then, opened AFTER the battery went red: **P** (the clone
+  regression) · **Q** (D53 position coverage on three lanes) · **R** (the Callable clone producer) ·
+  **U** (the self-host non-identifier-callee class) · **T-a1** (sanitize attribution).
+
+  **THE ROUND-CLOSE BATTERY FOUND MORE THAN THE ROUND DID, AND THAT IS THE ENTRY.** The C sweep came
+  back 2597/6. Four of the six were one class — D53's consume-position reject doing exactly what it
+  was ratified to do, against `lib/xtd/httpserver.gg` and a fixture written before the rule. The
+  other two were a **15.6x clone regression the round had shipped and nothing had noticed**:
+  `array_clone` 13,150,071 → 205,756,929.
+
+  **The 15.6x, attributed to one block.** D53's unique-lock probe called `infer_expr_type` on every
+  place, taking `&` of a by-value `TypeTable` param that stayed live — materialising the whole type
+  table per invocation. Its sibling one line away takes `TypeTable &types` and costs nothing: same
+  expression, same site, one free and one a bomb. **And `typecheck.gg:1428-1441` already carried the
+  war story, dated 2026-07-21: "a stage-0 clone bomb (12.6M → 121M array_clone). Fix: structural
+  `lvalue_value_type` only — NEVER `infer_expr_type` … NOT `TypeTable`-by-value recursion … NOT `&`
+  write-through."** D53 re-committed all three forbidden shapes against a rule that existed only as
+  prose. Core #6 in one sentence. The replacement is a whole-file call-count tripwire (pin 31),
+  measured RED at the re-commit, plus a body-scoped assertion that survives "bump the constant".
+
+  **THREE FRAMINGS OF ONE DEFECT DIED IN THE GAUNTLET, AND THE THIRD WAS REACHED BY MEASUREMENT.**
+  `t0936` was filed as "`Callable` has no clone path, so reject `.clone()`" — refuted by
+  `builtins.rs:1109` and a live security fixture. Reframed as "the axis is the receiver shape" —
+  refuted by one probe (`make().clone()` is a temp and still SEGVs). The surviving diagnosis came
+  from a reviewer who APPLIED the prescribed fix, measured it INERT with a fire count of ZERO, and
+  found the real gate 227 lines upstream: `infer_type_name_from_operand_full` returns `None` for a
+  `GirType::FnPtr` receiver, so the `.clone()` arm never runs and the call lowers to
+  `Constant::Unit`. **That function already documented the identical class for a sibling fixed once
+  for `int`.** Both dead framings are recorded IN the item so they are not re-proposed.
+
+  **The reference lagged the definition, twice, and the oracle was right both times.** ggdef
+  ADJUDICATES the Callable clone (`ggdef run` → `2`) while both production compilers SEGV'd; and
+  ggdef's D53 exclusion comment rested on "measured: accepted on both compilers", a premise that
+  DECAYED the moment D53 landed. Track Q closed SEVEN divergent ggdef positions, not the two its
+  review named, after measuring the whole position list first. ⭐ Track U found the reference lagging
+  the SELF-HOST: Rust `gg` miscompiles `flat_map(it)` where the self-host is correct.
+
+  **Owner rulings this round.** No partial moves (only whole-value `^m`; field/index `^` is
+  `E_PartialMove`) · D53 unique locks · leak debt: admit the 6, extend the ruling, **burn down all
+  of them over time and measure the TREND rather than set an expiry** · the parity non-MATCH ceiling
+  is **never raised — fix the self-host and port the rows** · the clone re-anchor authorized ·
+  the agent hold lifted mid-close · **R49 NOT opened, by owner instruction.**
+
+  **Battery at close, every figure regenerated on a QUIET tree** (no agents, no parallel builds — a
+  lesson this round paid for twice). ⚠ **Provenance is stated per leg rather than implied, because the
+  legs were NOT all taken on one tree and saying so is cheaper than pretending otherwise.** Everything
+  below except the two sweeps was re-measured at final HEAD; the two sweeps ran at `c7acf542c`, and
+  the commits after them are the 10-byte snapshot fix the sweeps themselves surfaced plus three guard
+  commits, each verified green on its own target at HEAD (`spec_conformance` 3/0,
+  `self_host_comprehension` 2/0, `lints` 218/0/1). C sweep **2614 passed / 1 failed / 214 ignored** · LLVM
+  sweep **2614 / 1 / 214** — byte-identical on both lanes, and the single failure was `self_host_runtime`
+  on ONE STALE SNAPSHOT, not a miscompile: Track U widened
+  `closure_mixed_implicit_explicit_wiring.gg` and never re-seeded its lock-in `.out`, which still dated
+  from Round XXXIV. Fixed surgically in `3361605db` (one file, 4→10 bytes, NOT a 1377-file whole-corpus
+  regen) and re-verified independently: `self_host_runtime` rc=0, passing set 1377, **regressed 0**.
+  ⚠ The two sweeps are therefore quoted AS THEY RAN; they were not re-run for a 10-byte test-data fix,
+  and the fix's own gate is the stronger evidence. · `spec_conformance` C **237/237**, LLVM **237/237**, self-host **236/237** · `security`
+  213/0/30 · `lints` **218/0/1** · `-p ggdef` **194/0** · `--lib` 1185/0 · `robustness_map` five lanes
+  **0 REGRESSIONS**, 5 new divergences filed unaccepted into `t0863` · `sanitize_sweep.sh` **rc=0**,
+  294 leaks / 294 allowlisted / flaky 0 / class-drift 0, covered 1792 (floor 1743) — **re-measured at
+  final HEAD**, and this is the leg that was rc=1 mid-close on three unattributed leaks · parity **rc=0**, MATCH **1532**, non-MATCH
+  **147 ≤ 147** with **the ceiling untouched all round**.
+  ⭐ **Self-host parity MATCH 1485 → 1532 (+47), the largest single-round gain the floor's log
+  records** — the round's compiler work showing up as measured lane convergence.
+
+  **Both legs that were RED at first close were FIXED, not waived.** The parity INFLOW gate had grown
+  by exactly two rows, BOTH of them Track R's own fixtures — Track R fixed the Callable-clone defect
+  on the Rust lane and did not port it, a Core #9 gap. Track U fixed the self-host. `sanitize_sweep.sh`
+  was rc=1 on three unattributed leaks; T-a1 replaced the corpus `-maxdepth 1` with a DECLARED
+  manifest, brought `security/` in, and added `UNCITED_LEAK_CLASS_PAIRS` as an `assert_eq!` ratchet so
+  every future allowlist row must name the item that owns it. **`sanitize_sweep.sh` had never been run
+  during the round — which is why three leaks sat unnoticed since Aug 31.**
+
+  **Four round-close ratchets reseeded, all regenerated on the final tree** (`d7d899c9b`): the spec
+  quartet 235/235/234/235 → **237/237/236/237** (`MIN_FIXTURES` is `>=`, so the two-fixture drift was
+  structurally invisible) · `RUNTIME_DIFF_MATCH_FLOOR` 1476 → **1527**, slack 56 → 5 · the non-MATCH
+  ceiling **untouched at 147** · all four clone axes re-pinned in BOTH `tests/integration.rs` and
+  `scripts/figures.db`, `.pin` and `.round_open` moved together because the band is computed FROM the
+  anchor. Stage-1 `array_clone` came in at **+1.016%**, past the ~1% band, and the owner authorized it
+  on the attribution that Track U's lowerer edits ARE the stage-1 meter's workload.
+  **Verified after the re-pin, on a quiet tree** (`cargo test --test integration --release clone_ceiling`,
+  rc=0, 576s): all four axes GREEN at **`delta_pin=+0` / `pct_pin=+0.000%`** — the measurement equals the
+  pin on every axis.
+  ⭐ **Three separate guards caught that reseed incomplete before it landed** —
+  `clone_meter_pins_carry_their_provenance`, `clone_meter_pin_provenance_shas_resolve` (twice), and
+  `figures_db_values_have_one_spelling` — i.e. the `t0861` machinery built THIS round catching an
+  orchestrator error hours later. That is the argument for binding a pin to its provenance.
+
+  **Doc write-through, verified at close** (16 commits across 12 files): both owner-ratified semantic
+  changes reached the USER-FACING docs, not just the devbook — **D53** in `book/11-ownership.md`,
+  `book/14-concurrency.md`, `book/16-smart-pointers.md` and `language-reference.md`; **D10** in
+  `book/11-ownership.md`, `language-reference.md` and the ratified ledger `decisions.md`.
+
+  ⭐ **THE ROUND CLOSE FOUND A CLASS, NOT JUST DEFECTS — AND THE THIRD INSTANCE WAS FOUND BY A
+  REVIEWER READING THE FIX FOR THE FIRST.** Three artifacts turned out to be **a derived fact guarded
+  in only ONE direction, or cached with no way to invalidate it**:
+  (i) the `spec_conformance` floor quartet — `MIN_FIXTURES` was `>=`, so adding a fixture made the
+  assert MORE true and two D10 spectests drifted in unratcheted;
+  (ii) `SELF_HOST_COMPREHENSION_CELL_FLOOR` — its own doc comment said *"raise it when the net grows"*,
+  which a `>=` guard structurally cannot enforce (Core #14 with nothing behind it);
+  (iii) `runtime_snapshots/*.out` — 1377 files recording a VALUE but not the fixture content they were
+  DERIVED FROM, so the lock-in net reports STALE and REGRESSED identically. Establishing which one a
+  live failure was took cross-reading three artifacts by hand.
+  (i) and (ii) are FIXED as exact pins plus three compile-time `const` asserts, all RED-verified
+  against the growth half the old guards could not see; (iii) is `t0964`.
+  ⚠ **(ii) existed because the fix for (i) did not ask what stopped the next site** — Core #4's exact
+  failure mode, committed by the orchestrator, caught by a T-a2 brief reviewer who read `235b554aa` and
+  went looking for siblings. The general shape, worth more than the three instances: **bind a derived
+  value to its provenance and guard the binding** — what the clone meters' `PINNED-BY` lines already
+  do, and what caught three incomplete pin moves earlier in this same close.
+
+  **Convergence: known_gaps 22→23 · TODO items 771→819 · net +49 (regen: `scripts/convergence.sh 22 771 62`)**
+  — declared filed 62 · implied closed 13 · measured net **+49**.
+  ⚠ **DEBT WENT UP, AND UNDER THE OWNER'S OWN TREND RULE THAT IS ACKNOWLEDGED, NOT EXPLAINED AWAY.**
+  62 filed against 13 closed is the worst ratio this log records, and no reading of "the instruments
+  got sharper" changes the direction of the arrow. What the instruments bought is real — `t0936`–`t0965`
+  are defects the battery and its gauntlet FOUND, most with durable repros RED-verified against the
+  pre-fix compiler, several critical (`.clone()` → SIGSEGV; a closure literal at a constructor arg never
+  constructed, with an ASan stack-buffer-overflow; the 15.6x clone regression; and
+  `auto x = <method call returning Result>` **silently discarding an entire `if x.is_error():` block**,
+  live in shipped `lib/xtd/p2p.gg` with 13 tests green by luck). But a round that finds 62 and closes 13
+  leaves 49 for someone else. ⇒ **The next round's headline is BURN-DOWN, not discovery.**
+  ⚠ **DEBT WENT UP, AND UNDER THE OWNER'S OWN TREND RULE THAT MUST BE ACKNOWLEDGED, NOT EXPLAINED
+  AWAY.** 60 filed against 13 closed is the worst ratio the log records, and no reading of "the
+  instruments got sharper" changes the direction of the arrow. What the instruments bought is real —
+  `t0936`-`t0963` are defects the battery and its gauntlet FOUND, with durable repros RED-verified
+  against the pre-fix compiler, several of them critical (`.clone()` → SIGSEGV; a closure literal at a
+  constructor arg never constructed, with an ASan stack-buffer-overflow; the 15.6x; and
+  `auto x = <method call returning Result>` **silently discarding an entire `if x.is_error():` block**,
+  live in shipped `lib/xtd/p2p.gg` with 13 tests green by luck). But a round that finds 60 and fixes 13
+  leaves 47 for someone else, and the next round's headline should be burn-down, not discovery.
 - [2026-09-03] **`t0966` — `figures_db_mirrors_agree` could not see the failure its own message named.** The assert was `checked >= 12` under the message *"a row lost its `mirror` field and this lint quietly stopped guarding it"* — and with **32** non-`none` mirrors declared, that floor left **twenty rows of headroom**. The guard stated its own class and was structurally blind to it (SIX QUESTIONS #2). Found by the T-a2 executor, which routed it out because its fence excluded the file and correctly said the fix was the **write site, not a bigger constant**.
   **Both halves closed, and NEITHER IS A NUMBER:** `mirror` is now REQUIRED-WITH-ESCAPE in `scripts/figures.py` exactly like `input` — *"this row mirrors no literal" must be a claim someone MADE, not a field someone FORGOT* — and the four rows that legitimately mirror nothing now say `mirror = none` out loud; and the lint's count is DERIVED from the DB on every run (`assert_eq!(checked, declared)`), so no pinned number remains to drift. Same ruling this round made twice before: **delete the count rather than update it**, because a count is the one part no lint can police.
   ⚠ **RED-verified both halves** — removing one row's `mirror` field reports `missing mandatory field \`mirror\`` (the failure the old floor could NOT detect); skipping one declared mirror gives `left: 31, right: 32`, a mutation the old `>= 12` passed.
