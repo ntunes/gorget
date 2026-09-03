@@ -465,6 +465,43 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **⛔ K · PASS 3 — 2 BLOCKING. DESIGN SOUND A THIRD TIME; BOTH MY FOLDS NAME THE WRONG WRITE SITE.**
+  Folded as ADDENDUM 4; **streak reset, pass 4 launched.** ⛔ **THE ENUMERATION HAS NOW FAILED THREE TIMES,
+  EACH TIME BECAUSE THE WITNESS WAS OVER THE WRONG POPULATION** — runtime functions (pass 1) · `index_load`
+  call sites (pass 2) · **and the producer is a `call_extern`, not an `IndexLoad` at all** (pass 3).
+  ⛔⛔ **`for c in s:` REACHES THE RUNTIME VIA `call_extern gorget_str_codepoint_at`
+  (`for_loops.rs:728-732`), and `for_loops.rs:940` — which BOTH my folds named — IS `lower_for_array`,
+  i.e. `for x in Vector[String]`. AN EXECUTOR FOLLOWING EITHER FOLD WOULD HAVE EDITED AN INERT LINE.**
+  Proof is in pass 2's own emitted C: an inlined `gorget_str_view_region` with **no `gorget_str_index` call
+  anywhere.** ⊕ The real site is **`for_loops.rs:742`**, and **S-C measured tagging `:940`/`:1166` to be
+  behaviourally INERT** — claiming them would break readiness row 4.
+  ⭐ **SIX Q#4 LANDS THE OPPOSITE WAY FROM MY FOLD: the for-element is not UNTAGGED, it is MIS-TAGGED.**
+  `bind_owned_for_drop(..., LoopOwned::Fresh)` stamps **FreshOwned on a `cap=0` view** — **the worst
+  possible tag**, because FreshOwned+dead is the one shape Tier 2a green-lights unconditionally
+  (`validate.rs:2955`, `:3066`). **That is why the class was invisible.**
+  ⚡ **CORE #14 COMMENT NUMBER FOUR, MEASURED FALSE** (`for_loops.rs:734-741`, *"run-proven sound … boundary
+  clones upgrade cap=0 views on entry"*). ⭐ **The CTOR row refutes it: `v.push(c)` materializes,
+  `Holder(c)` does not.** Both fixed by a `:742` View tag; ggdef and LLVM agree.
+  ⛔ **P2 · THE TAG DOES NOT CLOSE THE `.enumerate()` ICE — the root is a DIFFERENT defect.**
+  `infer_collection_element_type` (`methods.rs:4819`) has **no `GorgetString → GorgetString` arm** and falls
+  through to `I64_TYPE`, so a String `.enumerate()` types its element **i64** and nothing in K can reach it.
+  ⭐⭐ **AND IT IS WORSE THAN AN ICE — THE THIRD ACCIDENTALLY-CORRECT CELL:** the loop bounds on **BYTE**
+  length while `gorget_str_index` indexes by **CODEPOINT**, so `for i, c in "héllo".enumerate()` **TRAPS**
+  while plain `for c in s:` prints correctly. **ASCII is green; multibyte traps — accidentally correct on
+  every ASCII fixture in the corpus.** ⇒ `:1166` is a **NAMED OMITTED CELL**; root filed as **`t1049`**
+  (reference-lags-self-host — SH's `lower_loops.gg:466` carries its own codepoint-ordinal counter and gets
+  it right).
+  ✅ **P3 SETTLED BY MEASUREMENT: `set_view_of`, NOT the Borrowed tag** — a `Borrowed{CollectionElement}`
+  String matches **no** clone branch and falls to **Branch F → `AssignMode::Move`, a move out of a borrow**.
+  ✅ **HONEST `|changed| = 6`**: 4 at `methods.rs:4762` (including the heap-rooted **`h.s[4]`** index cell
+  nobody had measured) + 2 at `for_loops.rs:742`.
+  ⛔ **S-B · MY OWN ADDENDUM-2 FIGURE CORRECTION WAS FALSE** — pristine HEAD `--lib` is **1185 / 0 / 0** and
+  `src/` has **ZERO** `#[ignore]` attributes, so "1183/0/2" was impossible. ⚡ **EVERY FIGURE MUST NOW CARRY
+  ITS PROFILE AND ITS BARE COMMAND.**
+  ⚠ **S-D · AN UNSIZED COST: the `:742` tag charges ONE CLONE PER ITERATION, and the self-host scans source
+  text CHARACTER-BY-CHARACTER.** The executor must measure the **bootstrap's** `string_clone` and peak RSS
+  before/after — not the 1000-bind microbenchmark. **Pass 4 is measuring it.**
+
 - **⚡ A1-M · EXECUTOR RETURNED — `dc29f0faf` on `worktree-agent-af3d2f03b79e6b6b8`, 4 files +205/−8.
   OUTPUT-REVIEW LAUNCHED; NOT INTEGRATED.** `pack_closure_at_dest_type` in `calls.rs`, **FIVE** call sites
   each marked `A1M-PACK-SITE (n/5)`, destination predicate on `GirType::FnPtr` + a `GorgetClosure` alias and
