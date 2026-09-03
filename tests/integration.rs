@@ -38782,14 +38782,20 @@ fn assert_self_host_stdout(fixture_rel: &str, tag: &str, expected: &str) {
 // property DEC-K3-6's "one cell per FILE" exists to protect).
 //
 // The guard below can catch its own class (Core #15e Q2): a `.gg` without an
-// `.expected` FAILS rather than being skipped, and the cell count has a
-// shrink-only floor so silently deleting the net is a red.
+// `.expected` FAILS rather than being skipped, and the cell count has an
+// EXACT PIN, so both deleting the net and growing it without ratcheting are red.
 
-/// Cell count floor for `tests/fixtures/self_host_comprehension/`.
+/// Cell count EXACT PIN for `tests/fixtures/self_host_comprehension/`.
 ///
-/// SHRINK-ONLY IN THE WRONG DIRECTION: raise it when the net grows, never
-/// lower it to make a red go away. A net that can be emptied without a test
-/// failing is not a net.
+/// Move it in the SAME COMMIT as the cells: RAISE it when the net grows, and
+/// never lower it to make a red go away — a net that can be emptied without a
+/// test failing is not a net.
+///
+/// ⚠ This was a `>=` FLOOR until R48 close, and the wording above used to say
+/// "shrink-only in the wrong direction". That description could not be
+/// enforced: a floor catches only the DELETION half, because adding a cell
+/// makes `len() >= FLOOR` MORE true. The pin enforces BOTH halves, which is why
+/// the comment no longer describes a direction.
 const SELF_HOST_COMPREHENSION_CELL_FLOOR: usize = 39;
 
 /// The self-host COMPREHENSION net, stage 0.
