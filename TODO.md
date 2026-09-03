@@ -490,6 +490,40 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **⚡ F · EXECUTOR RETURNED — `22b8dec2f`, one commit. OUTPUT-REVIEW LAUNCHED; NOT INTEGRATED.**
+  Typed `ClosureShape` enum + a per-`(protocol, method)` `CLOSURE_SHAPES` table read through **one accessor**
+  (Core #2), SET at the **top** of the arg-lowering loop, `fold`'s accumulator from arg 0's **lowered** type
+  via the 3-arg `infer_operand_type_full`. ⊕ `builtin_type_args_from_name` extracted as the **single source
+  of truth** for elem/key/val; both closure callers of `extract_elem_type_id_from_type_name` retired, its
+  last caller filed as `t0992`. ⊕ Report-only DRIFT branch in `robustness_map.py`.
+  **Gates bare:** build 0 · `--lib` **1187/0** · `--test lints` **218/0** · `robustness_map --lanes c,llvm`
+  **0, no REGRESSION line** · targeted integration **599/0**. Whole-map **885/1038 = 85.3%**.
+  ⭐ **29 CELLS AS 8 PINS / 15 CONTROLS / 6 RED — and the CONTROLS were shown to DISCRIMINATE**: rebuilt with
+  `effective_name` (BR2-3's exact executor error) `map`/`filter`/`any`/`all`/`count`/`each` on
+  `Vector[String]` **all go BUILD-FAIL.** `ALL_PROTOCOLS` guard RED-verified — dropping the Deque row names
+  it and reds both Deque cells while every Vector cell stays green; **corpus Deque HOF coverage 0 → 3.**
+  ⛔ **THE BRIEF WAS WRONG IN FOUR PLACES.** (1) ⭐ **ADDENDUM 5's `for_each`-with-import "positive control"
+  IS NOT GREEN** — the real discriminator is **import × CALLABLE FORM** (named fn ✅, typed closure ✅,
+  **untyped closure ⛔**), and **`t0987` had held the callable form CONSTANT while varying the import** —
+  its own v2 correction warns about exactly that. **Third correction to that item; it cost a 29th cell.**
+  (2) `t0988` wrong a third time, as predicted — **and the consequence the brief did not state: NO GREEN
+  CONTROL EXISTS for it**, because every rc-0 shape is ASan-red, so a `match`-form fixture would be
+  green-on-arrival. (3) The DRIFT branch's first run found **9 drifts, 7 of them LLVM `TRAP → CRASH`**,
+  attributed to today's `verdict.py` change and filed as **`t0993`**; **419 of the 672 non-good cell-lanes
+  remain unmeasured and are NAMED as omitted.** (4) `hof_fold_nonconstant_accumulator` **is C-only** —
+  **LLVM compiles it and prints `<abc`.**
+  ⚡⚡ **A LANE DIVERGENCE WITH SILENT WRONG OUTPUT, which is why `t0068` went LOW → HIGH:**
+  **`find_index` bound — C REJECTS, LLVM SILENTLY ANSWERS `none`.** A silent wrong answer on one lane
+  outranks a rejection on the other; **the output-review adjudicates it under Core #8.**
+  ✅ **G'S BLOCKER DISCHARGES HERE** — F ships `for_each` RED cells citing `t0987`; the review confirms they
+  genuinely pin the no-import trigger before G is released.
+  ⚠ **Stated holes:** readiness #4's `_full`-vs-2-arg choice has **no fixture witness** (kept with the TRAP
+  comment, **not claimed as pinned**) · **23 of 1038 rows have an EMPTY `llvm` baseline and are ungated on
+  that lane** · `Dict.update` is newly in the table with **no corpus cell**.
+  ⊕ New filings: **`t0990`** (Deque has NO end-specific API — and the CoW consume-position tables already
+  name `push_back`/`push_front`, **which no type declares**: a Core #14 shape) · `t0991` · `t0992` · `t0993`.
+  Corrected in place: `t0987`, `t0988`, `t0068`. `reduce` joined `t0068` with **no new id**, as directed.
+
 - **⚡ G's BLOCKER HAS A NAMED DISCHARGE, NOT AN OPEN-ENDED ONE.** G must not land before `t0987`'s repro
   exists, because **G's prelude of `std.iter` erases that defect's only trigger and there is no fallback**
   (Deque rejects cleanly — measured). ⇒ **Track F ships that repro**: its owed-cell set carries
