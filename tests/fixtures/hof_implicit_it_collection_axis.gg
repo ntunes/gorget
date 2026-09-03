@@ -16,12 +16,28 @@
 #
 # TWO AXES, because two different things had to be true.
 #
-# AXIS 1 — the HOF ARM. Every collection higher-order method that takes a
-# single-parameter body, so a partial regression at one arm trips this fixture:
+# AXIS 1 — the HOF ARM. FIVE of the collection higher-order methods that take
+# a single-parameter body, so a partial regression at one of them trips this
+# fixture:
 #   map (cross-type accumulator) · filter (predicate) · any · all ·
 #   Set.any (a different iteration producer)
-# `Option.map(it * 2)` is NOT here: Option combinators lower through their own
-# arm and never reach `extract_hof_closure` (see `implicit_it.gg`).
+# ⚠ FIVE, NOT "every" — an earlier version of this line claimed the whole set
+# and that claim HID A DEFECT. Two are deliberately absent, and the reason is
+# different in each case:
+#   * `Option.map(it * 2)` — Option combinators lower through their own arm and
+#     never reach `extract_hof_closure` at all (see `implicit_it.gg`).
+#   * `flat_map` — ⚠ THE REFERENCE MISCOMPILES THE IMPLICIT-`it` SPELLING.
+#     MEASURED at HEAD with `lit = [[1, 1], [2, 2]]`: Rust `gg` prints
+#     `1 1 2 2` for `lit.flat_map((Vector[int] v): v)` and for
+#     `lit.flat_map(ident)`, but `1 0 2 0` for `lit.flat_map(it)` — the right
+#     element COUNT with every second value zeroed, which is precisely the
+#     "green for a reason unrelated to what it tests" signature this fixture
+#     exists to catch. The self-host prints `1 1 2 2` and is RIGHT. A cell here
+#     would assert the reference's wrong answer or fail on the correct one, so
+#     it lives in `known_gaps/flat_map_implicit_it_zeroes.gg` with an
+#     `#[ignore]`d test asserting the CORRECT output, filed as `todo/t0963`.
+#     `flat_map` has its own `comp_reserve` arm, so it is the same class at a
+#     different site — and on the other lane.
 #
 # AXIS 2 — the BODY SHAPE, i.e. how the body reaches `it`. Whether an argument
 # IS an implicit-`it` body is decided by one predicate, `expr_has_it`, and that
@@ -50,9 +66,16 @@
 # is not a cell:
 #   `it as float`                  Rust REJECTS (E_TypeMismatch on `?T0`)
 #   inline `match` / `do:` bodies  Rust REJECTS (parse errors)
-#   comprehension-bodied           Rust ICEs
 #   a MULTI-STATEMENT block body   needs a `Stmt` walk `expr_has_it` does not
-#                                  have; no reference program spells one here
+#                                  have (`EBlock` / `EDo`, two variants)
+# ⚠ AND ONE ROW THAT WAS WRONGLY LISTED AS A NON-CELL: comprehension-bodied.
+# An earlier version of this list said "Rust ICEs" on it. FALSE, measured at
+# HEAD — `grid.map([z * 2 for z in it])` prints `2 4 6 8`, and the set, dict
+# and filtered forms all run. The self-host REJECTS them loudly instead
+# (`cannot lower a call whose callee is a EListComp`), so nothing is silently
+# miscompiled, but it is a Core #9 LANE DIVERGENCE and it is now filed as
+# `todo/t0962` rather than dismissed. No cell here: a cell would have to be
+# `#[ignore]`d, and the item carries the repro.
 # The second axis is why the predicate is now an exhaustive walk that stops
 # only at closure boundaries, rather than a working set.
 #

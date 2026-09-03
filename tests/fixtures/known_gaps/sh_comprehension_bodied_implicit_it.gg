@@ -1,0 +1,28 @@
+# KNOWN GAP (todo/t0962), SELF-HOST lane — a comprehension-bodied implicit-`it`
+# argument is REJECTED by the self-host and accepted by Rust `gg`.
+#
+# `expr_has_it` (self_host_lowerer/lower_closures.gg) has no `EListComp` /
+# `ESetComp` / `EDictComp` arm, so it answers `false`, `extract_hof_closure`
+# treats the comprehension as a CALLABLE, and the synthesized
+# `([z * 2 for z in it])(__hofp0)` is refused by the `ECall` callee dispatcher:
+#
+#   error: cannot lower a call whose callee is a EListComp (in fn 'main')
+#
+# The rejection is LOUD, so nothing is miscompiled — this is Core #10 working.
+# It is a Core #9 LANE DIVERGENCE: Rust `gg` runs this and prints 2 4 6 8.
+#
+# The fix is probably three arms, and it is cheap: `ast.gg` gives all three
+# comprehension variants only `Box[SpannedExpr]` / `Option[Box[SpannedExpr]]`
+# fields — no statements — so the existing machinery walks them. Walk the
+# ELEMENT, the SOURCE and the optional FILTER; the loop VARIABLE is a binding,
+# and an `it` appearing only as that name is not this closure's `it`.
+#
+# INTENDED (asserted by the #[ignore]d wired test, which runs the SELF-HOST
+# lane): prints 2 4 6 8, exactly as Rust `gg` does today.
+
+void main():
+    Vector[Vector[int]] grid = [[1, 2], [3, 4]]
+    Vector[Vector[int]] out = grid.map([z * 2 for z in it])
+    for row in out:
+        for v in row:
+            print(f"a {v}")

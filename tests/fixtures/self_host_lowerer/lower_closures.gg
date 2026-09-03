@@ -961,22 +961,41 @@ bool stmts_tail_has_it(Vector[Stmt] body):
 # `EFieldAccess`, `EIndex` and every wrapper and container form, which is
 # exactly the family a real `it`-body reaches through.
 #
-# The ONE deliberate stop is a CLOSURE BOUNDARY: `EClosure` and
-# `EImplicitClosure` return false, because an `it` inside a nested closure
-# belongs to THAT closure, not to this one.
+# The DELIBERATE stop is a CLOSURE BOUNDARY: `EClosure` and `EImplicitClosure`
+# return false, because an `it` inside a nested closure belongs to THAT
+# closure, not to this one. Everything else that reaches the `else:` reaches it
+# for one of three reasons, and they are NOT interchangeable:
 #
-# ⚠ THE OTHER STOPS ARE NOT "no body is spelled that way" — AN EARLIER VERSION
-# OF THIS HEADER SAID THAT AND IT WAS FALSE. `if` IS spelled that way and is
-# walked: `EIf` takes its condition AND both branch tails, because
-# `xs.map(if flag: it else: 0)` is a real program that the reference compiler
-# runs. What genuinely stops here is a MULTI-STATEMENT block — `EBlock`,
-# `EDo`, `EMatch`'s arms, the comprehensions — and the honest reason is
-# narrower: those need a `Stmt` walk this predicate does not have, and each
-# omitted spelling was CHECKED against the reference before being left out.
-# `xs.map(it as float)` and the inline `match`/`do:` forms are REJECTED by
-# Rust `gg` (a type error and a parse error respectively), so they are not
-# cells; the comprehension-bodied form ICEs there. If any of those is ever
-# accepted by the reference, this predicate is where the fix goes.
+#   (a) NOTHING TO WALK — the seven literal / nullary forms (`EIntLiteral`,
+#       `EFloatLiteral`, `EBoolLiteral`, `EStringLiteral`, `ECharLiteral`,
+#       `ENoneLiteral`, `ESelfExpr`). No subexpression exists.
+#   (b) NEEDS A `Stmt` WALK this predicate does not have — `EBlock`, `EDo`.
+#       Exactly two variants, not a family.
+#   (c) ⚠ A KNOWN LANE DIVERGENCE, NOT A NON-CELL — `EListComp`, `ESetComp`,
+#       `EDictComp`. See below; these are `todo/t0962`.
+#
+# ⚠⚠ THIS PARAGRAPH HAS NOW BEEN WRONG TWICE, so read what replaced it. The
+# first version said "no implicit-`it` body is spelled that way"; `if` is, and
+# the `EIf` arm above walks its condition AND both branch tails because
+# `xs.map(if flag: it else: 0)` runs on the reference. The second version said
+# the comprehensions "need a `Stmt` walk" and that the reference ICEs on them.
+# BOTH HALVES WERE FALSE. Mechanically: `ast.gg` gives `EListComp` / `ESetComp`
+# / `EDictComp` only `Box[SpannedExpr]` and `Option[Box[SpannedExpr]]` fields —
+# there is no `Stmt` anywhere in them, so (b) never applied. Behaviourally,
+# MEASURED at HEAD: `grid.map([z * 2 for z in it])` prints `2 4 6 8` on Rust
+# `gg`, `xs.map([it for k in [0, 1]])` prints `1 1 2 2`, and the filtered form
+# runs too. The reference ACCEPTS all of them.
+#
+# What the self-host does with them is REJECT, loudly — `cannot lower a call
+# whose callee is a EListComp` — because a `false` here sends the body down the
+# callable-wrapper path. So Core #10 holds and nothing is silently miscompiled,
+# but this is a Core #9 LANE DIVERGENCE and it is filed as `todo/t0962`.
+# Adding the three arms is the likely fix and it is deliberately NOT done here:
+# it is a compiler change, and this pass is correcting a false record.
+#
+# The two genuine non-cells, each CHECKED against the reference rather than
+# assumed: `xs.map(it as float)` is a Rust type error (`E_TypeMismatch` on
+# `?T0`), and the inline `match` / `do:` forms are Rust parse errors.
 bool expr_has_it(SpannedExpr sexpr):
     match sexpr.expr:
         case EIt():

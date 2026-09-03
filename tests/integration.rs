@@ -6474,6 +6474,50 @@ fn callable_unit_form_clone_segv() {
     run_gg("known_gaps/callable_unit_form_clone_segv.gg", "2\n2\n2");
 }
 
+/// KNOWN GAP `todo/t0963` — ⭐ THE REFERENCE LAGS THE SELF-HOST. `flat_map`
+/// with an implicit-`it` body zeroes every element after the first of each
+/// inner vector on Rust `gg` (`1 0 2 0`), while the explicit-closure and
+/// named-function spellings of the SAME program are correct and the self-host
+/// prints `1 1 2 2` for all three. Right element COUNT, wrong values — the
+/// failure mode any length assertion sleeps through.
+///
+/// Asserts the CORRECT output, never the reference's current answer: per the
+/// succession plan the Rust side is fixed as oracle hygiene and the self-host
+/// is never dumbed down to match. NOT `todo/t0878` (that is the `Callable`
+/// PARAMETER monomorph gap, a link failure). Un-ignore when Rust prints
+/// `1 1 2 2` for all three spellings.
+#[test]
+#[ignore = "todo/t0963 — Rust gg miscompiles `flat_map(it)` (1 0 2 0); the explicit-closure and \
+named-fn spellings are correct and the SELF-HOST is right. Reference lags the self-host. \
+Asserts the intended 1 1 2 2 on all three spellings."]
+fn flat_map_implicit_it_zeroes() {
+    run_gg(
+        "known_gaps/flat_map_implicit_it_zeroes.gg",
+        "closure 1\nclosure 1\nclosure 2\nclosure 2\nnamed 1\nnamed 1\nnamed 2\nnamed 2\nit 1\nit 1\nit 2\nit 2",
+    );
+}
+
+/// KNOWN GAP `todo/t0962`, SELF-HOST lane — a comprehension-bodied
+/// implicit-`it` argument is REJECTED by the self-host and accepted by Rust
+/// `gg`, which runs it correctly. `expr_has_it` has no `EListComp` /
+/// `ESetComp` / `EDictComp` arm, so the body is treated as a CALLABLE and the
+/// `ECall` callee dispatcher refuses the synthesized
+/// `([z * 2 for z in it])(__hofp0)`. LOUD, so nothing is miscompiled — a
+/// Core #9 lane divergence, not a Core #10 hole. Asserts the intended output
+/// on the SELF-HOST lane.
+#[test]
+#[ignore = "KNOWN GAP t0962: the self-host rejects a comprehension-bodied implicit-`it` argument \
+that Rust gg accepts and runs (expr_has_it has no EListComp/ESetComp/EDictComp arm). Asserts the \
+intended 2/4/6/8 on the self-host lane; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn sh_comprehension_bodied_implicit_it() {
+    sh_known_gap_expect(
+        "known_gaps/sh_comprehension_bodied_implicit_it.gg",
+        "sh_comprehension_bodied_implicit_it",
+        "a 2\na 4\na 6\na 8",
+    );
+}
+
 // `todo/t0953` (Track T-a1's item, owned there) — the UNBOUNDEDNESS cell of
 // the closure-literal-argument env leak, which that item's own two-call repro
 // cannot show: twenty `map` calls leak twenty records (160 bytes), so the cost
