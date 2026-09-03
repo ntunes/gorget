@@ -178,7 +178,11 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
       `maybe_auto_propagate` hoisted to the `lower_expr` exit"*) so StructInit / EnumInit / TupleInit /
       projection-assign / CallByValueArg all route through one packer; **delete `wrap_single_closure_arg`'s
       duplicate**; pin with an arm-count lint on the `container_literal_arms_count` precedent
-      (`tests/lints.rs:1268`). Closes `t0937`, `t0938`, TupleInit, `s.f = literal` and the SIGBUS cell.
+      (`tests/lints.rs:1268`). **Closes `t0937` ONLY** — plus TupleInit, `s.f = literal` and the SIGBUS
+      cell. ⛔ **CORRECTED 2026-09-03 by A1-M's own executor: it does NOT close `t0938`** (`Some(^h)` /
+      `push(^h)` still ICE at `mod.rs:2144`, re-verified) **nor `t0873(a)`** (`S([lit])` stays RED in
+      `known_gaps/callable_literal_in_container_literal.gg`). The handover asserted both for two
+      generations; a track that reports what it did NOT close is doing the gauntlet's work for it.
     ⭐ **AND THE THREE-PASS MYSTERY IS SOLVED: there are TWO pack implementations.** `try_closure_pack`
     (`operands.rs:1357`, one caller) and `wrap_single_closure_arg` Case 2 (`:1703-1780`) are near-duplicate
     alloc+memcpy+`ClosurePack` sequences; `Inst::ClosurePack` is emitted from **4** sites
@@ -221,7 +225,7 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   - **A1 · PACK-AT-BIRTH (⭐ the CRITICAL one; wave 1).** `src/ir/lowering/closures.rs:360` returns the raw
     `Named("__Closure_N")` capture ENV, not the `GorgetClosure` fat pointer `Callable[T]` denotes, so
     materialization is deferred to consumers that each re-recognise a closure BY NAME PREFIX. Owns
-    `t0937` ⭐ · `t0938` · `t0873(a)` + **3 cells NOBODY HAS FILED** (`TupleInit`; `Assign`-with-projection;
+    `t0937` ⭐ (`t0938` and `t0873(a)` are **NOT closed** — see the correction above) + **3 cells NOBODY HAS FILED** (`TupleInit`; `Assign`-with-projection;
     and a THIRD fault mode — rc **135 bus error** on a capturing ctor literal). ⚠ **Those three are A1's
     SCOPE, not new filings** (rule 0: incorporate by default, file only when genuinely disjoint).
   - **A2 · `Callable` TYPE ERASURE.** `try_map_ast_type` returns `None` for the Callable family
@@ -461,6 +465,44 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **⚡ A1-M · EXECUTOR RETURNED — `dc29f0faf` on `worktree-agent-af3d2f03b79e6b6b8`, 4 files +205/−8.
+  OUTPUT-REVIEW LAUNCHED; NOT INTEGRATED.** `pack_closure_at_dest_type` in `calls.rs`, **FIVE** call sites
+  each marked `A1M-PACK-SITE (n/5)`, destination predicate on `GirType::FnPtr` + a `GorgetClosure` alias and
+  **source predicate on `TypeMetadata::is_closure_env` — no name-matching** (Core #2). **Closes `t0937`.**
+  Gates bare: build 0 · `--lib` 1185/0 · `--test lints` **219/0 (+1 new)** · `-p ggdef` 0 · `spec_conformance`
+  0; targeted C **and** LLVM across callable/closure/option/result/struct/tuple/enum/sh_ all 0.
+  ⭐ **IT IS FIVE SITES, NOT FOUR — the fifth is a SECOND, DISTINCT DEFECT at the same layer.** A nested
+  `Some(Some(<literal>))` resolves the INNER enum's type from the ambient `expected_type`, i.e. the **OUTER**
+  `Option[Option[Callable]]` — GIR shows `enum_init Option__Option__Callable__GorgetClosure::Some` for the
+  *inner* init. **Invisible with an `int` payload** because `Option__int64_t` is pre-registered so the
+  fallback never runs (SIX Q#6). Fixed through one shared helper for `Some`/`Ok`/`Error` (Core #4);
+  `Some(Some(lit))` rc 139 → `2` on both backends.
+  ⛔ **THE B3 CELL IS NOT AN IMPROVEMENT AND THE EXECUTOR SAID SO FIRST.**
+  `known_gaps/callable_capture_overlap_aggregate_init_uaf.gg` goes rc 139 → **rc 0 printing `7` then `70`**;
+  correct is `7`/`7` (ggdef agrees). Still `heap-use-after-free in __Closure_0__call` under C+ASan. Shipped
+  as an `#[ignore]`d cell asserting the **CORRECT** value, cited to `t0704`. **That is Core #8 self-applied.**
+  ⚡⚡ **NEW OWNER ASK — LEAK INFLOW, and the executor refused to slip it under a standing ruling.**
+  `callable_literal_at_consuming_positions` leaks **16 records / 144 B** (`__gorget_closure_env_alloc`),
+  identical C and LLVM. `LEAK_CEILING` 294→295, `LEAK_RECORDS` 2297→2313, `LEAK_CLASS_PAIRS` 501→502,
+  mirrored in `figures.db`. **The class is old; the BYTES ARE NEW** — at HEAD those positions never
+  constructed the closure, so they allocated nothing. The 2026-09-02 ruling admits *"pre-existing leaks newly
+  made VISIBLE by a graduation"* **and only those**; *"a row whose leak is genuinely NEW inflow is still an
+  owner ask."* **The output-review adjudicates first; if it agrees the bytes are new, this goes to the owner.**
+  ⊕ Attribution control: the enum-payload cells of the same fixture are **ASan-CLEAN**, pinning the row on
+  `t0948`'s struct predicate rather than on this fix.
+  ⊕ **`t0968` SPLITS ACROSS COMPILER PROFILES:** `Ok(Some(<literal>))` ICEs at `lir/validate.rs:137` in
+  **debug** but **builds and prints correctly under `--release` while leaking 8 B** — the validator is
+  `cfg!(debug_assertions)`-gated. Both halves owed; the `#[ignore]`d test is RED in debug (the census
+  profile) and green in release.
+  ⊕ **Filed: `t0968` · `t0969`** (a `Callable[String(String)]` struct field SEGVs on self-host where Rust is
+  correct on both backends — **the signature, not the position**: `int(int)`/`int()`/`int(int,int)` MATCH) ·
+  **`t0970`** (the SH typechecker types a closure PARAMETER from a **later** same-named local —
+  **order-dependent**, so a scoping defect, not a shadowing rule).
+  ⚠ **POSITIVE CONTROL RUN WITH THE FIX (S7 confirmed exactly):** A1-M takes A3's hazard surface from ONE
+  spelling to FOUR — three cells that looked safe were only **masked** because ASan halts on an earlier
+  stack-buffer-overflow. A **hard gate** is appended to `t0948`: it does not land without a read-side
+  materializer for `Callable g = <aggregate>.f`.
+
 - **⚖ OWNER RULING 2026-09-03 — ALL THREE LIVE ASKS ANSWERED: *"Take the reference grade (starred) option
   on each ask."*** The parked three (`t0844` · `t0842`(A) · `t0863`) stay parked; `t0947`'s direction needed
   no ruling (Track C pass 5 confirmed `decisions.md:2081-2093` already answers it).
