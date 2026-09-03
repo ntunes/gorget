@@ -505,6 +505,41 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **⛔ A1-M · CONFIRMING OUTPUT-REVIEW: THE CODE IS SIGNED OFF; 2 BLOCKING, BOTH IN THE RECORDS.** All three
+  mandatory gates PASS. Returned to the executor; **not integrated, and the LEAK ASK DOES NOT GO TO THE
+  OWNER YET.**
+  ✅ **THE SITE DISPUTE IS ADJUDICATED FOR THE EXECUTOR, BY CONSTRUCTION.** `functions.rs:215` calls
+  `emit_enum_init_owned`, so `wrap_expr_tail_in_ok` **already routed through the chokepoint — it was never
+  the gap.** The live site is `stmts/mod.rs:2047-2051`, and the placement is right (`:2052-2056` re-derives
+  `returned_local` from the **packed** operand; safe when the pack no-ops).
+  ⛔⛔ **BLOCKING-1 · THE REPLACEMENT CONTROL IS FALSIFIED TOO — THE SAME MOVE ONE LEVEL DOWN.** The
+  `Callable`-specific claim is false on **both lanes**: `Option[Option[String]]` in the *identical shape to
+  `t0971`'s repro* leaks **42 B / 1**, and `Result[String,String]` on a **call result** leaks **42 B / 1** —
+  both claimed CLEAN. The LOCAL-scrutinee form and the flat `Some(s)` control are genuinely clean, so the
+  loop is not the source. ⇒ **`t0972`'s axis is REAL but NOT `Callable`-specific — it UNDER-SCOPES a general
+  defect**, and **`t0971`'s MECHANISM *is* `Callable`-specific** (`Option__Option__GorgetString__drop` is
+  emitted; the `Callable` one has **zero** hits) **but its filed repro CONFLATES it with the match-move-out
+  leak, which is not.** The clean discriminator is the **NO-MATCH** form: **8 B for `Callable`, CLEAN for
+  `String`.** ⚡ Widened `scope`/`mechanism` lines on the two existing items — **not new filings.**
+  ⛔ **AND THE REVIEWER'S FRAMING IS WHY THIS BLOCKS:** *"the block's whole rhetorical weight rests on having
+  JUST corrected a control that was generalised from one cell. Ship it as-is and the owner reads a corrected
+  paragraph that REPEATS THE ERROR IT CORRECTS."* **Third generation of one error class.**
+  ⛔ **BLOCKING-2 · `DONE.md` OVERCLAIMS READINESS #4.** *"every one of the six is behaviourally pinned"* is
+  **false for site 5** — neutralising it by line leaves the fixture **rc 0 with full correct output**. The
+  cause is **STRUCTURAL, not accidental**: every `lower_prelude_variant_payload` caller goes on to
+  `emit_enum_init_owned`, so **site 3 packs whatever site 5 didn't.** ⚡ **Site 5 IS pinned — by the
+  ARM-COUNT LINT, which would go 5≠6.** Say "five behaviourally pinned, the sixth by the lint", or add the
+  cell. ⊕ The reviewer neutralised **all six by line**: 1, 2, 3, 4 and 6 each take the fixture to rc 139.
+  ✅ **ON LEAVING THE FALSIFIED CONTROL IN THE BLOCK, THE REVIEWER AGREES AND SAYS KEEP THE PATTERN** — it is
+  the reasoning the owner was going to rule on, the measured rows sit beneath it, **and deleting it would
+  hide the one thing the owner needs to see.**
+  ✅ **Verified clean:** all four isolated cells reproduce · **144 B / 16 allocations on BOTH lanes** ·
+  in-situ attribution holds for **both** items · both filings durable, `#[ignore]`d, RED at 8 B/1 on C and
+  LLVM · blast radius `throws` **45/0 on both lanes** · **SH lane MATCHes with a driver rebuilt at HEAD,
+  zero parity inflow** · bare gates `--lib` 1185/0, `--test lints` 219/0, `-p ggdef` 187+7/0 · **the helper
+  uses typed predicates on both sides — no name matching** — and `extract_result_field_types` is total, so
+  site 6 cannot panic.
+
 - **⛔⛔ A1-I · PASS 3 — THE DEFECT IS WORSE THAN A CRASH, AND MY GUARD RULING IS DISPROVEN.** 3 blocking,
   folded as ADDENDUM 3; **pass 4 launched.** ⭐ Pass 3 states explicitly this is **NOT a "review harder"
   case** — the spine (carrier #1 on `TypeMetadata`, the `ClosureCallSig` route, the A1/A2 split) **is sound
