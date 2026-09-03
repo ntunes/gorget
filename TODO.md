@@ -490,6 +490,45 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **⛔ A1-I · PASS 1 — 2 BLOCKING, 6 SCOPE. Headline REPRODUCES; carrier #1's host SIGNED OFF; the split
+  VERIFIED STRUCTURAL. Folded as ADDENDUM 1; streak reset, pass 2 launched, SCOPED to closing the census.**
+  ⭐ **THE CAUSAL CHAIN IS NOW PROVEN, NOT INFERRED** — a **LINE-ANCHORED** probe (the Core #13 rule added
+  this round) editing **only** `insts.rs:551` gives **rc 0 on C AND LLVM**. Emitted C shows the colliding
+  spelling passing `__gg___Closure_0 __s5 = {0}` — **a ZEROED 1-BYTE env** — then calling through
+  `((void**)__v3)[0]`, **a null fn_ptr read past the end of a 1-byte object.** ⊕ SIX Q#1 settled: `call` has
+  **no reserved status in the ledger** and ggdef executes it correctly ⇒ **a defect, not a ratified
+  asymmetry.**
+  ⛔ **B1 · THE BRIEF NEVER NAMED THE CARRIER THAT RETIRES THE HEADLINE SITE — AND CARRIER #3 CANNOT REACH
+  IT.** `FuncLowering` holds the CURRENT function only; no `&[LirFunction]`, no handle to `gir.functions`.
+  ⭐ **But the route exists and was found: `FuncLowering.closure_call_sigs` is ALREADY a per-function typed
+  sidecar, and its `skip` field at `lir/lower/mod.rs:257` is LITERALLY `takes_env` UNDER ANOTHER NAME.**
+  ⚠ It is keyed by EVERY GIR fn name, so `contains_key` alone is **not** a discriminator.
+  ⛔⛔ **B2 · THE CENSUS DOES NOT CLOSE — A FOURTH CONVENTION, INVISIBLE TO ALL FOUR WITNESSES.**
+  **The witnesses are a SELECTION BY CONSTRUCTION** — W1 post-filters on a fixed keyword list, so anything
+  outside it cannot appear, and its `== *"` regex cannot see `matches!` arm lists. Found outside all four:
+  **`lir/queries.rs:49-54` `is_spawn_wrapper`** with FOUR more prefixes, where **`__spawn_wrap_<struct>` is
+  minted FROM THE CLOSURE ENV STRUCT NAME** (`exprs/spawn.rs:387`; the SH spells it
+  `__spawn_wrap___Closure_N`). ⛔ **THIS CENSUS HAS BEEN A SELECTION FIVE TIMES RUNNING**, and the brief
+  never assigns four W1 rows to any convention, so its totals are **not checkable.** **Readiness item 2 fails.**
+  ⭐ **TWO AXIS CELLS THE BRIEF LACKED:** a **STORED closure variable is GREEN** — **SIX Q#6, green for an
+  UNRELATED reason** (the slot is materialised at the `let`), **so a variable-only fixture would be
+  ACCIDENTALLY CORRECT and prove nothing** — and **`equip X with Trait:` ALSO FAULTS.**
+  ⛔ **S3 · THE GUARD SPEC CANNOT CATCH ITS OWN CLASS AS WRITTEN.** §5 names four PREFIXES but not the
+  PREDICATE SHAPES, **and the defect that opened this track is a `contains(…)`, which no `starts_with` regex
+  sees** — the very blindness §5 diagnoses in the existing ratchet. ⊕ **That ratchet is blinder than
+  briefed: 0 of 22, not 0 of 12**, and `comm -12` against the census is **EMPTY**.
+  ⛔ **S4 · `--lib 1181/0` IS NOT EVIDENCE** — at pristine HEAD it is **identical** to the prototype figure
+  ⇒ no regression **and no new coverage**; the yield section ships **no exercising fixture.**
+  ⛔ **S2 · `t0681`'s REPRO IS UNWIRED** (`ALLOWED_UNWIRED`, `tests/lints.rs:24262`) — *"an UNWIRED `.gg` is
+  half a repro"*. **Claiming the item MEANS WIRING IT**, and its `cites` have drifted.
+  ⚡ **S5 · AN IDENTICAL-SHAPE SIBLING FAMILY: `llvm/mod.rs:4745-4762` is ~50 `!name.contains("__method")`
+  predicates** against mangled names — **the same shape that produced this SIGSEGV, at 50× the arm count**,
+  gated by `struct_aliases.contains_key` so **no exploit was demonstrated.** **DECISION: not A1-I's scope —
+  FILE as `t1051`, carrying "no exploit demonstrated" rather than "not exploitable".**
+  ⚡ **S6 · STATE WHICH FIX SHIPS: the miscompile is closed BY THE TYPED CARRIER, never by narrowing the
+  predicate** (Core #2 forbids a narrower name-match).
+  ⚡ **A1-I's NEW ID BLOCK: `t1051`–`t1060`** — A1's original `t0967`–`t0976` is fully consumed by A1-M.
+
 - **⭐⭐ A1-I · SCOUT FOUND A LIVE MEMORY-UNSAFETY MISCOMPILE, UNFILED AND UNCOVERED. Brief written
   (`/tmp/brief_A1I.md`); pass 1 launched.**
   **`src/lir/lower/insts.rs:551` tests `!func.contains("__call")` — a SUBSTRING match against a MANGLED USER
