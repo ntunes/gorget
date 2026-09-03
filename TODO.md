@@ -465,6 +465,43 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **✅ H · EXECUTOR RETURNED — 7 commits on `worktree-agent-af4ec5946c049e114`. OUTPUT-REVIEW LAUNCHED.**
+  `t0966` fix · `t0953`/`t0620` rewire · `t0054` graduation + axis · `t0824` battery lint · convergence
+  regex · `known_gaps` directory lint · `t0953` erratum. Closes **`t0966`, `t0054`, `t0824`**; files
+  **`t0997`** (only ID used — `t0998`–`t1006` unspent). Gates bare: build 0 · `--lib` 0 · `--test lints` 0
+  (**220**) · `security` 0 · `c_runtime` 0 · **`known_gaps_census.sh --check` REAL_EXIT 1 → 0** ·
+  `staging_move_burndown.sh --check` 0.
+  ⭐ **FIRE COUNTS, ALL BURNED TO ZERO:** scratch-dir terminations **21 → 0** (18 raw + 3 `-> !` helper
+  calls) — **exactly the reviewers' independent figure** · directory-arm lint **1 → 0** (11 dirs, zero
+  collateral as predicted) · battery lint **3 → 0**.
+  ⭐ **NINE GUARDS SHOWN RED ON DELIBERATELY BROKEN VARIANTS**, including the two the design turned on: a
+  `-> !` wrapper re-added and called (**the leak's original spelling**), and BOTH broken counters against
+  the **dot-prefixed** decoy. ⊕ **Each new guard also carries a SCANNER-ALIVE assertion** (`scopes >= 3`,
+  `dirs_seen >= 10`, `checked >= 10`) **so it cannot green on a stopped parser** — a class nobody briefed.
+  ⭐ **THE BRIEF WAS WRONG IN FIVE PLACES AND THE EXECUTOR SAID SO.** (1) `propagate_child_status` **cannot
+  survive as a wrapper** — with all three arms fixed it has zero callers and `-D warnings` makes it a hard
+  error, so it is **DELETED** and the `-> !` inventory is **1, not 2**; ADDENDUM 2 BLOCKING A's worry is
+  moot, though the lint still enumerates the class repo-wide with a pinned count. (2) **`t0054`'s own
+  bisection was over-specified** — it called the `match` arm the discriminator; the axis shows **every
+  non-`int` cell except the three `bare` ones fails, `if` included**. (3) SCOPE F's "23 candidates" is
+  rule-dependent — the executor's rule returns **39**, split 30 loud / 9 silent, **7 of the 9 false
+  positives of the word "leak"**; two real residuals, all 39 dispositioned in `t0997`.
+  ⚡⚡ **(4) IS A METHODOLOGY FINDING AND IT IS NOW A RULE.** The executor's own verification probe was wrong
+  twice before it was right: `lower_rethrow_expr` carries the sibling guard and spells
+  `ctx.set_owned(builder, err_local);` **identically apart from indentation**, so a SUBSTRING-anchored
+  deliberate break silently hit the **sibling** and reported *"no-op `set_owned` → still green, the brief is
+  wrong."* **The brief was right; the probe was wrong.** ⇒ **AGENTS.md Core #13 SHARPENED IN PLACE: anchor a
+  deliberate break BY LINE, never by substring.** Same class as reading an exit code through a pipe.
+  ⛔ **COUNTING CORRECTION — DO NOT BANK AS R49 CONVERGENCE.** `convergence.sh` known_gaps **21 → 16** is the
+  bare-directory spelling fix, **not** five closures; zero newly-open gaps hidden.
+  ⚠ **CROSS-TRACK, relayed to F:** `beginner_map` was **not deleted or moved**; the directory lint caught it,
+  `ALLOWED_UNWIRED` was forbidden, and a red tree is unshippable, so H **wired ONE cell** (`p18.gg`, the only
+  one whose intended output is not a design question) and annotated `t0018` with what remains owed.
+  **F can revert it with one `continue` if it wants a different disposition.**
+  ✅ H re-measured the leak on **E's rewritten** `hof_call_env_leak_unbounded` body: **identical** — both
+  spellings are non-capturing, so nothing in the pin rested on the `it` spelling. **The census went green
+  exactly as Track C predicted.**
+
 - **✅ E · OUTPUT-REVIEW: INTEGRATE, WITH TWO PRECONDITIONS — both sent back to E's executor.**
   All THREE mandatory gates PASS. Every gate re-run bare by the reviewer: `check --all-targets` · `--lib` ·
   `--test lints` · `spec_conformance` · `security` · `-p ggdef` · `build --release` ·
@@ -480,10 +517,13 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   ✅ **`t0977` PROVEN NOT INTRODUCED BY THIS DIFF, by construction** — its repro contains no `it` token, and
   every `src/` hunk removes only `Expr::It`/`ImplicitClosure` arms. ⊕ It is **mutually consistent** with
   `t0954`, whose own example IS `t0977`'s cell 4.
-  ✅ **ALL THREE RATCHETS MOVED DOWN** (`LEAK_CEILING` 294→293, `CLASS_PAIRS` 501→500, `RECORDS` 2297→2286),
-  `figures.py --validate` 0 errors, `--scan` 0 discrepancies. ⊕ **The reviewer ran the two grow-only floors
-  the executor did NOT re-measure** — `resolver_comparison` 1957 vs floor 1865, `c_emit_comparison` 1629 vs
-  1283 — because deleting a MATCHING fixture lowers them, unlike the ceiling.
+  ✅ **ALL THREE LEAK RATCHETS MOVED DOWN** (`LEAK_CEILING`, `LEAK_CLASS_PAIRS`, `LEAK_RECORDS` — read the
+  current values off `tests/lints.rs`; `UNCITED_LEAK_CLASS_PAIRS` correctly held, the deleted pair being
+  cited). `python3 scripts/figures.py --validate` 0 errors, `--scan` 0 discrepancies. ⊕ **The reviewer ran
+  the two grow-only `matched` floors the executor did NOT re-measure** —
+  `cargo test --test integration --release resolver_comparison` and `… c_emit_comparison`, each against
+  `RESOLVER_MATCH_FLOOR` / `C_EMIT_MATCH_FLOOR` — **both hold with wide slack. The direction is the point:
+  deleting a MATCHING fixture LOWERS a floor, unlike the ceiling, which is invariant.**
   ⛔ **PRECONDITION 1 — cite **D54**.** The lint `ratified_decisions_are_cited_in_the_spec` reds at 26 vs
   `BUDGET = 25`, which **already sits at ZERO headroom** (the reviewer re-implemented the population parse
   and reproduced the 25-name roster exactly). Citation goes in E's own paragraph at
@@ -561,8 +601,9 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   as an `#[ignore]`d cell asserting the **CORRECT** value, cited to `t0704`. **That is Core #8 self-applied.**
   ⚡⚡ **NEW OWNER ASK — LEAK INFLOW, and the executor refused to slip it under a standing ruling.**
   `callable_literal_at_consuming_positions` leaks **16 records / 144 B** (`__gorget_closure_env_alloc`),
-  identical C and LLVM. `LEAK_CEILING` 294→295, `LEAK_RECORDS` 2297→2313, `LEAK_CLASS_PAIRS` 501→502,
-  mirrored in `figures.db`. **The class is old; the BYTES ARE NEW** — at HEAD those positions never
+  identical C and LLVM. **All three leak ratchets move UP** (`LEAK_CEILING`, `LEAK_RECORDS`,
+  `LEAK_CLASS_PAIRS` in `tests/lints.rs`, mirrored in `scripts/figures.db` — regenerate with
+  `python3 scripts/figures.py --validate`). **The class is old; the BYTES ARE NEW** — at HEAD those positions never
   constructed the closure, so they allocated nothing. The 2026-09-02 ruling admits *"pre-existing leaks newly
   made VISIBLE by a graduation"* **and only those**; *"a row whose leak is genuinely NEW inflow is still an
   owner ask."* **The output-review adjudicates first; if it agrees the bytes are new, this goes to the owner.**
