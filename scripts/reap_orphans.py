@@ -490,7 +490,14 @@ def self_test() -> int:
         return raw[raw.rfind(")") + 2:].split()[0] != "Z"
 
     try:
-        dead_owner = 999_999
+        # SEED BELOW pid_max, NOT AT A FIXED 999_999. The owner-tag parser
+        # rejects any component above this box's pid_max as a creation stamp
+        # rather than a pid, so a sentinel above the bound is classified
+        # UNDECIDABLE and the RED/PGRP controls silently stop testing the
+        # predicate they were planted for. Measured: on a container with
+        # pid_max=99999 that is 5 of the 16 assertions failing for a reason
+        # that has nothing to do with the reaper.
+        dead_owner = min(999_999, _pid_max())
         while proc_start_epoch(dead_owner) is not None:
             dead_owner -= 1
 
