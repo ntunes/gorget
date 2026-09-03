@@ -1502,6 +1502,10 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t0927`](todo/t0927.md) **HIGH** — 🆕🐛 [HIGH — a closure that CAPTURES a Callable[T] parameter cannot be compiled AT ALL, on either backend; found R48 Track…
 - [`t0940`](todo/t0940.md) **MED** — 🆕🐛 [MED — Core #10 SILENT DROP: gg check ACCEPTS, the C build dies] Guard[T].clone() lowers to a call on gorget_guard_cl…
 - [`t0947`](todo/t0947.md) **HIGH** — 🆕🐛 [HIGH — Core #10 SILENT DROP of user STATEMENTS, gg check clean, both backends; live in shipped stdlib; found 2026-09…
+### High
+
+
+- [`t1017`](todo/t1017.md) **HIGH** — 🆕🚨 [HIGH — TWO SILENT WRONG-ANSWER PATHS ON THE SAME TEN LINES, gg check CLEAN, BOTH BACKENDS; found
 ### Medium
 
 
