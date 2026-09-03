@@ -456,7 +456,7 @@ fmt.max_width.input = none
 # of bare zeros and commit-hash tails collide with 79. The uniqueness scanner
 # cannot police them. Mirrors still exact-pin the literals.
 row = agents_md.heading_count
-agents_md.heading_count.value = 79
+agents_md.heading_count.value = 80
 agents_md.heading_count.unit = AGENTS.md extractor-hit headings
 agents_md.heading_count.polarity = exact-pin
 agents_md.heading_count.provenance = derived
@@ -466,7 +466,7 @@ agents_md.heading_count.regen_extract = ^(?P<value>[0-9]+)
 agents_md.heading_count.regen_fires = ^[0-9]+$
 agents_md.heading_count.regen_env = none
 agents_md.heading_count.instrument = grep over the count const
-agents_md.heading_count.measured_at = db9ec6a13
+agents_md.heading_count.measured_at = a1eaba9c1
 agents_md.heading_count.home = tests/lints.rs:AGENTS_MD_HEADING_INVENTORY
 agents_md.heading_count.scan = none
 agents_md.heading_count.caveat = a heading inventory does not pin clauses; scan cannot police a 2-digit value

@@ -251,6 +251,8 @@ When you launch sub-agents via the `Agent` tool, the following rules are **non-n
 
 3. **Stage explicitly by file name.** Brief every agent: `git add <specific files>` only — NEVER `git add -a`, `git add .`, or `git commit -a`. A sweeping stage clobbers other agents' uncommitted work.
 
+3b. **THE ORCHESTRATOR ALLOCATES `todo/` IDs; a track never picks its own.** Issue each executor a private, disjoint ID BLOCK in its brief and extend it on request — concurrent tracks otherwise collide on the same next-free id (owner 2026-09-03; the collision is real, it forced a renumber and left `t0946` permanently unused).
+
 4. **Parent drives the integration sweep, not agents.** Agents run `cargo build` + `--lib` + targeted tests only; the 15-20 min full sweep is the parent's job.
 
 5. **Brief file zones when running agents in parallel — disjointness is cheap insurance, NOT a hard requirement.** Tell each agent which files the others are touching; do not defer a worthwhile parallel track to avoid overlap. When two tracks must touch one file, brief EACH on the other's exact edit regions. Scout the overlap first.

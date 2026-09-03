@@ -9700,7 +9700,7 @@ fn agents_md_size_ratchet() {
 ///
 /// Inflow: a new token-count lint is a `scripts/figures.db` row in the
 /// same commit, or it is rejected.
-const AGENTS_MD_HEADING_COUNT: usize = 79;
+const AGENTS_MD_HEADING_COUNT: usize = 80;
 
 const AGENTS_MD_HEADING_INVENTORY: &[(&str, &str)] = &[
     ("H-TITLE", "# Gorget Compiler"),
@@ -9757,6 +9757,7 @@ const AGENTS_MD_HEADING_INVENTORY: &[(&str, &str)] = &[
     ("MA-1", "1. **Always pass `isolation: \"worktree\"`.**"),
     ("MA-2", "2. **Brief the agent to verify its worktree on entry.**"),
     ("MA-3", "3. **Stage explicitly by file name.**"),
+    ("MA-3b", "3b. **THE ORCHESTRATOR ALLOCATES `todo/` IDs; a track never picks its own.**"),
     ("MA-4", "4. **Parent drives the integration sweep, not agents.**"),
     ("MA-5", "5. **Brief file zones when running agents in parallel — disjointness is cheap insurance, NOT a hard requirement.**"),
     ("MA-6", "6. **Prune a track's worktrees"),
