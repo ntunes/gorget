@@ -224,6 +224,39 @@ const SELFHOST_MATCH_FLOOR: usize = 236;
 /// raises all four constants together.
 const MIN_FIXTURES: usize = 237;
 
+// ── THE RELATION ABOVE IS NOW ENFORCED, NOT ASSERTED IN PROSE (Core #14) ──
+// The doc comment on MIN_FIXTURES claims "It equals the C and LLVM MATCH
+// floors … adding a fixture raises all four constants together". That was an
+// invariant-asserting comment with NOTHING behind it, sitting on the exact
+// four constants that then drifted for two fixtures at R48. Core #14 gives two
+// options — enforce it or delete it — and it is worth enforcing: C and LLVM are
+// the reference lanes, and a spectest they cannot reproduce is a reference-grade
+// defect (Core #8), not a floor to quietly lower.
+//
+// These are CONST asserts on purpose: they fail at COMPILE time, so unlike a
+// `#[test]` they cannot be skipped by a name filter, cannot be `#[ignore]`d,
+// and cannot false-RED under load.
+//
+// ⚠ IF YOU LAND A SPECTEST THE C OR LLVM LANE CANNOT MATCH, this breaks the
+// build — deliberately. Fix the lane, or make the exemption an explicit,
+// commented decision here. Do not "fix" it by lowering a floor silently; that
+// is the drift this guard exists to stop.
+const _: () = assert!(
+    C_MATCH_FLOOR == MIN_FIXTURES,
+    "C_MATCH_FLOOR must equal MIN_FIXTURES: the C lane is a reference lane and      must reproduce every committed spectest. Fix the C lane or amend this      guard deliberately."
+);
+const _: () = assert!(
+    LLVM_MATCH_FLOOR == MIN_FIXTURES,
+    "LLVM_MATCH_FLOOR must equal MIN_FIXTURES: the LLVM lane is a reference lane      and must reproduce every committed spectest. Fix the LLVM lane or amend      this guard deliberately."
+);
+// The self-host is the lane still catching up, so its floor is `<=` rather than
+// `==` — but it may never EXCEED the corpus, which would mean a floor seeded
+// from a stale, larger corpus.
+const _: () = assert!(
+    SELFHOST_MATCH_FLOOR <= MIN_FIXTURES,
+    "SELFHOST_MATCH_FLOOR exceeds MIN_FIXTURES — a floor cannot require more      matches than the corpus has fixtures."
+);
+
 // ─────────────────────────── infrastructure ────────────────────────────
 // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs
 // (and there is no tests/common/ in this repo), so integration's helpers
@@ -634,11 +667,26 @@ fn run_lane(
         .collect();
     fixtures.sort();
 
-    // Guard the glob: an empty (or shrunken) corpus must not make a lane
-    // vacuously green.
-    assert!(
-        fixtures.len() >= MIN_FIXTURES,
-        "expected >= {MIN_FIXTURES} run fixtures in spectests/run, found {}",
+    // Guard the glob. ⚠ THIS IS AN EXACT PIN, NOT A FLOOR, AND THE `>=` IT
+    // REPLACED WAS BLIND IN THE DIRECTION THE CORPUS ACTUALLY MOVES.
+    // A `>=` guard catches only a SHRUNKEN corpus; adding a fixture makes its
+    // left side bigger, so the assert gets MORE true. R48's close measured that
+    // exactly: `reject_partial_move_field.gg` and `reject_partial_move_self.gg`
+    // landed with no ratchet and all four constants stayed green for two
+    // fixtures. Corpus SIZE is deterministic (a file count, not a timing-
+    // sensitive measurement), so `==` is safe here where it would not be for
+    // the parity MATCH counts — and it catches growth AND shrink.
+    assert_eq!(
+        fixtures.len(),
+        MIN_FIXTURES,
+        "spectests/run has {} `.gg` seeds but MIN_FIXTURES is {MIN_FIXTURES}.\n\n\
+         ADDING OR REMOVING A SPECTEST RATCHETS ALL FOUR CONSTANTS TOGETHER \
+         (tests/spec_conformance.rs):\n  \
+         MIN_FIXTURES, C_MATCH_FLOOR, LLVM_MATCH_FLOOR, SELFHOST_MATCH_FLOOR\n\n\
+         Regenerate the count with `ls spectests/run/*.gg | wc -l`, then run\n  \
+         cargo test --test spec_conformance -- --test-threads=1 --nocapture\n\
+         and seed each lane floor from the `total=… MATCH=…` line it prints.\n\
+         This duty attaches to the FIXTURE, not to any track pipeline.",
         fixtures.len()
     );
 
