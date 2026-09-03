@@ -461,6 +461,36 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   hand-written import lines. ⚠ **Verify the "parallel vectors because Gorget has no tuple fields"
   workaround** (`self_host_lowerer/lower.gg:246-250`, `lir_ssa.gg:82-86`) before deleting it — if
   tuple-typed fields really fail it is a robustness FILING, if not it is a fossil (showcase rule 1).
+- **⛔ H · PASS 2 RETURNED 2 BLOCKING + 7 SCOPE — STREAK RESET TO 0; pass 3 launched.** Both blocking
+  findings are **SIX Q#2 — a guard that cannot catch its own class**, folded as `/tmp/brief_H.md`
+  ADDENDUM 2 (precedence: 2 > 1 > LATE CORRECTION > BODY).
+  1. ⛔ **The lint misses the `-> !` HELPER spelling, which is the leak's ORIGINAL spelling.**
+     `propagate_child_status` is `-> !` at `src/main.rs:40`; its call sites `:2633` `:3335` `:3715` sit
+     inside all three destructor-bearing scopes. A `process::exit(`-only grep misses **3 of 21**, and the
+     fix KEEPS the helper as a wrapper — so the next site reintroduces the class and the guard stays green.
+     ⚡ The repo already has the convention (`src/main.rs:51` `LINT-CHOKEPOINT-FALLBACK`): enumerate the
+     `-> !` fns, never special-case the one name (Core #2).
+  2. ⛔ **The `gg build` negative control is VACUOUS, and `t0966` states a FALSE mechanism.** `gg build`
+     **never creates a tempdir** — `tempfile` appears at `src/main.rs:2596/3288/3510` only, and the build
+     arm passes `None` for scratch (`:3219`). So `t0966`'s *"its tempdir is dropped normally"* and its
+     `t0840` corroboration are false (Core #5): **it leaks 0 because it MAKES NONE.** The cell reads zero
+     pre-fix, post-fix, and with a deliberately broken counter — **a control that cannot fail is not a
+     control.** Executor owes the item-correction AND a seeded-decoy control in the same commit.
+  ✅ **The lint sibling is now PROTOTYPED with a real fire count** (21 at HEAD → 18 with the proto patch)
+  and it **independently rediscovers S2**: the surviving row is `src/main.rs:3343`. S3's escalation is
+  discharged; no further design work on the lint.
+  ⭐ **SCOPE folded:** conversion set is **21 edits (18 raw + 3 helper), 13 `unwrap_or_else`** — S1's
+  *"19 of 35"* counted a set S9 forbids touching · `impl Drop` audit CLEAN (none of `RawModeGuard` /
+  `CallArgGuard` / `ExprDepthGuard` is live in the three scopes — the premise that makes the IIFE safe, and
+  no pass had stated it) · Costume 2 needs the `return` spelling **and** an expected-COUNT assertion, plus
+  a `gg test` integration test (both existing ones are `gg run`) · `t0054` is `lane = "self-host"` so
+  `self_host_gaps/` would dodge its own ask — hand-run the SH lane · **B3's 16 cells all run at HEAD, no
+  ICE, and two `Vector[String]` match cells have NO SUBJECT** (Gorget has no vector pattern; `match e.len()`
+  moves the scrutinee) — name the omission, never substitute · `if matches!(err_mode` has **TWO** sites
+  (`exprs/mod.rs:4698` + `:4863`), the brief cited its own list · **the brief's targeted gate goes RED as
+  written** — needs both timeout knobs, and the filter substring-matches `sh_*` · S6's "14 sites" is stale
+  (**18**) · `.gorget/` is gitignored so B5's collision is result-file interference only.
+
 - **✅ H · HOLD LIFTED — OWNER, 2026-09-03: *"please unblock track H. the other agent work is not
   usable."*** The external `t0824` fix did not arrive.
   ⭐ **ALL H4 PREMISES RE-VERIFIED AT HEAD ON RESUME (the rule this hold set for itself) — EVERY ONE HOLDS
