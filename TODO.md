@@ -104,20 +104,102 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   obligation: parity is no longer the north star, but SH stays in sync.
 - **E · REMOVE THE IMPLICIT `it` CLOSURE PARAMETER — ⚡ OWNER-RULED 2026-09-03: REMOVE.** *"Remove it. Do
   not rename"* — every structural cost (body scan, third closure spelling, shadowing trap, lane
-  divergence) survives a rename. Scope is in the ease assessment's §OPEN, with **TWO CORRECTIONS measured
-  2026-09-03 that the assessment got wrong and a brief must not inherit**:
-  - ⚠ **The self-host is NOT untouched.** The assessment's *"self-host: 0"* counted USAGE. The self-host
-    **IMPLEMENTS** `it` in **91** places (`EIt` / `KwIt` / `expr_contains_it` across
-    `tests/fixtures/self_host_*/*.gg`). That is the removal work, and it is the larger half.
-  - ⚠ **Fixture usage is 12 code lines in 3 files, not 4 in 2.** The miss is
-    `hof_implicit_it_collection_axis.gg` (**8** lines) — the file `t0963` names as *"written to catch this
-    shape on the self-host lane"*.
-  - ⭐ **THEREFORE `t0963` IS DISSOLVED BY THIS TRACK, NOT FIXED BY TRACK B.** Rust `gg` miscompiles
-    `flat_map(it)` (`1 0 2 0` vs the self-host's correct `1 1 2 2`) — remove the construct and the defect
-    has no spelling. Same for `known_gaps/flat_map_implicit_it_zeroes.gg` and
-    `known_gaps/sh_comprehension_bodied_implicit_it.gg`. **Sequence E BEFORE B closes `t0963`, or B wastes
-    a fix on a construct that is leaving.** Rust footprint: 22 files, `src/parser/expr.rs` alone is 99
-    occurrences; rustc exhaustiveness is the independent witness (delete the variants, follow the errors).
+  divergence) survives a rename. ✅ **SCOUTED AND PROTOTYPED END-TO-END: the Rust half is DONE and GREEN**
+  — `/tmp/recover_trackE_full.patch`, 23 files, **+34 / −540**, `cargo test --lib` **1181 passed / 0
+  failed**, `cargo test -p ggdef` 187+ green with **ZERO ggdef edits**.
+  ⭐ **THE REMOVAL IS STRUCTURAL, NOT JUST EMPIRICAL — both AST nodes have exactly ONE producer:**
+  `Expr::It` ← `src/parser/expr.rs:496` (only from `Token::Keyword(Keyword::It)`) and
+  `Expr::ImplicitClosure` ← `:2290` (only when `contains_it(&value)`). `ImplicitClosure` is reachable ONLY
+  through `Expr::It`, which is reachable ONLY through the keyword. **Delete the keyword and both become
+  unconstructible.**
+  ⚠ **THREE OF MY NUMBERS WERE WRONG; the scout's win and are used here.** Self-host is **152 occurrences
+  across 25 REAL files**, not 91 — I counted symlinks as content and missed `expr_has_it` /
+  `EImplicitClosure`. Fixture usage is **22 lines in 11 files**, not 12 in 3 — I missed four
+  `robustness_map/` cells, `known_gaps/hof_call_env_leak_unbounded.gg` and `fmt_author_parens/wrappers.gg`,
+  and **those six carry the round's best evidence**. (Rust: 22 files / 99 in `expr.rs` — both confirmed.)
+  ⛔ **AND MY "rustc exhaustiveness is the independent witness" INSTRUCTION WAS WRONG AS A TOTAL CENSUS.**
+  Deleting the variants yields `E0599`, never `E0004` — it enumerates the AST-arm class COMPLETELY and
+  **nothing else**. **SIX further sites are STRING-ANCHORED and invisible to the type checker**, appearing
+  only when the tests RUN: `tests/lints.rs::{expr_stmt_walker_population_is_pinned` (loses 2 rows),
+  `fmt_author_paren_dedup_class` (caller count 2→1), `formatter_collection_literal_interior_hook_dispatch`,
+  `d29_propagate_walker_arm_coverage` (arm count 2→1), `doc_source_citations_name_the_right_line` (**8
+  citations in `docs/devbook/05-formatter.md` drift**)`}` and `src/parser/tests.rs::test_var_decl_with_it_binding_rejected`.
+  ⊕ Also invisible: **removing a struct field does not orphan its doc comment** — the scout's
+  `call_arg_depth` removal silently reattached its `///` to `expr_depth`, giving that field two doc
+  comments under `warnings = "deny"`. ⇒ Gate order: `cargo check --all-targets --message-format=short`
+  → `cargo test --test lints` → `cargo test --lib`.
+  ⭐ **DISSOLVES THREE ITEMS OUTRIGHT PLUS ONE BULLET, not just `t0963`:** `t0963` (Rust `gg` miscompiles
+  `flat_map(it)`) · **`t0962`** (self-host over-rejects comprehension-bodied implicit-`it` — the whole
+  class IS implicit-`it` HOF args) · **`t0961`** (self-host has TWO implicit-`it` detectors, a split
+  decision — both deleted) · and the `t0310` bullet *"the `it`-lambda tail dodges the drop-purity return
+  check"*, which cites `Expr::It` + `implicit_it_type` by name. ⚠ **`t0310` is the RATIFIED
+  enforcement-wave plan — strike ONLY that bullet, with a note, never the item.** Also answers the open
+  sub-question in `known_gaps/compound_yield_race_rhs_walker_underrecurses.gg` (17 hiding places → 16).
+  ⊕ **The scout ASKED SIX QUESTIONS #3 of the dissolution rather than assuming it.** `t0963`'s repro
+  samples a SELECTION — typed closure and named fn, but not the untyped `(v): v`, the nearest sibling. If
+  the real axis were "untyped identity closure", removal would RELOCATE the bug. Measured: typed ✅ named ✅
+  **untyped `(v): v` → `1 1 2 2` ✅**. The defect is unique to the `Expr::It` lowering path.
+  ⚡ **TRANSITION SURFACE — the scout's recommendation, and option (b) as I framed it is SELF-DEFEATING.**
+  Keeping `it` reserved to carry a fix-it means `for it in cart:` still fails, forfeiting the `t0018` win.
+  **Recommend (a) ordinary identifier PLUS an `it`-keyed note on `E_UndefinedName`** — *"`it` is no longer
+  a keyword; write an explicit closure, e.g. `(x): x * 2`"* — slot already exists at
+  `src/semantic/errors.rs:1160`/`:1192`; it should DISPLACE the unhelpful *"did you mean 'xs'?"*.
+  Measured post-removal: `for it in cart:` **runs** (prints `6`; `ex_shopping_cart.gg` prints its expected
+  output exactly) and `xs.map(it * 2)` gives ONE clean spanned error. ⊕ Brief the reviewers that a
+  diagnostic keyed on the string `it` is NOT a "No name matching" violation (that rule governs SEMANTIC
+  decisions in the pipeline, not diagnostic text) so nobody has to adjudicate it cold.
+  ⭐ **FIVE ARGUMENTS FOR THE RULING THE ASSESSMENT DID NOT HAVE — the owner asked to be told, not agreed
+  with, and the evidence came back STRONGER:**
+  1. **`it` is MEMORY-UNSAFE on three `robustness_map` cells TODAY.** Every implicit-`it` cell:
+     `hof_implicit_it` (selfhost **TRAP**, asan **SANITIZE-FAIL**) · `hof_filter_implicit_it` (**WRONG** +
+     **SANITIZE-FAIL**) · `doc_ld_implicit_it` (**WRONG** + **SANITIZE-FAIL**) — all three DIVERGENT. Top
+     of the owner's own severity ladder on every cell that exercises it.
+  2. **`docs/language-design.md:1713` rejects `$1`/`$2` for the reasons `it` INCURS** — *"introduce arity
+     ambiguity (the compiler must scan the body to determine parameter count)"*. That scan IS
+     `contains_it`: **212 lines of five mutually-recursive full-AST walkers with exactly ONE call site.**
+  3. **The keyword already cost a revert and a silent miscompile** — `src/parser/stmt.rs:678-686`: commit
+     `089b8e48` accepted `it` as a binding; `int it = 42; print(it)` **printed garbage** with only an
+     unused-variable warning. The current hard parse error is the scar tissue.
+  4. **A DOCUMENTED §7.6 example has NEVER worked.** `matrix.map(it.map(it * 2))` (`language-design.md:1732`):
+     `gg check` says *"OK: no semantic errors"*, `gg run` dies with raw **C compiler** errors. Check-clean,
+     codegen-broken, UNFILED — a Core #10 hole in a construct the design doc advertises.
+  5. **Zero real users** — `lib/std`, `lib/xtd`, `examples/`, `spec/`: not one use. Every occurrence is
+     test corpus or self-host implementation.
+  ⊕ Removal also SHRINKS two structural ratchets and retires the "transparent wrapper" hazard class
+  entirely (`ImplicitClosure` was the ONLY such wrapper).
+  **FIXTURES — the split matters:** DELETE `implicit_it.gg`, `hof_implicit_it_collection_axis.gg`,
+  `known_gaps/flat_map_implicit_it_zeroes.gg`, `known_gaps/sh_comprehension_bodied_implicit_it.gg`,
+  `robustness_map/cells/doc_ld_implicit_it.gg`, `hof_implicit_it.gg`, `hof_filter_implicit_it.gg` + their
+  wired tests (`integration.rs:6493`, `:6513`, `:7348`). **REWRITE, do NOT delete** (the `it` is
+  incidental): `closure_mixed_implicit_explicit_wiring.gg:18` · `fmt_author_parens/wrappers.gg:29-31`
+  (rewrite as an explicit closure so `fmt_author_parens_round_trip_semantic`'s expectation string is
+  UNCHANGED) · `known_gaps/hof_call_env_leak_unbounded.gg:35`. **KEEP** `ex_shopping_cart.gg` and
+  regenerate its MANIFEST row REJECTED→WORKS; rule explicitly on its now-near-duplicate companion
+  `ex_shopping_cart_total.gg`, which exists only to work around the rejection.
+  ⚠ **THE MANIFEST's own `actual` field is STALE** — records 4 errors, measured **10**. Regenerate, never copy.
+  ⚠ **HARD SEQUENCING inside the track:** `integration.rs::format_expr_canonical` carries an `Expr::It` arm
+  labelled *"LANE PARITY, not a spelling preference"* — the Rust and self-host canonical printers must emit
+  identical text, so the Rust arm and the self-host `format.gg` arm come out **in the SAME commit** or
+  `parser_comparison`/`resolver_comparison` diverge. ⚠ `self_host_parser/` and `self_host_resolver/` carry
+  their OWN independent `parser.gg`/`ast.gg`/`format.gg`/`lexer.gg` — **four parser implementations**; 12
+  paths under `self_host_check/`/`self_host_lowerer/` are symlinks and follow automatically.
+  ⚠ **THE SELF-HOST HALF IS SCOPED BUT NOT PROTOTYPED and is the LARGER half** — expect the four
+  independent parser copies plus the `*_comparison` byte-identity constraint to dominate the effort.
+  **DOCS:** `language-design.md` §7.1 (1550-1552), §7.5 table (1709, three tiers → two), **§7.6 DELETED**
+  (1717-1737), comparison table 2197, strays 965/1578/1702/1726/1732 — ⚠ **line 2992 is Jest/Mocha
+  `describe`/`it`, unrelated, LEAVE IT**; `book/05-collections.md:601-602`; `devbook/04-parser-ast.md` (3);
+  `devbook/07-name-resolution.md` (1); `language-reference.md` (5); plus the 8 drifted `devbook/05-formatter.md`
+  citations. ⛔ The D-ledger entry is an **owner ask — NO AGENT EDITS `decisions.md`.**
+  ⊕ **The `d29_propagate_walker_arm_coverage` guard's message enumerates only *(a) routed* and *(b) arm
+  deleted* — it has no case for *walker deleted entirely*. EXTEND the message, do not just lower the count.**
+  ⚠ **CROSS-TRACK COLLISION WITH H:** both touch `known_gaps/hof_call_env_leak_unbounded`. **E owns the
+  `.gg`** (rewriting `it` out — mechanically required); **H owns the assertion** at `integration.rs:6532`.
+  Brief each on the other's exact region.
+  ⭐ **ORPHAN FOUND, and the two scouts disagreed — ARBITRATED 2026-09-03, Scout E is right.** Scout H
+  assumed `hof_call_env_leak_unbounded` was `t0953`'s repro; **NO todo item cites it**
+  (`grep -rln hof_call_env_leak_unbounded todo/` → empty), and `t0953` actually cites
+  `known_gaps/closure_literal_call_arg_env_leak.gg`. So it is an `#[ignore]`d leak repro with **no filed
+  item** — a durable-repro-contract violation. **Track H files it from its own block.**
 - **F · DRIVE THE TWO ROBUSTNESS CORPORA TO GREEN — ⚡ owner-selected. ⚠ RE-SCOPED BY ITS OWN SCOUT: the
   "WIRE IT" HALF IS ALREADY DONE.** Both corpora are ALREADY GATED IN CI — `.github/workflows/ci.yml:96`
   (`--lanes c,llvm`) and `:228` (`--lanes all`). All 288 `t0015` cells are in the manifest as topics
