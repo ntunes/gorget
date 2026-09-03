@@ -71,14 +71,78 @@ fn parse_manifest(body: &str) -> Vec<ManifestRow> {
         .collect()
 }
 
+/// The first-level directories under `tests/fixtures/` that GIT considers part of
+/// this working tree, which is NOT the same set a disk walk returns.
+///
+/// ⚠ THIS LINT SHIPPED WITH A DISK WALK AND IT WAS WRONG, in the worst direction
+/// a guard can be wrong: it was GREEN WHERE NOTHING HAD HAPPENED AND RED WHERE
+/// WORK DID. `tests/fixtures/.gorget/` is a directory of `*.test-results.json`
+/// files that running the fixture suite creates, so the census matched disk in a
+/// fresh worktree and drifted on every machine — and every CI job — that had
+/// actually run the tests.
+///
+/// ⚠ AND `git check-ignore` IS THE WRONG INSTRUMENT, measured rather than
+/// assumed: `tests/fixtures/.gitignore` is deny-all plus an extension allowlist,
+/// and its line 19 `!*/` UN-IGNORES every directory so the file rules can match
+/// inside them. `git check-ignore -q tests/fixtures/.gorget` therefore exits 1 —
+/// NOT ignored — while the file inside it exits 0. An ignore-based filter
+/// excludes nothing here.
+///
+/// ⚠ AND TRACKED-NESS ALONE IS ALSO WRONG: a stray directory of real `.gg`
+/// fixtures nobody has `git add`ed has no tracked files either, and that one MUST
+/// still red — it is exactly the undeclared corpus this manifest exists to catch.
+///
+/// `--cached --others --exclude-standard` is the union that separates them: it
+/// lists TRACKED files plus UNTRACKED-BUT-NOT-IGNORED ones, so a directory
+/// appears iff it holds at least one file git would consider part of this tree.
+/// `.gorget` contributes none and vanishes; the stray contributes its `.gg` and
+/// stays. Verified both ways in the Core #13 probes at the end of this test.
+///
+/// ⚠ RESIDUAL, stated rather than papered over: a directory holding ONLY files
+/// the fixtures allowlist drops — or no files at all — is invisible here. `.gg`
+/// is allowlisted, so no real fixture directory can hide; but that IS the same
+/// silent-skip hazard `tests/fixtures/.gitignore`'s own header warns about at
+/// length, one level up.
 fn first_level_dirs(root: &Path) -> BTreeSet<String> {
-    let dir = root.join("tests/fixtures");
-    fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect()
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "--cached", "--others", "--exclude-standard", "tests/fixtures"])
+        .output()
+        .unwrap_or_else(|e| {
+            panic!(
+                "cannot run `git ls-files` in {}: {e}\n\
+                 The corpus population is defined by git, not by a disk walk — a \
+                 walk cannot tell a fixture directory from a build artefact like \
+                 tests/fixtures/.gorget/.",
+                root.display()
+            )
+        });
+    assert!(
+        out.status.success(),
+        "`git ls-files` failed in {}: {}",
+        root.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let listing = String::from_utf8_lossy(&out.stdout);
+    let dirs: BTreeSet<String> = listing
+        .lines()
+        .filter_map(|l| {
+            // `tests/fixtures/<dir>/…` — anything shallower is a loose fixture
+            // file at the top level, which the manifest does not enumerate.
+            let rest = l.strip_prefix("tests/fixtures/")?;
+            let (first, tail) = rest.split_once('/')?;
+            (!tail.is_empty()).then(|| first.to_string())
+        })
+        .collect();
+    assert!(
+        !dirs.is_empty(),
+        "`git ls-files` returned no directories under tests/fixtures/ in {} — \
+         the census would be vacuously satisfied, so this is an instrument \
+         failure, not an empty corpus.",
+        root.display()
+    );
+    dirs
 }
 
 /// Every `todo/tNNNN` token appearing in a string. The manifest defers real
@@ -121,18 +185,54 @@ fn assert_set_eq(label: &str, left: &BTreeSet<String>, right: &BTreeSet<String>)
     }
 }
 
-/// A THROWAWAY repo root holding `tests/fixtures/<name>/` and nothing else.
+/// A THROWAWAY GIT REPO holding a real fixture directory AND a build-artefact
+/// directory, so the probes can prove the census DISCRIMINATES them.
 ///
-/// The self-probes below claim a property of `first_level_dirs` + set difference,
-/// so they run against a synthetic root and touch no shared state. Writing a
-/// probe directory into the LIVE `tests/fixtures/` would race every other test in
-/// this binary and leave a stray directory behind whenever the process died
-/// inside the window — the mistake `ggdef_corpus_membership_lint.rs` records.
-fn probe_root(name: &str) -> tempfile::TempDir {
+/// ⚠ IT IS A GIT REPO, NOT A BARE TEMPDIR, AND THAT IS THE POINT. The census is
+/// now `git ls-files --cached --others --exclude-standard`, so a probe root with
+/// no git in it cannot exercise the property at all — and the earlier bare-dir
+/// probe is exactly why the `.gorget` defect shipped: it proved set-difference
+/// arithmetic while the real question was WHICH DIRECTORIES ENTER THE SET.
+///
+/// The `.gitignore` written here mirrors the real one's shape — deny-all, `!*/`
+/// to un-ignore directories, then an extension allowlist — because that shape is
+/// what makes `git check-ignore` useless on the directory itself.
+///
+/// Synthetic root, never the LIVE `tests/fixtures/`: writing a probe directory
+/// there would race every other test in this binary and leave a stray behind
+/// whenever the process died inside the window (the mistake
+/// `ggdef_corpus_membership_lint.rs` records).
+fn probe_root(real: &str, artefact: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("probe tempdir");
-    let d = dir.path().join("tests/fixtures").join(name);
-    fs::create_dir_all(&d).unwrap_or_else(|e| panic!("create {}: {e}", d.display()));
-    fs::write(d.join("probe.gg"), "void main():\n    print(1)\n").expect("write probe fixture");
+    let fixtures = dir.path().join("tests/fixtures");
+    fs::create_dir_all(&fixtures).expect("create probe fixtures dir");
+    fs::write(
+        fixtures.join(".gitignore"),
+        "*\n!*/\n!**/*.gg\n!.gitignore\n",
+    )
+    .expect("write probe gitignore");
+
+    let real_dir = fixtures.join(real);
+    fs::create_dir_all(&real_dir).expect("create probe real dir");
+    fs::write(real_dir.join("probe.gg"), "void main():\n    print(1)\n")
+        .expect("write probe fixture");
+
+    // The `.gorget` analogue: a directory whose every file the allowlist drops.
+    let art_dir = fixtures.join(artefact);
+    fs::create_dir_all(&art_dir).expect("create probe artefact dir");
+    fs::write(art_dir.join("probe.test-results.json"), "{}\n")
+        .expect("write probe artefact");
+
+    let git = |args: &[&str]| {
+        let st = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .output()
+            .expect("probe git");
+        assert!(st.status.success(), "probe `git {args:?}` failed");
+    };
+    git(&["init", "-q"]);
     dir
 }
 
@@ -156,6 +256,13 @@ fn sanitize_corpus_manifest_is_declared() {
         "corpus_paths()",
         "$2 == \"IN\"",
         "the swept corpus is not fully declared",
+        // ONE SOURCE OF TRUTH FOR THE POPULATION (Layering rule 3). The sweep and
+        // this lint must enumerate the SAME directories, or one of them polices a
+        // set the other does not have. Both ask git the same question; parsing the
+        // sweep's spelling of it here is what stops them drifting back apart —
+        // and a revert to a bare `find … -type d` reds right here, which is how
+        // the `.gorget` defect would have been caught before it shipped.
+        "git ls-files --cached --others --exclude-standard tests/fixtures",
     ] {
         assert!(
             sweep.contains(needle),
@@ -248,10 +355,27 @@ fn sanitize_corpus_manifest_is_declared() {
          trustworthy (docs/devbook/25-structural-guards.md)."
     );
 
-    // (g) CORE #13 — the guard, seen to fail, on a synthetic root.
+    // (g) CORE #13 — the guard, seen to fail, on a synthetic root, AND seen NOT
+    //     to fail on the artefact. Both halves, because the defect this probe
+    //     replaces was a census that reddened on a build artefact: a guard that
+    //     fires on the wrong thing is as broken as one that never fires, and it
+    //     is worse, because it fires only where somebody has done work.
     {
-        let probe = probe_root("ta1_undeclared_probe");
+        let probe = probe_root("ta1_undeclared_probe", ".ta1_artefact");
         let disk2 = first_level_dirs(probe.path());
+        assert!(
+            disk2.contains("ta1_undeclared_probe"),
+            "a real fixture directory that nobody has `git add`ed vanished from \
+             the census — tracked-ness is NOT the population, an untracked \
+             directory of `.gg` files is precisely what must still red"
+        );
+        assert!(
+            !disk2.contains(".ta1_artefact"),
+            "a build-artefact directory (every file dropped by the fixtures \
+             allowlist, like tests/fixtures/.gorget/) entered the census. That is \
+             the defect this lint shipped with: green in a fresh checkout, red on \
+             every machine that had actually run the tests. Got: {disk2:?}"
+        );
         assert!(
             disk2.difference(&seen).next().is_some(),
             "a directory with NO manifest row did not redden the census"
