@@ -8708,13 +8708,20 @@ fn sanitize_allowlists_shrink_only() {
     //      runtime, not generated user code — so an LLVM run would not be an
     //      equivalent measurement and these ceilings would not transfer to it.
     //      Extending the sweep to a second lane is filed as `todo/t0731`.
-    //   2. TOP-LEVEL FIXTURES ONLY. The sweep enumerates
-    //      `find tests/fixtures -maxdepth 1 -name '*.gg'`, so nothing in
-    //      `tests/fixtures/security/`, `known_gaps/`, or any other
-    //      subdirectory is counted here. `--test security` covers the first of
-    //      those and has its own configuration (notably `detect_leaks=0` for
-    //      `security_safe`), which is why a leak can exist in that corpus
-    //      without moving these numbers.
+    //   2. THE DECLARED CORPUS ONLY. The sweep's population is
+    //      `tests/sanitize/CORPUS_MANIFEST.txt`: every top-level `*.gg`, plus
+    //      every `*.gg` under a directory the manifest marks `IN`. Every row is
+    //      `OUT` today, so the walked set is still exactly the top level —
+    //      nothing in `tests/fixtures/security/`, `known_gaps/`, or any other
+    //      subdirectory is counted here — but it is now out BY DECLARATION with
+    //      a reason and, where the directory is a real corpus candidate, a cited
+    //      `todo/` item (`t0956`). It used to be out by an accident of walk
+    //      depth, which is why nobody could say what these numbers excluded.
+    //      `--test security` covers `security/` with its own configuration
+    //      (notably `detect_leaks=0` for `security_safe`), which is why a leak
+    //      can exist in that corpus without moving these numbers.
+    //      `sanitize_corpus_manifest_is_declared` reds when a new directory
+    //      joins the tree with no row.
     const CORRUPTION_CEILING: usize = 1;
     // 316 -> 313 (R47-E1): `async_blocking_io`, `async_channel_poll` and
     // `spawn_closure_copy` were measured CLEAN on every run of a repeat-run
@@ -8780,7 +8787,40 @@ fn sanitize_allowlists_shrink_only() {
     // asserting the intended clean run — `t0873` had `repro = []` before.
     // Retires to 304 when ALL THREE land; either one alone only tightens a row's
     // record count (`LEAK_RECORDS`), it does not remove a row.
-    const LEAK_CEILING: usize = 306;
+    //
+    // 306 -> 293 (R48 Track T-a1), which is a NET of two opposite moves and the
+    // net is DOWN — the first time this ceiling has fallen since it started
+    // recording admissions:
+    //   -16  rows the sweep's own "no longer leaking — DELETE these rows"
+    //        advisory named, re-verified CLEAN on all 3 reps at HEAD before the
+    //        deletion (`combinator_*_money_*` x10, `drop_enum_consume`,
+    //        `error_catch_in_loop`, `error_rethrow_transform`,
+    //        `fmt_catch_rethrow_single_stmt_terminal_axis`, `test_result_chaining`,
+    //        `trait_method_throws`). This is the round genuinely burning debt
+    //        down, and a shrink-only ratchet has to move for it.
+    //   + 3  ⚖ ADMITTED under the header's THIRD `⚖ EXTENDED` paragraph (owner,
+    //        2026-09-02: *"There must be a tendency to fix all leaks, even if we
+    //        admit these 3 … these must be burnt down and fixed at some point"*).
+    //        `iter_trait_default_trait_args`, `self_whole_move_ok` and
+    //        `vector_hof_cross_type_map`. ⚠ ALL THREE FIXTURES ARE THIS ROUND'S
+    //        (`4e0dc7811` 2026-08-31, `4e0dc7811`, `a9f6d4db3` 2026-09-02);
+    //        THE MECHANISMS ARE NOT, and the write sites' own history is the
+    //        evidence — `functions.rs`'s `self` carve-out since 2026-03-06,
+    //        `lib/std/iter.gg`'s `Ref[Dict[K, V]] source` since 2026-04-26,
+    //        `auto_clone_if_ptr`'s Clone arm since 2026-08-19. The allowlist
+    //        header carries the three `git log -1 -L …` commands. The third
+    //        fixture additionally read "clean" when first swept ONLY BECAUSE IT
+    //        CRASHED FIRST (a `heap-buffer-overflow` R48 Track γ fixed) — SIX
+    //        QUESTIONS #6, a green cell green for an unrelated reason.
+    // ⚠ THE ADMISSION CAME WITH THE MECHANISM, which is the other half of the
+    // same ruling: all six of their (fixture, class) pairs carry a third-column
+    // citation, and the five items behind them (`todo/t0951`-`t0955`) are new,
+    // each with a durable heap-forced `known_gaps` repro and an `#[ignore]`d
+    // `assert_gg_sanitize_clean` test asserting the intended clean run.
+    // ⚠ RECORDS WENT *UP* WHILE ROWS WENT DOWN — see `LEAK_RECORDS` below. That
+    // is not a contradiction: the 16 deleted rows tolerated 22 records between
+    // them and the 3 admitted rows tolerate 46.
+    const LEAK_CEILING: usize = 293;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -8918,12 +8958,107 @@ fn sanitize_allowlists_shrink_only() {
     // sweep's own `verdicts.tsv` column 4 with `FIXLIST` restricted to the two
     // fixtures, not from a hand count. See the `LEAK_CEILING` note above and the
     // `⚖ ADMITTED` block in the allowlist for the attribution and what retires them.
-    const LEAK_CLASS_PAIRS: usize = 511;
-    const LEAK_RECORDS: usize = 2262;
+    //
+    // ⚖ R48 Track T-a1: 511 -> 500 pairs and 2262 -> 2286 records. The two totals
+    // move in OPPOSITE DIRECTIONS and that is the honest reading, not an error:
+    //   -17 pairs / -22 records  the 16 DELETED rows (re-verified CLEAN on all 3
+    //                            reps at HEAD before deletion).
+    //   + 6 pairs / +46 records  the 3 ADMITTED rows, every count taken from the
+    //                            sweep's own `verdicts.tsv` column 4 with
+    //                            `FIXLIST` restricted to the three fixtures —
+    //                            `gorget_array_push*1`,
+    //                            `gorget_map_clone*12,str_alloc_copy*4`, and
+    //                            `__gorget_closure_env_alloc*10,gorget_array_push*6,str_alloc_copy*13`.
+    //                            None carries a `*N+` marker: the programs are
+    //                            single-threaded and 3 reps agree, so the counts
+    //                            are pinned EXACTLY and `LEAK_LOOSE_SIGNATURES`
+    //                            is unmoved at 8.
+    // ⚠ FEWER ROWS TOLERATING MORE RECORDS IS EXACTLY WHY THREE TOTALS EXIST. A
+    // reader who watched only `LEAK_CEILING` would score this round as a pure
+    // burn-down; a reader who watched only `LEAK_RECORDS` would score it as a
+    // regression. Both readings are wrong on their own.
+    const LEAK_CLASS_PAIRS: usize = 500;
+    const LEAK_RECORDS: usize = 2286;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
+    // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────
+    //
+    // THE DEFECT IT RETIRES, measured at R48: of 306 rows, the number citing a
+    // `todo/` item from a DATA ROW was **ZERO**. Eight items appeared inside
+    // `⚖ ADMITTED` comment blocks and nowhere a program could read them, so an
+    // admitted leak was invisible to `todo/`, to the convergence metric and to
+    // every burn-down campaign. Shrink-only stops the list GROWING; nothing
+    // created pressure to SHRINK, and the count had drifted 316 -> 304 -> 306
+    // across rounds while the backlog itself went unexamined.
+    //
+    // The owner's ruling (2026-09-02): *"There must be a tendency to fix all
+    // leaks, even if we admit these 3. How do we avoid forgetting about them in
+    // future rounds if we admit them?"* This is the answer: admission and filing
+    // become THE SAME ACT. A cited pair is in the work queue, where the index,
+    // the convergence arbiter and the next burn-down round can all see it.
+    //
+    // ⚠ THE UNIT IS THE (fixture, class) PAIR, NOT THE ROW, and that is the whole
+    // design. Measured on the landing file: 120 of the 293 rows carry two to five
+    // mechanisms, and 327 of the 500 pairs live on those rows — so a per-ROW
+    // citation would oblige 120 of them and leave 207 (41%) with no obligation at
+    // all. That is verbatim the bare-stem defect the class column was added to
+    // fix, one level up (SIX QUESTIONS #2: a guard that cannot catch its own
+    // class).  Regenerate:
+    //   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -v '^$' \
+    //     | cut -f2 | awk -F, '{n[NF]++; p+=NF} END{for (k in n) print k, n[k]; print "pairs", p}'
+    // `vector_hof_cross_type_map` is the live proof: three classes, three
+    // SEPARATE filed items, and one class splitting between two of them.
+    //
+    // ⚠ IT IS AN `assert_eq!`, NOT A `<=`, for the reason stated forty lines
+    // above about `LEAK_CEILING`: under `<=` a burn-down that forgets to lower
+    // the number is silently accepted and the leftover headroom quietly admits
+    // the next uncited rows. Core #6 wants BOTH directions.
+    //
+    // ⚠ WHAT MAKES A PAIR "CITED" IS DELIBERATELY HARDER THAN A GREP.
+    // `todo/t0875` catalogues four assertions each defeated by respelling what
+    // they counted, and its lesson is that a textual guard's reach is the TOKEN,
+    // never the CONCEPT. So both halves are required:
+    //   (1) the cited item must EXIST as `todo/<id>.md` — otherwise writing
+    //       `t0000` in the column satisfies the check; and
+    //   (2) that item's body must CONTAIN the pair's top-frame symbol — a token
+    //       the INSTRUMENT produced, never one the author chose. Citing a real
+    //       but unrelated item does not count.
+    // Both are demonstrated RED below against plausible evasions, not merely
+    // against deletion (Core #13).
+    //
+    // ⚠ THE TOKEN CHECK IS A FLOOR, NOT A LOCK, and saying so is the honest
+    // version: `str_alloc_copy` and `__gorget_closure_env_alloc` between them
+    // appear on 162 of the 293 rows (regenerate:
+    //   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -v '^$' | cut -f2 \
+    //     | grep -cE 'str_alloc_copy|__gorget_closure_env_alloc'
+    // ), so ONE item naming both symbols would satisfy a pair on every one of
+    // them. What stops that from being a cheap win is the PAIR granularity plus
+    // the reviewer reading the `⚖ ADMITTED` block: the number says how much is
+    // uncited, the block says whether the citation is true.
+    //
+    // SEEDED AT THE LANDING VALUE, not at the pre-edit one. 500 pairs, 6 of them
+    // cited by this round's three admitted rows, leaves 494. Seeding at 500 would
+    // have silently admitted six uncited pairs — the same argument this file
+    // makes against leaving headroom in `LEAK_CEILING`.
+    // TARGET: 0. Every pair carrying a filed item is the end state; nothing else
+    // in this file creates pressure toward it.
+    const UNCITED_LEAK_CLASS_PAIRS: usize = 494;
+
+    // A `todo/` item counts as citable for a pair only if it EXISTS and its body
+    // NAMES the pair's top-frame symbol. Cached: 293 rows would otherwise re-read
+    // the same handful of item files hundreds of times.
+    let mut todo_cache: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+    let mut item_covers = |id: &str, sym: &str| -> bool {
+        let body = todo_cache.entry(id.to_string()).or_insert_with(|| {
+            std::fs::read_to_string(root.join("todo").join(format!("{id}.md"))).ok()
+        });
+        body.as_ref().is_some_and(|b| b.contains(sym))
+    };
+
     let mut leak_stems: Vec<&str> = Vec::new();
-    let (mut pairs, mut records, mut loose) = (0usize, 0usize, 0usize);
+    let (mut pairs, mut records, mut loose, mut uncited) = (0usize, 0usize, 0usize, 0usize);
+    let mut uncited_examples: Vec<String> = Vec::new();
     for row in &leaks {
         let cols: Vec<&str> = row.split('\t').collect();
         assert!(
@@ -8932,6 +9067,25 @@ fn sanitize_allowlists_shrink_only() {
              Format: <fixture> TAB <top-frame>*<records>[,<top-frame>*<records>...]\n\
              Take the signature from column 4 of the sweep's own verdicts.tsv."
         );
+        // Column 3 — the per-class citation, `<class>=<todo-id>[,…]`. A class MAY
+        // repeat when more than one filed item owns records of that frame in this
+        // fixture (the DIRECT/INDIRECT split on `vector_hof_cross_type_map` is the
+        // in-tree example). Absent column = every pair on the row is uncited,
+        // which is a counted debt, not a malformed row.
+        let mut citations: Vec<(&str, &str)> = Vec::new();
+        if let Some(col3) = cols.get(2) {
+            for entry in col3.trim().split(',').filter(|e| !e.trim().is_empty()) {
+                let (class, id) = entry.trim().split_once('=').unwrap_or_else(|| {
+                    panic!(
+                        "leak allowlist citation is not <class>=<todo-id>: {entry:?} in {row:?}\n\
+                         The citation belongs in column 3, never appended to column 2 — \
+                         `str_alloc_copy*4@t0790` panics this lint's signature parse while \
+                         the sweep's awk silently reads the count as 4."
+                    )
+                });
+                citations.push((class.trim(), id.trim()));
+            }
+        }
         for sig in cols[1].trim().split(',') {
             let (sym, n) = sig.rsplit_once('*').unwrap_or_else(|| {
                 panic!(
@@ -8954,6 +9108,38 @@ fn sanitize_allowlists_shrink_only() {
             pairs += 1;
             records += parsed.unwrap() as usize;
             loose += usize::from(is_loose);
+            let sym = sym.trim();
+            let cited = citations
+                .iter()
+                .any(|(class, id)| *class == sym && item_covers(id, sym));
+            if !cited {
+                uncited += 1;
+                if uncited_examples.len() < 8 {
+                    uncited_examples.push(format!("{}:{sym}", cols[0].trim()));
+                }
+            }
+        }
+        // A citation naming a class the row does not exhibit is DEAD TEXT. It
+        // cannot lower `uncited` — that loop only asks whether each REAL pair
+        // found a citation — so it is not an evasion; it is a typo or a stale
+        // leftover after a class was retired, and either way it points a reader
+        // at an obligation that no longer exists. One assert, and it is the
+        // cheapest place to catch a citation that has rotted past its row.
+        let classes: Vec<&str> = cols[1]
+            .trim()
+            .split(',')
+            .filter_map(|sig| sig.rsplit_once('*').map(|(sym, _)| sym.trim()))
+            .collect();
+        for (class, id) in &citations {
+            assert!(
+                classes.contains(class),
+                "leak allowlist row {:?} cites `{class}={id}` but tolerates no \
+                 `{class}` — column 2 names {classes:?}. Either the class was \
+                 retired (drop the citation in the same commit) or the spelling \
+                 is wrong. A citation for a class the row does not exhibit \
+                 obliges nothing and misdirects the next reader.",
+                cols[0].trim()
+            );
         }
         let stem = cols[0].trim();
         assert!(
@@ -8988,6 +9174,61 @@ fn sanitize_allowlists_shrink_only() {
          an admission, not an annotation: add one only for a row the sweep's own \
          `count-drift` census has named, and move this number in the same commit."
     );
+    assert_eq!(
+        uncited, UNCITED_LEAK_CLASS_PAIRS,
+        "the LEAK allowlist now has {uncited} UNCITED (fixture, class) pairs, the \
+         pinned count is {UNCITED_LEAK_CLASS_PAIRS}. TARGET IS 0.\n\
+         first few: {uncited_examples:?}\n\n\
+         If it GREW, a leak was tolerated without being put in the work queue — \
+         admission and filing are the same act (owner, 2026-09-02: *\"these must \
+         be burnt down and fixed at some point. Not only these 3 but all of \
+         them!\"*). File the mechanism as a `todo/` item with a durable \
+         heap-forced repro and cite it in column 3 as `<class>=<todo-id>`.\n\
+         If it SHRANK, you filed some: LOWER this constant in the same commit. It \
+         is an `assert_eq!` and not a `<=` for the reason `LEAK_CEILING` states \
+         forty lines up — leftover headroom quietly admits the next uncited pair.\n\
+         A pair counts as CITED only when its column-3 entry names a `todo/` item \
+         that EXISTS *and* whose body CONTAINS that pair's top-frame symbol. \
+         Citing `t0000`, or citing a real but unrelated item, does not count."
+    );
+
+    // ── Core #13: watch the citation check fail, on plausible EVASIONS ────────
+    //
+    // Not merely on deletion. `todo/t0875` records four assertions in this tree
+    // that were each defeated by respelling what they counted, so the probes
+    // below are the two respellings a motivated author would actually reach for.
+    // They run against synthetic inputs and touch no shared state.
+    {
+        let real_id = "t0951";
+        let real_sym = "gorget_array_push";
+        assert!(
+            item_covers(real_id, real_sym),
+            "the positive control failed: todo/{real_id}.md should exist and name \
+             {real_sym:?}. Without a control, the negatives below prove nothing."
+        );
+        // EVASION 1 — a plausible-looking id nobody filed.
+        assert!(
+            !item_covers("t0000", real_sym),
+            "a citation to a NON-EXISTENT todo item was accepted — the guard has \
+             degraded to a shape check, which is exactly `todo/t0875`'s failure \
+             mode in a new costume"
+        );
+        // EVASION 2 — a real, live item that says nothing about this mechanism.
+        assert!(
+            !item_covers(real_id, "gorget_this_frame_does_not_exist"),
+            "a citation to an EXISTING but unrelated item was accepted — the \
+             token check is what makes a citation evidence rather than decoration"
+        );
+        // EVASION 3 — the citation smuggled into column 2, where the sweep's awk
+        // reads `kv[2]+0` as the count and silently tolerates it.
+        let smuggled = "str_alloc_copy*4@t0790";
+        let (_, n) = smuggled.rsplit_once('*').expect("signature shape");
+        assert!(
+            n.parse::<u32>().is_err(),
+            "`{smuggled}` parsed as a record count — the signature parse above \
+             must REJECT a citation appended to column 2, not read it as a number"
+        );
+    }
 }
 
 /// Every `qsort` this compiler EMITS is guarded on `len > 1`.
@@ -9110,8 +9351,8 @@ fn sanitize_sweep_selftest_is_wired() {
              leak class in the same commit.",
             p.display()
         );
-        // The corpus walk is `-maxdepth 1`; a control that also exists up there
-        // becomes an unlisted leak row and a flaky row at once.
+        // The base corpus is the TOP LEVEL, so a control that also exists up
+        // there becomes an unlisted leak row and a flaky row at once.
         assert!(
             !root.join("tests/fixtures").join(name).exists(),
             "sanitize-sweep control {name} must live ONLY in \
@@ -9125,14 +9366,22 @@ fn sanitize_sweep_selftest_is_wired() {
     for needle in [
         "SELFTEST_DIR=tests/fixtures/sanitize_selftest",
         "run_selftest || exit 2",
+        // The BASE corpus — top-level `*.gg` — inside `corpus_paths`. It no
+        // longer carries the whole invariant on its own: what keeps
+        // `sanitize_selftest/` out of the walk is that directory's `OUT` row in
+        // tests/sanitize/CORPUS_MANIFEST.txt, which
+        // `sanitize_corpus_manifest_is_declared` pins by name and refuses to let
+        // flip to `IN`. Depth used to be the whole guard, and a depth limit
+        // cannot say WHY anything is excluded.
         "find tests/fixtures -maxdepth 1 -name '*.gg'",
     ] {
         assert!(
             sweep.contains(needle),
             "scripts/sanitize_sweep.sh no longer contains {needle:?}.\n\
              The self-test must run on every sweep (a guard nothing runs is not \
-             a guard) and the corpus walk must stay at -maxdepth 1 so the \
-             controls stay outside it."
+             a guard), and the BASE corpus must stay the top level — a directory \
+             joins it only through an `IN` row in \
+             tests/sanitize/CORPUS_MANIFEST.txt."
         );
     }
 }
@@ -27188,4 +27437,11 @@ mod ggdef_corpus_membership {
 }
 mod ggdef_corpus_membership_lint {
     include!("lints_support/ggdef_corpus_membership_lint.rs");
+}
+
+// R48 Track T-a1: the sanitize sweep's corpus is DECLARED, not an accident of
+// walk depth. The manifest path and the IN-selection predicate are parsed from
+// `scripts/sanitize_sweep.sh` — do not re-list directories here.
+mod sanitize_corpus_manifest_lint {
+    include!("lints_support/sanitize_corpus_manifest_lint.rs");
 }

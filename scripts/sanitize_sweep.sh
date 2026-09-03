@@ -59,9 +59,11 @@
 #     finding no longer suppresses the leak verdict underneath it.
 #
 # SELF-TEST. Before it reports anything the sweep runs four control fixtures in
-# tests/fixtures/sanitize_selftest/ (a SUBDIRECTORY, so the corpus walk below
-# cannot see them) THROUGH THE SAME xargs PIPELINE the corpus uses, and asserts
-# its own detectors fire: the leak detector fires,
+# tests/fixtures/sanitize_selftest/ (kept out of the corpus BY DECLARATION —
+# that directory's `OUT` row in tests/sanitize/CORPUS_MANIFEST.txt says so and
+# says why; it used to be out by an ACCIDENT OF DEPTH, which is a property no
+# reader could check and no guard enforced) THROUGH THE SAME xargs PIPELINE the
+# corpus uses, and asserts its own detectors fire: the leak detector fires,
 # the clean path stays quiet, the flake detector fires on an alternating row,
 # and the class check fires on a SECOND leak record of an ALREADY-TOLERATED
 # class inside an already-allowlisted fixture. A guard that has never been seen
@@ -106,6 +108,14 @@ SELFTEST_ONLY=0
 # a baseline measurement. CI passes neither and gets the committed lists.
 CORRUPT_LIST="${CORRUPT_LIST:-tests/sanitize/CORRUPTION_ALLOWLIST.txt}"
 LEAK_LIST="${LEAK_LIST:-tests/sanitize/LEAK_ALLOWLIST.txt}"
+# THE DECLARED CORPUS. Every first-level directory under tests/fixtures/ carries
+# an IN|OUT row plus its reason; the corpus is the top-level `*.gg` plus every
+# `*.gg` under an IN directory. This REPLACES `find … -maxdepth 1`, which was
+# the right SET for the wrong REASON: the depth limit was load-bearing (the
+# self-test's controls live in a subdirectory, one leaks by design, and a naive
+# recursive walk ingests them as findings) but nothing recorded WHY any other
+# directory was unwatched, so a new one joined the unwatched set silently.
+MANIFEST="${MANIFEST:-tests/sanitize/CORPUS_MANIFEST.txt}"
 SELFTEST_DIR=tests/fixtures/sanitize_selftest
 
 # --- ceilings and floors -----------------------------------------------------
@@ -188,6 +198,21 @@ UNKNOWN_CEILING="${UNKNOWN_CEILING:-1}"
 # COVERAGE FLOOR: fixtures that actually produced a RUN verdict. A fixture
 # drifting CLEAN -> BUILD_FAIL_* is a silent coverage loss the old gate could
 # not see; this is the ratchet that sees it. Raise it when the corpus grows.
+#
+# ⚠ IT DID NOT MOVE WHEN THE MANIFEST LANDED, AND THAT IS CORRECT. Every row in
+# tests/sanitize/CORPUS_MANIFEST.txt is `OUT` today, so the declared walk
+# enumerates exactly what `-maxdepth 1` did — same paths, same `covered`. The
+# manifest changed WHY the set is what it is, not the set.
+#
+# ⚠ WHY IT IS NOT RE-PINNED TIGHT TO THE MEASURED `covered`. A tight floor turns
+# any LOAD-INDUCED `BUILD_FAIL` into a red gate, and today's slack is what
+# absorbs that on a busy box. The gaming vector a tight floor would close —
+# `mv leaky.gg tests/fixtures/<somewhere>/` to drive the leak counts down while
+# fixing nothing — is now closed by the MANIFEST instead: a move into a new
+# directory reds `sanitize_corpus_manifest_is_declared`, and a move into an
+# existing OUT directory still has to survive the reviewer reading a diff that
+# relocates a leaking fixture. Prefer the guard that names the act over the one
+# that only notices a number.
 COVERAGE_FLOOR="${COVERAGE_FLOOR:-1743}"
 # Per-run wall-clock budget for one fixture. Overridable so the TIMEOUT verdict
 # can be demonstrated without a 60-second fixture.
@@ -535,8 +560,38 @@ if [ -n "$malformed" ]; then
   exit 2
 fi
 
-# --- the corpus --------------------------------------------------------------
-if [ -n "$FIXLIST" ]; then cat "$FIXLIST"; else find tests/fixtures -maxdepth 1 -name '*.gg' | sort; fi \
+# --- the declared corpus -----------------------------------------------------
+# The manifest is the corpus's DEFINITION, so an incomplete one is an INSTRUMENT
+# failure (exit 2), never a verdict about the tree: a directory with no row is
+# a directory nobody decided about, and silently not sweeping it is exactly the
+# failure `-maxdepth 1` used to make invisible. `tests/lints.rs`'s
+# `sanitize_corpus_manifest_is_declared` catches the same drift on every commit,
+# in a second and without a compiler; this check is here so the sweep cannot be
+# run around it.
+[ -f "$MANIFEST" ] || { echo "no corpus manifest at $MANIFEST"; exit 2; }
+awk -F'\t' '!/^#/ && NF {print $1"\t"$2}' "$MANIFEST" | sort -u > "$OUT/manifest_rows"
+cut -f1 "$OUT/manifest_rows" | sort -u > "$OUT/manifest_dirs"
+find tests/fixtures -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -u > "$OUT/disk_dirs"
+undeclared=$(comm -13 "$OUT/manifest_dirs" "$OUT/disk_dirs")
+stale=$(comm -23 "$OUT/manifest_dirs" "$OUT/disk_dirs")
+baddisp=$(awk -F'\t' '$2 != "IN" && $2 != "OUT" {print $1" -> "$2}' "$OUT/manifest_rows")
+if [ -n "$undeclared" ] || [ -n "$stale" ] || [ -n "$baddisp" ]; then
+  echo "MALFORMED $MANIFEST — the swept corpus is not fully declared:"
+  [ -n "$undeclared" ] && { echo "  directories on disk with NO row (decide IN or OUT):"; echo "$undeclared" | sed 's/^/    /'; }
+  [ -n "$stale" ]      && { echo "  rows naming a directory that no longer exists:";      echo "$stale"      | sed 's/^/    /'; }
+  [ -n "$baddisp" ]    && { echo "  rows whose disposition is neither IN nor OUT:";        echo "$baddisp"    | sed 's/^/    /'; }
+  echo "Format: <directory> TAB IN|OUT TAB <reason, and what would change it>"
+  exit 2
+fi
+# Top-level `*.gg` is the base corpus; each IN directory is walked RECURSIVELY,
+# so a nested directory inherits its parent's row and cannot join on its own.
+corpus_paths() {
+  find tests/fixtures -maxdepth 1 -name '*.gg'
+  awk -F'\t' '$2 == "IN" {print $1}' "$OUT/manifest_rows" | while IFS= read -r _d; do
+    [ -n "$_d" ] && find "tests/fixtures/$_d" -name '*.gg'
+  done
+}
+if [ -n "$FIXLIST" ]; then cat "$FIXLIST"; else corpus_paths | sort; fi \
   | xargs -P "$JOBS" -I{} bash -uc 'run_one "$@"' _ {} > "$OUT/verdicts.tsv"
 
 awk -F'\t' '$2 ~ /ASAN_/             {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_corrupt"

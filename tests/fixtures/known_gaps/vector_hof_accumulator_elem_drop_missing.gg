@@ -1,0 +1,95 @@
+# todo/t0954 — the accumulator array a builtin Vector HOF mints is created with a
+# NULL `elem_drop`, so every heap element the callee produces leaks when the
+# result vector is freed.
+#
+# The emitted C is the witness: the runtime's own `gorget_str_chars`
+# (`src/backend/c/runtime/runtime_string_array.c:52-55`) does
+#     GorgetArray arr = gorget_array_new(sizeof(Str));
+#     arr.elem_drop = (__gorget_drop_fn)gorget_string_free;
+# while the `map` accumulator for the SAME element type does
+#     __v69 = gorget_array_new(__v68);        /* sizeof(Str) == 32, no elem_drop */
+# The backing array IS freed at scope exit — there is no `gorget_array_push`
+# record for IT — and the `Str` payloads it held are not.
+#
+# ── THE AXIS, because the defect is not about one method or one element type ──
+# PRODUCER x ELEMENT TYPE, and BOTH columns of the producer axis are here on
+# purpose: the CLEAN cells are the discriminator, not filler.
+#
+#   producer      element                       HEAD
+#   ------------  ----------------------------  ----------------------------------
+#   A  map        String (heap payload)         LEAKS `str_alloc_copy*1` (9 B / 3 allocs)
+#   B  map        struct owning a Vector[int]   LEAKS `gorget_array_push*1` (192 B / 3 allocs)
+#   C  filter     String                        CLEAN
+#   D  sorted     String                        CLEAN
+#
+# A vs B is what stops the filing from being read as a String bug: the frame
+# CHANGES with the element type (`str_alloc_copy` vs `gorget_array_push`) while
+# the mechanism does not, so attributing this class by TOP FRAME would split one
+# defect across two items. C and D are the other half: `filter` and `sorted` are
+# ELEMENT-PRESERVING — they carry the source's elements rather than minting new
+# ones — and they are clean, which is what localises the defect to the accumulator
+# an element-TRANSFORMING producer mints.
+#
+# OMITTED CELLS, named per Core #12:
+#   * `flat_map` — it leaks too, but through a DIFFERENT mechanism (the callee's
+#     returned husk is never freed) that is `todo/t0955`, with its own repro.
+#     Putting it here would merge two defects into one row.
+#   * every callee here is a NAMED FUNCTION, deliberately: a closure literal adds
+#     `todo/t0953`'s environment leak on top and the mechanisms would be reported
+#     as one. `nums.map((int n): int_to_str(n * 10))` leaks
+#     `__gorget_closure_env_alloc*1` AND `str_alloc_copy*1` — the two superimposed.
+#   * the LAZY iterator adapters (`.iter().map(…).collect()`) are not sampled;
+#     they route through `MapIter`, not the builtin Vector-HOF expander.
+#
+# ⭐ RECORDS vs ALLOCATIONS. ASan merges identical allocation stacks, so three
+# leaked Strings from one `int_to_str` call site are ONE RECORD in THREE
+# ALLOCATIONS. The record count is the number of producing SITES; the allocation
+# count is what scales with the element count.
+#
+# HEAP-FORCED on both leaking cells: `int_to_str` returns a real heap `String`,
+# and `Boxed` owns a real `Vector[int]` backing allocation. A struct of scalars
+# would leak nothing to see.
+#
+# INTENDED: prints 10 / 30 / 2 / 2 / 10 and is ASan-clean under `detect_leaks=1`,
+# on C and LLVM. At HEAD it prints all five correctly and leaks 201 bytes in 6
+# allocations (9 + 192), `gorget_array_push*1,str_alloc_copy*1`, identical on both
+# backends. Stdout-invisible, so this is wired to `assert_gg_sanitize_clean`.
+
+from std.conv import int_to_str
+
+String label(int n):
+    return int_to_str(n * 10)
+
+struct Boxed:
+    Vector[int] cells
+
+Boxed box_it(int n):
+    Vector[int] v = [n, n]
+    return Boxed(^v)
+
+bool keep(String s):
+    return s != "20"
+
+void main():
+    Vector[int] nums = [1, 2, 3]
+
+    # A — map to a String element. The accumulator has no elem_drop, so all
+    # three Strings leak while the array itself is freed.
+    auto a = nums.map(label)
+    print(a.get(0).unwrap())
+    print(a.get(2).unwrap())
+
+    # B — map to a STRUCT element owning a heap field. Same mechanism, and the
+    # leak surfaces under a DIFFERENT top frame.
+    auto b = nums.map(box_it)
+    print(f"{b.get(0).unwrap().cells.len()}")
+
+    # C — filter is ELEMENT-PRESERVING. Clean at HEAD, and load-bearing: it is
+    # what says the defect is the minted accumulator, not HOF results generally.
+    Vector[String] xs = ["10", "20", "30"]
+    auto c = xs.filter(keep)
+    print(f"{c.len()}")
+
+    # D — sorted, the second element-preserving control.
+    auto d = xs.sorted()
+    print(d.get(0).unwrap())
