@@ -27,30 +27,66 @@ unused). `AGENTS.md` is **36,186 bytes** against the 49,400 ceiling — **`t0714
 the headroom is DELIBERATE (the lint says compact a neighbouring rule rather than raise it), so do NOT
 lower the ceiling to "lock in" Track S's compaction.
 
-### 🔻 THE ROUND'S SHAPE — BURN-DOWN, NOT DISCOVERY
-R48 closed at **net +47** (`scripts/convergence.sh 22 771 60`): 60 filed, 13 closed, the worst ratio the
-log records. **The items `t0936`–`t0964` are R48's own debt** and most carry a durable RED-verified repro,
-so they are cheap to take. Bias bulk-graduation out of `known_gaps/` over new scouting.
-⚠ **THE ONE TRACK THAT CAN BLOW CONVERGENCE IS F** (the `t0015`/`t0018` corpus gates): wiring ~90 failing
-cells files ~90 items if each is filed separately. **It is convergence-SAFE only if each failing cell lands
-as a `known_gaps/*.gg` fixture CITED BY `t0015`/`t0018`** — the metric counts an UNCITED gap and nothing
-else (`scripts/convergence.sh` header, owner ruling 2026-08-23). Brief Track F with that constraint
-explicitly; it is the difference between −2 and +90.
+### 🔻 THE ROUND'S SHAPE — ⛔ CORRECTED 2026-09-03: **CONVERGENCE IS NOT A GATE AND NEVER WAS THIS ROUND**
+⚠ **THIS SECTION PREVIOUSLY READ "BURN-DOWN, NOT DISCOVERY" AND THAT FRAMING WAS BUILT ON A RETIRED RULE.**
+The orchestrator opened R49 off an orchestrator-memory entry dated 2026-08-02 (strict 2×: TODO must
+strictly decrease, close ≥ 2× filings). **The owner RETIRED that rule on 2026-08-23**, and Track F's scout
+caught it against the source. Verify at the source, not here:
+- `scripts/convergence.sh`: *"The STRICT 2x RULE was REMOVED. It was failed repeatedly, and the rounds that
+  failed it were the ones doing the most valuable work: a round that finds nine real defects — three of
+  them memory-safety — is a GOOD round that the ratio scored as failing. Measuring inflow is useful;
+  GATING on it selected against discovery."* The block reports and **always exits 0**.
+- `AGENTS.md` step 5: *"a MEASUREMENT, NOT A GATE"*. `grep -c '2×\|2x\|STRICT 2' AGENTS.md` → **0**.
+
+⇒ **R48's net +47 is NOT an indictment**, and no track in this round is scoped, deferred or rescoped to
+protect a ratio. **Rank by SOUNDNESS** (mem-unsafety > silent-wrong-output > ICE > leak). ⛔ **DELETED: the
+old warning that "the one track that can blow convergence is F."** It was the stale rule talking; F's
+scout confirmed the accounting is safe anyway, and the whole framing was wrong.
+✅ **What SURVIVES the correction, on its own merits:** `t0936`–`t0964` are R48's own debt, most carry a
+durable RED-verified repro, and they are genuinely cheap — take them because they are ripe, not to feed a
+number. Bulk-graduation out of `known_gaps/` is still good value.
+📌 **THE LESSON, for the next orchestrator:** an orchestrator-memory entry is a claim that DECAYED, not a
+fact. A binding rule gets re-verified at its SOURCE before a round rests on it (SIX QUESTIONS coda: *is
+this premise still TRUE, or a filed fact that decayed?*). The memory entry is now corrected at its own file.
 
 ### 🧭 R49 ROSTER — 8 TRACKS (owner-selected 2026-09-03; sizing answer was "6 + graduations", then the
 ### `it` ruling landed and E/F/G split out of the ease pick — a SPLIT, never a deferral)
-- **A · `Callable` VALUE-FORM CLASS FIX — the headline, and the biggest track.** `t0937` (⭐CRITICAL,
-  ASan `stack-buffer-overflow`: a closure LITERAL at a constructor / enum-init arg is NEVER CONSTRUCTED)
-  · `t0942` · `t0927` · `t0938` · `t0939` · `t0948` · `t0949` · `t0953` · `t0959` (self-host lane of the
-  same class). **Three separate items name the same root in their own words** — *"the value form of
-  `Callable` carries lossy type metadata"* (GIR local type erased to unit; the dispatch site sees the
-  signature-ERASED `Callable__GorgetClosure`). **The reference-grade fix shape is already written down in
-  `t0959`**: extend the FnPtr GIR type with a `param_ownerships` axis, populate a `callable_alias_sigs`
-  sidecar where the `Type::Function` inner is still in scope, teach the container-element inferrer to look
-  it up, route each arg through standard call-arg lowering **per param, not uniform**. Core #1 + #2 + #4.
-  ⭐ **MEASURED SCALE, regenerated 2026-09-03:** `__gorget_closure_env_alloc` is the sole frame on **56 of
-  the 754 `tests/sanitize/LEAK_ALLOWLIST.txt` rows and appears in 80** — the largest single class in that
-  file, which is what `t0953` claims and it checks out.
+- **A · SPLIT INTO A1/A2/A3/A4 BY ITS OWN SCOUT (2026-09-03) — ⚠ THE ONE-ROOT PREMISE IS REFUTED.**
+  ⛔ **DO NOT BRIEF "the Callable cluster" AS ONE TRACK.** The scout measured **FOUR** roots with four fix
+  sites and no implication between them: its prototype moved every Root-A cell and moved **nothing** in
+  B, C or D. A split is division, never deferral — all four are R49 tracks.
+  - **A1 · PACK-AT-BIRTH (⭐ the CRITICAL one; wave 1).** `src/ir/lowering/closures.rs:360` returns the raw
+    `Named("__Closure_N")` capture ENV, not the `GorgetClosure` fat pointer `Callable[T]` denotes, so
+    materialization is deferred to consumers that each re-recognise a closure BY NAME PREFIX. Owns
+    `t0937` ⭐ · `t0938` · `t0873(a)` + **3 cells NOBODY HAS FILED** (`TupleInit`; `Assign`-with-projection;
+    and a THIRD fault mode — rc **135 bus error** on a capturing ctor literal). ⚠ **Those three are A1's
+    SCOPE, not new filings** (rule 0: incorporate by default, file only when genuinely disjoint).
+  - **A2 · `Callable` TYPE ERASURE.** `try_map_ast_type` returns `None` for the Callable family
+    (`src/ir/lowering/types.rs:244`) and `Type::Function` (`:259`); `map_ast_type` (`:166`) then falls back
+    to `UNIT_TYPE`. Owns `t0942` · `t0927` · `t0406`×4 · **`t0959`** — which is Root **B**, NOT Root A, so
+    `t0959`'s `param_ownerships` / `callable_alias_sigs` shape belongs to A2 and the SH port is A2's.
+  - **A3 · `FnPtr` DROP RECOGNITION — owns 100% of the leak class.** Two predicates on ONE axis disagree
+    on purpose (Layering rule 3, in plain sight): `needs_drop` (`src/ir/types.rs:487`) says FnPtr ⇒ true,
+    `field_is_transitively_droppable` (`:537`) says false. The exclusion is licensed by a doc-comment
+    invariant at `:531-536` — *"captures use `MutPtr(T)` / value fields, never `FnPtr`-as-field… a
+    function-body local, not a struct field"* — which **`t0948`'s struct-field repro FALSIFIES (Core #14)**.
+    Owns `t0948` · `t0949` · `t0953` · `t0873(b)`. ⚠ **SEQUENCE A1 → A3**: A1 changes what a closure value
+    IS, hence what A3 must register. Landing A3 first means redoing it. ⚠ `t0949` also warns it and
+    `t0871` want the same site — that constraint lands here.
+  - **A4 · FIELD-CALL RESOLUTION.** `s.f(1)` resolves to method symbol `S__f`. Owns `t0939`. Small, disjoint.
+  ⚠ **MY LEAK FIGURE WAS MISLABELLED AND IS CORRECTED HERE.** I wrote *"56 of the 754 rows"*; **754 is
+  `wc -l` including comments.** Regenerated at `a1eaba9c1`: **294 DATA rows**, of which `__gorget_closure_env_alloc`
+  is the sole frame on **56** and appears in **81** (not 80), covering **320 of 2297 records**.
+  ⛔ **AND THE CLASS IS NOT A1's.** Root A's signature is that the env is **never allocated**; an allowlist
+  row exists because the fixture ran and leaked with that frame on the stack — i.e. it **was** allocated.
+  **A1 and the 56-row leak class are DISJOINT BY CONSTRUCTION.** The leak class is **A3's** in full.
+  ⭐ **THE SELF-HOST IS GREEN ON ALL NINE ROOT-A CELLS — the reference lags it, and the fix is already
+  written in Gorget.** `tests/fixtures/self_host_lowerer/lower_expr.gg:6058-6059` packs at birth, with its
+  own comment at `:6022` saying so. **A1's SH lane is NONE — do NOT touch the self-host**; per the
+  succession plan, fix Rust gg to match. (`lower_expr.gg` has exactly ONE copy — no driver-embedded twin.)
+  ⊕ **NAME-MATCH SITE COUNT — the scout said 3, I measured 6.** `src/lir/lower/operands.rs:1417`, `:1711`,
+  `src/lir/lower/insts.rs:3305`, `src/lir/lower/mod.rs:257`, `src/ir/lowering/exprs/methods.rs:276`, `:5110`.
+  The Core #2 violation is retired AS PART OF A1, not filed beside it — so the brief must carry all six.
 - **B · HOF ACCUMULATOR / ITERATOR OWNERSHIP.** `t0954` (`map` mints the accumulator with a NULL
   `elem_drop`, leaking every element) · `t0955` (`flat_map` leaks the callee's `Vector` per input element)
   · `t0952` (`DictIter.next()` deep-clones the WHOLE Dict 4× per call and frees none) · `t0951` (`^self`
@@ -81,9 +117,51 @@ explicitly; it is the difference between −2 and +90.
     `known_gaps/sh_comprehension_bodied_implicit_it.gg`. **Sequence E BEFORE B closes `t0963`, or B wastes
     a fix on a construct that is leaving.** Rust footprint: 22 files, `src/parser/expr.rs` alone is 99
     occurrences; rustc exhaustiveness is the independent witness (delete the variants, follow the errors).
-- **F · GATE THE TWO ROBUSTNESS CORPORA IN CI — ⚡ owner-selected.** `t0015` (288 doc-derived cells, 83%
-  behave as documented) · `t0018` (354 beginner cells, 87.3% WORKS). Wire both as real gates and drive to
-  green. **Read the convergence warning above before briefing this one.**
+- **F · DRIVE THE TWO ROBUSTNESS CORPORA TO GREEN — ⚡ owner-selected. ⚠ RE-SCOPED BY ITS OWN SCOUT: the
+  "WIRE IT" HALF IS ALREADY DONE.** Both corpora are ALREADY GATED IN CI — `.github/workflows/ci.yml:96`
+  (`--lanes c,llvm`) and `:228` (`--lanes all`). All 288 `t0015` cells are in the manifest as topics
+  `20/21/22 docs/*` (231+36+21, subtotals exact). **EXTEND `scripts/robustness_map.py`; do NOT build a
+  second harness** — it already runs 5 lanes, gates cross-lane divergence, refuses `--accept` when
+  regressions exist, and genuinely exits non-zero (`:762`, demonstrated RED in BOTH directions, including
+  the wrongly-ACCEPTED direction `t0015` feared).
+  **Regenerated at HEAD (map is green, so baseline == measurement):** `t0015` **239/288 = 83.0%** (exact
+  match to the item) · book 202/231 · language-design 23/36 · language-reference 14/21. ⚠ **`t0018`'s
+  corpus has DOUBLED since filing — 617/721 = 85.6%, not 354 cells @ 87.3%.** Whole map 842/1009 = 83.4%,
+  **153 failing cells** (85 REJECTED · 32 WRONG · 25 BUILD-FAIL · 6 CRASH · 3 ICE · 1 TIMEOUT · 1 UNKNOWN).
+  ⭐ **ESSENTIALLY ALL 153 ARE ALREADY HOMED at MECHANISM level** — this is CLOSURE work, not filing work.
+  The three to spend the track on, costed end-to-end:
+  - **M1 · the sort family, element-type axis — 7 cells, ONE root, and a SILENT NO-OP.** In one program:
+    `Vector[int].sort(cmp)` ✅ · **`Vector[Person].sort(cmp)` → rc 0, NO diagnostic, LIST UNCHANGED** ·
+    `Vector[String].sort(cmp)` → `undefined reference to 'int64_t__len'`. The comparator's param is typed
+    `int64_t` regardless of element type. `sort(cmp)`→`sort_by` at `exprs/methods.rs:2170`; the synth bails
+    at `lir/lower/insts.rs:3405` (`if is_sort && !sig_known { return None }`) to a TLS trampoline.
+    ⊕ SIX QUESTIONS #6 was ASKED and answered: a descending comparator on `Vector[int]` gives `40/30/25`,
+    so the int cell is genuinely right and the axis claim holds.
+  - **M2 · `.iter()` adapter chains — 6 cells, all Core #10 lower-or-reject.** `VectorIter__int64_t__fold`
+    / `__zip` undefined; `gorget_map_iter` implicit-declaration; `pair_joinwords_c_fold` **ICEs** at
+    `ir/lowering/mod.rs:2144`. `t0167` names the family for self-host; **the Rust-lane `fold` failure is
+    sharper than what is filed.**
+  - **M3 · `==` without `Equatable` — RATIFIED AND UNIMPLEMENTED, no owner ask needed.** **D46 (2026-08-27)**
+    already rules it: check-time rejection for structs/enums, intrinsic structural equality for tuples.
+    ⚠ **`t0013`'s own headline is STALE** — D46's measured table says the current answer is *address
+    identity, nondeterministic across lanes*, not "silently answers false".
+  - **THEN `t0695`'s asked-for pipe + shrink-only BUILD-FAIL ratchet**, converting all 25 BUILD-FAIL cells
+    into ONE guard (Core #6) instead of 25 filings — the item explicitly *"wants the PIPE, not 27 filings"*.
+  ⭐ **SHARPEST SINGLE CELL, and the best fit for the track's thesis:** Book Ch4 § "Capturing Variables" is
+  **unwritable in either spelling** — `(&count)():` is a PARSE ERROR (no such grammar) and without it the
+  same example is `E_ReadWhileMutCaptured`. 5 cells. Whichever way the doc adjudication goes, a
+  compiler-side change is required.
+  ⊕ **The doc-defect half is real and costs no filing: 31 of 49 doc failures are `REJECTED`** — the docs
+  teach code the compiler refuses (`float64 x = 1.5` → `E_TypeMismatch`; `m.get(k) ?? 0` →
+  `E_DefaultOpRhsTypeMismatch` since `.get()` returns `Option[int &]`; `enumerate` → `E_UndefinedName`).
+  ⚠ `language-reference` cells (7) are ADJUDICATIONS, not defects — it is written AFTER the code.
+  ⚠ **SEQUENCING vs Track A:** `func_type_value` / `func_closure_reassign` (function-typed reassignment is
+  a no-op) may belong to **A1/A2**. Scout F did NOT verify a shared root — CONFIRM before F takes them.
+  ⊕ **`beginner_map` currently counts OPEN in the convergence classifier** because `t0018` cites the bare
+  directory, not a `.gg`. Adding a `.gg` citation is a COUNTING CORRECTION, not a closure — do not bank it.
+  ⊕ **Doc-block coverage, regenerated: 944 ```gorget``` blocks in `docs/`** (book 478 · language-reference
+  272 · language-design 139) against 288 celled = **32% covered, 601 uncelled**. Celling all of them is a
+  FOLLOW-UP track, not this one (needs an extractor + hand-derived expected output; ~3× the map's runtime).
 - **G · EASE: PRUNE THE SHOWCASE + PRELUDE THE COLLECTIONS — ⚡ owner-selected.** `CLAUDE.md`
   § "Self-host as the elegance showcase" already MANDATES the prune and it has not happened: 822 `bool` +
   `match` + `else: pass` arms where `if d.kind is DkVariable():` exists · 356 `x = x + 1` where `+=` does
