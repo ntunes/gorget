@@ -675,6 +675,40 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **R EXECUTOR COMPLETE — `ab429b88b`, 8 files, +360/−109; output-review launched. `known_gaps_census.sh
+--check` rc 1 → rc 0.** Gates B/C: both `security_safe_except_on` annotations deleted, helper **kept** under
+`#[expect(dead_code, reason=…)]` — **`expect`, not `allow`, so it fires `unfulfilled_lint_expectation` the
+moment a caller returns.** Gate A: fixture graduated to top-level, self-host **PASS/MATCH 120.7 s** ⇒ no
+manifest edit, no allowlist row, no ceiling move. **`t0729` RE-SCOPED, not closed.**
+⭐ **IT SHIPPED THE FIXTURE WITH TWO TESTS, NOT ONE** — the LLVM/ASan pin **plus a default-lane `run_gg`** —
+because *top-level enrolment is diagnostic-always-pass*, so a C-lane regression would leave every gate green.
+⚡ **Enrolling a fixture is not the same as WATCHING it.**
+⛔⛔ **AND THE MISTYPED SLOT IS UPSTREAM OF BOTH BACKENDS — MEASURED, AND IT CHANGES THE ITEM.** Same source:
+LLVM `alloca %Option__int64_t` + `memcpy(%s17+8, %s16, i64 32)` — **SOURCE-sized**; C
+`memcpy(__v44, __v30, sizeof(int64_t))` — **DESTINATION-field-sized**. **Both lanes allocate a void `map`'s
+result as `Option[int64]`; only the LENGTH differs** (C 8, in bounds but a truncated `String`; LLVM 32, 24 OOB).
+⇒ **THE C LANE'S CLEANLINESS IS NOT A VINDICATION OF THE LOWERING (Core #8) — it is clean only because a void
+`map` DISCARDS its result — and fixing the LLVM length alone would SILENCE ASan WHILE LEAVING THE TYPE
+DISAGREEMENT.** It deliberately did NOT prescribe the result type: minting `unit` was measured rc 139 on both
+backends, so that is **an open design call for Track U**, not R's.
+⭐⭐ **AND IT REFUTED A2-α's ARCH ARGUMENT — ON FORM, NOT JUST FACTS.** At HEAD the copy is
+`memcpy(%v53, %s2, i64 16)` into a 16-byte field with **the length a CONSTANT OPERAND** ⇒ **in-bounds-ness is
+decidable from the IR with NO reference to frame layout, so NO TARGET CAN DIFFER.** ⚡ **This is the second
+arch claim this round that dissolved once someone read the IR instead of reasoning about stack layout — the
+first was "right by luck". RULE: an out-of-bounds argument whose length is a CONSTANT needs no architecture.**
+⊕ **Core #14 corrected in place:** `tests/integration.rs`'s doc asserted `combinator_callable_param_same_type.gg`
+"is ASan-clean" — **rc 99 `memcpy-param-overlap` under LLVM.** *True on C, false on LLVM, never measured on the
+lane it claimed* — exactly Track U's scout finding, reached independently.
+⊕ **Nothing filed from `t1157`–`t1166`** — every finding folded into `t0729`'s re-scope. The 33 OOB findings
+stay Track U's.
+⭐ **A ROUND-CLOSE CONVENTION WORTH KEEPING: a mid-round `DONE.md` entry must NOT open its headline with
+`R49 …`** — `done_md_round_close_shapes_are_pinned` counts that as round-ish and its prescribed remedy is a
+bump to a **SHARED `scripts/figures.db` census figure every other track's entry would collide on**. R instead
+opened with the item id (matching the existing `t0871 CLOSED (R49 Track K)` sibling): census back to 83/4,
+**no `figures.db` edit, no cross-track collision.** ⇒ **make this the convention for all mid-round entries.**
+⊕ **`CORPUS_MANIFEST.txt`'s `known_gaps` row said 315; its OWN recount command says 338. FIXED by the
+orchestrator (stale figure, own hands).**
+
 ⛔⛔⛔ **SESSION RATE LIMIT KILLED 8 AGENTS MID-FLIGHT (2026-09-04 ~07:40 UTC). THE ORCHESTRATOR RAN 12
 CONCURRENT AGENTS; THE CEILING IS THE SESSION BUDGET, NOT THE BOX.** Killed: M2 output-review · T1 pass 1 ·
 N2 executor · L fold 2 · F-G executor · N1 output-review · R executor · M1 confirming review. Two completed
