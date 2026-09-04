@@ -675,6 +675,45 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **A2-α OUTPUT-REVIEW = SIGN OFF ON DESIGN AND CODE (1 BLOCKING records defect, folded). AND IT BUILT THE
+ROUND'S STRONGEST INSTRUMENT: A 320-FIXTURE GIR DIFFERENTIAL.** Rather than trust the executor's single
+probe on the safety-critical *"behaviour-preserving on every accepted program"* claim, it emitted GIR for 320
+fixtures with both the pre- and post-fix compilers and **mechanically classified every difference**:
+**63 files differ · 221 call lines paired with IDENTICAL dst, callee and args · 0 UNEXPLAINED difference
+lines.** Every indirect-call site changed **shape only**. ⚡ **THIS IS THE ANSWER TO "HOW DO YOU PROVE A
+REFACTOR IS BEHAVIOUR-PRESERVING": DIFF THE IR OVER THE WHOLE CORPUS AND CLASSIFY THE RESIDUAL TO ZERO — a
+probe proves one cell, a classified differential proves the absence of a second.**
+⊕ **And it made the enumeration TOTAL with three independent witnesses** (a closed 3-variant `Ownership` enum;
+`compute_param_abi` as sole producer; the "PLAIN inner, no MutPtr wrap" invariant), producing a **6-row
+table** in which `callee_passes_by_ptr` agrees in all six and `callee_is_move_param` disagrees in **exactly
+one** — read at exactly one site, only when the call writes `^`. **The executor's cell was the right cell and
+the only one.**
+⊕ **It also RED-verified all 16 cells itself** and confirmed the disposition cell-for-cell: **8 RED, 2
+discrimination, 6 controls** — and that the decode is **genuinely deleted**: `git grep` for the two manufactured
+prefixes gives **4 at `fbed38cc0~1`, 0 at HEAD**.
+
+⛔ **THE BLOCKING DEFECT IS A GATE THAT CANNOT SEE ITS OWN ITEM — a new instance of the round's guard class.**
+`t1118` files a **HIGH self-host SEGV** citing a `known_gaps` fixture whose only test is now the **LIVE,
+Rust-lane** one. Measured: `known_gaps_census.sh --list | grep callable_local_var` → **rc 1, ZERO rows**,
+while `t1055`'s four SH cells show **4 rows**. ⇒ **`t1055` will flip when fixed; `t1118` is on the roster zero
+times.** ⚡ **A CITED REPRO IS NOT EVIDENCE UNLESS SOME GATE ENUMERATES IT — and the helper it needed
+(`sh_known_gap_expect`) WAS ADDED BY THE SAME COMMIT and used four times, twelve lines away.**
+⊕ **`DONE.md` overstates its own figure:** headline *"16 cells RED→GREEN"*, body 38 lines later *"8
+RED-verified … 2 discrimination … 6 controls"*. **Measured: 8.** The commit message was right; only the
+permanent record was wrong. **Core #5 in a figure a future round would have quoted.**
+⊕ **`t1118`'s cited `repro` fixture header describes a bug THIS COMMIT DELETED** (still "ICE … panics the Rust
+lowerer", cite `mod.rs:2114`, real site `:2154`), and a sibling assertion in `tests/integration.rs` still
+claims *"Every one … is `#[ignore]`d with a citation"* over a list naming the now-live row.
+⊕ **Two unowned findings folded for filing (`t1235`–`t1239`):** the residual `Named` arms are unpinned and
+`__Closure_N__call` **ICEs on user collision** (`gg check` rc 0, `gg build` rc 101 — pre-existing and LOUD, so
+the design holds, but **no `todo/` owner and no cell in the 16-cell net**); and a **Core #4 sibling census the
+deleted `t0389` asked for and nothing inherited** — `t0392`/`t0401`/`t0310` are Tier-2a siblings with
+`repro = []`, so **nothing measured whether they graduated with this fix.**
+⊕ **A second behaviour delta the executor never mentioned:** `register_call_result` now early-returns on
+`func_name == None`, so an indirect call returning an owned `String` with an untracked signature is no longer
+`FreshOwned`. **Conservative (more clones, never fewer), zero cells exercise it — but "behaviour-preserving"
+was scoped to the ABI channel only and the record must say so.**
+
 ⭐ **TRACK U LAUNCHED (pass 1) AND S-a2 RE-SCOPED TO *PLACES ONLY* (pass 2 launched), 2026-09-04.**
 U's brief makes **filing the 33-site enumeration its FIRST deliverable, before any fix work, unconditional on
 the design succeeding** — and tells the reviewer to **RECONSTRUCT THE DETECTOR AND RE-DERIVE THE NUMBER**
