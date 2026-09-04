@@ -683,6 +683,58 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+✅ **F-G INTEGRATED** (`e743229a4`) — **THIRTEEN TRACKS LANDED.** Bare rcs: `build_rc=0 · lib_rc=0 ·
+lints_rc=0 · todo_rc=0 · census_rc=0`.
+⚠ **ITS MERGE NEEDED REAL ADJUDICATION, NOT KEEP-BOTH** — three conflicts including `tests/lints.rs`'s
+`ALLOWED_UNWIRED` **count constant**, where ours said 27, theirs 28, and **the correct answer was 26**.
+Established by diffing the two SETS: F-G **removes** `eq_without_equatable_silently_false` (it wired that
+fixture), and its two extra entries are **STALE — M1 already wired those on HEAD.** 27 − 1 = 26, exactly what
+git's content merge produced. ⚡ **A COUNT CONSTANT BESIDE AN AUTO-MERGED LIST IS NOT A PICK-A-SIDE CONFLICT:
+NEITHER SIDE'S NUMBER IS RIGHT. RECOMPUTE IT FROM THE MERGED BODY.**
+⛔ **AND I GOT IT WRONG TWICE FIRST, WITH INSTRUMENTS THAT COULD NOT SEE THE STRUCTURE** — an `awk` range that
+ran past the array into an unrelated one (47) and a Python scan that stopped at a nested bracket. **Both
+produced a number.** ⚡ *Same lesson as N2's `sizes=[]` column: a parser that cannot see the structure still
+returns an answer, and the answer looks like a measurement.* Settled by extracting both sides with
+`git show` and diffing the entry SETS.
+⊕ Also fixed: the generated index duplicated `t1055` (the fold's base predates its re-grade to High), which
+`todo_index.py` caught as *"pointed at twice"* — dropped the stale Medium row, regenerated.
+⭐ **F-G's confirming review settled two things the executor had not measured:** a **4804-file corpus
+differential** showing the `derive_possible` selector is **message-only — 0 files change rc in either
+direction**; and every one of the six ratcheted constants equals its measurement, **none bumped to green a
+gate.** ⊕ Non-blocking erratum for integration: `DONE.md`'s "TWELVE" flips is **SIXTEEN** at the shipped tree
+— the earlier 13→12 correction landed one artifact-set stale.
+
+⚖⚖ **S-a2 — PRIOR-ART RESEARCH AND THE REFERENCE-GRADE PROPOSAL (delivered to the owner 2026-09-04).**
+**How every mainstream language calls a callable stored in a collection: THROUGH A BORROW, never a copy.**
+**Rust** `(map[&k])(args)` — `Index::index` returns `&V` and `Fn` is blanket-implemented for `&F`;
+**C++** `map[key](args)` — `operator[]` returns `V&`, `operator()` is `const`; **Go** func values are
+pointer-sized; **Swift/C#** closures and delegates are reference types, "copy" is a retain.
+⭐ **Rust is the decisive comparison — the only one achieving this WITHOUT refcounting or GC, with the same
+affine ownership and no-implicit-clone rule Gorget has. Its answer is exactly: CALLING IS NOT CONSUMING.**
+`Fn` takes `&self`; only `FnOnce` consumes.
+⭐⭐ **AND THE DECISIVE FACT IS INTERNAL: GORGET ALREADY HAS THE SPLIT.** `CallableTrait` / `MutCallableTrait`
+/ `ConsumeCallableTrait` (`src/semantic/types.rs:44-48`) **are exactly `Fn`/`FnMut`/`FnOnce`** — and
+`needs_explicit_move` (`src/semantic/safety/type_utils.rs:113-118`) **lumps ALL THREE into
+single-owner-no-implicit-copy.** ⇒ *the type system makes the distinction and the ownership rule ignores it.*
+**PROPOSAL: the callee position is a BORROW position.** (1) a call does not consume its callee — `Callable`
+borrows, `MutCallable` mutably borrows, `ConsumeCallable` consumes; **this is the ratified CoW default applied
+where it already belongs, because A CALL IS NOT AN OWNERSHIP BOUNDARY**; (2) `d[k](v)` parses (closing the
+`E_NotAFunction` gap) and lowers to call-through-place; (3) `h = d[k]` used only to call binds a **borrow**;
+(4) the 3 httpserver **transfer** sites still clone — correct, the destination must own.
+⇒ **This REMOVES the charter breach rather than accepting it** (the charter demands implicit clones be as good
+as the best hand-written code, and the best hand-written code borrows), and fits the ratified transient-view
+model exactly — **a call-through-place borrow is transient by construction, never stored.**
+⊕ **RECOMMENDED SEQUENCING: land S-a2's reject for FIELD and TUPLE places now** (closing the measured
+double-free) **and DEFER INDEX places behind the callee-borrow rule, NAMED as an omitted cell.** The
+httpserver's 8 sites are all *index* places, so this splits on a principled line and **avoids shipping a known
+charter breach even temporarily.**
+
+⭐ **TRACK W LAUNCHED (pass 1) — the expiry the owner asked for.** Scope: **field drop + typed-clone routing**
+(the minimum SAFE scope — the field drop alone double-frees). Closes `..._param_named` outright and tightens
+`..._local_literal` 12 B → 6 B, with the producer-side residual **NAMED as an omitted cell**. Bases on L's tip.
+⊕ **The admission's self-retiring half lands with L, not W** — each row cites W's item, and the sweep's
+no-longer-leaking path becomes fatal for cited rows. **W is the cited item.**
+
 ⚖ **OWNER RULING 2026-09-04 — L: LAND IT AND ADMIT THE ROWS, ADMISSION TO BE *TEMPORARY*.** Branch (a) taken.
 ⛔⛔ **AND "TEMPORARY" IS NOT FREE TODAY — THE ALLOWLIST HAS NO RETIRING DIRECTION.** S-a's pass 1 measured
 that when a row stops leaking the sweep prints *"✅ no longer leaking — DELETE these rows"* / *"leaking LESS —
