@@ -78,6 +78,26 @@ not the one named; zero `.status.code()` maskers remain, so that filing was not 
 ⊕ **A robustness-map cell was added** for the SEGV (hand-derived expectation, beginner idiom per the map's
 "not from our own corpus" rule) — and running it surfaced a SECOND drifting cell, `trait_dynamic_dispatch_box`
 `[selfhost] TRAP → CRASH`, recorded on `t1084`.
+✅ **T1's ERRATA DIFF IS SIGNED OFF — no blocking. Three small errata folding now; T1's TIP WILL MOVE, and
+INT-A's brief PINS T1 BY HASH — update the blank before its executor launches.**
+✅ **THE PARITY REASONING WAS VERIFIED AT THE MECHANISM, not the conclusion:** every fixture enumeration in
+`tests/integration.rs` is `read_dir` on the TOP LEVEL with `p.is_file()`
+(`grep -n 'let fixtures_dir = ' tests/integration.rs` → 12 sites, all identical), so nothing under
+`known_gaps/`, `security/` or `robustness_map/cells/` can enter the parity corpus, and the two modified
+top-level fixtures are comment-only. **The zero-slack ceiling is not at risk from that diff.**
+⊕ **The pre-existing attribution is STRONGER than T1 claimed:** `git diff --name-only 6bc50c3ea 0da7f78b6 --
+src/ lib/` is **EMPTY** — the Rust lane is byte-identical, so the overflow cannot be T1 inflow at all.
+⊕ **The robustness-map drift does NOT hide a red, and the reason is not the one given:** `drifts` is absent
+from the gate, but `new_div` IS in it — the second cell is safe because its BASELINE buckets already differ,
+so it is a KNOWN divergence. **The safety comes from the baseline, not from DRIFT being report-only.**
+⊕ **`t1303`'s eventual fix is LOCALIZED**: the emitted Rust artifact is internally inconsistent — the closure
+is declared correctly while the CALL-RESULT TEMP is declared as the wider type and the copy takes that width.
+**The fix is at the call-result slot typing, not the closure signature.**
+⛔ **E2 IS A CORE #5 VIOLATION AND IT WAS MINE TO CATCH:** the `sound_move_operand_*` sub-count is **14, not
+15** (`ls tests/fixtures/sound_move_operand_*.gg | wc -l` → 15, exactly one wired) — **and the item's own
+enumerated list already contains 14 entries, so the prose contradicts its own list.** Three sites carry it.
+The **46** headline is correct and independently confirmed.
+
 ⚠ **PARITY WAS DELIBERATELY NOT RE-MEASURED** — the claim is that the corpus scan is NON-RECURSIVE so
 `known_gaps/`, `security/` and `robustness_map/cells/` cannot enter it, and the two modified top-level
 fixtures are comment-only. **With the ceiling at zero slack this is load-bearing; the output-review's FIRST
