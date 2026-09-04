@@ -683,6 +683,39 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+✅ **TRACK Q INTEGRATED** (`a44f063da`) — **FOURTEEN TRACKS LANDED.** `build_rc=0 · lib_rc=0 · lints_rc=0 ·
+todo_rc=0`, **and the guard VERIFIED LIVE ON THE INTEGRATED TREE**: planted `<<<<<<< HEAD` in a tracked
+`.txt` → **rc 101**; restored → **rc 0**; `git status` clean.
+⛔⛔ **THE MERGE WAS NEARLY WRONG THREE TIMES, AND EVERY MISS WAS A NAIVE EXTRACTION.** (1) A union resolution
+**INTERLEAVED** the two EOF blocks — content differed 295 lines into the guard function while both `fn` names
+appeared exactly once, so a name-count check would have passed it. (2) Reconstructing as *ours + theirs' guard
+block* **cut the block too late**, dropping `CONFLICT_MARKER_ARMS`, `conflict_marker_arms()` and
+`line_is_conflict_marker()` — which live BEFORE the guard's doc-comment run — and the tree **failed to
+compile** (`E0425`, three call sites). (3) Only anchoring on the **const declaration** and walking back over
+`///` produced the true 413-line block, verified **verbatim** against the fold commit.
+⚡⚡ **THE RULE THIS EARNS: WHEN RESOLVING A CONFLICT BY RECONSTRUCTION, VERIFY THE RESULT AGAINST THE SOURCE
+COMMIT BYTE-FOR-BYTE — NOT BY COUNTING SYMBOLS. And a helper defined ABOVE the thing it serves is invisible to
+a walk-back that only climbs comments and attributes.** *Third instrument-blindness of the round, and the only
+one that would have shipped a non-compiling tree.*
+⭐ **Q's fold made the E-1 witness WORSE than the review described:** a **real Latin-1 file carrying a COMPLETE
+conflict block** — opener, separator, closer — with the new assert relaxed by ONE line was **rc 0, guard
+GREEN, block invisible**; with `assert_eq!(non_utf8, 0)` → **rc 101.** *The counter existed before and was
+asserted nowhere, surfacing only inside the floor's message, which never prints when floors pass — it was
+decoration.*
+⊕ **It split the doc bullet rather than over-asserting:** vanished paths stay **deliberately unasserted**,
+because *"that one is a legitimate race, and a guard that reds when a neighbour checks out a branch gets
+waived."* ⊕ `^` now pinned past the prefilter: dropping it went from flipping **0 of 39** rows to **1 of 40**.
+⊕ **It verified my E-3 measurement rather than taking it**, and named the irony itself: *"I'd added a number
+that couldn't carry information to a message I was changing to stop doing exactly that."*
+
+⚖✅ **OWNER RE-CONFIRMED (2026-09-04) WITH THE CORRECTED FIGURE: L's RULING HOLDS AT 5-of-8. Admit the five
+NEW-INFLOW rows, admission TEMPORARY.** Folded to L: admit at **exact measured byte counts** (not rounded, so
+drift trips); `spawn_unchecked_bypasses_check` needs a **brand-new row**; `shared_callable` and
+`closure_fstring_capture` need their **class sets widened**, not just counts. **Every row CITES `todo/t1210`**,
+and the sweep's no-longer-leaking path becomes **FATAL FOR CITED ROWS** — the self-retiring contract, precedent
+`security_safe_except_on`. ⚠ **Scoped to cited rows only**: turning the pre-existing uncited ones fatal would
+red the sweep on inflow that is not L's.
+
 ⛔⛔ **L's CONFIRMING REVIEW: THE CODE IS CORRECT AND SAFE; THE DISCLOSURE IS NOT. THE TABLE IS 8 CELLS, NOT
 5 — AND THREE ARE PRE-EXISTING FIXTURES L NEVER TOUCHED.** Measured base vs merged over 368 top-level
 fixtures, **5/5 reps deterministic each side**, all unambiguous NEW INFLOW:
