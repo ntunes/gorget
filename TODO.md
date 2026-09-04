@@ -221,7 +221,7 @@ is not enough if the brief that the executor reads is stale.**
 
 | L — closure-capture | **M1 — Box mint** | **M2 — trait-obj pack** | N — `t0988` | P — drop side | Q — `t1066` guard |
 |---|---|---|---|---|---|
-| **`t1067`–`t1075` + `t1136`–`t1145`** ⚠ | **`t1076`–`t1080`** | **`t1081`–`t1085`** | **N1 `t1086`–`t1090` · N2 `t1091`–`t1095`** | **`t1106`–`t1115`** | **`t1096`–`t1105`** |
+| **`t1067`–`t1075` + `t1136`–`t1145`** ⚠ | **`t1076`–`t1080`** | **`t1081`–`t1085`** | **N1 `t1086`–`t1090` · N2 `t1091`–`t1092`** ⊕ | **`t1106`–`t1115`** | **`t1096`–`t1105`** |
 
 ⛔⛔ **THIRD ID INCIDENT, AND IT IS A NEW FAILURE MODE: I SPENT AN ID OUT OF A BLOCK I HAD ALREADY ISSUED.**
 L held `t1066`–`t1075`; I then filed `todo/t1066.md` myself for the conflict-marker gap (`4d695b14f`).
@@ -349,6 +349,9 @@ reject** under D27 (`E_MoveWithoutOperator`), so `tests/integration.rs:60651-606
 
 ⊕ **`t1053` RETURNED TO THE POOL** — A1-I refused to file it because `todo/t0774` already owned the subject,
 **following GREP-BEFORE-YOU-FILE over my instruction.** It is free.
+⊕ **`t1093`–`t1095` HANDED BACK 2026-09-04** — N2's pass 3 found `t0954` and `t0955` already own both
+halves of its mechanism verbatim, so N2 **CLOSES** them and needs only two fresh ids. **GREP-BEFORE-YOU-FILE
+working as intended: a five-id block met a two-id need.**
 ⚡ **FIRST UNISSUED ID IS NOW `t1146`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
@@ -2482,64 +2485,44 @@ scripts/convergence.sh <prev_kg> <prev_todo> <filed>          # MEASURES, does n
 ```
 ⚠ **Run these on a QUIET tree** — no agents building. R48 paid for this twice with false REDs.
 
-### ⚖ PARKED OWNER ASKS — ask when the work is SCHEDULED, not before
+### ⚖ OWNER RULINGS 2026-09-04 — **ALL THREE ASKS ANSWERED. "go with your recommendations."**
+⛔ **THE LEDGER EDIT IS NOT AUTHORIZED BY THIS.** The owner's previous grant was a SEPARATE, item-scoped
+sentence (*"You have permission to adjust decisions.md as discussed on these items"*), so a substance ruling
+is not a ledger-write grant. **`docs/define-gorget/decisions.md` stays owner-edit-only (AGENTS.md).** The
+exact text for all three is prepared and awaits one line of authorization; **until then these rulings live
+HERE and in the track briefs, and every track cites "owner ruling 2026-09-04".**
 
-⭐⭐ **TWO ASKS ARE NOW DUE — BOTH TRACKS ARE SCHEDULED, BOTH REVIEWERS RULED THEM NON-BLOCKING, AND BOTH ARE
-PROCEEDING UNDER A STATED READING. Surface at the next owner contact; do NOT stall a track on either.**
+1. ⚖ **D46 EXTENDS — INTRINSIC STRUCTURAL EQUALITY FOR THE NON-ANNOTATABLE AGGREGATES, GATED ON ELEMENT
+   COMPARABILITY.** ACCEPT when every element is itself comparable: `Option[T]` · `Result[T,E]` · `Vector[T]`
+   · `Set[T]` · `Dict[K,V]` · `Array[T,N]` · `Range` (+ tuples, already ruled). REJECT unchanged: user
+   structs/enums without `@derive` or a user `equip`. ⊕ **`Box[Trait]` and `Callable[T]` are REJECT — a trait
+   object and a closure have no structural equality to give; name them so the axis has no unnamed cell.**
+   ⭐ **The generalising rationale: D46's own justification is ANNOTATABILITY, so the language now draws
+   "declarable ⇒ require `@derive`; non-declarable ⇒ intrinsic when elements are comparable" — the SAME
+   concept D46 already applied to tuples, not a new one.**
+   ⚠ **NOT FREE: `type_key_for_trait_lookup` maps `Generic(def_id,_)` to the BARE DEF NAME
+   (`typecheck.rs:6415-6417`), DISCARDING element types — the predicate needs the `Generic` args directly.
+   Scope it as real work.** ✅ Zero in-repo migration cost (no equality sites on any of these across 4,721
+   files).
 
-1. **D46's TUPLE RATIONALE HAS NO SUBJECT FOR THE PRELUDE/BUILTIN AGGREGATES (Track F-G, `t0013`/`t0683`).**
-   D46 justifies intrinsic structural equality for tuples on the ground that *"there is nowhere to write
-   `@derive(Equatable)`, so requiring one is impossible and rejecting would make tuples second-class."*
-   ⚡ **That rationale applies VERBATIM to `Option[T]`, `Result[T,E]`, `Vector[T]`, `Set[T]`, `Dict[K,V]` —
-   which the user also cannot annotate — while D46's TEXT sweeps them under "structs and enums keep
-   requiring `@derive`", which would reject `Some(1) == Some(1)` FOREVER.**
-   ⊕ Measured today: **`Some(1) == Some(1)` prints `false` on C and LLVM and `true` on ggdef**, and the
-   entire 3,350-file corpus contains **ZERO `Option[T] == Option[T]` comparisons** — which is why it survived.
-   ⇒ **The scout read the RATIONALE as settling it and called it a subject gap. ⚠ SHARPENED BY F-G PASS 1,
-   AND IT IS NOW A REAL OWNER ASK, NOT A CONFIRMING LINE:**
-   ⛔ **`Option` AND `Result` *ARE ENUMS*, SO D46's LITERAL TEXT REJECTS THEM.** This is not a gap the
-   rationale quietly covers — **the TEXT and the RATIONALE point OPPOSITE WAYS**, and a brief that assumed
-   ACCEPT was measured to contradict its own table. Under the prototype `gg check` **rejects** with
-   ``operator `==` is not defined for type `Option` ``.
-   ⊕ **AND THE CELL LIST IS LONGER THAN FIVE — also unruled and unnamed anywhere: `Array[T,N]` ·
-   `Box[Trait]` · `Callable[T]` · `Range`.**
-   ✅ **WHICHEVER WAY IT IS RULED, NOTHING IN-REPO BREAKS: zero equality sites on ANY of those types across
-   all 4,721 fixture/spectest/lib files.** ⚠ **AND IT IS NOT FREE TO IMPLEMENT EITHER WAY:
-   `type_key_for_trait_lookup` maps `Generic(def_id,_)` to the BARE DEF NAME (`typecheck.rs:6415-6417`),
-   discarding element types — "Option-of-comparable" needs the `Generic` args directly, not the trait key.**
-   ⭐ **ORCHESTRATOR RECOMMENDATION (given to the owner 2026-09-04): ACCEPT, gated on element comparability —
-   the rationale is about ANNOTATABILITY, ggdef already implements it, and rejecting makes a non-annotatable
-   type permanently uncomparable. The seam to accept knowingly: "declarable types need `@derive`,
-   non-declarable get intrinsic-when-elements-comparable" — which is the answer D46 ALREADY gives for tuples.**
+2. ⚖ **CLOSURE CAPTURE IS AN ORDINARY CONSUMING POSITION — clone-if-live, move-if-dead.** The
+   `decisions.md:1580` alternative (*"require by-value/`^` captures for any closure that escapes"*) is **NOT
+   adopted**: it depends on **D7's unimplemented capture list**, so it would hand users a diagnostic whose
+   fix-it cannot be spelled. **Track L already implements the ratified reading; its executor was told to
+   write it as RATIFIED rather than as an open question.**
+   ⊕ **The one cell that stays open regardless: a closure capturing a `Callable`/`Box`/`Owned`/`Task`/`Guard`
+   — clone breaches the carve-out, move breaches it under D31, reject cannot be spelled without D7. It ships
+   as the `known_gaps` repro asserting `41`, with D7 named as its gate.**
 
-3. 🆕 **THE ORDERING SIBLINGS ARE A SEPARATE ASK, AND A SEPARATE TRACK (F-G pass 1, measured).**
-   `<` `>` `<=` `>=` on a struct is the same `op_trait_and_method` hole — **but the blast radius is 938 sites
-   across 91 files, versus 4 for `==`, and 929 OF THE 938 ARE `String`.** `String` is registered
-   `Equatable`/`Hashable` **but NOT `Comparable`**, so a naive gate **rejects `"ab" < "ac"` — working,
-   ubiquitous code** — and **`Comparable` is NOT DERIVABLE AT ALL**, so the teaching diagnostic cannot say
-   *"add `@derive`"*. **D46's "Owed:" names only the `==` path.**
-   ⭐ **RECOMMENDATION: keep the CLASS fix (Core #4) by making `op_trait_and_method` EXHAUSTIVE over all 31
-   `BinaryOp` variants with the four ordering arms as explicit `=> None` citing a filed id — site N+1 becomes
-   a COMPILE ERROR and ordering behaviour is unchanged — then split the ordering REJECT into its own track
-   with an owner ask on whether `String` becomes `Comparable`.**
-
-2. **`decisions.md:1569` ENDS WITH AN OPEN OWNER-RAISED QUESTION THAT NAMES TRACK L's EXACT SHAPE.**
-   The block closes with an explicitly undecided question about *"Returning a closure that captured a local …
-   the shape behind the escaping-capture memory bug"*, listing options **including "require by-value/`!`
-   captures for any closure that escapes" — which is what Track L implements.**
-   ⚠ **L's brief had claimed "NO OWNER-ASK IS OWED. Four independent sources agree." That is FALSE: there is
-   a fifth and it is OPEN.** Pass 3 ruled the implemented reading **consistent with D1 and D5**, so L
-   proceeds under it and says so out loud. ⇒ **A confirming line, not a gate.**
-   ⊕ Related and NOT an ask: **D7's per-variable capture list is confirmed UNIMPLEMENTED at `:1569`**, which
-   is why a captured-`Callable` reject **cannot be spelled** and L ships a `known_gaps` repro instead.
-
-- **`t0844`** — `process_group(0)` + SIGINT forwarding: user-visible Ctrl-C semantics in the shipped
-  compiler.
-- **`t0842`(A)** — `wait_timeout` returns `-2` and does **not** kill the child, so a Gorget program leaks
-  a timed-out child *by design*. Unratified language surface.
-- **`t0863`** — robustness divergences left **UNACCEPTED** (5 more added at R48 close, all one signature:
-  C and self-host agree on accept-then-build-fail, LLVM merely unclassifiable via `t0646`). Verify the
-  prior per-lane grade before folding.
+3. ⚖ **THE ORDERING SIBLINGS SPLIT OUT — F-G KEEPS THE CLASS FIX, THE REJECT BECOMES ITS OWN TRACK.**
+   F-G makes `op_trait_and_method` **EXHAUSTIVE over all 31 `BinaryOp` variants** with the four ordering arms
+   as **explicit `=> None` citing the ordering item's id** ⇒ **site N+1 becomes a COMPILE ERROR and ordering
+   behaviour is UNCHANGED. Core #4 honoured; division, not deferral.**
+   ⛔ **F-G must NOT gate `<`/`>`/`<=`/`>=`: 938 sites over 91 files vs 4 for `==`, and 929 are `String`,
+   which is `Equatable`/`Hashable` but NOT `Comparable` — a naive gate rejects `"ab" < "ac"`. `Comparable` is
+   NOT DERIVABLE AT ALL, so the teaching diagnostic cannot say "add `@derive`".**
+   ⭐ **The ordering track carries its OWN owner ask: SHOULD `String` BECOME `Comparable`? — the question that
+   decides whether this is a small fix or a language change. NOT F-G's to answer.**
 
 ### 🗂 14 AGENT WORKTREES CARRIED FORWARD (R47 keep-list, verified at R48 close)
 All of R48's OWN track/review worktrees were pruned at integration (clean). What remains is the R47
