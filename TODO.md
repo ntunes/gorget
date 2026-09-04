@@ -522,6 +522,25 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   my rewritten ledger comment **no longer re-spells the value**, making the R48 waiver dead — **retired
   rather than carried.** **Two guards, two catches, both on my own edits.**
 
+- **⚡ A1-I · FOLLOW-UP LANDED (`2de5d0f06`, RECORDS ONLY) — the in-flight output-review was WARNED its base
+  moved.** ⚠ **A branch moving under a live reviewer is a real hazard and it nearly happened silently.**
+  ⭐ **AND THE EXECUTOR RECORDED A DISTINCTION I DID NOT ASK FOR AND SHOULD HAVE.** The `OUT` row now carries
+  **TWO triggers, not one**: the row **retires** when `t0953` is fixed, **and SEPARATELY the placement
+  becomes WRONG** if the owner's ruling on A1-M's pending ask admits rows of this shape — in which case
+  **the row should be DELETED, not waited on.** ⇒ *"so a future reader doesn't have to wait for `t0953` to
+  conclude the placement is stale."* **Conflating a retirement condition with a re-evaluation trigger is
+  exactly how a stale row survives a ruling that invalidated it.**
+  ⊕ Cost recorded in **two durable places**, not just the test comment: the `CORPUS_MANIFEST.txt` `OUT` row
+  and a **new `tests/fixtures/closure_identity/README.md`** (precedent `sanitize_selftest/README.md`), the
+  latter with a **"Moving them top-level"** section listing what a mover owes — six `⚖ ADMITTED` rows citing
+  `t0953`, deletion of the manifest row, and the path prefix off six `run_gg` calls.
+  ⊕ **`t1055` filed with the framing FIRST and in caps — LANE DEBT, NOT A SOUNDNESS LAG** — plus two claims
+  **a Rust-side reader would miss**: `lir_codegen.gg:1468` is a **verbatim mirror of the `optimize.rs` DCE
+  seed retired one commit earlier**, and **`__adapt_` has NO Rust counterpart at all**, so **no Rust-side
+  census could ever see it.** ⊕ Its own ratchet is labelled **bookkeeping, not a class retirement**, citing
+  the Rust twin's `const`-hoist evasion as the demonstration.
+  **Gates after the follow-up:** `--test lints` **222/0/1** · targeted integration 6/0 · index clean.
+
 - **✅ F · INTEGRATED — `ef171a34a`, the SIXTH landing.** Files `t0990`–`t0993`; corrects `t0987`, `t0988`,
   `t0068` in place. Gates bare: build 0 · `--lib` 1184/0 · `--test lints` **222/0**. ⚠ Worktree
   harness-LOCKED at merge; prune when it releases. ✅ **G's BLOCKER IS DISCHARGED** — F shipped the
