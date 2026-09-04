@@ -2410,6 +2410,32 @@ scripts/convergence.sh <prev_kg> <prev_todo> <filed>          # MEASURES, does n
 ⚠ **Run these on a QUIET tree** — no agents building. R48 paid for this twice with false REDs.
 
 ### ⚖ PARKED OWNER ASKS — ask when the work is SCHEDULED, not before
+
+⭐⭐ **TWO ASKS ARE NOW DUE — BOTH TRACKS ARE SCHEDULED, BOTH REVIEWERS RULED THEM NON-BLOCKING, AND BOTH ARE
+PROCEEDING UNDER A STATED READING. Surface at the next owner contact; do NOT stall a track on either.**
+
+1. **D46's TUPLE RATIONALE HAS NO SUBJECT FOR THE PRELUDE/BUILTIN AGGREGATES (Track F-G, `t0013`/`t0683`).**
+   D46 justifies intrinsic structural equality for tuples on the ground that *"there is nowhere to write
+   `@derive(Equatable)`, so requiring one is impossible and rejecting would make tuples second-class."*
+   ⚡ **That rationale applies VERBATIM to `Option[T]`, `Result[T,E]`, `Vector[T]`, `Set[T]`, `Dict[K,V]` —
+   which the user also cannot annotate — while D46's TEXT sweeps them under "structs and enums keep
+   requiring `@derive`", which would reject `Some(1) == Some(1)` FOREVER.**
+   ⊕ Measured today: **`Some(1) == Some(1)` prints `false` on C and LLVM and `true` on ggdef**, and the
+   entire 3,350-file corpus contains **ZERO `Option[T] == Option[T]` comparisons** — which is why it survived.
+   ⇒ **The scout reads the RATIONALE as settling it (intrinsic structural equality whenever the elements are
+   comparable) and calls it a SUBJECT GAP IN THE LEDGER TEXT, not an open design question. ONE CONFIRMING
+   LINE, in parallel with execution.**
+
+2. **`decisions.md:1569` ENDS WITH AN OPEN OWNER-RAISED QUESTION THAT NAMES TRACK L's EXACT SHAPE.**
+   The block closes with an explicitly undecided question about *"Returning a closure that captured a local …
+   the shape behind the escaping-capture memory bug"*, listing options **including "require by-value/`!`
+   captures for any closure that escapes" — which is what Track L implements.**
+   ⚠ **L's brief had claimed "NO OWNER-ASK IS OWED. Four independent sources agree." That is FALSE: there is
+   a fifth and it is OPEN.** Pass 3 ruled the implemented reading **consistent with D1 and D5**, so L
+   proceeds under it and says so out loud. ⇒ **A confirming line, not a gate.**
+   ⊕ Related and NOT an ask: **D7's per-variable capture list is confirmed UNIMPLEMENTED at `:1569`**, which
+   is why a captured-`Callable` reject **cannot be spelled** and L ships a `known_gaps` repro instead.
+
 - **`t0844`** — `process_group(0)` + SIGINT forwarding: user-visible Ctrl-C semantics in the shipped
   compiler.
 - **`t0842`(A)** — `wait_timeout` returns `-2` and does **not** kill the child, so a Gorget program leaks
