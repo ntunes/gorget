@@ -952,7 +952,7 @@ sanitize.leak.rows.round_open.mirror = none
 sanitize.leak.rows.round_open.input = none
 
 row = sanitize.leak.records.pin
-sanitize.leak.records.pin.value = 2310
+sanitize.leak.records.pin.value = 2308
 sanitize.leak.records.pin.unit = leak records the allowlist tolerates in total
 sanitize.leak.records.pin.polarity = exact-pin
 sanitize.leak.records.pin.provenance = derived
@@ -1047,7 +1047,7 @@ sanitize.leak.loose_signatures.pin.mirror = tests/lints.rs:LEAK_LOOSE_SIGNATURES
 sanitize.leak.loose_signatures.pin.input = none
 
 row = sanitize.leak.uncited_class_pairs.pin
-sanitize.leak.uncited_class_pairs.pin.value = 494
+sanitize.leak.uncited_class_pairs.pin.value = 493
 sanitize.leak.uncited_class_pairs.pin.unit = (fixture, leak-class) pairs with no citation naming a todo/ item that exists AND names the pair's top frame
 sanitize.leak.uncited_class_pairs.pin.polarity = exact-pin
 sanitize.leak.uncited_class_pairs.pin.provenance = derived
@@ -1064,6 +1064,7 @@ sanitize.leak.uncited_class_pairs.pin.caveat = TARGET IS 0, so this number is EV
 sanitize.leak.uncited_class_pairs.pin.cost_secs = 120
 sanitize.leak.uncited_class_pairs.pin.mirror = tests/lints.rs:UNCITED_LEAK_CLASS_PAIRS
 sanitize.leak.uncited_class_pairs.pin.waiver = tests/lints.rs 1 declared the constant's own SEEDED-AT note, which spells the value directly above the declaration as the evidence for not seeding at the pre-edit number
+sanitize.leak.uncited_class_pairs.pin.waiver = todo/t0614.md 1 declared NOT A SPELLING BUT A COLLISION: the digits occur inside the git hash `a93df493`, and a decimal scanner cannot tell a hash substring from a figure. Re-check this waiver if the value moves off 493 — it is keyed to the digits, not to the meaning
 sanitize.leak.uncited_class_pairs.pin.input = none
 
 # ── grow-only × policy ─────────────────────────────────────────────────────

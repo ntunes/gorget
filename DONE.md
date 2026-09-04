@@ -103,13 +103,33 @@
   `an UNCITED row was forced out` fires (rc 2).
   ⚠ **THE SCAN THAT FOUND THE THREE UNTOUCHED FIXTURES WAS A SELECTION, NOT A CENSUS — 368 fixtures.** Eight
   was therefore a FLOOR, and the authoritative instrument is a full `scripts/sanitize_sweep.sh`.
-  ✅ **RUN, AND IT CLOSES THE QUESTION: 2239 scanned, 1819 covered (floor 1743), leaks 300 / allowlisted
-  300, flaky 0, class-drift 0, corruption 1 / allowlisted 1.** The eight cells are exactly eight — no ninth
-  capture cell anywhere in the corpus — and the retiring direction did NOT fire, so no cited row is stale.
-  ⊕ **One unrelated RED, measured NOT to be this track's: `string_enum_variants`** leaks 12 B in 6
-  allocations (`str_alloc_copy*1`, `gorget_string_clone_to_owned ← tokenize`) from `String ch = input[i]`,
-  and a compiler built from this track's BASE commit leaks the identical amount. The fixture has no closure
-  in it. Filed as `t1290` with that measurement and with the Track-K hypothesis marked explicitly unproven.
+  ✅ **RUN, AND IT CLOSES THE QUESTION: 2239 scanned, 1819 covered (floor 1743), flaky 0, class-drift 0,
+  corruption 1 / allowlisted 1, and every leak allowlisted.** **EIGHT IS A CENSUS, NOT A FLOOR** — there is
+  no ninth capture cell anywhere in the corpus — and the retiring direction did NOT fire, so no cited row is
+  stale.
+  ⊕ **It surfaced ONE unrelated pre-existing leak, measured NOT to be this track's: `string_enum_variants`**
+  leaks 12 B in 6 allocations (`str_alloc_copy*1`, `gorget_string_clone_to_owned ← tokenize`) from
+  `String ch = input[i]`, on C and LLVM alike, and a compiler built from this track's BASE commit leaks the
+  identical amount — the fixture has contained no closure since 2026-04-07. Filed as **`t1290`** and
+  admitted with a row citing it, which needs no owner ask (the reserve-to-owner clause covers genuinely NEW
+  inflow). The item records a Track-K (`t0871`, `s[i]` View-tagging) hypothesis and marks it **explicitly
+  unproven**: the base-vs-base measurement rules this track OUT, it rules nothing IN.
+  ⭐ **AND THE FIX PAYS BACK OUTSIDE ITS OWN CELLS — ONE PRE-EXISTING ROW RETIRED, MEASURED BOTH WAYS.**
+  The sweep reported `cow_closure_deferred_mutate` as no longer leaking at all: **96 B in 3 allocations
+  (`str_alloc_copy*3`) against a compiler built from this track's base, ASan-CLEAN after.** Its allowlist row
+  is DELETED here rather than left for a later reader — the round that earned the burn-down does the
+  removal. **Row arithmetic, end to end: 294 + 7 admitted − 1 retired = 300.** The seven are the six
+  capture-class rows plus `string_enum_variants`; two further rows (`shared_callable`,
+  `closure_fstring_capture`) were WIDENED rather than added, and `closure_fstring_capture` was also
+  TIGHTENED in the same edit (`gorget_string_format*5 → *1`, four records it no longer leaks).
+  `LEAK_CLASS_PAIRS` 501 → 511, `LEAK_RECORDS` 2302 → 2308, `UNCITED_LEAK_CLASS_PAIRS` 494 → **493** —
+  the last one lowered not by citing a pair but by FIXING one, which is the direction the owner's
+  burn-down ruling asks for.
+  ⊕ **A CENSUS THE SWEEP HANDED BACK, LEFT DELIBERATELY UNACTIONED: 21 further rows now leak LESS than they
+  admit** (`httpserver_router` alone is `gorget_map_clone` x21 against a row saying x36). Every one is
+  UNCITED, so it stays advisory by design — tightening them is a burn-down someone must adjudicate row by
+  row, not a side effect of this track. They are recorded so the next reader sees the debt is shrinking on
+  its own and the rows are not tracking it.
   **THE COST IS THE HAND-WRITTEN COUNT.** `closure_capture_capture_cost_axis` pins both directions with
   `assert_eq!`: a dead source materializes NOTHING, a live one materializes exactly ONCE. Reverting the
   occurrence span alone measures `string_clone = 1` in the dead cell — RED — while stdout is unchanged,

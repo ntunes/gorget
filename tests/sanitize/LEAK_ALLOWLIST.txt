@@ -447,7 +447,6 @@ coroutine_dict_set	__gorget_closure_env_alloc*4
 coroutine_result_combinators	str_alloc_copy*3
 coroutine_vector_ops	gorget_array_push*1
 cow_amp_ref_field_forward	gorget_array_push*2
-cow_closure_deferred_mutate	str_alloc_copy*3
 cow_enum_bare_assign	str_alloc_copy*1
 cow_lazy_mut_borrow_write	str_alloc_copy*1
 crypto_hash	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*11,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
@@ -776,6 +775,29 @@ stress_spawn_fan_out	gorget_atomic_int_new*1
 stress_taskgroup_fan	gorget_atomic_int_new*1
 string_closures_transform	__gorget_closure_env_alloc*5,gorget_str_cat*2,gorget_string_format*4,str_alloc_copy*4
 string_conversions	gorget_parse_float*1,gorget_parse_int*1,str_alloc_copy*6
+# ⚖ ADMITTED (R49 Track L fold, 2026-09-04; covered by NEITHER new-inflow clause
+# and needing no owner ask — see below). Owned by `todo/t1290`.
+# MECHANISM: `String ch = input[i]` — a String INDEX read binding an owned local
+# — materialises through `gorget_string_clone_to_owned` into a value nothing
+# registers for drop, so `tokenize` leaks one small allocation per loop trip:
+# 12 byte(s) in 6 object(s), frames `str_alloc_copy <- gorget_string_clone_to_owned
+# <- tokenize <- main`. Identical on C and on `--backend=llvm` (measured by hand;
+# this sweep is C-only, `todo/t0731`).
+# ⛔ WHY NO OWNER ASK: it is NOT new inflow, and that was MEASURED, not argued. A
+# compiler built from R49 Track L's base commit `8bd978079` leaks the IDENTICAL
+# 12 B in 6 allocations, and the fixture (unchanged in-tree since 2026-04-07)
+# contains no closure, no capture and no `Callable` — so the capture-ownership
+# change that produced the eight rows above cannot reach it. The header's
+# reserve-to-OWNER-ASK clause covers genuinely NEW inflow; this is a pre-existing
+# leak that a full sweep surfaced, which is what this file is for.
+# ⚠ THE CAUSE IS NOT NAMED HERE ON PURPOSE. `todo/t1290` records a hypothesis
+# about the `s[i]` View-tagging surface and marks it EXPLICITLY UNPROVEN: the
+# base-vs-base measurement rules Track L OUT, it does not rule anything IN.
+# Bisect between the last green full sweep and HEAD before naming a write site.
+# ⭐ AND THIS ROW IS A DEADLINE, NOT A PARDON: it cites `t1290` in column 3, so
+# the retiring direction added in `scripts/sanitize_sweep.sh` turns FATAL the
+# moment the leak stops — the row forces its own removal.
+string_enum_variants	str_alloc_copy*1	str_alloc_copy=t1290
 string_higher_order	__gorget_closure_env_alloc*15,gorget_str_cat*1,gorget_string_format*1,str_alloc_copy*4
 string_parsing_patterns	str_alloc_copy*2
 string_word_frequency	str_alloc_copy*4
