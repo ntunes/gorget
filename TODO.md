@@ -683,6 +683,36 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔⛔ **THE FIGURES LINT CAUGHT ME A THIRD TIME, AND MY STATED RULE WAS TOO NARROW — HERE IS THE REAL
+MECHANISM.** `figures_db_values_have_one_spelling` went RED on `TODO.md`, on a line from the commit literally
+titled *"never paste a gate summary line into the handover"*. ⚡⚡ **AND THIS ONE WAS NOT A PASTED SUMMARY
+LINE — it was a value I wrote deliberately in prose, AND IT WAS LEGAL WHEN I WROTE IT.** I ran the lint after
+that commit and it was rc 0. **It went red later, when Track N2's fold MOVED THE CONSTANT TO THE VALUE I HAD
+WRITTEN.**
+⇒ ⚡⚡ **A FIGURE THAT IS SAFE TO WRITE TODAY BECOMES A VIOLATION WHEN A TRACK MOVES THE CONSTANT ONTO IT.
+RUNNING THE LINT AT WRITE-TIME CANNOT CATCH THAT — the only safe rule is NEVER WRITE A COVERED FIGURE'S VALUE
+AT ALL, in any form, and always name the constant instead.** *My first two fixes treated instances; my rule
+treated one SOURCE of instances; the actual hazard is that the handover is checked against a MOVING target.*
+⊕ Fixed (the reviewer had already proved the remedy); lint rc 0.
+
+⭐⭐ **N2's CONFIRMING REVIEW = SIGN OFF ON THE FIX, THE GUARD AND BOTH ARGUMENTS — and it ADJUDICATED A
+DUPLICATE BY FALSIFYING *BOTH* FILINGS' MECHANISM.** `t1287` (N2) and `t1290` (L) are the same defect. But the
+reviewer measured rather than picked: the leak site is **`String ch = input[i]`, not an enum payload** (six
+2-byte objects are single characters; a `Word("hello")` payload would be 6 bytes); a probe with that binding
+and **no consuming position is ASan-CLEAN**, so **`t1290`'s "every loop trip leaks" is ALSO not
+unconditional**; and adding a consuming position on one branch leaks **exactly the trips that miss it** —
+**7 outer trips, 1 reaches `Token.Punct(ch)`, 7 − 1 = 6, matching the fixture exactly.**
+⇒ ⭐ **THE REAL MECHANISM IS A CONDITIONAL MOVE INTO A CONSUMING POSITION ELIDING THE DROP ON *ALL* BRANCHES
+— Core #3.** **`t1290` survives** (right site, dated fixture, LLVM measured by hand, hypothesis marked
+UNPROVEN, and L's allowlist row already cites it); **`t1287` is removed**, folding in its **`t0218`
+discrimination** (same fixture, but a CLOSED self-host *output* parity cell — **grep alone merges them
+wrongly**), the branch narrowing that **corrects `t1290`'s own `mechanism` line**, and its `repro` path.
+⊕ **It verified N2's fixed fixture is STRONGER than claimed:** pre-fix the `map` section prints **no**
+`drop-cust` while the push control prints two, and the vanished leak has **zero `__gorget_closure_env_alloc`
+records** — *the defect's own leak, not an admitted floor.* ⊕ And re-derived all four constants independently.
+⚠ **ORDERING: L integrates FIRST; its row makes N2's four constants stale.** Whoever lands second
+**RE-DERIVES THE CENSUS — never applies a delta.**
+
 ✅ **TRACK L's FOLD IS COMPLETE — three commits, sweep `BARE_RC=0`, confirming review running its own sweep
 now.** Ratchets regenerated from the file; the row arithmetic reconciles end to end.
 
@@ -914,7 +944,7 @@ consistent with the allowlist FILE, but 293 is not what the TREE PRODUCES. The `
 THE CREDIT SIDE.** ⇒ **A NET FIGURE THAT HIDES INFLOW — the second face of the census-as-selection the same
 track already corrected once.**
 ⊕ Correction simulated exact (`rows=295 pairs=488 records=2256`), with `=t0953` citations keeping
-`UNCITED` at **481** rather than 483 — **cite them, and regenerate from the census rather than applying
+`UNCITED_LEAK_CLASS_PAIRS` UNCHANGED rather than +2 — **cite them, and regenerate from the census rather than applying
 deltas by hand.**
 ⭐ **THE REVIEW ITSELF IS A MODEL OF NOT SPOT-CHECKING:** it re-derived **all four constants three independent
 ways** (its own parser of the lint's rules, `figures.db`'s awk, the lint itself — all agreeing), re-measured
