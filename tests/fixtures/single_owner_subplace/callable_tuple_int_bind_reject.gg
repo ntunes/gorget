@@ -1,0 +1,21 @@
+# SINGLE-OWNER SUB-PLACE NEG — PLACE-SHAPE axis: tuple element, BARE-INT
+# spelling `t.1`. The parser builds `Expr::TupleFieldAccess` only for this
+# spelling; its `._1` twin is the sibling cell and goes through a DIFFERENT
+# resolver. Both are ratified and co-equal (language-reference §4.2/§7.8), both
+# double-free on a second read, and a suite that carried only ONE of them would
+# be a green guard over a live double-free.
+#
+# Omitted cell: bare INDEX places are deferred behind the callee-borrow ruling
+# (todo/t1225).
+#
+# CELL: type=Callable · place=TUPLE element (`.1`) · position=bind · capture=int.
+# RED at 7bf11017e: `gg check` ACCEPTED (rc 0).
+# ggdef: ABSTAIN (todo/t1227).
+
+Callable[int()] mk(int n):
+    return (): n + 1
+
+void main():
+    (int, Callable[int()]) t = (1, mk(40))
+    Callable[int()] g = t.1
+    print(g())

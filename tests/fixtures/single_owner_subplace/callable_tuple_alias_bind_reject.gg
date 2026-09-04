@@ -1,0 +1,30 @@
+# SINGLE-OWNER SUB-PLACE NEG — PLACE-SHAPE axis: tuple element, UNDERSCORE-ALIAS
+# spelling `t._1`. THE ROW THAT WAS NOT FIXED BY THE GATE WIDENING ALONE.
+#
+# `t.1` and `t._1` are the same place. The parser builds `TupleFieldAccess` only
+# for the literal-integer form; `._1` goes through `expect_name()` and arrives as
+# `Expr::FieldAccess { field: "_1" }`. The safety walk's `lvalue_value_type` then
+# needed a struct `DefId` to index `struct_field_names`, a tuple has none, so the
+# alias typed as unknown and EVERY ownership gate keyed on that resolver walked
+# straight past it while catching `t.1` one character away. Fixed by giving the
+# alias ONE resolver (`ast::tuple_field_alias_index`, Layering rule 3),
+# read by the typechecker AND the safety walk — the shape the self-host lane has
+# always had (`tuple_field_index`, self_host_typechecker/infer.gg).
+#
+# Break-and-watch: comment out `lvalue_value_type`'s `ResolvedType::Tuple` arm
+# and this cell goes rc 0 (and double-frees) while its `t.1` sibling stays rc 1.
+#
+# Omitted cell: bare INDEX places are deferred behind the callee-borrow ruling
+# (todo/t1225).
+#
+# CELL: type=Callable · place=TUPLE element (`._1`) · position=bind · capture=int.
+# RED at 7bf11017e: `gg check` ACCEPTED (rc 0), two reads double-free.
+# ggdef: ABSTAIN (todo/t1227).
+
+Callable[int()] mk(int n):
+    return (): n + 1
+
+void main():
+    (int, Callable[int()]) t = (1, mk(40))
+    Callable[int()] g = t._1
+    print(g())

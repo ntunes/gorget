@@ -1,0 +1,42 @@
+# KNOWN GAP (todo/t1225) — a BARE INDEX PLACE of single-owner type is an
+# implicit second owner. `gg check` rc 0, `gg build` rc 0, and the program
+# DOUBLE-FREES one closure environment under `--sanitize`.
+#
+# `Callable[T]` has NO implicit-copy path in the lowering, so each bare read
+# binds another owner of the same env. The FIELD and TUPLE spellings of exactly
+# this shape are rejected at check time (`E_MoveWithoutOperator`, see
+# `tests/fixtures/single_owner_subplace/`); the INDEX spelling is the ONE
+# outermost projection the gate deliberately does not key on, because rejecting
+# it today forces a per-request `.clone()` of a closure env on the httpserver
+# dispatch hot path — the charter breach the owner's callee-borrow ruling
+# (2026-09-04: a call does not consume its callee) removes instead.
+#
+# ⚠ THE TWO READS ARE DELIBERATELY OF THE *SAME* ELEMENT — THAT IS THE AXIS.
+# Each read of one element binds another owner of its single heap value. A
+# single read is clean, and so are two reads of DISTINCT elements: add
+# `v.push(mk(50))` after the push below and make the second bind `v[1]`, and
+# this same program runs CLEAN (`41`/`51`, rc 0). The container's spelling is
+# NOT the axis — the same same-element loop reached through a `&` BORROW PARAM
+# is a use-after-free too. So `lib/xtd/httpserver.gg` is safe only because each
+# of its 8 dispatch sites binds a DISTINCT key or index, and nothing enforces
+# that: a refactor that reads one element twice reintroduces this silently.
+#
+# INTENDED: either the callee-borrow rule lands and a call-only bind is a
+# BORROW (no second owner, no clone, no free), or the reject is widened to index
+# places. Either way this program must not double-free. Asserted below as a
+# clean run printing `41` twice.
+#
+# Measured at 7bf11017e: check rc 0, build rc 0, run under
+# `ASAN_OPTIONS=detect_leaks=1:exitcode=1` → `AddressSanitizer: attempting
+# double-free`, rc 1.
+
+Callable[int()] mk(int n):
+    return (): n + 1
+
+void main():
+    Vector[Callable[int()]] v = []
+    v.push(mk(40))
+    Callable[int()] g = v[0]
+    print(g())
+    Callable[int()] g2 = v[0]
+    print(g2())

@@ -3200,8 +3200,22 @@ void main():
 //     none exist in ggdef's type vocabulary (`grep -rn 'Mutex\|RWLock'
 //     spec/ggdef/src/` → 0 hits). ggdef abstains on them by construction; the
 //     Callable family is the whole in-subset slice of the carve-out set.
-//   · FIELD / INDEX *source* places (`v.push(h.f)`) — the check is
-//     identifier-gated on BOTH production and here; that axis is `todo/t0682`.
+//   · BARE INDEX *source* places (`v.push(v2[0])`, `d[k]`) — DEFERRED on all
+//     three lanes behind the owner's callee-borrow ruling (2026-09-04: a call
+//     does not consume its callee), which is what removes the per-request
+//     closure-env clone that rejecting them would force on a dispatch hot path.
+//     `todo/t1225`. The gate keys on the OUTERMOST projection, so `v[0].f` — a
+//     read THROUGH a container — IS covered and has a row below.
+//   · `Box[T]` at a sub-place — production rejects it (it rides the whole
+//     `needs_explicit_move` set); `Box` is not in ggdef's type vocabulary, so
+//     this lane ABSTAINS by construction. Filed as `todo/t1227` so the
+//     abstention is a citation rather than a silent omission.
+//
+// FIELD / TUPLE *source* places USED to be an omitted cell here, on the premise
+// that "the check is identifier-gated on BOTH production and here". That
+// premise expired: production and the self-host now reject a callable sub-place
+// at every position that routes through the shared init helper, so the rows
+// below are Core #9's cross-lane pin for the FINAL state.
 
 /// Assert a program is rejected as an implicit single-owner-callable copy,
 /// naming the position the diagnostic must report.
@@ -3311,6 +3325,97 @@ fn d53_callable_position_index_assign() {
         "void main():\n    Callable[int(int)] f = (int x): x + 1\n    Vector[Callable[int(int)]] v = [(int y): y + 2]\n    v[0] = f\n    print(1)\n",
         "index-assign",
     );
+}
+
+// ── SUB-PLACE source rows (Core #9 cross-lane pin) ─────────────────────────
+// A `Callable` read out of a FIELD or a TUPLE ELEMENT is the same implicit copy
+// as the bare identifier, and it is the one that is memory-unsafe in practice:
+// two plain `h.f` reads are an ASan `attempting double-free` on the production
+// lanes, at `gg check` rc 0, before the sub-place arm existed. ggdef is
+// STRUCTURALLY BLIND to that — it pins the VERDICT; ASan adjudicates the memory.
+
+#[test]
+fn d53_callable_subplace_struct_field_bind() {
+    d53_callable_rejects(
+        "struct W:\n    Callable[int(int)] h\nvoid main():\n    W w = W((int x): x + 1)\n    Callable[int(int)] g = w.h\n    print(g(1))\n",
+        "bind",
+    );
+}
+
+#[test]
+fn d53_callable_subplace_struct_field_ctor() {
+    // POSITION axis at a sub-place: the ctor arm routes through the same helper.
+    d53_callable_rejects(
+        "struct W:\n    Callable[int(int)] h\nstruct V:\n    Callable[int(int)] k\nvoid main():\n    W w = W((int x): x + 1)\n    V v = V(w.h)\n    print(1)\n",
+        "ctor-init",
+    );
+}
+
+#[test]
+fn d53_callable_subplace_tuple_int_spelling() {
+    // `t.0` — `Expr::TupleFieldAccess`, the literal-integer spelling.
+    d53_callable_rejects(
+        "void main():\n    (Callable[int(int)], int) t = ((int x): x + 1, 1)\n    Callable[int(int)] g = t.0\n    print(g(1))\n",
+        "bind",
+    );
+}
+
+#[test]
+fn d53_callable_subplace_tuple_alias_spelling() {
+    // `t._0` — the ratified ALIAS of the row above, and a DIFFERENT AST node
+    // (`Expr::FieldAccess`) reaching a DIFFERENT resolver arm. Carrying only
+    // one of the two spellings is how a guard greens over a live double-free:
+    // on production, `t.1` rejected while `t._1` was accepted and double-freed
+    // (`todo/t0943`). Both spellings, on every lane, or the row's NAME
+    // over-claims its scope.
+    d53_callable_rejects(
+        "void main():\n    (Callable[int(int)], int) t = ((int x): x + 1, 1)\n    Callable[int(int)] g = t._0\n    print(g(1))\n",
+        "bind",
+    );
+}
+
+#[test]
+fn d53_callable_subplace_field_through_index() {
+    // THE KEYING ROW: the gate keys on the OUTERMOST projection, so a read
+    // THROUGH a container rejects even though a BARE index place is deferred.
+    d53_callable_rejects(
+        "struct W:\n    Callable[int(int)] h\nvoid main():\n    Vector[W] v = [W((int x): x + 1)]\n    Callable[int(int)] g = v[0].h\n    print(g(1))\n",
+        "bind",
+    );
+}
+
+#[test]
+fn d53_callable_subplace_clone_is_accepted() {
+    // THE ACCEPT CONTROL. `.clone()` is the only in-language remedy at a
+    // sub-place (`^h.f` is a partial move under D10(a) ADDENDUM), so the
+    // rejection above is only followable if this row passes.
+    let src = r#"
+struct W:
+    Callable[int(int)] h
+void main():
+    W w = W((int x): x + 1)
+    Callable[int(int)] g = w.h.clone()
+    print(g(1))
+"#;
+    assert_eq!(out(src), "2");
+}
+
+#[test]
+fn d53_callable_subplace_bare_index_is_deferred() {
+    // THE NAMED OMITTED CELL, pinned as an ACCEPT so the deferral is visible in
+    // the suite rather than inferred from its absence. This is NOT a statement
+    // that the program is sound — a bare index place of callable type is
+    // memory-unsafe on the production lanes today (`todo/t1225`). It records
+    // that all three lanes AGREE to defer it behind the callee-borrow ruling,
+    // so a lane that starts rejecting it unilaterally trips here and has to say
+    // so. Flip this row to a reject when `t1225` lands.
+    let src = r#"
+void main():
+    Vector[Callable[int(int)]] v = [(int x): x + 1]
+    Callable[int(int)] g = v[0]
+    print(g(1))
+"#;
+    assert_eq!(out(src), "2");
 }
 
 #[test]

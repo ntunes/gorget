@@ -1601,3 +1601,47 @@ pub struct MetaIf {
     pub else_branch: Option<(Span, Vec<Spanned<Item>>)>,
     pub span: Span,
 }
+
+/// The tuple-element INDEX an `Expr::FieldAccess` field NAME denotes, or `None`
+/// when the name is not the tuple-alias spelling.
+///
+/// Gorget spells a tuple element two ways — `t.0` and `t._0` — both ratified
+/// and co-equal (`docs/language-reference.md` §4.2 / §7.8; `docs/book/`
+/// 05-collections lists `._0`/`._1` as *the* tuple syntax). `parse_postfix`
+/// builds `Expr::TupleFieldAccess` only for the literal-integer spelling;
+/// `._0` goes through `expect_name()` and lands as a plain
+/// `Expr::FieldAccess { field: "_0" }`. So "is this field name a tuple index?"
+/// is a DECISION every consumer of a place AST has to make.
+///
+/// It lives HERE, at the AST layer, because it is a fact about the SURFACE
+/// SPELLING rather than about any one analysis — and because that is the only
+/// layer all three Rust-side consumers can reach: `ggdef` shares the
+/// lexer/parser/AST and is fenced out of `semantic/` by
+/// `tests/lints.rs::ggdef_import_ratchet`, so a `semantic/` home would have
+/// forced a fourth copy of the rule into the definitional interpreter.
+///
+/// ONE resolver for the axis (Layering rule 3 — one source of truth, read
+/// through one accessor). The consumers:
+///   * `TypeChecker`'s `Expr::FieldAccess` disposition over a
+///     `ResolvedType::Tuple` (`semantic/typecheck.rs`), which types the READ;
+///   * `BorrowChecker::lvalue_value_type` (`semantic/safety/helpers.rs`), which
+///     types the PLACE for the ownership gates (D53 unique locks, D4/D12 drop
+///     taint, and the by-design single-owner carve-out); and
+///   * ggdef's `infer_ast_ty` (`spec/ggdef/src/elaborate/mod.rs`).
+///
+/// The first two diverged before this accessor existed: the safety walk's
+/// `FieldAccess` arm needed a struct `DefId` to index `struct_field_names`, a
+/// tuple has none, so it typed `t._0` as unknown and every ownership gate keyed
+/// on it walked straight past the alias spelling while catching `t.0` one
+/// character away — a live double-free one keystroke from a rejection
+/// (`todo/t0943`). Mirrors the self-host's `tuple_field_index`
+/// (`self_host_typechecker/infer.gg`), the lane that never had the split
+/// because its parser folds both spellings into one node. Pinned by
+/// `tests/lints.rs::tuple_field_alias_has_exactly_one_resolver`.
+pub fn tuple_field_alias_index(field_name: &str) -> Option<usize> {
+    let rest = field_name.strip_prefix('_')?;
+    if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    rest.parse::<usize>().ok()
+}

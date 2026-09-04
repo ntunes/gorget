@@ -1,0 +1,27 @@
+# SINGLE-OWNER SUB-PLACE NEG — SOURCE axis: the field is `self`-rooted.
+# `self` is a place (`expr_is_place`), so `self.f` is a field sub-place like any
+# other and the receiver's SPELLING is not part of the rule (AGENTS.md
+# § Ownership at Consuming Positions: "the POSITION is the rule; the receiver's
+# spelling (`fns` vs `self.routes`) is not part of it").
+#
+# Omitted cell: bare INDEX places are deferred behind the callee-borrow ruling
+# (todo/t1225).
+#
+# CELL: type=Callable · place=field of SELF · position=bind · capture=int.
+# RED at 7bf11017e: `gg check` ACCEPTED (rc 0).
+# ggdef: ABSTAIN (todo/t1227).
+
+Callable[int()] mk(int n):
+    return (): n + 1
+
+struct Holder:
+    Callable[int()] f
+
+equip Holder:
+    int run(self):
+        Callable[int()] g = self.f
+        return g()
+
+void main():
+    Holder h = Holder(mk(40))
+    print(h.run())

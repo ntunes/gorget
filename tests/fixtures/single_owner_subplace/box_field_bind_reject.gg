@@ -1,0 +1,32 @@
+# SINGLE-OWNER SUB-PLACE NEG — TYPE axis: `Box[T]`, not a closure. Pins that the
+# sub-place arm rides `needs_explicit_move`'s whole by-design set (Function /
+# CallableTrait / MutCallableTrait / ConsumeCallableTrait / BoxedCallable /
+# Owned, plus generic Box / Task / TaskGroup / Guard / Mutex / RWLock) rather
+# than a `Callable` costume. Without a non-closure cell, "the carve-out at a
+# sub-place" would be an anecdote about one type.
+#
+# ⚠ This ADVANCES todo/t0682, it does not close it. `t0682` crosses SOURCE
+# (local/field) with POSITION (bare-assign / `Box[T]` ctor); this fixture is its
+# field x bare-assign cell. Its `Box[T]`-CTOR cells stay open because
+# `is_constructor` matches `Variant | Newtype` only, so the helper never runs for
+# `Box[Box[String]](…)` — a case with no subject, which no widening of this arm
+# reaches. `t0682`'s durable repro is that cell verbatim and stays rc 0.
+#
+# The bound value is deliberately never READ: `taken.v` through a `Box` is
+# `E_DerefCoercionUnimplemented` (design-doc §9.4, not built), and a second
+# diagnostic in the same fixture would let this cell green on the wrong error.
+#
+# Omitted cell: bare INDEX places are deferred behind the callee-borrow ruling
+# (todo/t1225).
+#
+# CELL: type=Box[T] · place=field of a local · position=bind.
+# RED at 7bf11017e: `gg check` ACCEPTED (rc 0).
+# ggdef: ABSTAIN — `Box[T]` is out of ggdef's subset (todo/t1227).
+
+struct HB:
+    Box[String] b
+
+void main():
+    HB h = HB(Box[String]("x"))
+    Box[String] taken = h.b
+    print("built")

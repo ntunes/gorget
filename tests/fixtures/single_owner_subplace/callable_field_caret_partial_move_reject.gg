@@ -1,0 +1,25 @@
+# SINGLE-OWNER SUB-PLACE — the OTHER remedy is not available, and that is
+# RATIFIED, not a gap. `^h.f` is `E_PartialMove`: D10(a) ADDENDUM
+# (decisions.md, 2026-09-02) rejects field/index moves — no holes, no unpack.
+# So at a sub-place `.clone()` is the ONLY in-language remedy, which is exactly
+# what the widened diagnostic prescribes.
+#
+# This cell is what stops the accept-control cell from being read as "either
+# `^` or `.clone()` works here": one of the two is a different rejection, and a
+# reader who assumes otherwise writes `^h.f` and gets a diagnostic that looks
+# like the gate misfiring.
+#
+# CELL: type=Callable · place=field of a local · position=bind · sigil=`^`.
+# Pre-existing behaviour (NOT introduced by this track): rc 1 at 7bf11017e too,
+# with `E_PartialMove`. It pins the REMEDY CONTRACT, not a new reject.
+
+struct Holder:
+    Callable[int()] f
+
+Callable[int()] mk(int n):
+    return (): n + 1
+
+void main():
+    Holder h = Holder(mk(40))
+    Callable[int()] g = ^h.f
+    print(g())

@@ -1,0 +1,32 @@
+# D53 NEG — PLACE-SHAPE axis, the UNDERSCORE-ALIAS tuple spelling `t._0`.
+# CELL: lock=Mutex · place-shape=tuple element written `t._0` · source=local ·
+# position=push. Sibling of `mutex_tuple_local_push_reject.gg`, which is the
+# same place written `t.0`.
+#
+# `t.0` and `t._0` are the SAME PLACE and both are ratified
+# (language-reference §4.2/§7.8 — "Both forms work"), but they are different AST
+# nodes: `parse_postfix` builds `Expr::TupleFieldAccess` only for the
+# literal-integer form, so `._0` arrives as `Expr::FieldAccess{field: "_0"}`.
+# The two spellings therefore reached two different resolvers, and the safety
+# walk's `lvalue_value_type` had no tuple arm — it needed a struct `DefId` to
+# index `struct_field_names` and a tuple has none. So D53's consume gate fired
+# on `t.0` and walked past `t._0` one character away.
+#
+# RED before the `._N` unification: `gg check` ACCEPTED (rc 0), while the
+# spelling-equivalent `t.0` cell rejected. Now both resolvers read the ONE
+# spelling rule (`ast::tuple_field_alias_index`) — the shape the SELF-HOST lane
+# has always had (`tuple_field_index`, self_host_typechecker/infer.gg), which is
+# why that lane rejected both spellings all along. "Reference lags the
+# self-host", fixed on the Rust side per the succession plan.
+#
+# Break-and-watch: remove `lvalue_value_type`'s `ResolvedType::Tuple` arm and
+# this cell goes rc 0 while its `t.0` sibling stays rc 1.
+#
+# Run on BOTH lanes: `mutex_vector_d53_subplace_axis_reject` (Rust) and
+# `self_host_driver_rejects_d53_unique_lock_subplace` (self-host).
+
+void main():
+    (Mutex[int], int) t = (Mutex[int](5), 1)
+    Vector[Mutex[int]] v = Vector[Mutex[int]]()
+    v.push(t._0)
+    print(v.len())

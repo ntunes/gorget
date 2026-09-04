@@ -3963,18 +3963,21 @@ impl<'a> TypeChecker<'a> {
                     // Named fields on tuples: only the underscore alias
                     // `._0`/`._1`/… is legal (language-reference §4.2 / §7.8);
                     // bare `.0` is `TupleFieldAccess`. Any other name is absent.
+                    //
+                    // The spelling rule itself lives in ONE place
+                    // (`ast::tuple_field_alias_index`, Layering rule 3)
+                    // because the safety walk's `lvalue_value_type` has to make
+                    // the same decision over the same node. Inlining it here a
+                    // second time is what let the two resolvers disagree: this
+                    // one accepted `t._0`, that one typed it as unknown, and
+                    // every ownership gate walked past the alias spelling.
                     ResolvedType::Tuple(elems) => {
-                        let name = field.node.as_str();
-                        if let Some(rest) = name.strip_prefix('_') {
-                            if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
-                                if let Ok(idx) = rest.parse::<usize>() {
-                                    if let Some(&elem_tid) = elems.get(idx) {
-                                        return elem_tid;
-                                    }
-                                }
-                            }
+                        match crate::parser::ast::tuple_field_alias_index(&field.node)
+                            .and_then(|idx| elems.get(idx))
+                        {
+                            Some(&elem_tid) => return elem_tid,
+                            None => FieldDisp::NoField,
                         }
-                        FieldDisp::NoField
                     }
                     _ => FieldDisp::Accept,
                 };
