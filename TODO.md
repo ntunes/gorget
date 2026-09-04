@@ -675,6 +675,72 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⚖⚖ **OWNER RULINGS 2026-09-04 — BOTH OPEN ASKS CLOSED.**
+**(1) S-a3 APPROVED AS RECOMMENDED: put the drop and clone fn pointers in the closure env's EXISTING
+allocation header.** The 16-byte `GorgetClosure` handle does not change; the header already exists and three
+call sites already depend on it (`__gorget_closure_env_alloc` stores `env_size` in the prefix;
+`gorget_closure_free` frees `env - sizeof(size_t)`; `gorget_closure_clone_to_owned` reads the size back out).
+⇒ **this WIDENS a load-bearing channel rather than adding one.** Rejected alternatives and why: a **vtable
+slot** changes what `fn_ptr`/`env` mean and needs a per-type static; **refcounting** contradicts the ratified
+single-owner-by-design carve-out — a design contradiction, not a cost; **rejecting `Vector[Callable]`** is
+designing around the gap. ⭐ **It closes the CLONE half in the same stroke** — a clone pointer is how a
+type-erased handle FINDS `__Closure_N__clone`. **Brief written, pass 1 launched.**
+**(2) `decisions.md` CENSUS REMOVED — and the owner gave the general principle: "decisions.md should not list
+any census. decisions.md exists as a record of design decisions that were taken so we can look them up
+later."** The DEEP-1 paragraph gated the track on four named CRITICAL ids, three already closed. **The
+sequencing DECISION stays verbatim; the inventory is gone.** ⇒ ⚡ **RULE: A RATIFIED DOC RECORDS DECISIONS,
+NOT STATE. A dated inventory in it is a gate that decays in place; `todo/` is where the open set lives
+because it REGENERATES.** ⊕ Swept the rest of the ledger for the same shape — the other five multi-item
+citations are decision PROVENANCE, not inventories, and stay. Committed `20b36be22`, lints rc 0.
+
+✅ **TRACK A2-α INTEGRATED** (`08bd91940`; `lints_rc=0`, `todo_rc=0`). ⚠ **Its merge hit a `DONE.md` conflict —
+two tracks appended entries the same day; both kept.**
+⭐⭐ **ITS FOLD NAMED THE GENERAL TRAP BETTER THAN THE REVIEW DID: GRADUATING ONE LANE OF A TWO-LANE GAP
+SILENTLY UN-GATES THE OTHER.** Graduating the Rust half un-ignored the test, which **dropped the fixture off
+the census roster entirely — `known_gaps_census.sh` runs only `#[ignore]`d tests.** Roster **218 → 219**,
+new SH cell **verified RED (rc 101)**. **This is the first fixture in the tree hosting both a live and an
+ignored test.**
+⭐ **And `t1236` DISPROVED the suspicion it was filed to chase:** `t0389` asked whether one consume-site root
+explained both panics; the one measurable member (`t0938`) is `EnumInit(Some, arg #0)` — **a different
+consume-site class with no manufactured name, so the shared panic site is a shared VALIDATOR, not a shared
+defect.** `t0392`/`t0401`/`t0310` have `repro = []` and are **unmeasurable — the first work is a repro each,
+not a fix.**
+
+⭐ **Q PASS 2: the independent witness falsified the enumerator's set for the SECOND time.** `^=======$`
+**fails on `=======\r`** — git's Windows default, and **nothing in-repo pins it** (no `.gitattributes`,
+`core.autocrlf` unset) — and a non-default `--marker-size` **escapes ALL FOUR arms**, not just `=`. It
+measured the widening cost over 7438 files / 1,006,789 lines: `<{7,}`, `>{7,}`, `\|{7,}` are **free (0 false
+positives)**; only `={7,}` costs anything (**4**, all `============`). ⇒ **widen three, keep `=` exact — `=`
+is the only ambiguous glyph.** ⊕ **It also PROVED the guard self-trips on its own test corpus** by planting
+it in the real `tests/lints.rs`: **7 findings, rc 1.** ⊕ And it caught a brief erratum: **`git merge-file`
+IGNORES `merge.conflictStyle`** — only the flags, a real `git merge`, or `checkout --conflict=` honour it, so
+an executor reproducing the probe as written would conclude `|||||||` isn't real.
+
+⭐ **S-a2 PASS 2: the places/temps axis is CONFIRMED BY THE RATIFIED LEDGER ITSELF** — `decisions.md:1515`
+(D31 ADDENDUM): *"the exemption keys on the compiler's PLACE/TEMP distinction (`expr_is_place`), **never on
+syntax shape**"* — plus rustc exhaustiveness (45 `Expr` variants, exactly 5 place-true) and ggdef's own suite.
+**And the failure modes are categorically different, measured: every PLACE shape double-frees on a second
+read; the TEMP shape leaks and never double-frees.**
+⛔⛔ **IT ALSO REVERSED PASS 1's LANDING-ORDER PREMISE — SIX Q#6, and the central finding: cell G is
+ACCIDENTALLY clean at ONE read.** Two plain `h.f` reads → **`attempting double-free`**; read-in-inner-scope
+then re-read → **`heap-use-after-free`**. Both `gg check` rc 0, plain HEAD, no env-var simulation. ⇒ **the
+trade is NOT "working program → leaking program" but "memory-unsafe in general → a compile error + a 16 B
+leak" — strictly better on the owner's ranking.** ⊕ **And `t0948`'s own hard gate NAMES THIS TRACK AS ITS
+PREREQUISITE**, so the dependency runs S-a2 → `t0948`; the reverse is forbidden by `t0948`'s own text.
+⛔ **B-1: the track is instance-shaped while the CODE is class-shaped.** The prototype calls
+`needs_explicit_move`, which already covers `Function | CallableTrait | … | Owned` + `Generic{Box, Task,
+TaskGroup, Guard, Mutex, RWLock}`; `Box[String] taken = h.b` is **accepted at HEAD, rejected under the
+prototype**. **`todo/t0682` (HIGH) is this same defect family-wide with a RED-verified repro and my brief
+never mentioned it.** ⛔ **B-2: the prototype REJECTS `t.1` and still ACCEPTS `t._1`** — and `t._1` twice-read
+**double-frees at HEAD**. Two resolvers for one axis (Layering rule 3). ⚠ **The existing d53 suite spells it
+`t.0`, so an executor writing the tuple fixture in house style ships a GREEN GUARD OVER A LIVE DOUBLE-FREE.**
+⊕ **The stdlib breaks: 7 sites in `lib/xtd/httpserver.gg`** bind a `Callable` from an index place — so this
+is a widening **plus a stdlib migration**, and those sites bind-then-CALL, making per-request `.clone()` a
+possible charter breach. **`t0948`'s "clone, OR BIND A BORROW" is the alternative the brief never posed.**
+⊕ **The reviewer caught ITSELF tripping Core #5** — it measured the httpserver HEAD baseline with the
+prototype still built, got a false positive, reverted, **rebuilt**, re-measured. *Core #5 is easy to trip
+even while quoting it.*
+
 ⛔⛔⛔ **U PASS 1: THE COUNT IS EXACT, THE DESIGN WAS AIMED AT THE WRONG LAYER, AND 30 OF 33 SITES ARE A
 SEMANTIC DEFECT BOTH LANES AGREE ON.** It rebuilt the detector **from the brief's TEXTUAL DESCRIPTION, not
 the scout's code** — `#FINDINGS 33 in 18 files` over 2229 fixtures, positive control exact, file list
