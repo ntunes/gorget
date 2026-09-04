@@ -2823,6 +2823,20 @@ scripts/convergence.sh <prev_kg> <prev_todo> <filed>          # MEASURES, does n
 ```
 ⚠ **Run these on a QUIET tree** — no agents building. R48 paid for this twice with false REDs.
 
+### ⚖ A THIRD OWNER ASK — **A RATIFIED SENTENCE IS STALE AT HEAD AND IT GATES ANOTHER TRACK**
+`docs/define-gorget/decisions.md:3281` reads: *"At R47 close, obligation (ii)/(iii) still has **three CRITICAL
+live UAFs** (`t0763`, `t0770`, `t0771` — the last one silent, with no crash to trip a gate) plus `t0772`.
+**Those close first.**"*
+⛔ **MEASURED AT HEAD: `t0763`, `t0770` and `t0772` ARE ALREADY CLOSED** (no file in `todo/`), and **`t0771`
+closes when Track L integrates** — L's diff both closes it *and* falsifies its stated discriminator.
+⇒ ⚡ **THE SENTENCE STATES A BLOCKING CONDITION WHOSE SUBJECTS ARE GONE.** A reader concludes the **DEEP-1
+executor track is still blocked** when its named gate has essentially cleared. **That is not a typo — it is a
+stale gate on a parked track.**
+⛔ **I HAVE NOT EDITED IT.** The ledger is owner-edit-only, and the previous grant was item-scoped to the
+three rulings of 2026-09-04. **The correction is one sentence and I have the exact text; it needs a line.**
+⊕ **Found by Track L's executor while repairing seven dangling `t0771` citations elsewhere — it correctly
+stopped at the ledger boundary and reported instead.**
+
 ### ⚖ TWO OWNER ASKS FROM TRACK L's EXECUTOR — BOTH ARE CEILING/INFLOW RULINGS, BOTH DUE NOW
 1. ⚖ **SANITIZE-SWEEP INFLOW.** Track L's 5 new top-level fixtures leak: **3 are covered by the graduation
    ruling (owner 2026-09-02); 2 are GENUINELY NEW INFLOW** —
