@@ -683,6 +683,22 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+📋 **ROUND-CLOSE PREPARATION STARTED 2026-09-04 — C SWEEP PRE-RUN ON THE 14-TRACK INTEGRATION BRANCH**
+(`GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 scripts/run_integration.sh`, rc read off the BARE
+command, log under `/tmp/integration-preclose-*.log`). ⚡ **Running it BEFORE the last tracks land surfaces
+breakage while it is still attributable to a small set** — a full battery met cold at the gate is the
+expensive version. ⚠ **C and LLVM sweeps stay SERIAL, never simultaneous** (owner 2026-07-29).
+⊕ **Known flake to expect: `orphan_reaper_self_test`** spawns real processes and inspects PID/tag state; it
+failed once under concurrent builds and passed on every isolated re-run. **Re-run it ALONE before treating it
+as red.**
+
+⭐ **REALISTIC ROUND SHAPE, recorded so the close is not a surprise:** **L, S-a2, N2, M2 and T1 can land this
+round.** ⛔ **W (the leak fix) will not** — it is on brief-review pass 3, its executor has not launched, and
+its scope grew twice on measurement (the header design plus the mandatory NULL-when-absent fix plus the
+`ReturnFromBorrow` move). **That is the "leak fix spans into R50" call made earlier, now confirmed by where
+the passes actually are.** ⊕ **What DOES land this round is the LEAK ADMISSION with a working expiry** —
+L's cited rows plus the self-retiring mechanism — **so R50 inherits a deadline, not a waiver.**
+
 ⭐⭐ **L's FOLD 3 RAN THE FULL ~25 MIN SWEEP AND MADE THREE UNASKED JUDGEMENT CALLS, ALL RIGHT.**
 ⭐ **It admitted EIGHT rows, not the five I briefed** — the sweep's own `new_leak` bucket fired on the three
 GRADUATIONS too, which had **no rows at all**, so five would have left the gate red and **L unlandable**. The
