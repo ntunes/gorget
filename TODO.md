@@ -19,6 +19,15 @@ T1 turns exactly the three offending cells CC-FAIL → MATCH, landing at 146. **
 fixture breaches — **and all three parity gates SKIP EVALUATION under `cfg!(debug_assertions)` (`todo/t0924`),
 so only `--release` with `GG_RUNTIME_DIFF=1` can see it.**
 
+⛔ **NEVER PIN A MOVING TRACK BY HASH — NAME ITS BRANCH.** INT-A's brief pinned T1 at a commit that was
+**already two commits stale** while a reviewer was validating the merge order against it. T1 has moved three
+times (main diff → errata → errata-errata); **the other four branches are signed off and stable.** ⭐ **The
+rule: resolve a live track's tip with `git rev-parse <branch>` AT LAUNCH, and make the executor report which
+commit it actually merged.** This is the same defect class as the stale-figure census — a value captured
+before the producer finished — and it has now fired FOUR times this round in four different disguises.
+**Branches, not hashes:** T1 = `worktree-agent-a646a4a5eb16b14ca` · RS = `worktree-agent-ab9ae501a4608bce2` ·
+S-a2 = `sa2-fixup`.
+
 **UNINTEGRATED WORK, all commits verified reachable:** T1 executor (live, the round's critical path) · L
 `2f7eb9b58` (done, waits for T1) · N2 `0d9f9cebe` (done) · S-a2 — output-review SIGNED OFF the CODE, blocking
 corrections were to filed TEXT only and are **applied at `36e9f57eb`; ⛔ MERGE `sa2-fixup`, NOT `55323d628`**
