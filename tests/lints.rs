@@ -2430,7 +2430,15 @@ fn self_host_d12_reject_hook_count() {
 #[test]
 fn self_host_safety_place_probes_are_structural() {
     /// Whole-file `infer_expr_type(` occurrences — the new-path tripwire.
-    const TOTAL_INFER_CALLS: usize = 31;
+    ///
+    /// 31 → 32: D46's equality gate in `check_safety_expr`'s `EBinaryOp` arm.
+    /// OUT OF CLASS, and for the reason the doc comment above gives — it is not
+    /// a PLACE probe. It does not gate on `expr_is_place`; it needs the operand's
+    /// full TYPE (a container's element types decide whether `==` is legal), which
+    /// `lvalue_value_type` cannot supply because it resolves a place, not a type
+    /// graph. It sits beside the arithmetic `check_operator_supported` call in the
+    /// same arm, which is in the same out-of-class category and was already counted.
+    const TOTAL_INFER_CALLS: usize = 32;
     /// (probe signature prefix, `infer_expr_type(` calls its body may contain).
     const IN_CLASS_PROBES: &[(&str, usize)] = &[
         ("void reject_tainted_place(", 1),
@@ -14553,8 +14561,8 @@ fn interp_error_retention_arms_count() {
     let block = &scope[matches_start..matches_start + block_end];
     let arm_count = block.matches("SemanticErrorKind::").count();
     assert_eq!(
-        arm_count, 16,
-        "interp-error retention whitelist arm count changed ({arm_count} vs pinned 16). \
+        arm_count, 17,
+        "interp-error retention whitelist arm count changed ({arm_count} vs pinned 17). \
          Add the new SemanticErrorKind arm here + bump the count if a new gate needs \
          its error preserved inside `f\"{{...}}\"`. Removing an arm may re-open a \
          silent-swallow class — see Round XXIX Track A residual `17a3e342` + \
@@ -16289,9 +16297,12 @@ fn d26_map_binop_arm_count_ratchet() {
         ),
         (
             "src/semantic/typecheck.rs",
-            23,
+            30,
             "op_glyph_str (7) + op_display non-compound (7) + op_display compound (7) + \
-             shift-fallible Route-B reject guard matches! (2: ShlFallible|ShrFallible)",
+             shift-fallible Route-B reject guard matches! (2: ShlFallible|ShrFallible) + \
+             op_trait_and_method's EXHAUSTIVE fallible arm (7 — D46 deleted its \
+             `_ => None` catch-all so rustc exhaustiveness, not an arm count, is \
+             the guard that a new BinaryOp variant cannot go unmapped)",
         ),
         (
             "src/parser/expr.rs",
@@ -24408,7 +24419,7 @@ fn staging_move_burndown_shrink_only() {
 #[test]
 fn known_gaps_repros_are_wired_to_a_test() {
     /// Baseline regenerated 2026-08-27 by running this test. SHRINK-ONLY.
-    const ALLOWED_UNWIRED: [&str; 29] = [
+    const ALLOWED_UNWIRED: [&str; 28] = [
         "box_callable_call_through_box_undefined_function",
         "box_enum_payload_c_wont_compile_llvm_double_frees",
         "box_from_field_owning_boxes_double_free",
@@ -24423,7 +24434,6 @@ fn known_gaps_repros_are_wired_to_a_test() {
         "dict_index_assign_during_iteration_ice",
         "dict_value_write_through_silently_dropped",
         "doc_ld_concurrency_example_does_not_typecheck",
-        "eq_without_equatable_silently_false",
         "for_amp_dict_key_binding_must_reject",
         "for_amp_set_key_binding_must_reject",
         "fstring_inline_struct_ctor_lowers_as_tuple",

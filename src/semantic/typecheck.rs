@@ -1489,6 +1489,14 @@ impl<'a> TypeChecker<'a> {
                             // carrier/inner-type" reject — never the unify-noise
                             // TypeMismatch was the original swallow-reason for.
                             | SemanticErrorKind::DefaultOpRhsTypeMismatch { .. }
+                            // D46: the `==`-without-`Equatable` reject must
+                            // survive `f"{a == b}"` — measured as the position
+                            // users most write a comparison. Without this arm
+                            // the same expression errors at `bool r = a == b`
+                            // and `if a == b:` but COMPILES AND PRINTS `false`
+                            // inside the f-string, and every other guard for
+                            // the reject is green on that state.
+                            | SemanticErrorKind::UnsupportedOperator { .. }
                     )
                 }));
                 for seg in &s.segments {
@@ -1764,7 +1772,66 @@ impl<'a> TypeChecker<'a> {
                     | BinaryOp::Gt
                     | BinaryOp::LtEq
                     | BinaryOp::GtEq => {
-                        self.unify(left_type, right_type, expr.span);
+                        let unified = self.unify(left_type, right_type, expr.span);
+                        // D46: `==` / `!=` on a declarable type with no
+                        // `Equatable` impl is a CHECK-TIME rejection. It must be
+                        // check-time, not eval-time: the comparison may sit on a
+                        // branch that never executes, and a runtime trap there
+                        // leaves the defect shipped. Ordering (`<` `>` `<=`
+                        // `>=`) is a different class with a different remedy —
+                        // deliberately untouched here (`todo/t1126`).
+                        if matches!(op, BinaryOp::Eq | BinaryOp::Neq) {
+                            // JUDGE THE OPERANDS, NOT ONLY THE UNIFIED RESULT.
+                            // `unify` can hand back an inference-poisoned type
+                            // even when one side is perfectly concrete —
+                            // measured on `d == Direction.North`, where the
+                            // parenless variant path leaves the unified type
+                            // unjudgeable and the gate silently passed while
+                            // `d == e` on the same enum was refused. Falling
+                            // back to the operand types closes that hole and
+                            // cannot widen the reject: it only runs when the
+                            // unified type carries no verdict at all.
+                            let blame = match self.eq_comparable_blame(unified, 0) {
+                                Some(b) => Some(b),
+                                // The unified type IS judgeable and says
+                                // "comparable" — accept, and do not go looking
+                                // for a second opinion.
+                                None if self.eq_verdict_is_possible(unified) => None,
+                                // Unjudgeable (error / unbound var / never):
+                                // ask the operands themselves.
+                                None => self
+                                    .eq_comparable_blame(left_type, 0)
+                                    .or_else(|| self.eq_comparable_blame(right_type, 0)),
+                            };
+                            if let Some(blame) = blame {
+                                // Name the INNERMOST offending type, not the
+                                // container: `Option[P]` is refused because of
+                                // `P`, and `P` is where the derive goes.
+                                let type_name = self
+                                    .type_key_for_trait_lookup(blame)
+                                    .unwrap_or_else(|| self.describe_resolved_type(blame));
+                                // Typed, from the resolved blame — a closure or
+                                // trait object can never carry an `Equatable`
+                                // impl, so it must not be told to add one.
+                                let derive_possible = !matches!(
+                                    self.types.get(self.resolve_type(blame)),
+                                    ResolvedType::TraitObject(_)
+                                        | ResolvedType::CallableTrait(_)
+                                        | ResolvedType::MutCallableTrait(_)
+                                        | ResolvedType::ConsumeCallableTrait(_)
+                                        | ResolvedType::BoxedCallable { .. }
+                                        | ResolvedType::Function { .. }
+                                );
+                                self.error(
+                                    SemanticErrorKind::UnsupportedOperator {
+                                        op: Self::op_display(*op, false).to_string(),
+                                        type_name,
+                                        derive_possible,
+                                    },
+                                    expr.span,
+                                );
+                            }
+                        }
                         self.types.bool_id
                     }
                     // Logical operators require bool
@@ -6426,6 +6493,18 @@ impl<'a> TypeChecker<'a> {
 
     /// Trait name + method name for an overloadable arithmetic op, if any.
     /// Wrap / bitwise ops have no trait equip path (integer-only builtins).
+    ///
+    /// ⚠ EXHAUSTIVE ON PURPOSE — THE DELETED `_ => None` CATCH-ALL IS WHY `==`
+    /// WENT UNGATED FOR THE LIFE OF THE LANGUAGE. `Eq` fell into it,
+    /// `check_operator_supported` was therefore never consulted for equality,
+    /// and a comment at `operator_supported_for_type` asserted the
+    /// non-arithmetic ops were *"gated elsewhere"* when there was no elsewhere
+    /// (D46; Core #14). An arm-COUNT lint would not have caught that: a count
+    /// reds when someone ADDS an arm and is blind to a new `BinaryOp` variant
+    /// left unmapped, which is precisely the mechanism. **rustc's own
+    /// exhaustiveness check is the guard instead** — adding a variant to
+    /// `BinaryOp` (`src/parser/ast.rs:959-992`) makes THIS a compile error, so
+    /// site N+1 cannot slip past silently. Do not reintroduce `_ => None`.
     fn op_trait_and_method(op: BinaryOp) -> Option<(&'static str, &'static str)> {
         match op {
             BinaryOp::Add => Some(("Add", "add")),
@@ -6434,7 +6513,45 @@ impl<'a> TypeChecker<'a> {
             BinaryOp::Div => Some(("Div", "div")),
             BinaryOp::Rem => Some(("Rem", "rem")),
             BinaryOp::Mod => Some(("Mod", "mod")),
-            _ => None,
+            // `**` has its own D28 typed gate at the `BinaryOp::Pow` arm of
+            // `infer_expr` (no equip path — numeric operands only).
+            BinaryOp::Pow => None,
+            // Wrapping + bitwise + shifts: integer-only builtins, gated by
+            // `is_integer_only_op`, no trait to equip.
+            BinaryOp::AddWrap | BinaryOp::SubWrap | BinaryOp::MulWrap => None,
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => None,
+            // D46: `==` / `!=` do NOT route through `operator_supported_for_type`
+            // — that helper consumes only the `type_key`, which collapses
+            // `Generic(def, args)` to the bare def name and DISCARDS the element
+            // types the rider's "gated on element comparability" rule needs.
+            // The `==` gate is `eq_comparable`, called from the comparison arm
+            // of `infer_expr`.
+            BinaryOp::Eq | BinaryOp::Neq => None,
+            // Ordering (`<` `>` `<=` `>=`) is DELIBERATELY ungated here: it is a
+            // different class by size and by remedy. `String` is registered
+            // `Equatable`/`Hashable` but not `Comparable`, so a D46-shaped gate
+            // applied naively rejects `"ab" < "ac"` — working, ubiquitous code —
+            // and `Comparable` is not derivable at all, so the teaching
+            // diagnostic could not say "add `@derive`". Tracked as `todo/t1126`
+            // together with the owner ask it depends on (should `String` become
+            // `Comparable`, and on what ordering?).
+            BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq => None,
+            // Logicals take bool operands (unified at the comparison arm); `in`
+            // is a container-membership builtin, not an overloadable operator.
+            BinaryOp::And | BinaryOp::Or | BinaryOp::In => None,
+            // D26 fallible arithmetic: integer-only, gated by the D26 reject
+            // path; the fallible spelling is not separately equippable.
+            BinaryOp::AddFallible
+            | BinaryOp::SubFallible
+            | BinaryOp::MulFallible
+            | BinaryOp::DivFallible
+            | BinaryOp::RemFallible
+            | BinaryOp::ShlFallible
+            | BinaryOp::ShrFallible => None,
         }
     }
 
@@ -6516,6 +6633,133 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// D46 (+ its 2026-09-04 rider): is `ty` comparable with `==` / `!=`?
+    ///
+    /// **The rule the language draws is DECLARABILITY.** A user struct or enum
+    /// is a type the author can annotate, so `==` on it requires
+    /// `@derive(Equatable)` or a user `equip … with Equatable` and is REJECTED
+    /// without one — never silently answered (today's answer is ADDRESS
+    /// IDENTITY: `a == a` is true, `a == b` is false, on every backend). A
+    /// tuple, array, or prelude container has nowhere to write the derive, so
+    /// its equality is INTRINSIC — legal exactly when every element is itself
+    /// comparable. A trait object and a closure have no structural equality to
+    /// give, and reject.
+    ///
+    /// ⚠ THIS WALKS `ResolvedType` **DIRECTLY**, not through
+    /// `type_key_for_trait_lookup`. That helper maps `Generic(def, args)` to the
+    /// BARE DEF NAME and DISCARDS the element types, so "`Option`-of-comparable"
+    /// simply cannot be expressed at that layer — which is why the reject does
+    /// not route through `check_operator_supported` the way the arithmetic
+    /// family does.
+    ///
+    /// ⚠ THE ACCEPT BRANCH IS A NO-OP FALL-THROUGH — returning `true` emits no
+    /// error and leaves the program byte-identical to what it compiled to
+    /// before. The seven intrinsic structural-equality LOWERINGS (tuple,
+    /// `Option`, `Result`, `Vector`, `Set`, `Dict`, `Array`) are a separate
+    /// obligation: until they land, an accepted aggregate still answers by
+    /// address identity. Making those families REJECT instead would be a new
+    /// over-reject on code that compiles today, and is not what D46 rules.
+    /// Can `eq_comparable_blame` reach a verdict about `ty` at all? False for
+    /// the three "don't cascade" types — an error sentinel, an unbound
+    /// inference var, and `Never` — where a `None` answer means *"no opinion"*
+    /// rather than *"comparable"*. The gate needs the distinction: a unified
+    /// type that carries no opinion is not evidence the comparison is legal,
+    /// and the operands may each be perfectly concrete.
+    fn eq_verdict_is_possible(&self, ty: TypeId) -> bool {
+        !matches!(
+            self.types.get(self.resolve_type(ty)),
+            ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_)
+        )
+    }
+
+    /// Returns `None` when `ty` is comparable, or `Some(blame)` naming the
+    /// INNERMOST type that is not. The blame is what the diagnostic must talk
+    /// about: `Option[P]` is refused because `P` has no `Equatable`, and telling
+    /// the author to *"add `@derive(Equatable)` to `Option`"* would be advice
+    /// they cannot take and would not fix it if they could.
+    fn eq_comparable_blame(&self, ty: TypeId, depth: usize) -> Option<TypeId> {
+        // Recursion guard for a self-referential type graph (`struct Node:
+        // Vector[Node] kids`). Bailing to comparable never invents a REJECT.
+        if depth > 16 {
+            return None;
+        }
+        let ty = self.resolve_type(ty);
+        let has_eq_impl = |this: &Self, name: &str| {
+            this.traits.has_trait_impl_by_name(name, "Equatable")
+                || this.traits.has_method_for_type(name, "eq")
+        };
+        match self.types.get(ty) {
+            ResolvedType::Ref(inner) | ResolvedType::Owned(inner) => {
+                self.eq_comparable_blame(*inner, depth + 1)
+            }
+            // Inference / error / divergence: never cascade a second diagnostic
+            // out of a type the checker already failed to pin down.
+            ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_) => None,
+            ResolvedType::Void => None,
+            // D46 half 1: a tuple is an anonymous product type — nowhere to
+            // write the derive — so it is intrinsic when its elements are.
+            ResolvedType::Tuple(elems) => {
+                let elems = elems.clone();
+                elems.iter().find_map(|e| self.eq_comparable_blame(*e, depth + 1))
+            }
+            // Rider: `Array[T,N]` and slices are non-declarable for the same
+            // reason, on the same element gate.
+            ResolvedType::Array(elem, _) | ResolvedType::Slice(elem) => {
+                let elem = *elem;
+                self.eq_comparable_blame(elem, depth + 1)
+            }
+            // Rider, named explicitly so the axis has no unnamed cell: a trait
+            // object and a closure have no structural equality to give. They
+            // blame THEMSELVES — there is no element to point at.
+            ResolvedType::TraitObject(_)
+            | ResolvedType::CallableTrait(_)
+            | ResolvedType::MutCallableTrait(_)
+            | ResolvedType::ConsumeCallableTrait(_)
+            | ResolvedType::BoxedCallable { .. }
+            | ResolvedType::Function { .. } => Some(ty),
+            ResolvedType::Generic(def_id, args) => {
+                let def_id = *def_id;
+                let args = args.clone();
+                // TYPED flag, seeded once at registration — never a name match
+                // here (layering rule 2). A USER `struct Vector[T]` shadowing
+                // the builtin gets a distinct DefId with the flag `false` and
+                // still owes its derive.
+                if self.scopes.get_def(def_id).has_intrinsic_equality {
+                    return args.iter().find_map(|a| self.eq_comparable_blame(*a, depth + 1));
+                }
+                let name = self.scopes.get_def(def_id).name.clone();
+                if has_eq_impl(self, &name) { None } else { Some(ty) }
+            }
+            ResolvedType::Defined(def_id) => {
+                let def_id = *def_id;
+                // A bare generic parameter (`T` inside `struct Pair[T]`, or a
+                // generic fn's `T`) is EXEMPT. The exemption is deliberate and
+                // it leaves a hole — `Pair[P] == Pair[P]` with a non-`Equatable`
+                // `P` is accepted — filed as `todo/t1127`. Closing it needs the
+                // derive expansion to record and consult `T`'s declared bound,
+                // which is blocked today by a separate pre-existing bug
+                // (`@derive(Equatable) struct Pair[Equatable T]` reports `T`
+                // failing its OWN bound). Gating without the exemption does not
+                // buy the catch: it rejects on `T` blindly, refusing
+                // `Pair[int]` identically — a judgement about nothing.
+                if self.scopes.get_def(def_id).kind == DefKind::GenericParam {
+                    return None;
+                }
+                if self.scopes.get_def(def_id).has_intrinsic_equality {
+                    return None;
+                }
+                let name = self.scopes.get_def(def_id).name.clone();
+                if has_eq_impl(self, &name) { None } else { Some(ty) }
+            }
+            ResolvedType::Primitive(_) => {
+                let Some(key) = self.type_key_for_trait_lookup(ty) else {
+                    return None;
+                };
+                if has_eq_impl(self, &key) { None } else { Some(ty) }
+            }
+        }
+    }
+
     /// Whether `op` is supported on `ty` (numeric / String concat / Vector
     /// binary+compound concat / trait equip / inherent method). `compound`
     /// is reserved for future op-specific distinctions; Array-family `+` /
@@ -6581,7 +6825,15 @@ impl<'a> TypeChecker<'a> {
             return false;
         }
 
-        // Non-arithmetic ops gated elsewhere (comparisons / logicals / `in`).
+        // ⚠ THIS COMMENT USED TO READ "Non-arithmetic ops gated elsewhere
+        // (comparisons / logicals / `in`)" AND THERE WAS NO ELSEWHERE — `==`
+        // reached no gate at all for the life of the language, and the sentence
+        // is why nobody looked (Core #14: an invariant-asserting comment needs
+        // an enforcing guard or it gets deleted). The elsewhere now EXISTS for
+        // equality: `eq_comparable_blame`, called from the comparison arm of
+        // `infer_expr`. Ordering (`<` `>` `<=` `>=`) and the logicals are still
+        // ungated — that is a KNOWN hole, tracked as `todo/t1126`, not an
+        // invariant.
         true
     }
 
@@ -6630,6 +6882,9 @@ impl<'a> TypeChecker<'a> {
             SemanticErrorKind::UnsupportedOperator {
                 op: Self::op_display(op, compound).to_string(),
                 type_name: display_name,
+                // The arithmetic family always names a type an author could
+                // equip; the no-structural-equality cell is `==`-only.
+                derive_possible: true,
             },
             span,
         );

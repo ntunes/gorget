@@ -1,0 +1,18 @@
+# D46 rider — the `Vector[T]` cell of the element-comparability gate. Same rule
+# as `Option[T]`, different container: the container is non-declarable so its
+# equality is intrinsic, and the gate is on the ELEMENT. `Point` has no
+# `Equatable`, so this is refused and `Point` is blamed.
+#
+# The container axis is covered rather than sampled: `Option` (prelude enum),
+# `Vector` (prelude struct) and the anonymous tuple each get a cell, because the
+# three reach the predicate through DIFFERENT `ResolvedType` variants
+# (`Generic`, `Generic`, `Tuple`) and a bug can live in one arm alone.
+
+struct Point:
+    int x
+    int y
+
+void main():
+    Vector[Point] a = [Point(1, 2)]
+    Vector[Point] b = [Point(1, 2)]
+    print(a == b)

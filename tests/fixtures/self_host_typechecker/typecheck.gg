@@ -28,6 +28,7 @@ from scope import ScopeTable, DefKind, DefInfo, ScopeKind, SkEquipBlock, SkFunct
 from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
 from scope import DkVariable, DkConst, DkStatic, DkGenericParam
 from scope import get_def_at, get_scope_at, Scope, enum_variants_of
+from scope import def_kind_is_declarable_type
 from types import TypeTable, TraitRegistry, ResolvedType, ast_type_to_resolved, get_stype_at
 from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
 from types import RTTuple, RTArray, RTSlice, RTError, RTVar, RTNever, RTRef, get_rtype_at, get_int_at
@@ -2657,12 +2658,21 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
                 check_default_op_lhs(SpannedExpr((*left).expr, (*left).span), scope_id, scopes, &types, &ctx)
                 check_default_op_rhs(SpannedExpr((*left).expr, (*left).span), SpannedExpr((*right).expr, (*right).span), scope_id, scopes, &types, &ctx)
             # E_UnsupportedOperator for arith / bitwise binary ops (Rust
-            # BinaryOp arm, compound=false). Non-arith ops (`==`, `and`, `in`,
-            # `??`) fall through operator_supported_for_type as supported.
+            # BinaryOp arm, compound=false).
             String bin_base = arith_base_op(op)
             if op_trait_name(bin_base) != "" or is_integer_only_op(bin_base):
                 int left_ty = infer_expr_type(SpannedExpr((*left).expr, (*left).span), scopes, &types, &ctx)
                 check_operator_supported(left_ty, op, false, expr.span, scopes, &types, &ctx)
+            # D46: `==` / `!=` on a declarable type with no `Equatable` impl.
+            # ⚠ The comment this replaced said the non-arithmetic ops "fall
+            # through operator_supported_for_type as supported" — which was an
+            # invariant claim with no enforcing guard behind it, and it was how
+            # `==` stayed ungated on this lane too (Core #14). Ordering
+            # (`<` `>` `<=` `>=`) is still deliberately ungated: a different
+            # class with a different remedy (`todo/t1126`).
+            if op == "==" or op == "!=":
+                int eq_ty = infer_expr_type(SpannedExpr((*left).expr, (*left).span), scopes, &types, &ctx)
+                check_equality_supported(eq_ty, op, expr.span, scopes, &types, &ctx)
         case EUnaryOp(_op, operand):
             check_safety_expr(*operand, scope_id, &state, &scopes, &types, &ctx)
         case ECall(callee, args, _targs):
@@ -5585,7 +5595,12 @@ bool operator_supported_for_type(int ty, String op, bool compound, ScopeTable sc
             if type_key == "Vector" or type_key == "Deque" or type_key == "Array":
                 return true
         return false
-    # Non-arithmetic ops gated elsewhere (comparisons / logicals / `in`).
+    # ⚠ This comment used to read "Non-arithmetic ops gated elsewhere" and there
+    # was no elsewhere — `==` reached no gate at all (Core #14: an invariant-
+    # asserting comment needs an enforcing guard or it gets deleted). The
+    # elsewhere now EXISTS for equality: `check_equality_supported`, called from
+    # the `EBinaryOp` arm of `check_safety_expr`. Ordering and the logicals are
+    # still ungated — a KNOWN hole (`todo/t1126`), not an invariant.
     return true
 
 String unsupported_operator_message(String op, String type_name):
@@ -5605,6 +5620,74 @@ void check_operator_supported(int ty, String op, bool compound, Span span, Scope
     if type_name == "":
         type_name = "<error>"
     ctx.diagnostics.push(Diagnostic.error(span, DkUnsupportedOperator(), unsupported_operator_message(op, type_name)))
+
+# ── D46 equality gate (E_UnsupportedOperator on `==` / `!=`) ─
+# Mirrors Rust `eq_comparable_blame` (src/semantic/typecheck.rs). D46 + its
+# 2026-09-04 rider draw the line at DECLARABILITY: a user struct / enum /
+# newtype can carry `@derive(Equatable)` or a user `equip ... with Equatable`,
+# so `==` without one is a CHECK-TIME rejection; a tuple, array or prelude
+# container has nowhere to write the derive, so its equality is intrinsic when
+# its elements are comparable.
+#
+# Returns the NAME of the innermost type that cannot be compared, or "" when the
+# whole type can. The name is what the diagnostic blames — `(P, int)` is refused
+# because of `P`, and `P` is where the derive goes.
+#
+# ⚠ NARROWER THAN THE RUST GATE, DELIBERATELY: this walks `RTDefined` and the
+# structural aggregates but ACCEPTS every `RTGeneric`, because the self-host
+# `DefInfo` carries no registration-seeded intrinsic-equality flag yet (Rust's
+# `DefInfo.has_intrinsic_equality`), so it cannot tell `Vector[P]` from
+# `Pair[P]`. Accepting is the safe direction — it can never over-reject working
+# code — and the divergent cells (`Option[P]`, `Vector[P]`, a user generic
+# struct) are named in `todo/t1128` with the reference-grade shape.
+String eq_blame_type_name(int type_id, int depth, ScopeTable scopes, TypeTable types):
+    if depth > 16:
+        return ""
+    if type_id < 0 or type_id >= types.types.len():
+        return ""
+    ResolvedType rt = get_rtype_at(types.types, type_id)
+    match rt:
+        case RTRef(inner):
+            return eq_blame_type_name(inner, depth + 1, scopes, types)
+        case RTTuple(elems):
+            for e in elems:
+                String blame = eq_blame_type_name(e, depth + 1, scopes, types)
+                if blame != "":
+                    return blame
+            return ""
+        case RTArray(elem, _n):
+            return eq_blame_type_name(elem, depth + 1, scopes, types)
+        case RTSlice(elem):
+            return eq_blame_type_name(elem, depth + 1, scopes, types)
+        case RTDefined(def_id):
+            DefInfo d = scopes.get_def(def_id)
+            # Only a DECLARABLE type-def is gated: a struct, enum or newtype the
+            # author can annotate. ⚠ There is NO builtin-vs-user discriminator
+            # available here — `resolve.gg` registers EVERY top-level def with
+            # `Span(0, 0)`, user and prelude alike, so the dummy-span marker
+            # `define_replace_or_fail` reads cannot tell them apart (that is a
+            # separate self-host defect, `todo/t1129`). It costs nothing on this
+            # axis: the only non-generic prelude declarables are the payload-free
+            # `ArithError` variants, which the Rust lane also refuses.
+            if not def_kind_is_declarable_type(d.kind):
+                return ""
+            if has_trait_impl_by_name(types, d.name, "Equatable"):
+                return ""
+            if has_method_for_type_name(types, d.name, "eq"):
+                return ""
+            return d.name
+        else:
+            return ""
+    return ""
+
+String missing_equatable_message(String op, String type_name):
+    return "operator `" + op + "` is not defined for type `" + type_name + "` — add `@derive(Equatable)` to `" + type_name + "`, or write `equip " + type_name + " with Equatable:` and implement `eq`, to compare values with `" + op + "`"
+
+void check_equality_supported(int ty, String op, Span span, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
+    String blame = eq_blame_type_name(ty, 0, scopes, types)
+    if blame == "":
+        return
+    ctx.diagnostics.push(Diagnostic.error(span, DkUnsupportedOperator(), missing_equatable_message(op, blame)))
 
 # ── Assign-target lvalue gate (E_InvalidAssignTarget) ───────
 # Mirrors Rust's check_assign_target_lvalue (typecheck.rs:5472–5483), called

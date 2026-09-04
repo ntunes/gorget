@@ -1,3 +1,71 @@
+- [2026-09-04] **`t0013` CLOSED (R49 Track F-G) — D46's REJECT half: `==` / `!=` on a declarable type with
+  no `Equatable` implementation was ACCEPTED on every engine and answered ADDRESS IDENTITY. Now a CHECK-TIME
+  rejection with a teaching diagnostic, on all four lanes, pinned by five cross-lane seeds.**
+  **THE DEFECT, and why "both backends agree" could not certify it.** `Direction.North() == Direction.North()`
+  printed `NOT-equal`. `a == a` was TRUE and `a == b` FALSE on struct, enum-unit, enum-payload, tuple,
+  `Option` and `Vector` alike — so it was never even a tag comparison, it was the pointer. C, LLVM and ASan
+  all agreed; the definitional interpreter answered structurally and disagreed with all three. The original
+  filing's "silently answers `false`" was wrong, and the open question it ended on ("which built-in aggregates
+  get an intrinsic `Equatable`? a blanket reject would break `(int,int) == (int,int)`") rested on a false
+  premise — that comparison already returned the wrong answer, so rejecting did not break tuple equality, it
+  stopped it lying. D46 ratified the split on 2026-08-27 and its rider extended it on 2026-09-04.
+  **THE FIX, at the write site.** A total `eq_comparable_blame` walk over `ResolvedType` **directly**, called
+  from the comparison arm of `infer_expr`. It cannot route through `check_operator_supported`, whose
+  `type_key_for_trait_lookup` collapses `Generic(def, args)` to the bare def name and DISCARDS the element
+  types the rider's "gated on element comparability" rule needs. The declarable/non-declarable split is a
+  TYPED flag, `DefInfo.has_intrinsic_equality`, seeded once at registration from
+  `builtin_has_intrinsic_equality` — the `DerefWrapperKind::for_builtin_name` precedent — so a USER
+  `struct Vector` gets a distinct DefId with the flag clear and still owes its derive. The blame is the
+  INNERMOST offending type: `Option[P]` is refused because of `P`, and `P` is where the derive goes.
+  **THE CLASS FIX (Core #4).** `op_trait_and_method`'s `_ => None` catch-all is DELETED and the match is
+  EXHAUSTIVE over all 31 `BinaryOp` variants. That catch-all was the mechanism — `Eq` fell into it, so the
+  support gate was never consulted, while a comment at `operator_supported_for_type` asserted the
+  non-arithmetic ops were "gated elsewhere" and there was no elsewhere (Core #14). An arm-COUNT lint would
+  not have caught it: a count reds when someone ADDS an arm and is blind to a new variant left unmapped.
+  rustc's exhaustiveness check is the guard instead. Behaviour on the ordering axis is unchanged, proven two
+  ways (31/31 variants identical; zero ordering hits over the corpus); those four arms are an explicit
+  `=> None` citing `t1126`.
+  **THE ARM THAT WAS NOT AN ERRATUM.** Without adding `UnsupportedOperator` to the interpolation-retention
+  whitelist, the reject EVAPORATED inside `f"{a == b}"` — the position users most write it — while the same
+  expression was refused at `bool r = a == b`. Every other guard was green on that state. The arm also closed
+  a pre-existing sibling: `print(f"{a + a}")` on a struct was silently accepted at HEAD and now rejects.
+  **THE DISCRIMINATOR SEED.** `reject_eq_no_equatable_dead_branch.gg` puts the comparison on a branch guarded
+  by a function that always returns false. At HEAD it exits 0 and prints its marker on every lane, so an
+  EVAL-time fix leaves it green; a check-time fix refuses it. It is the only seed in the corpus that goes red
+  for the right reason under the wrong implementation.
+  **LANES.** Rust gg (C + LLVM), ggdef and the self-host all reject with `E_UnsupportedOperator`. ggdef needed
+  `@derive` support first — it had NONE, and would have falsely rejected `derive_equatable_enum.gg` — read
+  from `sd.attributes` / `ed.attributes` in ~8 lines rather than by calling production's `expand_derives`,
+  which would have made production the definition of `@derive` and ggdef agree by construction. The reject
+  rides typed `Program.static_reject` metadata surfaced by `run` BEFORE eval, generalised from the D29 slot so
+  it carries its own `E_` code: an `ElabError` would have been a `FrontendError` and therefore a GGDEF-SKIP,
+  whose committed `expect:` is never compared. `GGDEF_SKIP_CEILING` (shrink-only, seeded at 18) is the new
+  guard that forces that shape — the MATCH floor could only see the other direction.
+  **MEASURED — the pre-fix and post-fix compilers, `gg check` over every `.gg` in the tree.** THIRTEEN
+  files flip 0→1 and **ZERO flip 1→0**. Eleven of the thirteen are this round's own new seeds and
+  fixtures, which makes the same run their RED-verification: each was ACCEPTED by the pre-fix compiler,
+  so none was green on arrival (Core #12). The two PRE-EXISTING files are both `robustness_map` cells —
+  `doc_b06_struct_eq_no_derive.gg`, whose MANIFEST row already recorded `expected = REJECTED`, and
+  `doc_b06_enum_variant_construction.gg`, which used `==` on a bare enum as scaffolding to print a
+  construction result and now observes it through `match` instead. Plus the graduated repro, which moved
+  out of `known_gaps/`. The ACCEPT branch is a no-op fall-through: RUN output byte-identical to the
+  pre-fix compiler on the whole accept set.
+  **AND THE GATE HAD TO JUDGE THE OPERANDS, NOT THE UNIFIED TYPE.** `unify` hands back an
+  inference-poisoned type for `d == Direction.North` (the parenless variant path), so the first shape of
+  the gate accepted it while refusing `d == e` on the same enum — position-dependent, and it showed up as
+  a self-host-vs-Rust divergence in the robustness map rather than in any test. Falling back to the
+  operand types when the unified type carries no verdict closes it, and cannot widen the reject.
+  **STILL OWED, filed:** `t1132` the seven intrinsic structural-equality lowerings (every accepted aggregate
+  still answers address identity); `t1126` the ordering siblings; `t1127` `@derive(Equatable)` on a generic
+  struct records no `T: Equatable`; `t1128` the self-host gate accepts every `RTGeneric`; `t1129` self-host
+  spans; `t1130` ggdef's `==` never dispatches a user `equip`; `t1131` the f-string caret.
+  ⭐ **AND ONE PREMISE THAT DID NOT SURVIVE RE-MEASUREMENT, RECORDED SO IT IS NOT RE-FILED:** the reject
+  was briefed as blocked by a bug where `@derive(Equatable) struct Pair[Equatable T]` reports `T` failing
+  its OWN declared bound. That does not reproduce. The bound spelling parses, the derive accepts it, and
+  `Pair[Point]` with a non-`Equatable` `Point` is ALREADY refused with `E_UnsatisfiedTraitBound` naming
+  `Point`. What is actually missing is narrower and is what `t1127` records: the derive does not IMPLY the
+  bound, so the same program without the hand-written `[Equatable T]` is accepted.
+
 - [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
   STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,
   garbage or empty stdout on BOTH backends. Two producer sites now stamp the View tag; 12 cells RED→GREEN.**

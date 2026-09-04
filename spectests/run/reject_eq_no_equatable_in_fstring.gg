@@ -1,0 +1,27 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [equality, traits, fstring]
+# doc: |
+#   D46's reject must survive INSIDE an interpolation. `f"{a == b}"` is where a
+#   comparison is most often written, and the checker deliberately truncates
+#   most interpolation errors to a whitelist of kinds worth showing — so a
+#   rejection whose kind is not on that whitelist is SILENTLY SWALLOWED and the
+#   program compiles and prints `false`, position-dependently, while the same
+#   expression at `bool r = a == b` is refused. This seed is the guard on the
+#   whitelist: drop the equality kind from it and this goes red.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_UnsupportedOperator
+#!end
+
+struct Point:
+    int x
+    int y
+
+void main():
+    Point a = Point(1, 2)
+    Point b = Point(1, 2)
+    print(f"{a == b}")

@@ -1,0 +1,31 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [equality, traits]
+# doc: |
+#   D46: `==` on a user struct with no `Equatable` implementation is a
+#   CHECK-TIME rejection on all four lanes — E_UnsupportedOperator, stdout
+#   EXACTLY empty (the program never runs, which IS the verdict), exit 1.
+#   Before D46 this was ACCEPTED and answered ADDRESS IDENTITY: `a == a` was
+#   true and `a == b` false, identically on C, LLVM and ASan, while ggdef
+#   answered structurally — agreement on a wrong answer, which is the trap
+#   Core #8 names. Flipping the expected `reject:` code must make every lane
+#   MISMATCH (Core #6/#8/#9).
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_UnsupportedOperator
+#!end
+
+struct Point:
+    int x
+    int y
+
+void main():
+    Point a = Point(1, 2)
+    Point b = Point(1, 2)
+    if a == b:
+        print("equal")
+    else:
+        print("NOT-equal")

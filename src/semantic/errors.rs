@@ -836,7 +836,15 @@ pub enum SemanticErrorKind {
     /// trait equip; String supports only `+`/`+=` (concatenation). Without
     /// this gate, typecheck accepted then lowering ICE'd (resource-moves) or
     /// emitted broken C. See language-reference §operators / §Strings.
-    UnsupportedOperator { op: String, type_name: String },
+    /// `derive_possible` is the TYPED half of D46's teaching diagnostic: `true`
+    /// when an `Equatable` (or arithmetic-trait) impl COULD exist for
+    /// `type_name` — a struct, enum or newtype the author can annotate — and
+    /// `false` for a value kind that has no structural equality to give at all
+    /// (a closure, a `Callable[T]`, a `Box[Trait]` trait object). Telling the
+    /// author to *"add `@derive(Equatable)` to `Callable[int(int)]`"* is advice
+    /// they cannot take, so the flag is set at the emit site from the resolved
+    /// type — never re-derived here from the spelling of `type_name`.
+    UnsupportedOperator { op: String, type_name: String, derive_possible: bool },
 
     /// `5 += 1` / `foo() += 1` / `(a + b) = x` — the left side of an assignment
     /// or compound assignment is NOT an assignable place. Valid targets are a
@@ -1789,7 +1797,31 @@ impl std::fmt::Display for SemanticError {
                      `IndexMut[K,V]` implementation."
                 )
             }
-            SemanticErrorKind::UnsupportedOperator { op, type_name } => {
+            SemanticErrorKind::UnsupportedOperator { op, type_name, derive_possible } => {
+                // D46's owed TEACHING diagnostic for `==` / `!=`: name
+                // `Equatable` and suggest `@derive`. This arm comes FIRST
+                // because the generic arm below would otherwise fall into
+                // "only integer numeric types support this operator", which is
+                // simply false for equality — and because `String` is
+                // `Equatable`, so it can never reach the `==` reject anyway.
+                if op == "==" || op == "!=" {
+                    if !*derive_possible {
+                        return write!(
+                            f,
+                            "operator `{op}` is not defined for type `{type_name}` — \
+                             a closure or trait object has no structural equality \
+                             to compare; compare a value you can derive \
+                             `Equatable` for instead"
+                        );
+                    }
+                    return write!(
+                        f,
+                        "operator `{op}` is not defined for type `{type_name}` — \
+                         add `@derive(Equatable)` to `{type_name}`, or write \
+                         `equip {type_name} with Equatable:` and implement `eq`, \
+                         to compare values with `{op}`"
+                    );
+                }
                 // Teaching messages: String only has concat; user types need equip.
                 if type_name == "String" {
                     write!(
@@ -2138,6 +2170,7 @@ mod code_tests {
                 SemanticErrorKind::UnsupportedOperator {
                     op: "-=".into(),
                     type_name: "String".into(),
+                    derive_possible: true,
                 },
                 "E_UnsupportedOperator",
             ),

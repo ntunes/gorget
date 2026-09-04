@@ -39,6 +39,15 @@ trait Equatable:
 
 Enables `==` and `!=` operators. Inequality is derived automatically from `eq`.
 
+`==` on a struct or enum with no `Equatable` implementation — neither
+`@derive(Equatable)` nor an `equip` block — is refused at check time with a
+diagnostic naming the trait. Tuples and the non-annotatable aggregates
+(`Option`, `Result`, `Vector`, `Set`, `Dict`, arrays, ranges) instead compare
+structurally, whenever every element is itself comparable; when an element is
+not, the diagnostic names the ELEMENT, since that is where an implementation
+could go. Closures and trait objects have no structural equality and are always
+refused.
+
 ### Comparable
 
 ```gorget
@@ -433,7 +442,9 @@ Derivable traits: `Equatable`, `Hashable`, `Displayable`, `Debuggable`,
 `Cloneable`, `Default`, `Serializable`, `Deserializable`.
 
 The generated implementation operates field-by-field. For `Equatable`, all fields
-must be equal. For `Hashable`, all fields are combined into the hash. For
+must be equal — and on a generic type, deriving it requires every compared type
+parameter to be `Equatable` in turn, which a bound on the declaration states:
+`struct Pair[Equatable T]`. For `Hashable`, all fields are combined into the hash. For
 `Displayable`, fields are printed as `TypeName(field1, field2, ...)`. For
 `Debuggable`, structs render as `TypeName { field1: …, field2: … }` where each
 field's `debug()` is called recursively (strings get quoted and escaped); enum

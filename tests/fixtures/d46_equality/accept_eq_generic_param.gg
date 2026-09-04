@@ -1,0 +1,24 @@
+# D46 — a BARE GENERIC PARAMETER is EXEMPT from the equality gate, and the
+# exemption is deliberate. `T` inside `same[T]` (and inside a `@derive`-expanded
+# body) has no instantiation at the point the gate runs, so rejecting on it is
+# not a judgement about the argument: it refuses `same[int]` identically. The
+# check that would be worth having needs `T`'s declared `Equatable` bound to be
+# recorded by the derive expansion and consulted here, which is a separate
+# piece of machinery.
+#
+# The hole this leaves — `same[Point]` with a non-`Equatable` `Point` is
+# accepted — is filed, and it is one corner of a pre-existing class-wide gap:
+# `T + T` inside a generic function is ungated too.
+
+struct Point:
+    int x
+    int y
+
+bool same[T](T a, T b):
+    return a == b
+
+void main():
+    print(same[int](1, 2))
+    Point p1 = Point(1, 2)
+    Point p2 = Point(1, 2)
+    print(same[Point](p1, p2))

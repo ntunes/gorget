@@ -1,0 +1,18 @@
+# D46 — a TUPLE gets intrinsic structural equality "whenever its elements are
+# comparable", so a tuple whose element is a struct with no `Equatable` is
+# REFUSED. This is the cell D46's original text had no subject for: half 1 made
+# tuples intrinsic and half 2 made structs reject, and this expression is both.
+# The element gate is what gives it a subject.
+#
+# The diagnostic must blame `Point`, not the tuple: a tuple type renders as a
+# placeholder here (`(<defined>, int)`), which is not a name anyone can write a
+# derive on.
+
+struct Point:
+    int x
+    int y
+
+void main():
+    auto a = (Point(1, 2), 5)
+    auto b = (Point(1, 2), 5)
+    print(a == b)

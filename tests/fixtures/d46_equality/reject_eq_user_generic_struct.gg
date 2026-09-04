@@ -1,0 +1,20 @@
+# D46 — a USER generic struct is declarable, so it needs the derive like any
+# other struct. `Pair[T]` reaches the predicate as `ResolvedType::Generic`, the
+# same variant `Vector[T]` and `Option[T]` arrive on, and the two dispositions
+# are opposite: the prelude containers are intrinsic, a user generic is not.
+# The split is a TYPED flag seeded once at registration, so a user type that
+# happens to be named `Vector` gets a distinct definition with the flag clear
+# and still owes its derive.
+
+struct Point:
+    int x
+    int y
+
+struct Pair[T]:
+    T first
+    T second
+
+void main():
+    Pair[Point] a = Pair[Point](Point(1, 2), Point(3, 4))
+    Pair[Point] b = Pair[Point](Point(1, 2), Point(3, 4))
+    print(a == b)

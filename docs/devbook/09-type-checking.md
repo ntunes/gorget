@@ -185,6 +185,44 @@ keyed on the callee span (`typecheck.rs:1453-1503`). Pass 4.5 then writes them
 into the AST. Without this, IR-lowering's monomorphizer has no mangled symbol
 to dispatch to and link-fails.
 
+### Operator support gates
+
+Two gates hang off the binary-operator arm, and they are deliberately not the
+same gate.
+
+The ARITHMETIC family routes through `check_operator_supported` →
+`operator_supported_for_type`, which consumes a `type_key` — the bare def name
+`type_key_for_trait_lookup` produces — and asks the trait registry whether that
+name equips `Add` / `Sub` / … or carries the inherent method. A key is all it
+needs, because arithmetic support is a property of the type itself.
+
+EQUALITY cannot use that layer. `==` and `!=` are legal on a container exactly
+when the container's ELEMENTS are comparable, and `type_key_for_trait_lookup`
+maps `Generic(def, args)` to the def name alone, discarding the arguments. So
+`eq_comparable_blame` walks `ResolvedType` **directly**, recursively, and
+returns the innermost type that cannot be compared — which is also what the
+diagnostic must name, since `Option[Point]` is refused because of `Point` and
+`Point` is where an implementation goes.
+
+The walk's shape is the language rule, one arm per case: a tuple, array or slice
+recurses into its elements; a trait object, closure or function type is refused
+outright; a `Generic` splits on the typed `DefInfo.has_intrinsic_equality` flag —
+set, and it recurses into the type arguments; clear, and it demands an
+`Equatable` impl; a `Defined` does the same, with a bare generic parameter
+exempt; inference, error and divergence types never cascade a second diagnostic.
+
+`has_intrinsic_equality` is seeded ONCE at registration from
+`builtin_has_intrinsic_equality` (`scope.rs`), the same one-allowed-name-match
+pattern `DerefWrapperKind::for_builtin_name` uses, and every read downstream is
+the typed flag. That is what lets `Vector[T]` and a user `Pair[T]` — which
+arrive on the same `ResolvedType::Generic` variant — take opposite dispositions
+without anyone matching on a name at the decision site.
+
+`op_trait_and_method`, which the arithmetic gate consults, is EXHAUSTIVE over
+every `BinaryOp` variant with no catch-all arm. rustc's exhaustiveness check is
+therefore the guard that a newly added operator cannot silently join the ungated
+set; the operators that genuinely have no trait path each say so explicitly.
+
 ## Method resolution and dispatch
 
 The `MethodCall` arm (`typecheck.rs:1721`) is the most intricate part of the

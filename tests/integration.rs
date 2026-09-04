@@ -2097,6 +2097,120 @@ fn reject_field_on_string() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// D46 (+ its 2026-09-04 rider) — `==` / `!=` WITHOUT AN `Equatable` IMPL
+//
+// The cross-lane behaviour lives in `spectests/run/reject_eq_*.gg` (five seeds,
+// four engines each: ggdef + C + LLVM + self-host). The tests below pin the
+// cells those seeds cannot carry, either because the shape is outside the
+// phase-0 subset or because the SELF-HOST gate is deliberately narrower than
+// the Rust one (it accepts every `RTGeneric`, having no registration-seeded
+// intrinsic-equality flag — `todo/t1128`).
+//
+// The AXES, and why each is covered rather than sampled (Core #12):
+//   * CONTAINER — `Option` / `Vector` / tuple reach the predicate through
+//     DIFFERENT `ResolvedType` variants, so one is an anecdote.
+//   * DECLARABILITY — a prelude container of a non-comparable element rejects
+//     and blames the ELEMENT; a USER generic struct rejects and blames ITSELF.
+//     Both arrive as `ResolvedType::Generic`; only a typed flag separates them.
+//   * NO-EQUALITY-POSSIBLE — `Callable[T]` is the rider's explicit REJECT cell.
+//   * EXEMPTION — a bare generic parameter is accepted, deliberately.
+//   * NON-REJECTION — every shape that compiled before must still compile.
+
+/// GRADUATED from `tests/fixtures/known_gaps/eq_without_equatable_silently_false.gg`.
+/// The gap it recorded — accepted, no diagnostic, answers address identity —
+/// is closed by D46's check-time rejection.
+#[test]
+fn d46_eq_without_equatable_rejects() {
+    check_gg_fails(
+        "d46_equality/eq_without_equatable_rejects.gg",
+        "E_UnsupportedOperator",
+    );
+}
+
+/// The rider's element gate on the prelude ENUM container. The blame must be
+/// `Point` — the type the derive goes on — never `Option`, which the author
+/// cannot annotate.
+#[test]
+fn d46_eq_option_element_not_equatable_rejects() {
+    check_gg_fails(
+        "d46_equality/reject_eq_option_element.gg",
+        "not defined for type `Point`",
+    );
+}
+
+/// The same gate on the prelude STRUCT container.
+#[test]
+fn d46_eq_vector_element_not_equatable_rejects() {
+    check_gg_fails(
+        "d46_equality/reject_eq_vector_element.gg",
+        "not defined for type `Point`",
+    );
+}
+
+/// D46 half 1 meeting half 2: a tuple is intrinsic, a struct must derive, and
+/// this expression is both. The blame must be `Point` and not the tuple's
+/// placeholder rendering, which is not a name a derive can be written on.
+#[test]
+fn d46_eq_tuple_element_not_equatable_rejects() {
+    check_gg_fails(
+        "d46_equality/reject_eq_tuple_element.gg",
+        "not defined for type `Point`",
+    );
+}
+
+/// The rider's explicit no-structural-equality cell. The message must NOT tell
+/// the author to derive `Equatable` for a closure type — advice they cannot
+/// take — so this asserts the alternative wording, not just the code.
+#[test]
+fn d46_eq_callable_rejects_without_derive_advice() {
+    check_gg_fails(
+        "d46_equality/reject_eq_callable.gg",
+        "has no structural equality to compare",
+    );
+}
+
+/// A USER generic struct is declarable and owes its derive, even though it
+/// arrives on the same `ResolvedType::Generic` variant as `Vector[T]`.
+#[test]
+fn d46_eq_user_generic_struct_rejects() {
+    check_gg_fails(
+        "d46_equality/reject_eq_user_generic_struct.gg",
+        "not defined for type `Pair`",
+    );
+}
+
+/// THE NON-REJECTION PIN. Everything that compiled before D46 must still
+/// compile: primitives, `String`, `@derive(Equatable)`, a user `equip`, and the
+/// non-declarable aggregates of comparable elements. Deliberately a CHECK-only
+/// assertion — the tuple / `Option` / `Vector` / `Result` rows still answer by
+/// address identity, and pinning that output would ratify the wrong answer
+/// (the intrinsic structural-equality lowering is owed separately).
+#[test]
+fn d46_eq_accept_side_still_checks() {
+    check_gg_ok("d46_equality/accept_eq_still_legal.gg");
+}
+
+/// The bare-generic-parameter exemption, pinned as an ACCEPT so that a later
+/// tightening has to face it deliberately rather than by accident.
+#[test]
+fn d46_eq_generic_param_exempt() {
+    check_gg_ok("d46_equality/accept_eq_generic_param.gg");
+}
+
+/// THE ACCEPT PATH, RUN — because a `gg check` exit code is not evidence that a
+/// comparison WORKS, and accepting an expression whose answer is wrong is the
+/// entire defect D46 retires. Only the rows that answer correctly today are
+/// here; the aggregates that are accepted but still answer by address identity
+/// stay in the check-only fixture, so nothing pins a wrong value.
+#[test]
+fn d46_eq_accept_controls_run() {
+    run_gg(
+        "d46_equality/accept_eq_controls_run.gg",
+        "true\ntrue\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\nfalse\ntrue",
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
 // Track E1 — smart-pointer/lock-guard METHOD-call fabrication class
 // (mirror of the FieldAccess-fabrication block above, but for MethodCall).
 //

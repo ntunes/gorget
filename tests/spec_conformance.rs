@@ -212,9 +212,9 @@ use ggdef::{parse_frontmatter, Expect};
 // C 237/237 · LLVM 237/237 · self-host 236/237, so both new fixtures MATCH on
 // all three lanes and the sole SH mismatch remains `d22_slice_clamp.gg` below.
 // 235/235/234/`MIN` 235 → 237/237/236/`MIN` 237.
-const C_MATCH_FLOOR: usize = 237;
-const LLVM_MATCH_FLOOR: usize = 237;
-const SELFHOST_MATCH_FLOOR: usize = 236;
+const C_MATCH_FLOOR: usize = 242;
+const LLVM_MATCH_FLOOR: usize = 242;
+const SELFHOST_MATCH_FLOOR: usize = 241;
 // SH lane doesn't yet reproduce d22_slice_clamp.gg — SH lowerer needs the
 // Range-in-index lowering wired (parser mirror lands the syntax, but the
 // lowerer's SIndex arm at self_host_lowerer/lower_expr.gg doesn't yet
@@ -228,7 +228,7 @@ const SELFHOST_MATCH_FLOOR: usize = 236;
 /// It equals the C and LLVM MATCH floors. The SELF-HOST floor sits ONE BELOW,
 /// on `d22_slice_clamp.gg` (see `SELFHOST_MATCH_FLOOR`); adding a fixture
 /// raises all four constants together.
-const MIN_FIXTURES: usize = 237;
+const MIN_FIXTURES: usize = 242;
 
 // ── THE RELATION ABOVE IS NOW ENFORCED, NOT ASSERTED IN PROSE (Core #14) ──
 // The doc comment on MIN_FIXTURES claims "It equals the C and LLVM MATCH
