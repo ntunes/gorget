@@ -778,22 +778,24 @@ vector_higher_order	__gorget_closure_env_alloc*4
 #     directly in `main`. ⚠ WIDER THAN THIS FILE'S OWN big-groups prose, which
 #     calls the frame "every builtin HOF call": a plain USER function taking
 #     `Callable[int(int)]` leaks the same frame with no HOF in the program.
-#   * `gorget_array_push*6` -> `todo/t0955`. The `Vector[U]` a `flat_map` CALLEE
-#     returns is never freed once its elements are drained into the accumulator:
-#     one husk per input element (2 via `fan <- __adapt_fan`, 2 via
-#     `fan_box <- __adapt_fan_box`, 1 each via `__Closure_5__call` and
-#     `__Closure_6__call`).
-#   * `str_alloc_copy*13` -> SPLIT, and the DIRECT/INDIRECT distinction is what
-#     splits it. 8 are INDIRECT, reachable from the leaked husks above, so they
-#     are `todo/t0955`. 5 are DIRECT (2 via `label <- __adapt_label`, 3 via
-#     `__Closure_0/1/8__call <- main`) and belong to `todo/t0954`: the accumulator
-#     array a builtin Vector HOF mints carries a NULL `elem_drop`, so the array is
-#     freed and its heap elements are not.
-# RETIRES only when ALL THREE of `todo/t0953`, `todo/t0954` and `todo/t0955` have
-# landed; each one alone TIGHTENS this row's counts. All three ship a durable
-# heap-forced `known_gaps` repro with a NAMED callee where the isolation needs one,
-# and an `#[ignore]`d `assert_gg_sanitize_clean` test asserting the clean run.
-vector_hof_cross_type_map	__gorget_closure_env_alloc*10,gorget_array_push*6,str_alloc_copy*13	__gorget_closure_env_alloc=t0953,gorget_array_push=t0955,str_alloc_copy=t0954,str_alloc_copy=t0955
+# TWO OF THE THREE CLASSES HAVE SINCE LANDED, and this row is what tightening
+# looks like. Re-measured 2026-09-04 at 80 bytes in 10 allocations, all
+# `__gorget_closure_env_alloc`:
+#   * `gorget_array_push*6` was `todo/t0955` — the `Vector[U]` a `flat_map`
+#     CALLEE returns, never freed once its elements were drained into the
+#     accumulator, one husk per input element. GONE: the expander frees the
+#     drained husk, which is safe because the accumulator now carries
+#     `elem_clone` and the append is a deep copy rather than an aliasing memcpy.
+#   * `str_alloc_copy*13` was SPLIT by the DIRECT/INDIRECT distinction — 8
+#     INDIRECT under the husks above (`todo/t0955`) and 5 DIRECT
+#     (`todo/t0954`: the accumulator a Vector HOF mints carried a NULL
+#     `elem_drop`, so the array was freed and its heap elements were not). BOTH
+#     GONE: the accumulator is built from the RESULT element type's resolved
+#     hooks, so it drops what it holds.
+# RETIRES when `todo/t0953` lands. That item ships a durable heap-forced
+# `known_gaps` repro with a NAMED callee where the isolation needs one, and an
+# `#[ignore]`d `assert_gg_sanitize_clean` test asserting the clean run.
+vector_hof_cross_type_map	__gorget_closure_env_alloc*10	__gorget_closure_env_alloc=t0953
 vector_methods2	__gorget_closure_env_alloc*4,gorget_array_push*1
 vector_sort_by	__gorget_closure_env_alloc*3
 vector_sort_by_key	__gorget_closure_env_alloc*3,str_alloc_copy*2

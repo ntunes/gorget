@@ -952,7 +952,7 @@ sanitize.leak.rows.round_open.mirror = none
 sanitize.leak.rows.round_open.input = none
 
 row = sanitize.leak.records.pin
-sanitize.leak.records.pin.value = 2302
+sanitize.leak.records.pin.value = 2283
 sanitize.leak.records.pin.unit = leak records the allowlist tolerates in total
 sanitize.leak.records.pin.polarity = exact-pin
 sanitize.leak.records.pin.provenance = derived
@@ -962,10 +962,10 @@ sanitize.leak.records.pin.regen_extract = census: rows=[0-9]+ pairs=[0-9]+ recor
 sanitize.leak.records.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
 sanitize.leak.records.pin.regen_env = none
 sanitize.leak.records.pin.instrument = the awk census over tests/sanitize/LEAK_ALLOWLIST.txt (shares one run with the other three HEAD-side leak rows)
-sanitize.leak.records.pin.measured_at = 74fc27705
+sanitize.leak.records.pin.measured_at = 832a3039d
 sanitize.leak.records.pin.home = tests/lints.rs:LEAK_RECORDS
-sanitize.leak.records.pin.scan = standard
-sanitize.leak.records.pin.caveat = the `*N+` signatures are counted at their FLOOR — a `+` means at-least-N and switches that row's count check off, so this total is a lower bound on what the concurrency rows may actually leak; see sanitize.leak.loose_signatures.pin for how many rows are in that state
+sanitize.leak.records.pin.scan = none
+sanitize.leak.records.pin.caveat = scan = none since the value became 2283 — a four-digit figure collides with `file:line` CITATIONS, which churn every round: at the moment of the change the unrelated spellings were `src/main.rs:2283` quoted in docs/devbook/01 and a self-host line pair 2280/2283 in todo/t0944, neither a mirror of anything. Waiving line numbers means re-waiving them whenever a file moves, and a waiver that must be renewed is a waiver nobody reads. The mirror to LEAK_RECORDS is what actually holds this row, exactly as for sanitize.leak.class_pairs.pin. ⊕ the `*N+` signatures are counted at their FLOOR — a `+` means at-least-N and switches that row's count check off, so this total is a lower bound on what the concurrency rows may actually leak; see sanitize.leak.loose_signatures.pin for how many rows are in that state
 sanitize.leak.records.pin.cost_secs = 30
 sanitize.leak.records.pin.mirror = tests/lints.rs:LEAK_RECORDS
 sanitize.leak.records.pin.input = none
@@ -990,7 +990,7 @@ sanitize.leak.records.round_open.mirror = none
 sanitize.leak.records.round_open.input = none
 
 row = sanitize.leak.class_pairs.pin
-sanitize.leak.class_pairs.pin.value = 501
+sanitize.leak.class_pairs.pin.value = 499
 sanitize.leak.class_pairs.pin.unit = (fixture, leak-class) pairs the allowlist names
 sanitize.leak.class_pairs.pin.polarity = exact-pin
 sanitize.leak.class_pairs.pin.provenance = derived
@@ -1000,7 +1000,7 @@ sanitize.leak.class_pairs.pin.regen_extract = census: rows=[0-9]+ pairs=(?P<valu
 sanitize.leak.class_pairs.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
 sanitize.leak.class_pairs.pin.regen_env = none
 sanitize.leak.class_pairs.pin.instrument = the awk census over tests/sanitize/LEAK_ALLOWLIST.txt (shares one run with the other three HEAD-side leak rows)
-sanitize.leak.class_pairs.pin.measured_at = 74fc27705
+sanitize.leak.class_pairs.pin.measured_at = 832a3039d
 sanitize.leak.class_pairs.pin.home = tests/lints.rs:LEAK_CLASS_PAIRS
 sanitize.leak.class_pairs.pin.scan = none
 sanitize.leak.class_pairs.pin.caveat = scan = none since R49 Track E — 500 is a round three-digit number with 32 legitimate spellings across the roots (18 in tests/integration.rs, 12 in tests/lints.rs — `> 500` size thresholds and the re-seed ledger — one each in todo/t0154 and todo/t0605), and a waiver farm on that scale is how a guard dies. It carried `scan = standard` only while the value happened to be 501. The mirror to LEAK_CLASS_PAIRS is what actually holds this row. ⊕ the PAIR is the citation unit precisely because the ROW is not: most rows carrying multiple mechanisms would leave the majority of pairs unobliged under a per-row rule. This count says how many obligations exist, never whether any is discharged — that is sanitize.leak.uncited_class_pairs.pin

@@ -4638,16 +4638,276 @@ fn iter_trait_default_trait_args() {
 // type. `map` is `(T) -> U ⇒ Vector[U]` and `flat_map` is `(T) -> Vector[U] ⇒
 // Vector[U]`, but the builtin protocol declared both `ret_self`, so the GIR
 // disagreed with both the typechecker and the LIR expander and a DECLARED
-// destination papered over it — the visible discriminator was `auto` vs
-// `Vector[U]`, not the callee shape. Axes: producer {map, flat_map} × callee
+// destination papered over it. Axes: producer {map, flat_map} × callee
 // {inline closure, named fn} × element {int control, String, struct} ×
 // destination {auto, typed}. RED-verified against the pre-fix compiler: SEGV on
 // the Rust lane, abort on the self-host lane.
+//
+// ⚠ THIS SET DOES NOT SAMPLE THE CLOSURE-BODY AXIS, and that omission is
+// named here rather than left for the next reader to discover. Every inline
+// closure below has a body that is a CALL (`int_to_str(…)`, `Boxed(…)`,
+// `fan(n)`), and a call body resolves the result element correctly. A closure
+// whose body is a CONTAINER LITERAL (`(n): [mk("t", "ag")]`) did not, so the
+// discriminator was never `auto` vs `Vector[U]` — measured, both destinations
+// behave the same and both callee typings behave the same. That axis lives in
+// `vector_hof_result_element_sizing`, and the hook half of the same class in
+// `vector_hof_result_element_drop`.
 #[test]
 fn vector_hof_cross_type_map() {
     run_gg(
         "vector_hof_cross_type_map.gg",
         "10\n30\n100\n300\n21\n20\n30\n200\n100\n6\n10\n31\n20\n21\n300\n100\n2\n2\n2\n3",
+    );
+}
+
+/// The array a Vector HOF mints for its RESULT carries the RESULT element
+/// type's runtime metadata. The observable is not a leak count — it is that a
+/// user's `equip … with Drop` body runs at all.
+///
+/// The `push-control` section is the measurement: the same `Vector[Cust]`
+/// holding the same two values in the same scope, differing only in which
+/// writer minted the array. RED-verified against the pre-fix compiler — the
+/// `map` and `flat_map` sections printed NO `drop-cust` line, at rc 0 with
+/// `gg check` clean.
+///
+/// `flat_map` is deliberately absent: its Rust expander deep-clones and then
+/// frees the husk (four `Drop` bodies for two elements) while the self-host
+/// moves (two), so pinning either count here would pin a lane divergence and
+/// break when `todo/t1216` lands. Its result-element hooks are pinned by
+/// `known_gap_flat_map_callee_result_vector_leak` instead.
+#[test]
+fn vector_hof_result_element_drop() {
+    run_gg(
+        "vector_hof_result_element_drop.gg",
+        "push-control\ndrop-cust\ndrop-cust\n2\nmap\ndrop-cust\ndrop-cust\n2\n2\n2\n2",
+    );
+}
+
+/// Companion stdout pin for the sizing fixture. ⚠ THIS ASSERTION IS GREEN AT
+/// THE PRE-FIX COMPILER TOO and pins nothing on its own — every cell reads
+/// back correctly over a mis-sized accumulator. It is here so that a fix which
+/// corrects the slot width and breaks the values is caught. The pins that go
+/// RED are `hof_result_accumulator_element_sizes` and
+/// `vector_hof_result_element_sizing_no_overflow`.
+#[test]
+fn vector_hof_result_element_sizing() {
+    run_gg(
+        "vector_hof_result_element_sizing.gg",
+        "8\ntag\n7\n2\n8\n8\n0",
+    );
+}
+
+/// Resolve every `gorget_array_new(N)` in an emitted C file to its enclosing C
+/// function and its literal element size.
+///
+/// The emitted form is `__vNN = (int64_t)32LL; __vNN2 = gorget_array_new(__vNN);`,
+/// so a grep for `gorget_array_new\([0-9]+\)` matches NOTHING and reads as
+/// "no arrays here". The enclosing function matters too: a named callee's own
+/// `Vector[U] out = []` is emitted above `main`, so a positional read of the
+/// last few sizes attributes the callee's array to the accumulator.
+fn resolved_array_new_sizes(c_src: &str) -> Vec<(String, i64)> {
+    let mut out = Vec::new();
+    let mut consts: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+    let mut cur = "<toplevel>".to_string();
+    for line in c_src.lines() {
+        let t = line.trim_end();
+        // A top-level function definition: no leading whitespace, ends in `{`.
+        if !t.starts_with(char::is_whitespace) && t.ends_with('{') && t.contains('(') {
+            if let Some(paren) = t.find('(') {
+                let head = &t[..paren];
+                if let Some(name) = head.split_whitespace().last() {
+                    cur = name.trim_start_matches('*').to_string();
+                    consts.clear();
+                }
+            }
+        }
+        let s = line.trim();
+        if let Some(eq) = s.find(" = (int64_t)") {
+            let name = &s[..eq];
+            if name.starts_with("__v") && !name.contains(' ') {
+                let rest = &s[eq + " = (int64_t)".len()..];
+                if let Some(ll) = rest.find("LL;") {
+                    if let Ok(val) = rest[..ll].parse::<i64>() {
+                        consts.insert(Box::leak(name.to_string().into_boxed_str()), val);
+                    }
+                }
+            }
+        }
+        let mut rest = line;
+        while let Some(idx) = rest.find("gorget_array_new(") {
+            rest = &rest[idx + "gorget_array_new(".len()..];
+            if let Some(close) = rest.find(')') {
+                let arg = rest[..close].trim();
+                if let Some(v) = consts.get(arg) {
+                    out.push((cur.clone(), *v));
+                } else if let Ok(v) = arg.trim_end_matches("LL").parse::<i64>() {
+                    out.push((cur.clone(), v));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// THE pin for the sizing class: the accumulator's slot width, read off the
+/// emitted C. Every cell in the fixture prints the same thing before and after
+/// the fix, so stdout cannot see this and ASan sees it only on the one cell
+/// wide enough to run off the end.
+///
+/// RED-VERIFIED against the pre-fix compiler: the `main` sizes read
+/// `[8, 8, 32, 32, 32, 32, 32, 32, 32]` — four accumulators minted at the
+/// SOURCE element's width.
+#[test]
+fn hof_result_accumulator_element_sizes() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/vector_hof_result_element_sizing.gg");
+    assert!(fixture.exists(), "fixture not found: {}", fixture.display());
+
+    let work = std::env::temp_dir().join(format!(
+        "gg_hof_elem_sizes_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&work).unwrap();
+    let bin = work.join("hof_elem_sizes");
+    // CARGO_BIN_EXE_gg, not `gg_command` — the C backend regardless of
+    // GG_BACKEND, so the emitted `.c` this test reads always exists (the LLVM
+    // backend emits only `.ll` + exe). That is not a coverage hole: the slot
+    // width is decided UPSTREAM of both backends, on `HofExpand.value_ty`, so
+    // the C emission witnesses the shared decision. The LLVM lane's own
+    // behaviour on the same fixture is covered by
+    // `vector_hof_result_element_sizing` and `..._no_overflow`, which do route
+    // through `gg_command` and so run under `GG_BACKEND=llvm`.
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_gg"));
+    cmd.arg("build").arg(&fixture).arg("-o").arg(&bin);
+    let build = build_with_timeout(&mut cmd, "vector_hof_result_element_sizing.gg");
+    assert!(
+        build.status.success(),
+        "build failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+    let c_src = std::fs::read_to_string(work.join("hof_elem_sizes.c"))
+        .expect("emitted C artifact missing");
+    let sizes: Vec<i64> = resolved_array_new_sizes(&c_src)
+        .into_iter()
+        .filter(|(f, _)| f == "main")
+        .map(|(_, v)| v)
+        .collect();
+    let _ = std::fs::remove_dir_all(&work);
+
+    // In source order within `main`:
+    //   nums (source, int)            8
+    //   (a) wide accumulator          32  ← was 8
+    //   v (source, String)            32
+    //   (b) pairs accumulator         16  ← was 32
+    //   (c) lens accumulator          8   ← was 32
+    //   (d) called accumulator        32  (correct pre-fix)
+    //   (e) named accumulator         32  (correct pre-fix)
+    //   empty (source, String)        32
+    //   (f) none_pairs accumulator    16  ← was 32
+    assert_eq!(
+        sizes,
+        vec![8, 32, 32, 16, 8, 32, 32, 32, 16],
+        "HOF result accumulators must be minted at the RESULT element's width; \
+         got {sizes:?}",
+    );
+}
+
+/// The memory-unsafety face of the same defect. An undersized accumulator only
+/// runs off the end once the element count outgrows `gorget_array_extend`'s
+/// eight-slot minimum reserve, which is why the fixture feeds it eight inputs.
+///
+/// Leaks are TOLERATED here and overflows are not: each closure literal in the
+/// fixture leaks an 8-byte environment through `todo/t0953`, a different defect
+/// with its own repro, so `assert_gg_sanitize_clean` would be asserting that
+/// item rather than this one.
+///
+/// RED-VERIFIED against the pre-fix compiler: `AddressSanitizer:
+/// heap-buffer-overflow`, WRITE of size 32, inside `gorget_array_extend`.
+#[test]
+fn vector_hof_result_element_sizing_no_overflow() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/vector_hof_result_element_sizing.gg");
+    let work = std::env::temp_dir().join(format!(
+        "gg_hof_overflow_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&work).unwrap();
+    let bin = work.join("hof_overflow_asan");
+    let build = build_with_timeout(
+        gg_command("build").arg("--sanitize").arg(&fixture).arg("-o").arg(&bin),
+        "vector_hof_result_element_sizing.gg (sanitize)",
+    );
+    assert!(
+        build.status.success(),
+        "sanitize build failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+    let mut run_cmd = Command::new(&bin);
+    run_cmd.env("ASAN_OPTIONS", "detect_leaks=1:abort_on_error=0:exitcode=99");
+    let run = run_with_timeout(&mut run_cmd, "vector_hof_result_element_sizing");
+    let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    let _ = std::fs::remove_dir_all(&work);
+
+    // Stdout is NOT asserted here: LeakSanitizer's exit path can bypass the
+    // stdio flush, so the captured stdout is empty whenever the run reports
+    // the `todo/t0953` environment-leak floor this fixture cannot avoid. The
+    // values are pinned by `vector_hof_result_element_sizing` on an ordinary
+    // build; what this test owns is the memory-error classes below.
+    for bad in [
+        "heap-buffer-overflow",
+        "heap-use-after-free",
+        "stack-buffer-overflow",
+        "double-free",
+        "allocation-size-too-big",
+        // The runtime's own element-metadata check, compiled in under
+        // --sanitize. It fires when the accumulator and the array the callee
+        // returns disagree about the element type.
+        "gorget: internal: array extend",
+    ] {
+        assert!(
+            !stderr.contains(bad),
+            "vector_hof_result_element_sizing: sanitize run reported `{bad}`:\n{stderr}",
+        );
+    }
+}
+
+/// SELF-HOST lane for the result-element metadata class. The self-host LIR has
+/// no `HofExpand` variant at all — `try_lower_vector_hof` desugars the HOF into
+/// a comprehension loop whose accumulator is an ordinary array constructor, and
+/// that constructor already wires the element hooks — so there is nothing to
+/// port and the property should hold by construction. "By construction" is a
+/// prediction, though, and the rule is that a NEW fixture COMPILES and MATCHES
+/// on this lane in the round that adds it, so both fixtures are measured here
+/// rather than reasoned about.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_vector_hof_result_element_drop() {
+    assert_self_host_stdout(
+        "vector_hof_result_element_drop.gg",
+        "sh_hof_result_elem_drop",
+        "push-control\ndrop-cust\ndrop-cust\n2\nmap\ndrop-cust\ndrop-cust\n2\n2\n2\n2",
+    );
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_vector_hof_result_element_sizing() {
+    assert_self_host_stdout(
+        "vector_hof_result_element_sizing.gg",
+        "sh_hof_result_elem_sizing",
+        "8\ntag\n7\n2\n8\n8\n0",
     );
 }
 
@@ -5855,10 +6115,12 @@ fn known_gap_cow_local_alias_loop_mutation_lost() {
 /// closure's registered return type, the same signature the LIR expander
 /// already sized the result array by.
 ///
-/// The old Rust-lane discriminator was the DESTINATION, not the callee shape:
-/// `Vector[String] v = …` was correct and `auto v = …` was not, for named
-/// callees and inline closures alike. `known_gaps/…_destination_axis.gg`
-/// samples both destinations for both shapes.
+/// ⚠ The `auto`-vs-`Vector[U]` DESTINATION reading of this class did not
+/// survive measurement, and the fixture it cited never existed. Over the full
+/// 2×2 the destination makes no difference and neither does the closure
+/// parameter's typing: what discriminates is the closure's BODY — a call
+/// resolves the result element, a container literal did not. That axis is
+/// pinned in `vector_hof_result_element_sizing`.
 #[test]
 fn known_gap_map_inline_closure_cross_type_input_mint() {
     run_gg(
@@ -7918,20 +8180,19 @@ fn known_gap_closure_literal_call_arg_env_leak() {
     assert_gg_sanitize_clean("known_gaps/closure_literal_call_arg_env_leak", "41\n41");
 }
 
-// `todo/t0954` — the accumulator array a builtin Vector HOF mints carries a NULL
-// `elem_drop`, so the backing array is freed and the heap elements it held are
-// not. FOUR cells over PRODUCER x ELEMENT TYPE, because neither axis is the
-// defect on its own: `map`->String and `map`->struct-owning-a-Vector both LEAK
-// and do so under DIFFERENT top frames (`str_alloc_copy` vs `gorget_array_push`),
-// so attributing this class by frame would split one defect across two items;
-// `filter` and `sorted` are ELEMENT-PRESERVING and are CLEAN, which is what
-// localises it to the accumulator an element-TRANSFORMING producer mints. Every
-// callee is a NAMED function so `todo/t0953`'s env leak cannot contaminate the
-// record set, and `flat_map` is omitted by name because its leak is
-// `todo/t0955`'s different mechanism. 201 bytes in 6 allocations, C and LLVM.
+// GRADUATED — the accumulator a Vector HOF mints carries the RESULT element's
+// `elem_drop`, so the heap elements the callee produced are freed with it.
+// FOUR cells over PRODUCER x ELEMENT TYPE, because neither axis is the defect
+// on its own: `map`->String and `map`->struct-owning-a-Vector leaked under
+// DIFFERENT top frames (`str_alloc_copy` vs `gorget_array_push`), so
+// attributing the class by frame would have split one defect across two items;
+// `filter` and `sorted` are ELEMENT-PRESERVING and were always clean, which is
+// what localises it to the accumulator an element-TRANSFORMING producer mints.
+// Every callee is a NAMED function so `todo/t0953`'s env leak cannot
+// contaminate the record set — which is why this one CAN assert fully clean
+// while `vector_hof_result_element_drop` cannot. It was 201 bytes in 6
+// allocations, C and LLVM.
 #[test]
-#[ignore = "todo/t0954 — the Vector-HOF accumulator is minted without elem_drop, so every heap \
-element the callee produces leaks. Asserts the intended ASan-clean run."]
 fn known_gap_vector_hof_accumulator_elem_drop_missing() {
     assert_gg_sanitize_clean(
         "known_gaps/vector_hof_accumulator_elem_drop_missing",
@@ -7939,15 +8200,48 @@ fn known_gap_vector_hof_accumulator_elem_drop_missing() {
     );
 }
 
-// `todo/t0955` — the `Vector[U]` a `flat_map` callee RETURNS is never freed once
-// its elements have been drained into the accumulator: one leaked backing array
-// per input element, plus the Strings those husks still own. Named callee, for
-// the same isolation reason as `t0954`. 777 bytes in 6 allocations, C and LLVM.
+// GRADUATED — the `Vector[U]` a `flat_map` callee returns is freed once its
+// elements have been drained into the accumulator. It used to leak one backing
+// array per input element plus the Strings those husks still owned: 777 bytes
+// in 6 allocations, C and LLVM. Named callee, for the same isolation reason as
+// the sibling above.
+//
+// ORDER-COUPLED, one way: the free is safe only because the accumulator now
+// carries `elem_clone`, which turns `gorget_array_extend` from an aliasing
+// memcpy into a deep clone. Freeing the husk without that is a
+// use-after-free, so this test also pins the ordering.
 #[test]
-#[ignore = "todo/t0955 — a flat_map callee's returned Vector is never freed after its elements \
-are appended. Asserts the intended ASan-clean run."]
 fn known_gap_flat_map_callee_result_vector_leak() {
     assert_gg_sanitize_clean("known_gaps/flat_map_callee_result_vector_leak", "10\n3");
+}
+
+// `todo/t1215` — a Vector HOF whose callable arrives as an opaque
+// `Callable[…]` PARAMETER. The callable's type is erased to a bare `Ptr`
+// before lowering, so the call is a generic `CallExtern` with no `HofExpand`
+// to carry the resolved result-element metadata: the LLVM fallback inliner
+// mints the result array with no hooks (6 bytes in 1 object), and the C
+// backend does not monomorphize the shape at all and fails at the LINKER with
+// no `gg` diagnostic. Same symptom as the accumulator class above, different
+// write site — that fix provably does not reach this one.
+#[test]
+#[ignore = "todo/t1215 — a Vector HOF through an opaque Callable parameter mints its result array \
+with no element hooks on LLVM, and does not link at all on C. Asserts the intended ASan-clean run."]
+fn known_gap_t1215_opaque_callable_vector_hof() {
+    assert_gg_sanitize_clean("known_gaps/t1215_opaque_callable_vector_hof", "aabc!");
+}
+
+// `todo/t1217` — a container literal as a closure BODY producing a nested
+// collection does not unify with the declared destination element type:
+// `E_TypeMismatch: expected Vector[String], found ?T0[1]`, with an unresolved
+// inference variable in user-facing text. This is the fifth value of the HOF
+// result-element axis and the only one that is not expressible, which is why
+// `vector_hof_result_element_drop.gg` covers four of five and names this cell
+// rather than reshaping around it.
+#[test]
+#[ignore = "todo/t1217 — a nested-collection container literal in a closure body does not unify \
+with the declared destination element type. Asserts the intended output."]
+fn known_gap_t1217_map_to_nested_collection() {
+    run_gg("known_gaps/t1217_map_to_nested_collection.gg", "2\naabc");
 }
 
 // SELF-HOST-LANE gap (surfaced Round R40, Track-J review): `for (i, b) in

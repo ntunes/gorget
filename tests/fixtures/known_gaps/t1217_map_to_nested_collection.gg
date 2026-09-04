@@ -1,0 +1,42 @@
+# KNOWN GAP `todo/t1217` — a container literal as a closure BODY, producing a
+# nested collection, does not unify with the declared destination element type.
+#
+# This is the fifth value of the HOF result-element axis {primitive, runtime
+# singleton, Recursive-drop struct, Custom-drop struct, NESTED COLLECTION}. The
+# first four are pinned by `vector_hof_result_element_drop.gg`; this one is not
+# expressible today, so it is named as an omitted cell here rather than the
+# fixture being reshaped around it.
+#
+# RED-VERIFIED 2026-09-04, bare rc 1:
+#   error[E_TypeMismatch]: type mismatch: expected `Vector[String]`,
+#                          found `?T0[1]`
+# The `expected` half names the ELEMENT type while the destination is
+# `Vector[Vector[String]]`, and `?T0[1]` is an unresolved inference variable
+# leaking into user-facing text — the diagnostic is part of the defect.
+#
+# ⊕ The same literal is accepted in a non-closure position: declaring
+# `Vector[Vector[String]] r = []` and then `r.push([s])` compiles. The gap is
+# specific to the literal's expected type coming from the HOF's result element.
+#
+# Heap-FORCED: `mk` concatenates.
+#
+# INTENDED (asserted by the test): prints `2` then `aabc`.
+
+from std.collections import Vector
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push(mk("aa", "bc"))
+    v.push(mk("dd", "efg"))
+    Vector[Vector[String]] r = v.map((s): [s])
+    print(f"{r.len()}")
+    if r.get(0) is Some(inner):
+        if inner.get(0) is Some(x):
+            print(x)
+        else:
+            print("none")
+    else:
+        print("none")

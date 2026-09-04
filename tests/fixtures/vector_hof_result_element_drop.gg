@@ -1,0 +1,98 @@
+# Regression: the array a Vector HOF mints for its RESULT carries the RESULT
+# element type's runtime metadata — `elem_drop`, `elem_clone`,
+# `elem_materialize` — and not the source element's, and not nothing at all.
+#
+# `Vector.map` is `(T) -> U` and `Vector.flat_map` is `(T) -> Vector[U]`, so
+# the accumulator's element is `U`. The expander synthesises that array in BIR,
+# downstream of the LIR pass that installs those hooks for every other array in
+# the program, so it used to get a bare `gorget_array_new(N)` with all three
+# slots NULL. The visible consequence is not a leak report — it is that a
+# user's `equip … with Drop` body DOES NOT RUN.
+#
+# THE PUSH CONTROL IS THE MEASUREMENT, not filler. `via_push` builds the same
+# `Vector[Cust]` holding the same two values in the same scope, and differs
+# only in which writer minted the array. Pre-fix it printed its two
+# `drop-cust` lines while `via_map` printed NONE.
+#
+# RED-VERIFIED against the pre-fix compiler: the `map` section emitted no
+# `drop-cust` line at all, at rc 0 with `gg check` clean, and the program
+# leaked under `--sanitize`.
+#
+# ⚠ `flat_map` IS DELIBERATELY NOT A CELL HERE, and the reason is a
+# measurement rather than an oversight. On the Rust lane its expander appends
+# with `gorget_array_extend`, which deep-clones each element and then frees the
+# drained husk, so a two-element result runs the `Drop` body FOUR times; the
+# self-host desugars `flat_map` to a nested loop that MOVES, and runs it twice.
+# Both are sound — every value is dropped exactly once — but the count is the
+# clone-optimality question `todo/t1216` tracks, not the metadata question this
+# fixture pins, and baking either number in would pin a lane divergence and
+# break when that item lands. `flat_map`'s result-element hooks are pinned
+# instead by `known_gap_flat_map_callee_result_vector_leak`, which goes from
+# 777 bytes to ASan-clean and requires BOTH the hooks and the husk free.
+#
+# NOT ASSERTED ASan-CLEAN, and the reason is cited rather than hidden: every
+# cell here needs a closure LITERAL to reach the expander, and each literal
+# leaks an 8-byte environment through `todo/t0953`, which is a different defect
+# with its own durable repro. Post-fix this program sits at exactly that floor
+# — 32 bytes in 4 allocations, one per closure literal.
+#
+# AXIS CELLS — result element type × producer:
+#   Custom drop (`equip Drop`)  × {push control, map}
+#   Recursive drop (`Wrap`)     × map          — no stdout signal of its own;
+#                                                its String field is what leaks
+#   trivial (`int`, `Pair`)     × map          — must install NO hook at all
+
+from std.collections import Vector
+
+struct Cust:
+    String s
+
+equip Cust with Drop:
+    void drop(^self):
+        print("drop-cust")
+
+struct Wrap:
+    String s
+
+struct Pair:
+    int a
+    int b
+
+String mk(String a, String b):
+    return a + b
+
+int via_map(Vector[String] src):
+    Vector[Cust] r = src.map((s): Cust(s))
+    return r.len()
+
+# CONTROL: same element type, same values, same scope — only the writer that
+# mints the array differs.
+int via_push(Vector[String] src):
+    Vector[Cust] r = Vector[Cust]()
+    if src.get(0) is Some(s0):
+        r.push(Cust(s0))
+    if src.get(1) is Some(s1):
+        r.push(Cust(s1))
+    return r.len()
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push(mk("aa", "bc"))
+    v.push(mk("dd", "efg"))
+
+    print("push-control")
+    print(f"{via_push(v)}")
+    print("map")
+    print(f"{via_map(v)}")
+
+    # Trivial-element controls: a fix that types every accumulator as a
+    # resource would install a drop here and corrupt these.
+    Vector[int] ints = v.map((s): s.len())
+    print(f"{ints.len()}")
+    Vector[Pair] pairs = v.map((s): Pair(s.len(), 7))
+    print(f"{pairs.len()}")
+
+    # Recursive-drop element: `Wrap` has no `equip Drop` body to print, so it
+    # pins the hook through the leak rather than through stdout.
+    Vector[Wrap] wraps = v.map((s): Wrap(s))
+    print(f"{wraps.len()}")

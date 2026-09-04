@@ -393,6 +393,11 @@ fn add_sanitize_flags(cmd: &mut Command, sanitize: bool) {
     cmd.arg("-fsanitize=address,undefined");
     cmd.arg("-fno-omit-frame-pointer");
     cmd.arg("-g");
+    // Compile the runtime's compiler-invariant checks (currently
+    // `GORGET_ARRAY_EXTEND_CHECK`). They report a COMPILER defect on a
+    // user-facing path, so they abort only in sanitize builds — the same
+    // configuration `scripts/sanitize_sweep.sh` already runs.
+    cmd.arg("-DGORGET_HOF_HOOK_ASSERTS=1");
 }
 
 /// Print inferred borrow analysis for all functions (--show-borrows diagnostic).

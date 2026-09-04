@@ -9693,8 +9693,16 @@ fn sanitize_allowlists_shrink_only() {
     // `gg build --sanitize` and `--backend=llvm --sanitize` each report the same
     // 16 allocations, all `__gorget_closure_env_alloc`, and no corruption.
     // See the `⚠⚠ OWNER ASK` block in the allowlist.
-    const LEAK_CLASS_PAIRS: usize = 501;
-    const LEAK_RECORDS: usize = 2302;
+    // ⬇ A GENUINE BURN-DOWN, and the first one these numbers have recorded:
+    // 501 -> 499 / 2302 -> 2283 as `vector_hof_cross_type_map` sheds TWO of its
+    // three classes. The Vector-HOF accumulator is now built from the RESULT
+    // element type's resolved hooks, so `str_alloc_copy*13` (the elements it
+    // never dropped) and `gorget_array_push*6` (the `flat_map` husks it never
+    // freed) both stop leaking rather than stopping being reachable. Re-measured
+    // on the fixture itself: 80 bytes in 10 allocations, all
+    // `__gorget_closure_env_alloc` — `todo/t0953`, the one class still open.
+    const LEAK_CLASS_PAIRS: usize = 499;
+    const LEAK_RECORDS: usize = 2283;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────
