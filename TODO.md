@@ -683,6 +683,24 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔ **THE SESSION CRASHED ON DISK EXHAUSTION (owner, 2026-09-04). RECLAIMED AND RESTARTED.**
+**Disk 93G → 59G used, 371 GB free. Worktrees 37 → 10. `/tmp` 51.6 GB → 17 GB.**
+⚡⚡ **THE CAUSE IS STRUCTURAL, NOT AN ACCIDENT: EVERY AGENT BUILDS ITS OWN COMPILER.** A single `/tmp` build
+target was **11 GB**; nine finished agents' scratch dirs were **~28 GB between them**; and each of the 27
+pruned worktrees carried its own `target/`. ⇒ **AGENTS.md MA-6 says prune "the moment a track INTEGRATES" —
+this round proved the REVIEW agents matter more, because there are FIVE of them per track and none of them
+ever integrates.** ⊕ **Prune finished REVIEWERS' scratch, not just executors'.**
+⭐ **THE KEEP-LIST DISCIPLINE HELD, AND THE OWNER'S WARNING WAS RIGHT TO GIVE:** three pending agents' trees
+AND their `/tmp` scratch were preserved by name (`/tmp/reseed` 1.2 GB, `/tmp/rev_Sa2out` 266 MB, T1's two
+`recover_T1x_*` patches), **two DIRTY worktrees were left untouched**, and **all four unintegrated commits
+re-verified reachable AFTER the prune** (`2f7eb9b58` `0d9f9cebe` `55323d628` `bc762d0d3`). **All 35 briefs
+intact.** ⊕ *Worktree removal freed almost nothing on its own — git shares objects. The win was `/tmp`.*
+⊕ **All three interrupted agents RESUMED from their transcripts, each told to re-verify `git status` first
+and REBUILD before quoting a number** — a process exit mid-write can truncate a file, and **a sweep
+interrupted by disk failure can leave a truncated verdicts file that reads as FEWER findings.**
+⊕ **The 30-minute orchestration loop is RESTORED** (job `8540638e`), now carrying the disk rule and the fixed
+integration order.
+
 📋 **CONVERGENCE DRY RUN (owner's standing instruction: run it FIRST, before burning sweep time).**
 `scripts/convergence.sh 23 819 64` → **`known_gaps 23→17 · TODO items 819→870 · net +45`**, declared filed 64,
 implied closed 19. **rc 0 — and convergence MEASURES, it does not gate** (the strict 2× rule is retired).
