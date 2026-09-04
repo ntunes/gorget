@@ -265,6 +265,59 @@ ownership" from "clone and keep."
 > (`docs/language-reference.md` §9.6, kept in sync with the two enums). A fixed
 > hard-coded count in a doc drifts; the enums don't.
 
+### Widening at a boundary: the trait-object pack
+
+A boundary does not only decide *whether* to clone; where the destination is
+wider than the source, it decides *what shape* to store. `Box[Concrete]` is one
+pointer; `Box[Trait]` is a `{data, vtable}` pair. Carrying the first into a slot
+declared as the second is a **widening**, and it needs an adapter — the
+trait-object pack, which materializes a `Box[Trait]`-typed temp and lets the
+LIR's trait-object construction fill in the vtable half.
+
+The pack runs at every position that consumes into a declared destination:
+constructor and struct-field arguments, enum payloads, returns, closure returns,
+container-literal elements, general call arguments, the builtin collection
+methods (`push` / `add` / `send` / `put` / `set` / `insert` / `fill` /
+`get_or_put`), and `v[i] = x` / `d[k] = x`. The last two reach it at their own
+site rather than through the call-argument path, because index-assign lowers its
+runtime call directly and never passes through `lower_call_arg` — a position with
+no subject in the call-argument rule, which no widening of that rule reaches.
+
+Two invariants make it correct, and they are opposite halves of one ledger.
+
+**The pack CONSUMES its source.** It emits `tmp = <src>` and then unregisters and
+move-zeroes `src`, because the consumer takes the allocation: after the copy there
+is exactly one owner, the destination. Leaving the source registered leaves two,
+and a `Box` is single-owner-by-design, so the second owner is a double free rather
+than a redundant drop. Only a bare local can be consumed — a projection like `s.f`
+or `v[i]` is a place inside a larger owner, and move-zeroing it would punch a hole
+in that owner's drop.
+
+**The pack does NOT register its temp.** Every consumer takes the value: the
+structural positions consume it by construction, and the collection positions
+memcpy the pair into the backing store, which then owns it. Registering the temp
+would mint the same second owner from the other direction.
+
+Those two are a matched pair, and shipping one without the other is worse than
+shipping neither: a source that is registered and copied double-frees, a source
+that is neither registered nor consumed merely leaks. A mint that under-registers
+and a pack that under-consumes cancel to exactly one owner, which is why the
+half-fix reads as a regression on a program the full fix leaves correct.
+
+The pack fires on a **declared destination type**, so it is only as good as the
+carrier that supplies one. Builtin collection methods have no signature entry
+carrying their element type, and a carrier that answers `int` for a
+`Vector[Box[Trait]]`'s value parameter silently disables the pack: the concrete
+box reaches the runtime unpacked and `gorget_array_push` memcpys sixteen bytes out
+of an eight-byte slot. The destination type therefore comes from the protocol
+table, through `builtin_type_args_from_name` and `protocol_for_mangled_name` — the
+one accessor for that axis. Reading it from the protocol's `base_name` rather than
+from a hand-listed set of mangled prefixes is what makes it total: it covers the
+two-type-argument protocols (whose *value* slot, not their key slot, is what a
+`put` writes) and the three protocols that hold another's method table by
+reference (`Deque`, `HashMap`, `HashSet`), which have no method-table text of
+their own for a name-shaped recognizer to match.
+
 ### Container literals: the materializer mints the slot
 
 A container literal is a materialization point with a property none of the other

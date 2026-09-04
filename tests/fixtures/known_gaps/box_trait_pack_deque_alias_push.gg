@@ -1,0 +1,45 @@
+# LIVE REGRESSION FIXTURE — the trait-object pack on an ALIAS PROTOCOL.
+#
+# ⭐ WHY A SEPARATE FIXTURE FROM `Vector`. `Deque`'s method table is not its
+# own: the protocol static holds `VECTOR.methods` BY REFERENCE. There is no
+# `BuiltinMethodDecl` text spelling a `Deque` consuming position, so a census
+# derived from the method-table SOURCE misses `Deque`, `HashMap` and `HashSet`
+# entirely — three whole protocols with no sentinel string to match. Routing
+# the pack's destination type through `protocol_for_mangled_name` covers them
+# because it matches on `base_name`, not on the table's spelling. This
+# fixture is the value of the alias axis that proves it (Core #12: a fixture
+# set that samples one value of a typed axis is an anecdote).
+#
+# ⚠ `Deque.push_back` on a `Deque[Box[Trait]]` is `E_NoMethodFound` — the
+# printed receiver type has LOST THE BOX (`Deque[trait Speaker]`) — both
+# before and after this fix. That is a separate, pre-existing gap on the
+# element-type-through-the-receiver axis, filed under its own item; the alias
+# coverage this fixture owes is satisfiable through `push`.
+#
+# ⚠ Payload is heap-forced through `mk`.
+#
+# ⚠ It stays in `known_gaps/` deliberately: moving the file registers a
+# non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING`, and Core #9 ⊕ forbids
+# raising that ceiling for a round's own inflow.
+#
+# INTENDED: prints `Q7!` on both backends.
+from std.collections import Box
+from std.collections import Deque
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Deque[Box[Speaker]] q = Deque[Box[Speaker]]()
+    q.push(Box.new(Robot(mk("Q", "7"))))
+    print(q[0].speak())

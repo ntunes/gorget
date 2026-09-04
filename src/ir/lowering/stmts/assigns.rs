@@ -1412,6 +1412,29 @@ pub(super) fn lower_index_assign(
     ctx.func_state.expected_type = prev_expected;
 
     let type_name = ctx.type_name_for_id(obj_type).unwrap_or("").to_string();
+    // `v[i] = x` / `d[k] = x` are consuming positions — the Ownership table
+    // names them alongside `push`/`put`/`set` — so the value needs the same
+    // trait-object pack the call-argument path runs, reading the destination
+    // type through the same sanctioned accessor. Index-assign is ALWAYS a
+    // value write, so unlike the method path it needs no method-name match:
+    // the value slot of a 2-arity protocol and the element slot of a 1-arity
+    // one are both `.2`.
+    //
+    // Placement is load-bearing and correct by construction: this sits before
+    // the `is_vector` / `is_dict` branches, hence before their
+    // `ensure_owned_at_consuming_arg` calls — exactly as the pack at
+    // `calls.rs`'s `lower_call_arg` precedes the method path's. The clone /
+    // move decision therefore sees the PACK TEMP, not the user's local, and
+    // cannot mint a second owner of the source.
+    let val = {
+        let pack_dest_ty = crate::ir::lowering::builtins::protocol_for_mangled_name(&type_name)
+            .map(|protocol| {
+                let (_elem, _key, val_ty, _elem_name, _val_name) =
+                    ctx.builtin_type_args_from_name(protocol, &type_name);
+                val_ty
+            });
+        crate::ir::lowering::exprs::maybe_pack_trait_object_at_arg(ctx, builder, val, pack_dest_ty)
+    };
     // Read typed `collection_kind` from TypeMetadata (Phase A) instead of
     // matching `type_name.starts_with("Vector__"/"Dict__"/...)`. The kind
     // covers Vector/Deque/GorgetArray as Array; Dict as OrderedMap; HashMap/

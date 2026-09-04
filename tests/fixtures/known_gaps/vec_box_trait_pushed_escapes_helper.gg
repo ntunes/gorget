@@ -1,32 +1,31 @@
-# KNOWN GAP — 🚨 a `Vector[Box[Trait]]` built with `Box.new` + `push` and
-# returned from a helper SEGFAULTS: rc 139 on both backends, ASan
-# `stack-buffer-overflow` in `__interceptor_memcpy`.
+# LIVE REGRESSION FIXTURE for `t0697`/`t0709` — a `Vector[Box[Trait]]` built
+# with `Box.new` + `push` and returned from a helper. It used to segfault
+# (rc 139 on both backends, ASan `stack-buffer-overflow` in
+# `__interceptor_memcpy`) because the trait-object pack never ran at a builtin
+# consuming position: the collection's element type reached the pack as `int`,
+# so `Box[Robot]` was handed straight to `Vector__Box__Speaker__push` and the
+# runtime memcpy'd 16 bytes of `{data, vtable}` out of an 8-byte `void*` slot.
 #
 # ⚠ DISCRIMINATED FROM ITS SIBLING BY FORMATION SPELLING — do not merge them.
 # The same program written with the CTOR CALL and a CONTAINER LITERAL --
-# `Box(Robot(...))` + `Vector[Box[Speaker]] v = [b]` -- fails DIFFERENTLY at
-# HEAD: rc 0 printing the EMPTY STRING on both lanes, ASan
-# `heap-use-after-free` in `gorget_string_clone_to_owned`. That sibling is
-# REPAIRED by R45 Track A's fix B (measured: rc 0 with the correct string,
-# leaving a 98-byte leak that is filed as `t0700`).
+# `Box(Robot(...))` + `Vector[Box[Speaker]] v = [b]` -- failed DIFFERENTLY:
+# rc 0 printing the EMPTY STRING on both lanes, ASan `heap-use-after-free` in
+# `gorget_string_clone_to_owned`.
 #
-# THIS spelling -- `Box.new(...)` + `v.push(b)` -- is rc 139 at HEAD **and
-# still rc 139 under fix A + fix B** (measured 2026-08-27 with the patch
-# applied). So it is not the same defect wearing a different costume: it
-# survives the repair that closes the sibling.
-#
-# The two differ in exactly two tokens, which is why this is worth pinning:
-#   sibling : Box(Robot(mk(..)))      + Vector[Box[Speaker]] v = [b]
-#   THIS    : Box.new(Robot(mk(..)))  + v.push(b)
+# ⚠ THIS IS THE NAMED-LOCAL SPELLING. `v.push(^b)` moves an owning named local
+# into the collection; its sibling
+# `known_gaps/vec_box_trait_pushed_no_helper.gg` pushes a TEMP. The two took
+# different paths to the same overflow and are both pinned.
 #
 # ⚠ The payload is heap-forced through `mk`. A literal would not reallocate
 # and would hide the defect.
 #
-# INTENDED: prints `R2` on both backends, ASan-clean.
+# ⚠ It stays in `known_gaps/` deliberately: moving the file registers a
+# non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING`, and Core #9 ⊕ forbids
+# raising that ceiling for own inflow. The self-host lane has no analogue of
+# the GIR-level pack at consuming positions and still crashes here.
 #
-# RED-verified 2026-08-27 at pristine HEAD (rc 139, C and LLVM) and again
-# under Track A's fix A+B patch (still rc 139), by the R45 orchestrator while
-# verifying Track A brief-review pass 18's P18-2.
+# INTENDED: prints `R2` on both backends.
 from std.collections import Box
 trait Speaker:
     String speak(self)
@@ -42,7 +41,7 @@ String mk(String a, String b):
 Vector[Box[Speaker]] make():
     Box[Robot] b = Box.new(Robot(mk("R", "2")))
     Vector[Box[Speaker]] v = []
-    v.push(b)
+    v.push(^b)
     return v
 
 void main():

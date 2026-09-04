@@ -18834,6 +18834,31 @@ fn sh_gap_static_trait_method_returns_string_len() {
     );
 }
 
+/// KNOWN SELF-HOST GAP (`todo/t1084`) — the self-host has no GIR-level
+/// trait-object pack at CONSUMING positions. Its `try_emit_trait_obj_construct`
+/// mirrors the Rust LIR Assign/SlotStore coercion only, so a `Box[Concrete]`
+/// pushed into a `Vector[Box[Trait]]` is memcpy'd unpacked — the exact class
+/// R49 Track M2 closed on the Rust C and LLVM lanes.
+///
+/// ⚠ ATTRIBUTABLE, because the lane has a GREEN CONTROL: a bare
+/// `Box[Speaker] b = Box.new(Robot("R2")); b.speak()` runs correctly on the
+/// self-host, so `Box[Trait]` is not broken wholesale there. Measured 2026-09-04
+/// against a driver rebuilt from the FIXED compiler, so the redness is not
+/// Rust gg miscompiling the driver either.
+#[test]
+#[ignore = "todo/t1084 — self-host: no GIR-level trait-object pack at consuming \
+positions, so Vector/Deque/Dict push/put/set/insert and index-assign memcpy an \
+unpacked Box[Concrete] into a Box[Trait] slot (rc 139; the Dict.get_or_put cell \
+is rejected by cc outright). Asserts the intended `R2!`."]
+#[serial(self_host_lowerer_driver)]
+fn sh_gap_box_trait_pack_at_consuming_position() {
+    assert_self_host_stdout(
+        "known_gaps/vec_box_trait_pushed_no_helper.gg",
+        "sh_gap_box_trait_pack",
+        "R2!",
+    );
+}
+
 /// PATH CELL — `emit_closure_call_function`. The closure body, whose AST is a
 /// bare `Spanned<Expr>` rather than a statement block: `FnBodyAst::Expr` is
 /// what carries it into the prescans.
@@ -60642,18 +60667,25 @@ fn known_gap_box_trait_import_flips_accept_reject() {
     run_gg("known_gaps/box_trait_import_flips_accept_reject.gg", "R2");
 }
 
-/// KNOWN GAP — a `Vector[Box[Trait]]` built with `Box.new` + `push` and
-/// returned from a helper segfaults (rc 139 both backends, ASan
-/// stack-buffer-overflow). Its two-token sibling — ctor call plus container
-/// literal — fails DIFFERENTLY (rc 0, empty string, heap-use-after-free) and
-/// IS repaired by R45 Track A's fix B. This spelling survives that repair.
+/// LIVE REGRESSION FIXTURE (was a known gap; un-ignored with the fix). A
+/// `Vector[Box[Trait]]` built with `Box.new` + `push` and returned from a
+/// helper used to segfault on both backends. The NAMED-LOCAL spelling: the
+/// box is bound, then moved in with `^b`. Its sibling
+/// `vec_box_trait_pushed_no_helper` pushes a TEMP; the two took different
+/// paths into the same overflow, so both are pinned.
+///
+/// ⚠ The `#[ignore]` reason this test used to carry asserted "is rc 139 at
+/// HEAD", and that had been FALSE since D27 landed: the fixture read
+/// `v.push(b)`, which is `E_MoveWithoutOperator: cannot copy 'b'` — the test
+/// could not have reached its own gap. The fixture is respelt `v.push(^b)`
+/// and RED-verified at rc 139 in that spelling before the fix.
+///
+/// ⚠ It stays in `known_gaps/` deliberately: moving the file registers a
+/// non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING`, and Core #9 ⊕ forbids
+/// raising that ceiling for a round's own inflow. The self-host lane has no
+/// analogue of the GIR-level pack at consuming positions and still crashes.
 #[test]
-#[ignore = "KNOWN GAP (R45, orchestrator-verified while checking Track A pass \
-18): Vector[Box[Trait]] via Box.new + push, returned from a helper, is rc 139 \
-at HEAD and still rc 139 under fix A+B. Distinct from the ctor+literal \
-sibling by formation spelling and failure mode."]
-fn known_gap_vec_box_trait_pushed_escapes_helper() {
-    // INTENDED: `R2`, both backends, ASan-clean.
+fn vec_box_trait_pushed_escapes_helper() {
     run_gg("known_gaps/vec_box_trait_pushed_escapes_helper.gg", "R2");
 }
 
@@ -62845,17 +62877,132 @@ fn known_gap_closure_captures_param_then_escapes_uaf() {
     run_gg("known_gaps/closure_captures_param_then_escapes_uaf.gg", "hello");
 }
 
-/// KNOWN GAP `t0709`, second repro — the STRICTLY SIMPLER form: no helper
-/// escape, no `mk()` payload, `v[0]` rather than `.get(0).unwrap()`, and the
-/// identical `stack-buffer-overflow` at the push inside `main`. Shows that
-/// item's "RETURNED FROM A HELPER" discriminator is over-specified. The pushed
-/// value must be a TEMP: binding it to a named local first leaks (35 B / 2)
-/// instead of crashing.
+/// LIVE REGRESSION FIXTURE (was a known gap; un-ignored with the fix) — the
+/// STRICTLY SIMPLER form: no helper escape, no `mk()` payload, `v[0]` rather
+/// than `.get(0).unwrap()`, and the identical `stack-buffer-overflow` at the
+/// push inside `main`. It showed that the filing's "RETURNED FROM A HELPER"
+/// discriminator was over-specified: the mechanism is the missing pack at a
+/// builtin consuming position, and the helper escape is scenery.
+///
+/// ⚠ IT STAYS IN `known_gaps/` — ADJUDICATED, not defaulted. The graduation
+/// census prefers "move the fixture out", and both consequences of doing that
+/// were measured: (1) at `tests/fixtures/` top level the file joins the
+/// runtime-diff corpus, where the self-host lane still crashes, so it would
+/// register a non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING` — forbidden
+/// for a round's own inflow by Core #9 ⊕; (2) it also joins the sanitize
+/// corpus, where it is rc 0 `R2!` but leaks 32 B / 1 from
+/// `__gorget_box_alloc_Robot` — the `Vector[Box[Trait]]` element-drop gap
+/// whose write site is `elem_drop_fn_for_type` (`todo/t0700`), identical to
+/// the class already allowlisted for `box_trait_vector_lit`. That would cost
+/// a second ceiling raise for a leak this round did not create. Un-ignoring
+/// in place discharges the census's whole objective — the test now RUNS on
+/// every sweep as a live regression net — at zero ceiling movement. Same
+/// disposition and same reason as `cow_loop_bare_param_tuple_assign` above.
 #[test]
-#[ignore = "KNOWN GAP t0709: Vector[Box[Trait]] push of a TEMP overflows at \
-the push — no helper escape required"]
-fn known_gap_vec_box_trait_pushed_no_helper() {
+fn vec_box_trait_pushed_no_helper() {
     run_gg("known_gaps/vec_box_trait_pushed_no_helper.gg", "R2!");
+}
+
+/// LIVE REGRESSION FIXTURE — the trait-object pack at every `Vector`
+/// consuming position (`push` / `set` / `insert` / `fill`), not just at the
+/// call-argument positions that carry a real signature. Each was rc 135
+/// before the destination type reached the pack through the protocol table.
+#[test]
+fn box_trait_pack_vector_consuming_positions() {
+    run_gg("known_gaps/box_trait_pack_vector_consuming_positions.gg", "C3!\nB2!\nF6!");
+}
+
+/// LIVE REGRESSION FIXTURE — the KEY-VALUE consuming positions, and the axis
+/// value that decides the carrier. `Dict`/`HashMap` receivers answer `None`
+/// by construction under the older `strip_prefix("Vector__")` element-type
+/// extractor (it has no Dict arm), so a fix routed through it leaves every
+/// row here crashing. `HashMap` additionally pins an ALIAS protocol, whose
+/// method table is `DICT.methods` held by reference and therefore invisible
+/// to any text-derived census of consuming positions.
+#[test]
+fn box_trait_pack_map_consuming_positions() {
+    run_gg("known_gaps/box_trait_pack_map_consuming_positions.gg", "D1!\nG2!\nH3!");
+}
+
+/// LIVE REGRESSION FIXTURE — the pack on an ALIAS PROTOCOL. `Deque`'s method
+/// table IS `VECTOR.methods`, held by reference, so `Deque` has no
+/// `BuiltinMethodDecl` text of its own; only a `base_name`-driven protocol
+/// lookup covers it.
+#[test]
+fn box_trait_pack_deque_alias_push() {
+    run_gg("known_gaps/box_trait_pack_deque_alias_push.gg", "Q7!");
+}
+
+/// LIVE REGRESSION FIXTURE — `v[i] = x` and `d[k] = x`. `lower_index_assign`
+/// never calls `lower_call_arg`, so no widening of which METHOD names get a
+/// destination-type hint can reach these two positions; they need the pack
+/// run at their own site.
+#[test]
+fn box_trait_pack_index_assign() {
+    run_gg("known_gaps/box_trait_pack_index_assign.gg", "B2!\nC3!");
+}
+
+/// KNOWN GAP `todo/t1082` — a `Box[Trait]` collection's element type loses the
+/// Box at three boundaries. This repro pins the READ side: `.get(0).unwrap()`
+/// on a `Deque[Box[Speaker]]` mangles its method against `int64_t`, so the
+/// program builds and then fails to link with `undefined reference to
+/// 'int64_t__speak'`. The index read `q[0].speak()` on the same receiver
+/// resolves — that is the discriminator. The other two cells (`push_back`'s
+/// `E_NoMethodFound` on `Deque[trait Speaker]`, and index-assign's
+/// `E_TypeMismatch: expected 'trait Speaker'`) are recorded in the fixture
+/// header as this item's evidence.
+#[test]
+#[ignore = "KNOWN GAP t1082: a Box[Trait] collection's element type loses the \
+Box — the .get() chain mangles against int64_t and fails to link. Pre-existing \
+and unchanged by the R49 trait-object pack fix, which is a different axis."]
+fn known_gap_box_trait_collection_elem_type_lost() {
+    run_gg("known_gaps/box_trait_collection_elem_type_lost.gg", "R2!");
+}
+
+/// KNOWN GAP `todo/t1083` — `Box__{T}__drop` is emitted TWICE with two
+/// signatures (the collection element-drop helper by value, the vtable
+/// slot-drop by `void*`), so a `Vector[Box[Concrete]]` of a trait-equipped
+/// type emits C that `cc` refuses. `gg check` passes; the failure is at the C
+/// compiler. The `Vector[Box[Speaker]]` spelling of the same program compiles
+/// and runs — only the concrete-box element reaches both emitters.
+#[test]
+#[ignore = "KNOWN GAP t1083: Vector[Box[Concrete]] of a trait-equipped type \
+emits Box__Robot__drop twice with different signatures — `error: redefinition \
+of 'Box__Robot__drop'`. Accepted by the compiler, rejected by cc."]
+fn known_gap_box_concrete_elem_drop_redefinition() {
+    run_gg("known_gaps/box_concrete_elem_drop_redefinition.gg", "R2!");
+}
+
+/// LIVE REGRESSION FIXTURE — `t0697`'s CRASH face. Changing one token in the
+/// committed `box_trait_struct_field.gg` (`Box.new(` → `Box(`) used to
+/// double-free: the trait-object pack copied its source into a `Box[Trait]`
+/// temp without consuming it, leaving the registered source and the
+/// struct field as two owners of one allocation.
+///
+/// ⚠ WIRED THROUGH THE SANITIZER, NOT `run_gg` (Core #13 — pick an instrument
+/// that can SEE the failure class). The value lane is the WEAKER net here: a
+/// double-free that happens to survive prints the right answer at rc 0. This
+/// program's post-fix state is measured ASan-SILENT, so the assertion can be
+/// absolute rather than a delta.
+#[test]
+fn box_trait_bare_ctor_struct_field_uaf() {
+    assert_gg_sanitize_clean("known_gaps/box_trait_bare_ctor_struct_field_uaf", "R2");
+}
+
+/// LIVE REGRESSION FIXTURE — `t0697`'s LEAK face, the mirror of the above. A
+/// discarded `Box.new(...)` leaked where the byte-identical bare `Box(...)`
+/// program did not, because only the `CallExtern` mint registered its result
+/// for drop. Registering at the `Box.new` birth closes it — and is safe only
+/// because the pack now consumes its source, which is why the two faces ship
+/// together and are each other's positive control.
+///
+/// ⚠⚠ THE VALUE LANE IS STRUCTURALLY BLIND TO THIS ONE and wiring it to
+/// `run_gg` would have been a fixture that can never be seen to fail: with the
+/// birth registration disabled by hand the program still prints `1` at rc 0,
+/// and only the sanitizer reports the 65 B / 2 leak the filing names.
+#[test]
+fn box_new_discarded_trait_pack_leak() {
+    assert_gg_sanitize_clean("known_gaps/box_new_discarded_trait_pack_leak", "1");
 }
 
 

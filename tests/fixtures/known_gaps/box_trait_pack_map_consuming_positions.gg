@@ -1,0 +1,61 @@
+# LIVE REGRESSION FIXTURE — the trait-object pack at the KEY-VALUE consuming
+# positions, and the axis value the pre-fix carrier could not express at all.
+#
+# ⭐ THE DISCRIMINATOR. `Dict`/`HashMap` receivers are the reason the pack is
+# routed through `builtin_type_args_from_name` + `protocol_for_mangled_name`
+# rather than through the older `strip_prefix("Vector__")` extractor: that
+# extractor has no Dict arm and answers `None` for EVERY `Dict__` receiver by
+# construction, so a fix built on it leaves every row here at rc 135. The
+# sanctioned accessor understands `type_arity == 2` and returns
+# `(key, key, value, …)` — the VALUE slot is what a `put` writes, so the
+# destination type is the third element, never the first.
+#
+# ⭐ `HashMap` is an ALIAS PROTOCOL: its method table IS `DICT.methods`, held
+# by reference, so there is no `BuiltinMethodDecl` text of its own to match. A
+# text-derived census of consuming positions misses all three aliases
+# (`DEQUE → VECTOR`, `HASHMAP → DICT`, `HASHSET → SET`); the protocol table
+# does not. That is why the alias row is pinned here rather than assumed to
+# follow from `Dict`.
+#
+# ⚠ `get_or_put` is a HINT-ONLY position: it borrows its default rather than
+# consuming it, so consuming (clone + move-zero) the value there would
+# double-free a live source. It is pinned to show the hint path and the
+# consume path read the SAME destination-type carrier.
+#
+# ⚠ Payloads are heap-forced through `mk`.
+#
+# ⚠ It stays in `known_gaps/` deliberately: moving the file registers a
+# non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING`, and Core #9 ⊕ forbids
+# raising that ceiling for a round's own inflow. The self-host lane has no
+# analogue of the GIR-level pack at consuming positions.
+#
+# INTENDED: prints `D1!`, `G2!`, `H3!` on both backends.
+from std.collections import Box
+from std.collections import Dict
+from std.collections import HashMap
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Dict[String, Box[Speaker]] d = Dict[String, Box[Speaker]]()
+    d.put(mk("k", "1"), Box.new(Robot(mk("D", "1"))))
+    print(d.get(mk("k", "1")).unwrap().speak())
+
+    Dict[String, Box[Speaker]] g = Dict[String, Box[Speaker]]()
+    Box[Speaker] got = g.get_or_put(mk("k", "2"), Box.new(Robot(mk("G", "2"))))
+    print(got.speak())
+
+    HashMap[String, Box[Speaker]] h = HashMap[String, Box[Speaker]]()
+    h.put(mk("k", "3"), Box.new(Robot(mk("H", "3"))))
+    print(h.get(mk("k", "3")).unwrap().speak())
