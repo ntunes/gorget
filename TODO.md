@@ -102,6 +102,15 @@ owes a note + a filed subset gap.
   ⇒ **SIX Q#2 fired on the guard's own section.** ⊕ Corollary: `OK — N item(s), N−k pointer(s)` is NOT a
   near-miss; a `--write` printout must **state its own effect** (`k inserted, 0 removed`), or it manufactures
   false forensics.
+- ⛔⛔ **THE SCOUT'S BASE IS NOT THE EXECUTOR'S BASE — R48's BRIEF-STALENESS ERRATUM RECURRED INSIDE ONE
+  ROUND, WHICH IS THE PROOF THAT PROSE WAS NOT HOLDING IT.** Track M's scout ran ~50 min against
+  `2cf818442`; Track A1-I integrated during that window and moved `calls.rs` by 115 lines, `methods.rs` by
+  108, `mod.rs` by 63. **Every line cite in both M briefs was rotted before an executor ever read them**, and
+  ⚡ **Core #13's *anchor the deliberate break BY LINE* is UNUSABLE against a stale number** — the two rules
+  collide exactly when parallel tracks are working, which is always.
+  ⇒ **SHARPENED IN AGENTS.md Core #15(a) THIS ROUND: a `file:line` IS a load-bearing claim, so it carries the
+  GREP THAT REGENERATES IT, never a bare number.** ⊕ Orchestrator duty: **re-anchor a brief at HEAD at LAUNCH
+  time, and message any in-flight reviewer the moment a sibling track integrates into its files.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
