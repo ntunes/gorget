@@ -486,7 +486,18 @@ the order: **GRADUATE > REWIRE > allowlist-with-a-reason-code.**
 A live defect whose repro no longer reaches it, graduated, is how a security bug gets marked closed.
 **The discriminator is mechanical and the script names it: break the cited fix site BY LINE and watch the
 test go red.**
-⚡ **FIRST UNISSUED ID IS NOW `t1167`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
+⚖⭐ **OWNER RULED ON L's TWO ASKS, 2026-09-04 — AND RULED *AGAINST* THE ORCHESTRATOR'S LEAN ON BOTH:
+*"fix the leaks and fix SH so that it compiles the new fixtures. As part of this round."*** I recommended
+ADMIT-AND-FILE for both; **the owner said FIX, this round.** ⇒ **TWO TRACKS OPEN, SCOUTS LAUNCHED:**
+**S — `t0953`, ID BLOCK `t1167`–`t1176`** — the closure-env heap leak that is the mechanism behind both
+genuinely-new-inflow rows. **`LEAK_CEILING` stays an exact pin at 294 and is NOT raised.**
+**T — `t0877`, ID BLOCK `t1177`–`t1186`** — the self-host `guess_return_type` arms that block 3 of Track L's
+11 fixtures. ⚠ **THE ITEM DOCUMENTS ONLY ARMS (a) AND (b); L's EXECUTOR HIT (b)/(c)/(d) — SO (c) AND (d) ARE
+UNDOCUMENTED AND THE ITEM IS INCOMPLETE.**
+⚡ **THE RULING'S PRINCIPLE, WHICH OUTLIVES THE TWO ASKS: an inflow ceiling is not a place to put a defect
+you have just discovered you own. Both of my "admit" recommendations were the designing-around-a-gap shape —
+the fixtures were the load-bearing artifact and I proposed bending the ceiling around them.**
+⚡ **FIRST UNISSUED ID IS NOW `t1187`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
