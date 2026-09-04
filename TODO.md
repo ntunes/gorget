@@ -242,7 +242,34 @@ touches neither. **Six Questions #2, on the replacement guard — the same failu
 one, one level up.** ⭐ **THE CLASS IS "AN `⚖ ADMITTED` BLOCK'S RETIRE CONDITION OVER-STATES ITS BLOCKERS",
 and the guard is a required `# RETIRES: <id>…` line per block with every id asserted to exist** — both
 directions, no allowlist, no sentinel hole, and it fires TODAY on the live instance.
-🚀 **INT-B's EXECUTOR IS LAUNCHED on `/tmp/brief_INTB_v6.md` after FIVE sequential brief-reviews.** Pass 5's
+✅✅ **TRACK INT-B IS COMPLETE — branch `intb-ad3c5ffd` @ `b230a992d`, off INT-A's `54dafc26d`. OUTPUT-REVIEW
+LIVE.** `cargo test --test lints` **rc 0** — **the round's declared red is CLOSED.** Full sweep: `new_class`
+0, `retire_fatal` 0, `fixed_leak` 0. Constants **300/497/2262/8/480**, predicted from the executor's own
+census BEFORE `figures.py check`. Column 3 forced 21 → 19, re-derived independently and matching. No `.gg`
+touched, so parity correctly not re-measured.
+⭐ **ACCEPTANCE 6b AND 6d WERE SEEN RED FIRST** (35 and 1 examined rows against the pre-fix sweep) — Core #13
+on the acceptance set itself, which is what five passes of axis-hunting were for.
+⭐ **THE LEDGER'S VERDICT ON WHO WAS RIGHT: of 44 measured rows, the RE-SEED on 22, N2 on 13, L on 8 — and
+`closure_fstring_capture` on NONE of them.** The worked example held: L over-admits a class, N2 drops a live
+one, and only the measurement carries L's citation through.
+
+⚖⚖ **A SECOND OWNER ASK — FILED, NOT ADMITTED, AND IT IS THE PRE-FLIGHT THAT CAUGHT IT.**
+`tests/fixtures/closure_literal_ambient_return_at_call_arg.gg` (added by S-a2) leaks
+`__gorget_closure_env_alloc*3` with **no row** — `t0953` verbatim, a closure literal at a call-argument
+position, three literals, three records, `flaky: 0`. **New inflow ⇒ owner ask by the file's own header, and
+the 2026-09-04 ruling admits ONE row and is explicitly NOT extensible by analogy — so the executor refused to
+extend it and filed `t1306`** with the three options and proof it is not merge damage. ⛔ **CONSEQUENCE: the
+sanitize sweep is rc 1 on that single row, and the sweep is ON THE ROUND-CLOSE BATTERY.**
+⊕ Of the other four pre-flight fixtures: three CLEAN, one `BUILD_FAIL_BOTH` which is an expect-REJECT fixture,
+so correct rather than infra.
+⊕ **`t1305` is CLOSED** (`git rm` + `DONE.md`). **`t1306` is SPENT. Free block `t1307`–`t1310`.**
+⚠ **Executor findings to carry:** a closer I prescribed **red-lights the correct end state** (a block must keep
+narration carrying a retire-word and two ids — it IS the record of the over-statement correction), so only the
+primary guard shipped; the guard's `$` anchor **had to be relaxed** or two conditions in one block become
+indistinguishable; the canonicalisation is **THIRTEEN**, not twelve; and the `shrunk_class` residue is **16,
+all identical at base ⇒ ZERO merge damage, all `t0572`**.
+
+⊖ **Superseded: INT-B's EXECUTOR IS LAUNCHED on `/tmp/brief_INTB_v6.md` after FIVE sequential brief-reviews.** Pass 5's
 verdict was *"fold and launch"*, and it delivered a row-by-row TOTALITY ARGUMENT for every axis except the one
 it found.
 🚨 **THE FIFTH AXIS: `fixed_leak` OUTSIDE THE EXAMINED SET — ~254 ROWS POLICED BY NOTHING.** An uncited row
