@@ -177,6 +177,25 @@ owes a note + a filed subset gap.
   `tests/fixtures/` top level with a known leak trips `sanitize_sweep.sh:721` *"❌ NEW LEAK(S) — no row in
   LEAK_LIST at all"*. **R49 already parked six fixtures for exactly this.** ⇒ **every brief that orders a new
   leaking-but-correct fixture must name the PLACEMENT, or the executor obeys Core #11 and reds the sweep.**
+- ⛔⛔ **A GUARD CAN BE INERT FOR A REASON THAT HAS NOTHING TO DO WITH THE THING YOU ARE FIXING — AND THE
+  ROUND ALMOST SHIPPED THAT CLAIM.** A2-α's brief was about to promote `validate.rs:420/428`'s
+  "call to undefined function" to the track's CLASS GUARD, arguing it becomes TOTAL once the four phantom-name
+  mints are gone. **Measured in two line-anchored stages: removing the prefix bypass changes NOTHING; the
+  check only fires once `auto_register_externs` (`mod.rs:4129`, called `:1688`) is ALSO disabled — a
+  NAME-AGNOSTIC BLANKET FALLBACK that registers EVERY unknown callee as a variadic extern.** ⇒ **the check is
+  structurally dead for essentially every call in the language, before and after the fix.**
+  ⚡ **THE PROCEDURE THAT CAUGHT IT AND SHOULD BE STANDARD: to claim a guard will catch a class, DISABLE THE
+  GUARD'S SUSPECTED SUPPRESSOR AND SHOW THE GUARD FIRE. Reasoning about why it is currently quiet is not
+  evidence.** ⊕ Filed separately: a blanket fallback that manufactures an extern for any callee the lowering
+  invented is what turns *"the lowering emitted a call to a function nobody defines"* into a silently-linked
+  binary.
+- ⚠ **A RATIFIED DECISION CAN BE CITED ONE LAYER OFF ITS SUBJECT — I DID IT AND IT REACHED THE OWNER.**
+  I reported that **A37** ratified against reserving the `__` prefix. **A37 ratifies that DIAGNOSTIC-CODE
+  SEVERITY must be table data rather than a name prefix; a LEXICAL RESERVATION of `__` for user identifiers
+  is a different animal — C11 §7.1.3 does exactly that, enforced once at the parser rather than read
+  downstream as meaning.** The conclusion (not the fix, not an owner ask) survives on its other grounds, but
+  **the "ratified against" framing was over-reach.** ⇒ **before citing a ledger entry as settling a question,
+  check that its SUBJECT is the same question — not merely the same vocabulary.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
