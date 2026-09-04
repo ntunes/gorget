@@ -1,0 +1,15 @@
+# `Vector[String].find` whose `Option` result is BOUND AND NEVER READ.
+#
+# The result-consumption axis: nothing observes the payload, so the only thing
+# that can go wrong is the drop of the `Option` at end of scope. The element
+# inside it must be the `Option`'s own, or that drop frees memory the source
+# array frees again.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push(mk("aa", "bc"))
+    v.push(mk("dd", "efg"))
+    Option[String] r = v.find((s): s.len() == 4)
+    print("done")

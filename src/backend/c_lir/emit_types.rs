@@ -3007,6 +3007,15 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     // `(src->entries_keys || src->order)` (D39 Phase A.2b): under current
     // (legacy Dict → `->order != NULL`) and future (dense Dict → post-A.2c
     // `->entries_keys != NULL`) states both fire → correct Dict ctor picked.
+    // `gorget_array_adopt_hooks` / `gorget_array_push_cloned` /
+    // `gorget_array_clone_elem_inplace` are deliberately NOT emitted here.
+    // They live beside `gorget_array_push` in `runtime/runtime_array.c`,
+    // because `push_cloned` shares that function's growth policy and a copy
+    // spelled out in a Rust string literal would be a second definition of it.
+    // Both backends already carry that file: the C path through
+    // `ensure_array!` (every `gorget_array_*` call triggers it) and the LLVM
+    // path through `main.rs`'s unconditional `RUNTIME_ARRAY` + `static inline`
+    // strip, which is the same route `gorget_map_new_like` takes.
     if has_extern("gorget_map_new_like") {
         writeln!(out, "static inline GorgetMap gorget_map_new_like(const GorgetMap* __src) {{ \
             GorgetMap __dst = (__src->entries_keys || __src->order) \

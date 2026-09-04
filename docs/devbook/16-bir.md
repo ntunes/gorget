@@ -239,6 +239,76 @@ caller-supplied `closure_arg_abis` and `closure_ret_ty` carried on the
 `HofExpand`. The body never inspects closure env layout — this is the
 opaque-closure invariant (below).
 
+#### The element pointer is a borrow, and the destination owns
+
+`HofLoopCtx` hands each expander `elem_ptr` — a raw pointer **into the source
+collection's buffer**. Every loop-family expander reads it, and the reads fall
+into three roles that look identical at the instruction level and are not:
+
+- **The closure argument.** `Inst::CallClosure` passes the pointer to user code
+  that only reads through it. Nothing is transferred and nothing is cloned.
+- **A consuming position that clones for you.** `Dict.filter` and `Set.filter`
+  hand the borrow to `gorget_map_put_cloned`, which inserts and *then* deep-clones
+  in place. Cloning before the call would clone twice.
+- **A consuming position that does not.** `filter`'s array push and `find`'s
+  `Option` payload write take ownership of what they are given. Handing them the
+  raw borrow makes the result alias the source's buffer, and both free it.
+
+The third role is the whole reason this section exists, and it is a producer-side
+obligation (Core #3, "register ownership at the value's birth"): the expander
+that materializes the destination is the layer that knows the value is a borrow,
+so it is the layer that clones. Two runtime helpers carry that out, and both work
+through hooks **already resolved when the source collection was built** — a
+resolved abstraction written through, not re-derived:
+
+- `filter` builds its result with `gorget_array_new(elem_size)` and then
+  `gorget_array_adopt_hooks(result, source)`, copying the source's
+  `elem_drop`/`elem_clone`/`elem_materialize` triple onto it. That call is emitted
+  into the *current* block, before the loop — the pushes inside the loop need the
+  hooks already in place. Each matching element then goes in through
+  `gorget_array_push_cloned`, which clones through `elem_clone` rather than
+  materializing through `elem_materialize`: materialize is a no-op on an
+  already-owned element and would leave the copy aliasing the source, while
+  running both would allocate twice and leak the materialized copy.
+- `find` memcpys the element into the `Option`'s payload slot and immediately
+  calls `gorget_array_clone_elem_inplace(source, payload)`, the same clone through
+  the same hook for a destination that is not an array. Its scalar sibling — a
+  plain `Inst::Store` — is correct without a clone, but only because a scalar
+  carries no hook at all.
+
+Adopting the source's hooks is sound **only where the result element type equals
+the source's**. `filter` keeps elements unchanged, so it is; `map` and `flat_map`
+produce a different element type, and giving their result the source's wiring
+would be a miscompile. That is a property of the call site, not of the helper, so
+`tests/lints.rs::hof_borrowed_elem_ptr_sinks_are_cloning` pins both the adopt
+call-site count and the sink every borrowed-element-pointer read reaches. A new
+expander that pushes the borrow into a plain `gorget_array_push` changes the
+pinned multiset and fails there.
+
+That ratchet is a stopgap with a known reach, and it is worth knowing which,
+because the same file's next expander is where the class recurs. It reads one
+file as text and sees a borrow only where the source spells a field access —
+through any receiver name, which is the load-bearing part, since anchoring on
+one name meant a sibling that bound the scaffold differently walked straight
+through. A struct pattern rebinds the field under a bare name that no field
+access exists for, so the context structs' brace-form is pinned separately; and
+because the list of borrowed field names is hand-written, their declared field
+counts are pinned too, so a seventh cannot be added without someone classifying
+it. Failing closed on an unrecognizable sink covers more than it looks: a
+pointer threaded out of a same-file helper trips on the helper's own read.
+
+What no clause reaches is a pattern written through a type alias, and a bare
+local holding a locally-emitted `ElemPtr` — which is not a hypothetical shape.
+`expand_reduce` holds exactly such a pointer today, benign only because it is
+loaded rather than pushed. Nothing structural stops either, because the BIR has
+no typed borrow tag: `Inst::CallExtern` and `Inst::CallClosure` both take a bare
+`Vec<ValueId>`, and the instruction stream cannot tell a borrow from any other
+pointer. A validator carrying that provenance is the reference-grade shape, and
+adding the tag is the work it waits on. The lesson generalises past this one
+guard: every clause above that failed did so because it consulted a list its own
+author wrote, and every clause that holds does so because it consults a
+declaration instead.
+
 ### Appending synthesized functions
 
 After all functions are expanded, `lower_lir_to_bir` splices the synthesis pool's

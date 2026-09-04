@@ -1,0 +1,19 @@
+# `Vector[<user struct with a String field>].find` — the `find` half of the
+# synthesized-clone-hook element axis covered for `filter` by
+# `t0988_filter_vector_struct_escape.gg`.
+String mk(String a, String b):
+    return a + b
+
+struct Holder:
+    String name
+    int n
+
+void main():
+    Vector[Holder] v = Vector[Holder]()
+    v.push(Holder(mk("aa", "bc"), 1))
+    v.push(Holder(mk("dd", "efg"), 2))
+    Option[Holder] r = v.find((h): h.n == 1)
+    if r is Some(x):
+        print(x.name)
+    else:
+        print("none")

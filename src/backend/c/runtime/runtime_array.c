@@ -12,19 +12,65 @@ static inline GorgetArray gorget_array_new_drop(size_t elem_size, __gorget_drop_
     return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc, drop, NULL, NULL};
 }
 
-static inline void gorget_array_push(GorgetArray* arr, const void* elem) {
+// The array growth policy, in ONE place. Every push variant below reserves
+// room through this, so the doubling rule cannot drift between them.
+static inline void __gorget_array_reserve_one(GorgetArray* arr) {
     if (arr->len >= arr->cap) {
         size_t old_cap = arr->cap;
         size_t new_cap = old_cap == 0 ? 8 : old_cap * 2;
         arr->data = arr->alloc->realloc(arr->alloc->ctx, arr->data, old_cap * arr->elem_size, new_cap * arr->elem_size);
         arr->cap = new_cap;
     }
+}
+
+static inline void gorget_array_push(GorgetArray* arr, const void* elem) {
+    __gorget_array_reserve_one(arr);
     memcpy((char*)arr->data + arr->len * arr->elem_size, elem, arr->elem_size);
     arr->len++;
     // CoW ownership boundary: materialize views/borrows to owned copies.
     // Push takes ownership — the collection must independently own its elements.
     if (arr->elem_materialize) {
         arr->elem_materialize((char*)arr->data + (arr->len - 1) * arr->elem_size);
+    }
+}
+
+// Copy `src`'s per-element hooks onto `dst`.
+//
+// A freshly-constructed array knows its element SIZE but nothing about how to
+// drop, clone or materialize what it holds; those three function pointers are
+// resolved once, when the source array is built, and this is how a derived
+// array inherits them. Sound only where the derived array's element type is
+// IDENTICAL to the source's — `filter` keeps elements unchanged, so it is; a
+// `map` result holds a different type and must not adopt the source's wiring.
+static inline void gorget_array_adopt_hooks(GorgetArray* dst, const GorgetArray* src) {
+    dst->elem_drop = src->elem_drop;
+    dst->elem_clone = src->elem_clone;
+    dst->elem_materialize = src->elem_materialize;
+}
+
+// Push a BORROWED element into an array that will own and drop it.
+//
+// The distinction from `gorget_array_push` is the hook: `elem_clone` produces
+// an independently-owned value from ANY source, view or owned, while
+// `elem_materialize` no-ops on an already-owned element and would leave the
+// pushed copy aliasing the source's buffer. Running both would allocate twice
+// and leak the materialized copy, so this variant runs exactly one.
+static inline void gorget_array_push_cloned(GorgetArray* arr, const void* elem) {
+    __gorget_array_reserve_one(arr);
+    void* slot = (char*)arr->data + arr->len * arr->elem_size;
+    memcpy(slot, elem, arr->elem_size);
+    arr->len++;
+    if (arr->elem_clone) {
+        arr->elem_clone(slot);
+    }
+}
+
+// Clone in place, through `src`'s element hook, a copy already memcpy'd out of
+// `src` into a destination that will own it — the non-array counterpart of
+// `gorget_array_push_cloned`, for a payload slot that is not itself an array.
+static inline void gorget_array_clone_elem_inplace(const GorgetArray* src, void* slot) {
+    if (src->elem_clone) {
+        src->elem_clone(slot);
     }
 }
 

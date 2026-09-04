@@ -202,6 +202,82 @@
   mis-classification it closed), `t1235` (the residual `Named` arms), `t1236` (the Tier-2a
   consume-site sibling census `t0389` asked for and nothing inherited).
 
+- [2026-09-04] **`t0988` CLOSED (R49 Track N1) — `find` and `filter` put a POINTER INTO THE SOURCE
+  COLLECTION'S BUFFER in a destination that owns and drops it. `find` died at rc 134 double-free;
+  `filter` exited 0 with `gg check` clean and wrote the low bytes of a freed heap pointer to stdout —
+  a memory-disclosure primitive, not stale bytes. 14 cells RED→GREEN on BOTH backends.**
+  **THE DEFECT.** `expand_find` memcpy'd `ctx.elem_ptr` — a borrow into the collection's buffer — into
+  the `Option`'s payload, and `expand_filter` pushed the same borrow into a fresh array through
+  `gorget_array_push`. Both destinations drop what they hold, and so does the source. The two methods
+  over, `v.get(0)`, gets this right by yielding a `Ref` with no drop emitted at all; the higher-order
+  path dropped that owned/view distinction. Six cells across three element types wrote freed-heap bytes
+  to stdout with byte 4 pinned at `0xaa` in thirty consecutive runs, on both backends.
+  **THE FIX, at the producer (Core #3).** `filter` builds its result with `gorget_array_new` and then
+  `gorget_array_adopt_hooks(result, source)` — emitted into the CURRENT block, before the loop, because
+  the pushes inside the loop need the hooks already in place; moving it to `done_bb` builds cleanly and
+  flips two cells to rc 134, which is how that was measured. Each element then goes in through
+  `gorget_array_push_cloned`, which clones through `elem_clone` — NOT through `elem_materialize`, which
+  no-ops on an already-owned element and would leave the copy aliasing. `find` memcpys as before and
+  immediately calls `gorget_array_clone_elem_inplace(source, payload)`. All three helpers read hooks
+  ALREADY RESOLVED when the source was built (Layering rule 4), so no new typed metadata carrier was
+  needed — the `StructDef` hook triple is `None` for a user struct and could not have carried it.
+  **THE MECHANISM WAS CHOSEN BY MEASUREMENT, NOT PREFERENCE.** The reviewed prescription was a
+  `gorget_array_new_like(src)` returning an aggregate: **7/7 rc 139 SIGSEGV on LLVM**, because the
+  `declare` and the call site disagree on `sret` — that backend routes aggregate-returning runtime
+  constructors through hardcoded name allow-lists and a BIR-synthesized constructor is in none of them.
+  Keeping `gorget_array_new` and adding `adopt_hooks` makes all three new symbols `void(ptr,ptr)`: no
+  sret, no allow-list, no classification row, both lanes row-for-row identical.
+  **ONE SOURCE OF TRUTH FOR GROWTH.** The helpers live beside `gorget_array_push` in
+  `runtime/runtime_array.c` and share its doubling rule through `__gorget_array_reserve_one`, rather
+  than re-implementing it inside a Rust string literal in the emitter.
+  **THE GUARD (Core #6).** `tests/lints.rs::hof_borrowed_elem_ptr_sinks_are_cloning` pins the SINK of
+  every read of a borrowed collection-element pointer in `bir/lower.rs` — 33 read lines across six
+  fields and three structs, as a keyed multiset — plus the `adopt_hooks` call-site count and the
+  context-struct brace-form count. It fails CLOSED: a read whose sink it cannot identify is a
+  violation, not an exemption. RED on **eleven mutants that all COMPILE**: both reverts, a new sibling
+  expander pushing `ctx.elem_ptr` and one pushing `ctx.elem_arg`, a `format!`-hoisted sink name, a
+  `name:` written below `args:`, a raw `Inst::Store`, a backward-scan mis-attribution, `adopt_hooks`
+  misused at `expand_map`, a sibling that binds the scaffold as `scaffold`, and one that DESTRUCTURES
+  it. A role-separated newtype was built and rejected: it hides the field (`E0616`) and the defect
+  walks straight through the free accessor, and a `clone_into_owned()`-only route would DOUBLE-CLONE at
+  four of the seven consuming sites, because `gorget_map_put_cloned` calls `gorget_map_put` and then
+  deep-clones in place.
+  ⛔ **AND THE GUARD IS NOT SUFFICIENT — the first version of this entry said it was, on a mutant set
+  built in the guard's own image.** Two successive fresh reviews invented probes the executor had not
+  shown it, and **five were GREEN on compiling code that was exactly the class.** The first pair: the
+  read pattern was anchored on the receiver name `ctx.`, which every existing expander happens to
+  bind, so a sibling binding it as `scaffold` — or destructuring it — walked straight through.
+  Dropping the receiver censuses the identical 33 lines and buys the whole family of binding names for
+  no false positives; the LITERAL destructure spelling is closed from the other side, by pinning the
+  context structs' brace-form. The second trio: a SEVENTH borrowed field (`BORROW_FIELDS` is a
+  hand-written list, so a name never added to it is invisible) — closed by pinning each struct's
+  DECLARED FIELD COUNT, which is a declaration rather than another list; a destructure through a TYPE
+  ALIAS, which spells no pinned name and produces no tenth brace site; and an EXISTING bare local
+  holding a locally-emitted `ElemPtr`, which spells no field at all — `expand_reduce`'s `first_ptr`,
+  benign today only because it is `Load`-ed rather than pushed. **The last two are STILL OPEN and are
+  recorded on `t1090` rather than papered over**; chasing them would need another hand-written list,
+  which is the defect that produced all five. ⚡ **A guard measured only against probes its own author
+  designed has been measured for consistency, not for coverage — and it took TWO independent
+  adversarial passes to establish that, the second finding three more after the first found two.**
+  ⊕ One shape the first correction listed as open is measurably CAUGHT: a value threaded out of a
+  same-file helper trips the fail-closed rule on the helper's own read.
+  **AND IT READS SINKS, NOT BEHAVIOUR — the fixtures are the other half.** A twelfth mutant keeps the
+  sink spelling and corrupts the arguments (`vec![pay_ptr, pay_ptr]`): guard GREEN, **8 of 18 fixture
+  cells RED** at rc 134/139 with stack-buffer-overflow and SEGV. The layered defence is measured, not
+  assumed.
+  **TOTALITY, while in the file.** `bir/lower.rs`'s `HofOp` dispatch traded its `_ =>` for the three
+  variants it was hiding. Measured both directions: explicit arms + a new variant → `E0004`; the
+  wildcard + the same variant → rc 0 with zero warnings, because `HofOp` is `pub`.
+  **17 fixtures**, all RED-verified against the pre-fix compiler on both backends, covering element type
+  (scalar · String · user struct · `Option[String]` · `Vector[String]` · `Dict[String,int]`),
+  collection kind, source liveness, element provenance and result consumption, plus a cross-type `map`
+  control and a no-higher-order control. They sit in `known_gaps/` with LIVE tests so they do not enter
+  the runtime-parity corpus before the self-host runs these shapes. Leak accounting on every cell is
+  exactly 8 bytes per closure literal — pure `t0953`, zero attributable to this change.
+  Filed from the track: `t1086` `Vector[Callable]` element-width stride · `t1087` `Deque[T].get`
+  element-type loss · `t1088` `Vector[Set[T]]` double-free · `t1089` `Vector[Option[T]]` read
+  double-free · `t1090` the BIR-validator borrow-provenance instrument. `t0705` widened with the
+  `Option` payload cell it now surfaces.**
 - [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
   STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,
   garbage or empty stdout on BOTH backends. Two producer sites now stamp the View tag; 12 cells RED→GREEN.**

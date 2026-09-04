@@ -803,7 +803,19 @@ fn expand_func(
                             hof_split = true;
                             break;
                         }
-                        _ => {
+                        // The remaining variants, listed EXPLICITLY rather than
+                        // swept up by `_`, so rustc's exhaustiveness check is
+                        // what forces the next `HofOp` through a disposition.
+                        // Under a wildcard a new variant compiles clean with no
+                        // warning — `HofOp` is `pub`, so not even `dead_code`
+                        // fires — and its first sign of trouble is a BIR
+                        // validator bounce at some caller's build.
+                        //
+                        // `Windows` / `Chunks` / `DictMap` are constructed
+                        // nowhere and matched nowhere else; they reach this arm
+                        // only in principle, which is precisely why naming them
+                        // costs nothing and hiding them costs the guard.
+                        HofOp::Windows | HofOp::Chunks | HofOp::DictMap => {
                             // Not yet migrated — keep as-is. If it ever
                             // leaks into BIR the validator will flag it.
                             new_insts.push(Inst::HofExpand {
@@ -1946,6 +1958,15 @@ fn expand_find(
             src_ptr: ctx.elem_ptr,
             size: size_val,
         });
+        func.block_mut(found_bb).push_synthetic(Inst::CallExtern {
+            dst: None,
+            name: "gorget_array_clone_elem_inplace".to_string(),
+            args: vec![coll, pay_ptr],
+            arg_abis: vec![
+                crate::ir::abi::AbiKind::Ptr,
+                crate::ir::abi::AbiKind::Ptr,
+            ],
+        });
     } else {
         func.block_mut(found_bb).push_synthetic(Inst::Store {
             ptr: pay_ptr,
@@ -2040,6 +2061,20 @@ fn expand_filter(
         value: arr_val,
         is_move: true,
     });
+    let result_hook_addr = alloc_value(next);
+    func.block_mut(cur).push_synthetic(Inst::SlotAddr {
+        dst: result_hook_addr,
+        slot: result_slot,
+    });
+    func.block_mut(cur).push_synthetic(Inst::CallExtern {
+        dst: None,
+        name: "gorget_array_adopt_hooks".to_string(),
+        args: vec![result_hook_addr, coll],
+        arg_abis: vec![
+            crate::ir::abi::AbiKind::Ptr,
+            crate::ir::abi::AbiKind::Ptr,
+        ],
+    });
 
     let elem_abi_hint = closure_arg_abis.first().copied();
     let ctx = emit_hof_loop_scaffold(
@@ -2093,7 +2128,7 @@ fn expand_filter(
     });
     func.block_mut(push_bb).push_synthetic(Inst::CallExtern {
         dst: None,
-        name: "gorget_array_push".to_string(),
+        name: "gorget_array_push_cloned".to_string(),
         args: vec![result_addr, ctx.elem_ptr],
         arg_abis: vec![
             crate::ir::abi::AbiKind::Ptr,

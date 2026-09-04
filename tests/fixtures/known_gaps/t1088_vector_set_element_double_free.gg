@@ -1,0 +1,25 @@
+# KNOWN GAP todo/t1088 — a `Set[String]` stored as a `Vector` element is freed
+# twice.
+#
+# No higher-order call appears in this program: the Set is built, pushed, the
+# Vector escapes its producer, and one element is read back. ASan puts the
+# second free in `main` at `gorget_set_free` / `gorget_string_free` on a block
+# allocated by `gorget_set_clone`, so the element clone taken at the push
+# boundary and the value the producer drops are the same allocation.
+#
+# Intended: prints `aabc`, rc 0, ASan-clean, on both backends.
+String mk(String a, String b):
+    return a + b
+
+Vector[Set[String]] pick():
+    Vector[Set[String]] v = Vector[Set[String]]()
+    Set[String] s1 = Set[String]()
+    s1.add(mk("aa", "bc"))
+    v.push(s1)
+    return v
+
+void main():
+    Vector[Set[String]] r = pick()
+    Set[String] s0 = r[0]
+    for e in s0:
+        print(e)

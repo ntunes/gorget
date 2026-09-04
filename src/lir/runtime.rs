@@ -401,6 +401,9 @@ runtime_table! {
     // validator routes results identically with the rest of the
     // collection-allocator family.
     ArrayNew           => "gorget_array_new",           sig_fresh(&[(T::I64, A::Scalar)], T::Array, F::Allocates);
+    ArrayAdoptHooks    => "gorget_array_adopt_hooks",   sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::Ptr)], T::Void, F::Mutates);
+    ArrayPushCloned    => "gorget_array_push_cloned",   sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Void, F::Mutates);
+    ArrayCloneElem     => "gorget_array_clone_elem_inplace", sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::Ptr)], T::Void, F::Mutates);
     ArrayPop           => "gorget_array_pop",           sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Ptr, F::Mutates);
     ArrayPush          => "gorget_array_push",          sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Void, F::Mutates);
     ArrayRemove        => "gorget_array_remove",        sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Void, F::Mutates);

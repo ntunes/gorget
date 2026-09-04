@@ -1,0 +1,12 @@
+# `Vector[int].filter` — the SCALAR value of the element-type axis. A scalar
+# element carries no drop or clone hook, so the filtered array must not gain
+# one, and cloning through an absent hook must stay a no-op.
+Vector[int] pick():
+    Vector[int] v = Vector[int]()
+    v.push(7)
+    v.push(9)
+    return v.filter((n): n > 5)
+
+void main():
+    Vector[int] r = pick()
+    r.each((t): print(t))

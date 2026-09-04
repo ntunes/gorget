@@ -1,0 +1,20 @@
+# `Vector[Vector[String]].find` — a nested-collection element, the axis value
+# whose clone hook is a DEEP RECURSIVE clone (`gorget_array_clone`, which walks
+# every inner element in turn).
+String mk(String a, String b):
+    return a + b
+
+Vector[String] one(String a, String b):
+    Vector[String] w = Vector[String]()
+    w.push(mk(a, b))
+    return w
+
+void main():
+    Vector[Vector[String]] v = Vector[Vector[String]]()
+    v.push(one("aa", "bc"))
+    v.push(one("dd", "efg"))
+    Option[Vector[String]] r = v.find((w): w.len() == 1)
+    if r is Some(x):
+        x.each((s): print(s))
+    else:
+        print("none")

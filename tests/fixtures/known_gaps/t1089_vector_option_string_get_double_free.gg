@@ -1,0 +1,25 @@
+# KNOWN GAP todo/t1089 — reading a `Vector[Option[String]]` element back
+# through `.get` double-frees the String inside the payload.
+#
+# No higher-order call appears in this program. `v.get(0)` yields
+# `Option[Option[String]]`; unwrapping to the inner String and printing it dies
+# at rc 134 with `free(): double free detected in tcache 2`, so the nested
+# enum-payload element is copied out without being cloned.
+#
+# The same shape read through `v.find(<pred>)` fails identically, at HEAD and
+# after the `find`/`filter` ownership fix — which is what places the defect on
+# the element-read path rather than in the higher-order expanders.
+#
+# Intended: prints `aabc`, rc 0, ASan-clean, on both backends.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[Option[String]] v = Vector[Option[String]]()
+    v.push(Some(mk("aa", "bc")))
+    v.push(Some(mk("dd", "efg")))
+    Option[Option[String]] r = v.get(0)
+    if r is Some(x):
+        print(x.unwrap_or("MISSING"))
+    else:
+        print("none")
