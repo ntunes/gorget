@@ -2633,16 +2633,25 @@ every round close by mandate, so anything recorded only here is deleted by the n
 this pointer exists instead of the list.
 
 ### ⚠⚠ A ROUND-CLOSE GATE IS **ALREADY RED AT HEAD** AND IT IS NOBODY'S INFLOW — VERIFY BEFORE BLAMING
-⛔⛔ **THREE GATES, NOT ONE — TRACK L's EXECUTOR FOUND TWO MORE, ALSO PRE-EXISTING (2026-09-04).**
-**`GG_BACKEND=llvm cargo test --test security sec_64` AND `sec_70` BOTH FAIL AT PRISTINE HEAD.** Mechanism:
-**`t0729` NO LONGER REPRODUCES**, and `security_safe_except_on` asserts the trip **still happens** — so the
-gate reds *because the defect was fixed*. Verified ASan-clean with a compiler built from `8bd978079`;
-recorded on `t0729` with the measurements. ⇒ **the round-close battery WILL hit all three; none is this
-round's inflow.**
-⚡ **AND THE SHAPE IS WORSE THAN "a stale gate": a `security_safe_except_on`-style assertion that a defect
-STILL TRIPS is a guard that goes RED WHEN THE BUG IS FIXED.** That is the inverse of a ratchet and it
-converts good news into a red battery. **Adjudicate `t0729` (close it and retire or invert the two
-assertions) rather than treating the red as noise.**
+⛔⛔ **THREE GATES, NOT ONE — ALL PRE-EXISTING (2026-09-04), AND THEY ARE *ONE* ADJUDICATION, NOT THREE.**
+`GG_BACKEND=llvm cargo test --test security sec_64` and `sec_70` are **rc 101 at pristine HEAD**, and both —
+plus the census row — trace to **`t0729`**, whose trip is **genuinely gone**.
+⛔⛔ **CORRECTION 2026-09-04, AND IT REVERSES WHAT I WROTE HERE: I called `security_safe_except_on` "a guard
+that goes RED when the bug is fixed — the inverse of a ratchet" and "a guard-design defect". THAT IS WRONG,
+AND ITS OWN DOC COMMENT SAYS SO** (`tests/security.rs:422-440`): *"THIS IS NOT A SKIP … the moment the cited
+defect is fixed, this test goes RED and forces the annotation to be removed — the same self-retiring contract
+`security_known_unsafe` uses."*
+⇒ ⚡ **IT IS CORE #6's BOTH-DIRECTIONS RATCHET, FIRING IN THE GOOD DIRECTION. The red IS the design working**,
+and its failure message already prescribes the remedy verbatim.
+⇒ ⛔ **AND THE WRITE SITE I NAMED WAS WRONG TOO: not the HELPER, but the two CALL SITES**
+(`tests/security.rs:1431`, `:1474`) — **delete the annotations, restore the plain `security_safe(...)` calls,
+and LEAVE THE HELPER INTACT.**
+⚡ **THE LESSON: BEFORE CALLING A GUARD BADLY DESIGNED, READ ITS DOC COMMENT. A self-retiring annotation is
+SUPPOSED to red when its defect dies — that is the whole contract.**
+⭐ **THE DEFECT IS GENUINELY FIXED, NOT A STALE TRIGGER — settled by a POSITIVE CONTROL, not by inference:** a
+hand-written `.ll` with a deliberate overlapping `memcpy` through the same pipeline **still trips ASan
+(`memcpy-param-overlap`, rc 99)**, so the detector is live on that lane; and three nearby re-trip shapes are
+ASan-clean on both lanes. **The aliasing INPUT vanished from upstream lowering.**
 
 ⭐ **ORCHESTRATOR-VERIFIED 2026-09-04, bare rc, at pristine HEAD: `census_bare_rc=1`, roster 215 · PASS 7 ·
 FAIL 208 · allowlist 113 rows. THE SOLE UN-ALLOWLISTED PASSER IS `llvm_nested_option_match_no_memcpy_overlap`**
