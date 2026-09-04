@@ -204,6 +204,25 @@ not *"silently answers false"* — **severity is silent-wrong-output, and the sc
 `tests/fixtures/robustness_map/cells/hof_for_each_strings_noimport_namedfn.gg` is present and BUILD-FAIL in
 `MANIFEST.tsv:232`, whose note names it *"the import half's only possible witness once that lands"*.
 
+⭐⭐ **A2 SPLIT INTO α + β 2026-09-04, AND THE SCOUT DISPROVED MY ROOT-FIX FRAMING BY CONSTRUCTION.**
+**α holds `t1116`–`t1120` (pass 1 launched); β holds `t1121`–`t1125` (queued, needs its OWN scout).**
+⛔ **THE HYPOTHESIS WAS "fix the erasure and convention 2's arm becomes unreachable." MEASURED: IT RENAMES
+IT.** Un-erasing the `Callable` param type cuts `unit_param` fires by **79 %** while the sibling `fnptr_local`
+arm **MORE THAN DOUBLES (+119 %)** — **266 of 335 fires MIGRATE to the sibling synthetic name, which THE
+SAME SIX DECODE SITES handle** (regenerate both counts from `/tmp/a2scout_census_{base,proto}/`). ⇒ **two independent tracks: α needs no type change, β needs no instruction change.**
+🚨 **AND THE SCOUT FOUND THE ROUND'S SEVERITY LEADER, UNFILED AND OWNED BY NOTHING IN `todo/`:**
+`insts.rs:3917` tests the **emitted C symbol**, so a user writing `extern int f(...) = "__callable_probe"` —
+**the same `extern "C"` form `lib/std/io.gg` uses throughout** — gets **rc 0 with no diagnostic and rc 139
+at runtime on C AND on the self-host**, while **LLVM refuses** (`llc: '%v0' defined with type 'i64' but
+expected 'ptr'`). The emitted C dereferences the integer literal `40` as a `void*[2]` closure. **Causation
+proved by line-anchored break-and-watch; clean negative control at `= "llabs"` → `42`.**
+⚡ **It is EXACTLY the class A1-IDENTITY retired for convention 1 THIS ROUND, one convention over, still
+live — and the backends disagree, so Core #8 applies.**
+⊕ **Three things my A2 brief got wrong, all corrected in α's:** `todo/t0681` must **NOT** be claimed (it owns
+an unrelated check-time `E_DerefNonBox` diagnostic) · the `UNKNOWN_CLOSURE_CALL` item is stale · and
+`Instruction::CallIndirect` is **DEAD END-TO-END** (`shared_async.rs:632` is a match arm, not a construction),
+so the carrier must be **EXTENDED**, not adopted — **`t0774` needs correcting on both counts.**
+
 ⭐ **TRACK A2 OPENED 2026-09-04 — ID BLOCK `t1116`–`t1125`, WRITTEN HERE IN THE SAME ACTION THAT LAUNCHED
 ITS SCOUT.** ⚠ **A2 WAS NEVER A FORMAL TRACK — it was a SCOPE LABEL from Track A's scout split, and the
 owner caught the orchestrator calling it "a named owner" for the four surviving sidecars.** It is a track
@@ -1416,8 +1435,10 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   and ⭐ **a typed carrier for convention 2 ALREADY EXISTS** — `ClosureDispatchKind` (`lir/mod.rs:445-455`)
   **whose doc-comments literally read *"Originally `__callable_N`"***, leaving `insts.rs:3892/3895` the sole
   surviving name-decode. ⊕ **`t0681` already owns `methods.rs:276` and already prescribes this fix — CLAIM,
-  do not duplicate.** ⊕ `c_lir/emit_types.rs:24` emits `/* UNKNOWN_CLOSURE_CALL */` **into the generated C**
-  — a silent codegen failure dressed as a comment.
+  do not duplicate.** ⛔ ~~`c_lir/emit_types.rs:24` emits `/* UNKNOWN_CLOSURE_CALL */` into the generated C~~ — **STALE,
+  CORRECTED 2026-09-04: A1-IDENTITY RETIRED IT THIS ROUND (`935863366`).** Zero occurrences in emitted code;
+  only doc-comments remain. ⚠ **This line fed a whole item into A2's brief. A handover bullet outlives the
+  thing it describes — re-verify before briefing off one (Core #5).**
   ⚡ **SPLIT ON THE MECHANISM BOUNDARY: convention 2 → A2, for a STRUCTURAL reason** — the synthetic name is
   **a MAP KEY into four sidecar tables**, and **the convention exists BECAUSE of A2's erasure**
   (`calls.rs:1897` is gated on `local_type_id == UNIT_TYPE`). **Fix A2 and that arm becomes unreachable.**
