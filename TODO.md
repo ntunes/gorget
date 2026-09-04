@@ -20,9 +20,13 @@ fixture breaches — **and all three parity gates SKIP EVALUATION under `cfg!(de
 so only `--release` with `GG_RUNTIME_DIFF=1` can see it.**
 
 **UNINTEGRATED WORK, all commits verified reachable:** T1 executor (live, the round's critical path) · L
-`2f7eb9b58` (done, waits for T1) · N2 `0d9f9cebe` (done) · S-a2 `55323d628` — **output-review SIGNED OFF the
-CODE**, one BLOCKING correction to filed TEXT only, being applied on branch `sa2-fixup`; **merge `sa2-fixup`,
-not the bare commit** · leak-class re-seed `bcf703ee1` (done, output-review live).
+`2f7eb9b58` (done, waits for T1) · N2 `0d9f9cebe` (done) · S-a2 — output-review SIGNED OFF the CODE, blocking
+corrections were to filed TEXT only and are **applied at `36e9f57eb`; ⛔ MERGE `sa2-fixup`, NOT `55323d628`**
+· leak-class re-seed `bcf703ee1` (done, output-review live).
+⚠ **`sa2-fixup` reports `--test lints` rc 101 ON ITS OWN BRANCH and that is EXPECTED, not inflow** — its base
+predates this branch's `TODO.md` figure-spelling fix. The executor proved it by reverting to the pristine
+parent and getting the identical failure. **It goes green at merge because `TODO.md` comes from THIS side —
+verify that after merging rather than assuming it.**
 **→ R50:** W + S-a3 (merged, brief measured against source three times) · U1 · U2 · S-a1 · S-b · T2.
 
 ⚖ **ONE OWNER ASK OPEN:** admit `vector_hof_result_element_sizing` (`__gorget_closure_env_alloc*5`, cite
@@ -491,6 +495,11 @@ renumber.
 
 ⭐ **`t1047` IS ALLOCATED TO THE OWNER (2026-09-03, owner request).** RESERVED — ⛔ no track may use it,
 and the orchestrator must not re-issue it.
+
+⛔ **FIRST UNISSUED ID IS `t1302`.** Late-round allocations: the re-seed track spent `t1295`/`t1296` (on its
+own branch, so they do NOT exist at HEAD yet — do not assume a gap); the orchestrator filed `t1300`/`t1301`
+from S-a2's fixup findings. **`t1297`–`t1299` are FREE, not reserved** — a reader seeing the jump will
+otherwise assume they were consumed.
 
 ⛔ **SECOND-WAVE BLOCKS, ISSUED AFTER THE TABLE ABOVE — READ THIS BEFORE ALLOCATING ANYTHING.**
 **A's original block is FULLY CONSUMED by A1-M**, so the tracks split out mid-round got fresh blocks:
@@ -6241,6 +6250,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0606`](todo/t0606.md) — 🧹 (G1 follow-up) lint-file-scope: widen g1_projected_materialize_sites_untrack files[] IF a projected-materialize cow_be…
 - [`t0731`](todo/t0731.md) **LOW** — [LOW — the sanitize sweep covers ONE lane and ONE directory level; extending it to the LLVM lane is now possible for the…
 - [`t0965`](todo/t0965.md) **LOW** — 🆕 [LOW — ADOPTION GAP, not a defect; identified 2026-09-03 by R48 Track T-a2 while closing its
+- [`t1301`](todo/t1301.md) **LOW** — 🆕🛡 [LOW — A GUARD NARROWER THAN THE CLASS IT NAMES; found 2026-09-04 by R49 Track S-a2's fixup pass, which narrowed the…
 ## Concurrency
 
 ### High
@@ -6400,3 +6410,4 @@ Only NEW items are listed — recommendations already tracked elsewhere are cros
 
 - [`t1065`](todo/t1065.md) **LOW** — 🆕🧹 [LOW — a DESIGN NOTE claims its own subject is unbuilt while the tree has built part of it; found 2026-09-04 by the o…
 - [`t1256`](todo/t1256.md) **LOW** — 🆕🧹 [LOW — a devbook chapter describes tests/lints.rs as five layering ratchets over two directories; it is 219 guards, s…
+- [`t1300`](todo/t1300.md) **LOW** — 🆕📄 [LOW — A CORE #15(a) VIOLATION WHOSE DECAY HAS ALREADY HAPPENED; found 2026-09-04 by R49 Track S-a2's fixup pass, the…
