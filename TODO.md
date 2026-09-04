@@ -334,6 +334,25 @@ owes a note + a filed subset gap.
   narrative and its captured data disagree, THE DATA IS THE ITEM**; and here the difference decided a design
   question, because *distinct* 24-byte allocas cannot sit 16 apart at `-O0` — **so the original aliasing was
   expressed IN THE IR, not produced by frame layout.**
+- ⛔⛔ **A FIX THAT CONVERTS UAF → LEAK CHANGES THE *SEVERITY CLASS*, AND THE SWEEP'S CLASSIFIER SEES A NEW
+  LEAK WHERE THE OLD STATE WAS "CLEAN BECAUSE IT CRASHED FIRST".** Track L's five graduating cells report
+  **`heap-use-after-free` at pristine base and a LEAK after the fix** — the right trade on the owner's
+  ranking, and **`sanitize_sweep.sh` goes rc 1 on it.** ⚡ **The allowlist's own header documents this exact
+  SIX-Q#6 shape** (*"read CLEAN only because it crashed first"*), **so an undisclosed class change is the
+  thing that file exists to prevent.**
+  ⇒ ⭐ **A TRACK THAT MOVES A CELL BETWEEN SEVERITY CLASSES OWES A `DONE.md` CLAUSE SAYING SO — naming the
+  old class, the new one, and the residue's owning item.** ⊕ **And when the residue belongs to ANOTHER live
+  track, HOLD THE INTEGRATION rather than admitting a row you are about to delete** — R49 holds L until S
+  closes `t0953`, per the owner's *"fix the leaks"*.
+- ⛔ **`known_gaps/` IS OUT OF THE SWEPT CORPUS AND TOP-LEVEL IS IN, SO *GRADUATION ITSELF* IS WHAT MAKES A
+  LEAK VISIBLE.** Four graduations plus seven new cells put five leaks into the sweep **for the first time**,
+  with no allowlist row and no justification. ⇒ **before graduating a fixture, RUN THE SWEEP ON IT** — the
+  cell's leak state at HEAD tells you nothing about whether the gate will accept it, because the gate was
+  never looking.
+- ⚠ **A DELETED ITEM'S CITATIONS DO NOT DIE WITH IT, AND NO LINT CATCHES THE CLASS.** Closing `t0771` left
+  its **falsified discriminator quoted verbatim** in `todo/t0953.md`, plus six other dangling cites —
+  including a control fixture that now claims a just-closed item is *"still open"*. ⇒ **`git rm todo/tNNNN.md`
+  owes a `grep -rn tNNNN` sweep across `todo/`, `tests/` and fixture headers in the SAME commit.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
