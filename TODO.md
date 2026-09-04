@@ -675,6 +675,37 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔⛔ **L'S FOLD CORRECTS *BOTH* THE ORCHESTRATOR AND THE REVIEWER ON THE SAME CELL — THE THIRD ATTRIBUTION
+ERROR IN ONE CHAIN, AND ALL THREE HAD THE SAME CAUSE. `t0953` OWNS *NONE* OF THE FIVE LEAKING CELLS.**
+Commit `bc762d0d3`. I attributed all five to `t0953`; the reviewer corrected me to "greens 0 of 5, 72 of 110
+bytes"; **the executor read the emitted C and found the 72 B block belongs to `t0948`** — the env is a closure
+literal stored in **`struct Pair: Callable[int(int)] f`**, **no `Pair__drop` is emitted at all**, and `t0948`
+names that predicate verbatim (`field_is_transitively_droppable` excluding bare `FnPtr` fields).
+**`t0953`'s subject is the CALL-ARGUMENT position, which no cell here exercises.**
+⚡⚡ **AND ALL THREE ERRORS SHARE ONE CAUSE — THE FRAME HEURISTIC. `__gorget_closure_env_alloc` appears in the
+trace ⇒ therefore `t0953`. TWO DIFFERENT DEFECTS SHARE THAT FRAME, so the instrument cannot separate the
+POSITIONS. A FRAME COUNT IS A SYMPTOM; A SHARED SYMPTOM IS NOT EVIDENCE ABOUT THE MECHANISM.** Same shape as
+the `EIdentifier` inert-vs-absent error and the "same byte count ⇒ same cause" non-filing. **Four instances
+this round; this is the round's dominant defect class and it is an INSTRUMENT class, not a carelessness class.**
+⇒ ⭐ **The field-drop gap (`t1210`, now FILED, HIGH, both backends measured) owns FOUR cells outright and half
+the fifth. S-a's case is STRONGER: there is no "other half lands elsewhere" story.**
+⊕ **OPEN FOR S-a PASS 2: is `t0948` a THIRD FACE of the same erasure?** If a struct field typed `Callable[…]`
+is excluded from transitive droppability by the same missing-TypeDef problem, S-a's design must cover it or
+name it as an omitted cell — my "teardown AND copy sites" may still be naming two of three.
+
+⭐ **AND L's FOLD DECLINED TO FILE `t1211`, CORRECTLY — the pre-filing grep found a THREE-ITEM FAMILY the
+reviewer's lint-only grep could not see:** `t0675` (ratified 2026-08-23, and it already specifies exactly the
+requested lint), `t0901` (measured damage, "closes as part of `t0675`"), `t1064` (the `repro`-field twin).
+**No discriminator ⇒ a new item would have been a duplicate.** It landed the measurement in `t0675`, whose own
+last sentence asked for it: **48 todo-to-todo cites, 2 dead**, plus the live escape and the verified
+non-coverage of all three neighbouring guards. **`t1211` unspent.** ⚡ *The GREP-BEFORE-YOU-FILE rule has now
+prevented four duplicates this round and cost nothing.*
+⭐⭐ **AND IT REPLACED A LINE CITE WITH A SYMBOL CITE — THEN PROVED THE POINT IN ITS OWN COMMIT.** Told to fix
+`types.rs:777` → the real line, it did — **and its own doc-comment widening moved that line 786 → 798 in the
+same diff.** A bare line there is unguarded (the citation lint is scoped to one chapter), so it cited the
+SYMBOL. ⇒ **Core #15(a) generalises: where no guard pins a citation, cite the SYMBOL, not the line.** It also
+swept every `src/ir/types.rs:N` cite ≥ 776 and found one **already dead by ~189 lines** before it started.
+
 ⭐⭐ **R EXECUTOR COMPLETE — `ab429b88b`, 8 files, +360/−109; output-review launched. `known_gaps_census.sh
 --check` rc 1 → rc 0.** Gates B/C: both `security_safe_except_on` annotations deleted, helper **kept** under
 `#[expect(dead_code, reason=…)]` — **`expect`, not `allow`, so it fires `unfulfilled_lint_expectation` the
