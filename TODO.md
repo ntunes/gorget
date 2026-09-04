@@ -683,6 +683,38 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **S-a2 PASS 4 = SIGN OFF ON THE RE-SCOPE (streak 3, executor LAUNCHED) — and it produced a launchability
+result no earlier pass had.** It **built the field/tuple-only restriction** and swept the corpus:
+**ZERO verdict changes across all 4544 `.gg` files** in `lib/` + `tests/fixtures/` — 822 fail at HEAD, the
+same 822 under the probe, `diff` empty. ⇒ **the field half's migration cost is EXACTLY ZERO**, which is far
+stronger than *"the stdlib doesn't break."*
+⛔ **THE GATE KEYS ON THE OUTERMOST PROJECTION — and that falsifies two of my claims.** `v[0].f` **REJECTS**
+(a read THROUGH a container is in scope), so "index places deferred" reads as "reads out of containers are
+deferred" and is wrong. **And `t._1` is INSIDE the claimed in-scope cell and is NOT covered**: `t.1` → rc 1,
+**`t._1` → rc 0 and still `attempting double-free`.** ⚡⚡ **"The fixture carries both spellings" — CARRYING
+THE ROW DOES NOT FIX IT.** The row would go red and the cheapest reaction is to delete it. ⇒ **DECIDED: the
+two-resolver `._N` unification is IN SCOPE (Layering rule 3 — one axis, two resolvers).**
+⛔⛔ **MY OWN STATED REASON FOR THE STDLIB BEING SAFE WAS FALSE, AND WAS INHERITED THROUGH TWO ADDENDA.** I
+wrote the call-only sites are *"ACCIDENTALLY clean because each binds EXACTLY ONCE."* **Falsified by a cell
+that binds exactly once per iteration and is a heap-use-after-free.** The real discriminator, from a
+controlled pair: **a read through a `&` BORROW PARAM is CLEAN; the same loop from a BARE LOCAL is a UAF.**
+⇒ **httpserver is safe because it reads THROUGH A BORROW — a property NOTHING ENFORCES**, so any refactor to
+a local container reintroduces it silently. **The deferred cell is UNSAFE-AND-DEFERRED**, with three measured
+cells at plain HEAD (two double-frees, one UAF), all `gg check` rc 0.
+⛔ **AND FILING 2 DECAYED *WITHIN THIS ROUND*: it no longer reproduces.** `v.push(^c)`, `(7, ^c)` and
+`d.put(k, ^c)` all build rc 0, almost certainly fixed by **`fbed38cc0` — Track A2-α, integrated THIS ROUND.**
+⚡ **Mid-gauntlet rot, exactly what Core #15 warns about, measured.** Executor instructed to **re-verify before
+filing** rather than burn a block id on a phantom.
+⚖ **AND MY OWNER-FACING PREMISE WAS HALF FALSE (the ruling stands).** I said *"the zero-cost route does not
+exist — `d[k](v)` is `E_NotAFunction`."* **`E_NotAFunction` keys on LITERAL-vs-VARIABLE index, not position:**
+`d["a"](5)` and `v[0](5)` **check rc 0, build and RUN.** The mechanism is a **PARSER AMBIGUITY**
+(`src/parser/expr.rs:1122-1141` — `k` parses as a type name, so `d[k](v)` becomes a generic call).
+⇒ **The callee-borrow ruling is still right and still needed — but what closes the deferred cell is HALF A
+RESOLVER FIX**, and the filed item must say so or the work gets scoped as pure ownership.
+⊕ **New, unfiled: `h.f()` — calling a `Callable` struct field directly — is `gg check` rc 0 and then FAILS TO
+LINK** (`undefined reference to Holder__f`); resolved as a method on the struct instead of an indirect call
+through the field. **Core #10 lower-or-reject.**
+
 ⭐⭐ **N2's FOLD LANDED AND WENT WELL PAST ITS BRIEF — confirming review launched.**
 ⭐ **B1's Deque cell exposed a WHOLESALE self-host gap, not a drop-hook one:** Rust C and LLVM both **2 → 4**
 (4 correct), **self-host CC FAILURE unchanged** — and it REDUCED the failure to **`Deque[int]` with a trivial
