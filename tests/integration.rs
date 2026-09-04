@@ -5598,10 +5598,13 @@ fn mutex_vector_d53_class_pin_guard_push_reject() {
 ///   - generic-struct-field / generic-`Index` x param — the divergence these two
 ///     pin is on the OBJECT's `ResolvedType` (`RTGeneric`), which the source
 ///     binding does not vary.
-///   - `t._0` (the tuple alias spelling) — the Rust lane UNDER-rejects it; it is
-///     filed as `todo/t0943` with the `#[ignore]`d
-///     `d53_tuple_alias_rust_lane_under_rejects` below. The self-host lane
-///     rejects it and the self-host battery covers it.
+///   - `t._0` (the tuple alias spelling) is NO LONGER an omitted cell: both
+///     resolvers now read one spelling rule (`ast::tuple_field_alias_index`),
+///     so it rejects on the Rust lane too. Its cell lives in
+///     `d53_tuple_alias_subplace_reject` rather than the loop below, because it
+///     is MUTEX-ONLY — the loop crosses every cell with both lock families, and
+///     the alias spelling is a property of the PLACE resolver, which the lock
+///     family does not vary.
 ///   - generic `Index[]` with a MULTI-type-arg receiver whose `Index` output is
 ///     not the last type parameter — the `generic_index_impl` rows above pin
 ///     only the SINGLE-type-arg cell, where `args.last()` and the impl's output
@@ -5655,20 +5658,162 @@ fn mutex_vector_d53_subplace_axis_reject() {
     }
 }
 
-/// `t._0` is the ratified alias for `t.0` (language-reference §4.2/§7.8) and the
-/// Rust lane accepts it as a tuple accessor, but `src/parser/expr.rs` only builds
-/// `Expr::TupleFieldAccess` for a literal `.<int>` — `._0` becomes a plain
-/// `Expr::FieldAccess`, whose `lvalue_value_type` arm needs a struct def id a
-/// tuple does not have. D53's consume gate therefore never fires on the alias
-/// spelling while it fires on `t.0`. The SELF-HOST lane rejects both (its parser
-/// folds them into one node and both resolvers share `tuple_field_index`), so
-/// this is a "reference lags the self-host" finding — fix the Rust side.
+/// `t._0` is the ratified alias for `t.0` (language-reference §4.2/§7.8), and
+/// the two spellings are different AST nodes: `parse_postfix` builds
+/// `Expr::TupleFieldAccess` only for a literal `.<int>`, so `._0` arrives as a
+/// plain `Expr::FieldAccess`. The safety walk's `lvalue_value_type` had no tuple
+/// arm — it needed a struct def id a tuple does not have — so D53's consume gate
+/// fired on `t.0` and walked past `t._0`.
+///
+/// Both resolvers now read ONE spelling rule (`ast::tuple_field_alias_index`),
+/// which is the shape the self-host lane always had (`tuple_field_index`) and
+/// why it rejected both spellings all along: a "reference lags the self-host"
+/// finding, fixed on the Rust side per the succession plan.
+///
+/// The cell keeps its own test rather than joining the axis loop below because
+/// it is MUTEX-ONLY: the loop crosses every cell with both lock families, and
+/// there is no `rwlock_tuple_alias_*` twin — the alias spelling is a property of
+/// the PLACE resolver, which the lock family does not vary.
 #[test]
-#[ignore = "known gap (todo/t0943): Rust `lvalue_value_type` misses the `._N` tuple alias, so D53 under-rejects `v.push(t._0)`; un-ignore when the FieldAccess arm resolves a tuple object"]
-fn d53_tuple_alias_rust_lane_under_rejects() {
+fn d53_tuple_alias_subplace_reject() {
     check_d53_unique_lock_reject(
-        "known_gaps/d53_tuple_alias_subplace_rust_accepts.gg",
+        "d53_unique_lock/mutex_tuple_alias_local_push_reject.gg",
         D53_MUTEX,
+    );
+}
+
+/// The by-design single-owner carve-out (`Callable[T]`, `Box[T]`, …) at a FIELD
+/// or TUPLE-ELEMENT place. The arm that enforces it used to key on
+/// `Expr::Identifier` alone while its two siblings — the D53 unique-lock arm and
+/// the D4/D12 drop-taint arm — resolved places structurally, so the ratified
+/// rule ("the POSITION is the rule; the receiver's spelling is not part of it")
+/// held for `g = f` and not for `g = h.f`.
+///
+/// WHAT THIS CLOSES, measured at 7bf11017e with `gg check` rc 0 in every row:
+/// two plain `h.f` reads → `AddressSanitizer: attempting double-free`; two
+/// `t._1` reads → the same; two `v[0].f` reads → the same. ggdef is
+/// STRUCTURALLY BLIND to memory invalidation, so it pins the verdicts and ASan
+/// adjudicated the memory.
+///
+/// AXES, with every cell covered or named (Core #12):
+/// | axis          | values                                                    |
+/// |---------------|-----------------------------------------------------------|
+/// | place shape   | field-of-local · field-of-param · `self`-field · `t.1` ·   |
+/// |               | `t._1` · `v[0].f` (field THROUGH an index)                 |
+/// | position      | bind · push · user-struct ctor                             |
+/// | type          | `Callable[T]` · `Box[T]`                                   |
+/// | capture       | int (non-droppable) · String (droppable) · none            |
+/// | remedy        | `.clone()` accepts and runs · `^h.f` is `E_PartialMove`    |
+///
+/// OMITTED CELLS, named rather than silently dropped:
+///   - **BARE INDEX places (`v[0]`, `d[k]`) — DEFERRED, AND UNSOUND WHILE
+///     DEFERRED.** The gate keys on the OUTERMOST projection, so `v[0].f` is IN
+///     (it has a row) and a bare index place is OUT. Those are memory-unsafe at
+///     HEAD — `todo/t1225` — and are deferred behind the owner's callee-borrow
+///     ruling (2026-09-04: a call does not consume its callee), because
+///     rejecting them today forces a per-request closure-env clone on the
+///     httpserver dispatch hot path, which is the charter breach that ruling
+///     removes. Deferred, not forgotten; do not read this suite as covering them.
+///   - `Task` / `TaskGroup` / `Guard` / `Owned[T]` — the remaining
+///     `needs_explicit_move` members. The `Box[T]` row is the non-closure
+///     witness that the arm rides the whole predicate rather than a `Callable`
+///     costume; `Mutex`/`RWLock` at a sub-place are already the D53 suite's.
+///   - `Box[T]` at a CONSTRUCTOR — `todo/t0682` cells B and D, which stay OPEN.
+///     `is_constructor` matches `DefKind::Variant | DefKind::Newtype`, and
+///     `Box[T](…)` is neither, so the helper is never called for it: a case with
+///     NO SUBJECT, which no widening of this arm reaches (SIX Q#4). `t0682`'s
+///     durable repro is that cell verbatim and stays rc 0.
+#[test]
+fn single_owner_subplace_reject_axis() {
+    for cell in [
+        "callable_field_local_bind_reject.gg",
+        "callable_field_param_bind_reject.gg",
+        "callable_self_field_bind_reject.gg",
+        "callable_tuple_int_bind_reject.gg",
+        "callable_tuple_alias_bind_reject.gg",
+        "callable_index_then_field_bind_reject.gg",
+        "callable_field_push_reject.gg",
+        "callable_field_ctor_reject.gg",
+        "callable_field_string_capture_reject.gg",
+        "callable_field_noncapturing_reject.gg",
+        "box_field_bind_reject.gg",
+    ] {
+        check_gg_fails(
+            &format!("single_owner_subplace/{cell}"),
+            "E_MoveWithoutOperator",
+        );
+    }
+}
+
+/// The diagnostic's SUBJECT is the sub-place, not the place's root. The shared
+/// `MoveShape::FieldIndex` text asserts "`<subject>` is a single-owner type" and
+/// offers "`<subject>.clone()`" — and at `Callable[int()] g = h.f` the root `h`
+/// is a plain struct, so a root-named message states a false type claim AND
+/// prescribes a clone of the wrong thing (`h.clone()` copies the whole struct).
+///
+/// The two pre-existing arms (D53 unique-lock, D4/D12 drop-taint) still render
+/// their root; that is `todo/t0453`, which stays filed. This test pins only the
+/// NEW arm, so the polish landing later cannot silently regress it.
+#[test]
+fn single_owner_subplace_diagnostic_names_the_subplace() {
+    for (cell, place) in [
+        ("callable_field_local_bind_reject.gg", "h.f"),
+        ("callable_tuple_int_bind_reject.gg", "t.1"),
+        ("callable_tuple_alias_bind_reject.gg", "t._1"),
+        ("callable_index_then_field_bind_reject.gg", "v[0].f"),
+        ("box_field_bind_reject.gg", "h.b"),
+    ] {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fixture = manifest_dir
+            .join("tests/fixtures/single_owner_subplace")
+            .join(cell);
+        let output = build_with_timeout(gg_command("check").arg(&fixture), cell);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("cannot copy `{place}`")),
+            "{cell}: the diagnostic must name the SUB-PLACE `{place}`, not the \
+             place's root — a root-named message claims the root is a \
+             single-owner type (it is a plain struct/tuple) and prescribes a \
+             clone of the whole aggregate. got:\n{stderr}",
+        );
+        assert!(
+            stderr.contains(&format!("`{place}.clone()`")),
+            "{cell}: the remedy must be `{place}.clone()` — a bare `^` on a \
+             sub-place is `E_PartialMove` under D10(a) ADDENDUM, so `.clone()` \
+             is the only in-language fix and it has to name the right place. \
+             got:\n{stderr}",
+        );
+    }
+}
+
+/// The remedy the sub-place diagnostic prescribes must COMPILE and RUN. A
+/// reject-only suite cannot tell "the gate works" from "the gate rejects
+/// everything", and a remedy nobody ran is a diagnostic that sends users into a
+/// wall. Covers all three rejected spellings: a struct field and both spellings
+/// of a tuple element.
+///
+/// Asserted on STDOUT, not under the sanitizer: the program leaks 16 B from
+/// `__gorget_closure_env_alloc` because a struct holding a `Callable` field is
+/// `[drop: None]` and never drops it — `todo/t0948`, whose own hard gate names
+/// this reject as its prerequisite ("does not land without a read-side
+/// materializer … landing WITH it"). Add it to a sanitizer battery when t0948
+/// lands, not before.
+#[test]
+fn single_owner_subplace_clone_remedy_runs() {
+    run_gg("single_owner_subplace/callable_field_clone_accept.gg", "41\n51\n51");
+}
+
+/// The OTHER remedy is not available, and that is RATIFIED rather than a gap:
+/// `^h.f` is `E_PartialMove` (D10(a) ADDENDUM, `decisions.md` 2026-09-02 —
+/// field/index moves reject; no holes, no unpack). Pinned so the accept-control
+/// above is not read as "either `^` or `.clone()` works here" — a reader who
+/// assumes that writes `^h.f` and gets a diagnostic that looks like the
+/// sub-place gate misfiring.
+#[test]
+fn single_owner_subplace_caret_is_partial_move() {
+    check_gg_fails(
+        "single_owner_subplace/callable_field_caret_partial_move_reject.gg",
+        "E_PartialMove",
     );
 }
 
@@ -8339,6 +8484,65 @@ fn known_gap_struct_callable_field_env_leak() {
 env leaks. Asserts the intended ASan-clean run."]
 fn known_gap_vector_callable_push_env_leak() {
     assert_gg_sanitize_clean("known_gaps/vector_callable_push_env_leak", "41\n52");
+}
+
+// `todo/t1225` — a BARE INDEX PLACE of single-owner type binds a second owner
+// of one closure environment, and two reads DOUBLE-FREE it. `gg check` rc 0,
+// `gg build` rc 0 at HEAD.
+//
+// The FIELD and TUPLE spellings of this exact shape are rejected at check time
+// (`single_owner_subplace_reject_axis`); the gate keys on the OUTERMOST
+// projection and deliberately does not reach a bare index place, because
+// rejecting it today forces a per-request closure-env `.clone()` on the
+// httpserver dispatch hot path. The owner's callee-borrow ruling (2026-09-04 —
+// a call does not consume its callee) is what removes that cost, and this test
+// is the deferral's receipt.
+//
+// ⚠ ASan-clean is the right assertion here rather than a reject: which of the
+// two dispositions lands is the OPEN question (borrow at the callee position,
+// or widen the reject), and both make this program safe. Asserting the
+// rejection would pin one of two open answers.
+#[test]
+#[ignore = "todo/t1225 — a bare INDEX place of single-owner type binds a second owner; two reads \
+double-free under ASan at gg check rc 0. Asserts the intended clean run."]
+fn known_gap_callable_index_place_double_free() {
+    assert_gg_sanitize_clean("known_gaps/callable_index_place_double_free", "41\n41");
+}
+
+// `todo/t1226` — an explicit `^` move into a TUPLE LITERAL ICEs the lowering:
+// `gg check` rc 0, then `gg build` rc 101 with
+// `StructInit(<tuple>, arg #1) — BORROWED source consumed at consuming
+// position`. `^c` is the sanctioned remedy the single-owner carve-out tells the
+// user to write, so the compiler crashing on it means the fix does not compile.
+//
+// DISCRIMINATED from `todo/t0401` below: different consume-site CLASS
+// (`StructInit(<tuple>)` vs `CollectionMutator`), different classification
+// ("borrowed" vs "untracked"), and different trigger set (this one ICEs for
+// BOTH a closure-literal-bound and a call-result-bound source; t0401 only for
+// the former). A user-struct ctor with the same argument is clean.
+#[test]
+#[ignore = "todo/t1226 — `(x, ^c)` ICEs the lowering (StructInit(<tuple>) borrowed source consumed) \
+at gg check rc 0. Asserts the intended build-and-run."]
+fn known_gap_tuple_literal_caret_move_ice() {
+    run_gg("known_gaps/tuple_literal_caret_move_ice.gg", "41");
+}
+
+// `todo/t0401` — THE DURABLE REPRO THAT HIGH-SEVERITY ITEM NEVER HAD, and one
+// of the three unmeasurable members `todo/t1236`'s Tier-2a census names.
+// `v.push(^f)`: `gg check` rc 0, `gg build` rc 101 with
+// `CollectionMutator(Vector__Callable__GorgetClosure__push, arg #1) —
+// UNTRACKED source consumed`.
+//
+// ⭐ The discriminator is NOT the item's stated "identifier-specific": measured
+// at 7bf11017e, a local bound from a closure LITERAL ICEs and the same local
+// bound from a CALL RESULT builds rc 0. Same syntax at the push, opposite
+// verdicts — which is why a re-measurement that bound from a helper concluded
+// the item no longer reproduced. This fixture binds from a literal deliberately.
+#[test]
+#[ignore = "todo/t0401 — `v.push(^f)` on a closure-literal-bound local ICEs (CollectionMutator \
+untracked source consumed) at gg check rc 0. Asserts the intended build-and-run."]
+fn known_gap_vector_push_caret_callable_literal_ice() {
+    run_gg("known_gaps/vector_push_caret_callable_literal_ice.gg", "8");
 }
 
 // `todo/t0949` — the THIRD `Vector[Callable]` leak mechanism, and the one the
@@ -36460,9 +36664,18 @@ fn self_host_driver_rejects_d12_drop_purity() {
 //
 // The axis and its omitted cells are documented on the Rust-lane twin
 // `mutex_vector_d53_subplace_axis_reject`; the two lanes share one fixture set
-// (Core #9), plus `known_gaps/d53_tuple_alias_subplace_rust_accepts.gg` — the
-// `t._0` alias spelling, which the self-host rejects and the Rust lane does not
-// (todo/t0943).
+// (Core #9), plus `d53_unique_lock/mutex_tuple_alias_local_push_reject.gg` — the
+// `t._0` alias spelling. That cell used to be a Rust-lane under-rejection
+// (todo/t0943, now closed): this lane rejected both spellings all along because
+// its parser folds them into one node and both its resolvers share
+// `tuple_field_index`. The Rust lane now shares one resolver too, so the cell
+// runs NOT-ignored on both lanes and pins that neither can drift alone.
+//
+// The by-design single-owner carve-out at a sub-place gets its OWN battery
+// (`self_host_driver_rejects_single_owner_subplace`) rather than joining this
+// loop: this one asserts the diagnostic never offers `.clone()`, which is right
+// for a unique lock (no clone path by design) and exactly WRONG for a
+// `Callable` sub-place, where `.clone()` is the only in-language remedy.
 //
 // The contract asserted here is deliberately the DIAGNOSTIC KIND and the fact of
 // rejection, NOT the message text: the self-host currently renders the Whole
@@ -36493,7 +36706,7 @@ fn self_host_driver_rejects_d53_unique_lock_subplace() {
             fixtures.push(format!("d53_unique_lock/{lock}_{cell}_reject.gg"));
         }
     }
-    fixtures.push("known_gaps/d53_tuple_alias_subplace_rust_accepts.gg".to_string());
+    fixtures.push("d53_unique_lock/mutex_tuple_alias_local_push_reject.gg".to_string());
 
     for name in &fixtures {
         let fixture = manifest_dir.join("tests/fixtures").join(name);
@@ -36524,6 +36737,83 @@ fn self_host_driver_rejects_d53_unique_lock_subplace() {
             !stderr.contains(".clone()"),
             "D53 diagnostic must never offer `.clone()` for a unique lock \
              (`{name}`) — Mutex/RWLock have no clone path by design.\nstderr:\n{stderr}",
+        );
+        assert!(
+            stdout.trim().is_empty(),
+            "self-host driver emitted C for rejected `{name}` — the gate must halt \
+             BEFORE lowering. stdout bytes={}",
+            stdout.len(),
+        );
+    }
+}
+
+/// SELF-HOST lane for the by-design single-owner carve-out at a FIELD / TUPLE
+/// place — Core #9's same-round cross-lane landing for the Rust-lane
+/// `single_owner_subplace_reject_axis`. Both lanes carried the IDENTICAL hole in
+/// the IDENTICAL shape: the unique-lock arm resolved places structurally while
+/// the single-owner arm keyed on a bare identifier (Rust
+/// `if let Expr::Identifier(_)`; here `case EIdentifier(_name)`), so `g = h.f`
+/// walked past a gate that caught `g = f`.
+///
+/// Separate from the D53 battery above because that one asserts the diagnostic
+/// never offers `.clone()` — right for a unique lock, exactly wrong here, where
+/// `.clone()` is the ONLY in-language remedy (a bare `^` on a sub-place is a
+/// partial move under D10(a) ADDENDUM).
+///
+/// SUBSET NOTE: `box_field_bind_reject.gg` is absent — `Box[T]` is out of this
+/// driver's subset. The BARE index place (`v[0]`, `d[k]`) is the named omitted
+/// cell on every lane (`todo/t1225`), deferred behind the owner's callee-borrow
+/// ruling; `callable_index_then_field_bind_reject.gg` is the keying cell that
+/// proves a read THROUGH a container is still in scope.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_single_owner_subplace() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    for cell in [
+        "callable_field_local_bind_reject.gg",
+        "callable_field_param_bind_reject.gg",
+        "callable_self_field_bind_reject.gg",
+        "callable_tuple_int_bind_reject.gg",
+        "callable_tuple_alias_bind_reject.gg",
+        "callable_index_then_field_bind_reject.gg",
+        "callable_field_push_reject.gg",
+        "callable_field_ctor_reject.gg",
+        "callable_field_string_capture_reject.gg",
+        "callable_field_noncapturing_reject.gg",
+    ] {
+        let name = format!("single_owner_subplace/{cell}");
+        let fixture = manifest_dir.join("tests/fixtures").join(&name);
+        assert!(fixture.exists(), "missing sub-place fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_rejects_single_owner_subplace",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !out.status.success(),
+            "self-host driver ACCEPTED a single-owner callable SUB-PLACE at an \
+             ownership boundary (`{name}`) — the field/tuple arm of \
+             `reject_single_owner_init` (self_host_typechecker/typecheck.gg) \
+             regressed, or `lvalue_value_type`'s RTTuple arm was dropped. On the \
+             Rust lane the accepted program is an ASan `attempting double-free`. \
+             exit={:?}\nstderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            stderr.contains("E_MoveWithoutOperator") && stderr.contains('\u{250c}'),
+            "self-host driver rejected `{name}` but not with the \
+             `E_MoveWithoutOperator` codespan diagnostic — a rejection for some \
+             OTHER reason is not coverage of this gate.\nstderr:\n{stderr}",
+        );
+        assert!(
+            stderr.contains(".clone()"),
+            "the sub-place diagnostic must OFFER `.clone()` for `{name}` — unlike \
+             a unique lock, a `Callable` has a clone path, and `^h.f` is a partial \
+             move, so `.clone()` is the only in-language remedy. A message without \
+             it is unfollowable.\nstderr:\n{stderr}",
         );
         assert!(
             stdout.trim().is_empty(),

@@ -1,3 +1,25 @@
+- [2026-09-04] **`t0943` CLOSED (R49 Track S-a2) — the tuple-element alias `t._N` had a SECOND resolver,
+  and the two disagreed.** `parse_postfix` builds `Expr::TupleFieldAccess` only for the literal-integer
+  spelling, so the ratified `t._0` arrives as `Expr::FieldAccess{field: "_0"}`. The typechecker resolved
+  that inline with a `strip_prefix('_')`; the safety walk's `lvalue_value_type` did not resolve it at all
+  (its `FieldAccess` arm needed a struct `DefId`, and a tuple has none). Every ownership gate keyed on the
+  safety walk therefore caught `t.0` and walked past `t._0` — `v.push(t.0)` rejected while `v.push(t._0)`
+  was accepted and DOUBLE-FREED, one character apart. Unified on ONE accessor,
+  `ast::tuple_field_alias_index` (`src/parser/ast.rs`), read by the typechecker, the safety walk AND ggdef
+  — it lives at the AST layer because that is the only one ggdef can reach, being fenced out of `semantic/`
+  by `ggdef_import_ratchet`, and because the spelling is a fact about surface syntax rather than about any
+  one analysis. ⭐ THE SELF-HOST WAS THE CORRECT LANE ALL ALONG and is what the fix mirrors: its parser
+  folds both spellings into one node and both its resolvers share `tuple_field_index`, so they cannot
+  diverge by construction ("reference lags the self-host" — fixed on the Rust side, per the succession
+  plan). The known-gap fixture GRADUATED out of `known_gaps/` to
+  `d53_unique_lock/mutex_tuple_alias_local_push_reject.gg` and its test is no longer `#[ignore]`d, running
+  on BOTH lanes. Guarded by `tests/lints.rs::tuple_field_alias_has_exactly_one_resolver` (Core #6): the
+  accessor must exist, all three consumers must call it, and `strip_prefix('_')` may not appear in CODE
+  outside the accessor's own body. ⚠ `t0943`'s own advice was to normalise at the PARSER instead; that was
+  NOT taken, and the reason is worth keeping — the formatter prints `TupleFieldAccess` as `.N`, so folding
+  `._0` into that node makes `gg fmt` rewrite every `._N` in the corpus and loses a documented spelling.
+  Carrying the spelling on the node would be the real parser fix, and it is a much larger change than the
+  one the defect needs. ⚠ A MID-ROUND entry, not a round close.
 - [2026-09-04] **`t0729` RE-SCOPED, NOT CLOSED (R49 Track R) — THE THREE ROUND-CLOSE GATES THAT WERE RED AT
   PRISTINE HEAD ARE ONE ADJUDICATION, NOT THREE: the fixture GRADUATES, both `security_safe_except_on`
   annotations come OUT, and the class is live at HEAD in a green, non-`#[ignore]`d, top-level fixture.**

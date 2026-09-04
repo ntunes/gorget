@@ -1,0 +1,31 @@
+# SINGLE-OWNER SUB-PLACE NEG — POSITION axis: a CONSTRUCTOR argument (D12
+# position 2). Sibling of the push cell; together they pin that the sub-place
+# arm runs at every position routing through the shared helper, not just at bind.
+#
+# ⚠ Scope note (Core #14 / SIX Q#4): this cell is a USER-STRUCT constructor,
+# which resolves through `is_constructor` (`DefKind::Variant | DefKind::Newtype`).
+# A `Box[T](…)` constructor is NEITHER, so the helper is never called for it and
+# NO widening of this arm reaches it — that is todo/t0682 cells B and D, which
+# stay OPEN with their own durable repro
+# (known_gaps/box_move_without_operator_missing_at_ctor_and_field.gg, still rc 0).
+#
+# Omitted cell: bare INDEX places are deferred behind the callee-borrow ruling
+# (todo/t1225).
+#
+# CELL: type=Callable · place=field of a local · position=USER-STRUCT CTOR.
+# RED at 7bf11017e: `gg check` ACCEPTED (rc 0).
+# ggdef: ABSTAIN (todo/t1227).
+
+struct Holder:
+    Callable[int()] f
+
+struct Wrapper:
+    Callable[int()] g
+
+Callable[int()] mk(int n):
+    return (): n + 1
+
+void main():
+    Holder h = Holder(mk(40))
+    Wrapper w = Wrapper(h.f)
+    print(w.g())

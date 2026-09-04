@@ -24215,6 +24215,16 @@ fn expr_stmt_walker_population_is_pinned() {
     "src/semantic/safety/helpers.rs::find_stale_in_condition [HAND-ROLLED]",
     "src/semantic/safety/helpers.rs::find_with_tracked_in_condition [HAND-ROLLED]",
     "src/semantic/safety/helpers.rs::lvalue_value_type [HAND-ROLLED]",
+    // NOT a walker with a reach obligation, and deliberately not routed through
+    // `visit_expr_children`: it is a PLACE PRINTER whose domain is exactly the
+    // five forms `expr_is_place` (three rows above) admits, and its `_ => None`
+    // is the CONTRACT — a non-place has no place text, and the caller falls back
+    // to the root name. Routing it through the chokepoint would make it descend
+    // into call args and closure bodies and print nonsense. Its arm set must
+    // mirror `expr_is_place`'s: if a form is added there, add it here, or the
+    // printer silently degrades that form to the root name in a diagnostic that
+    // then names the wrong place.
+    "src/semantic/safety/helpers.rs::render_place_expr [HAND-ROLLED]",
     "src/semantic/safety/origins.rs::compute_expr_origin [HAND-ROLLED]",
     "src/semantic/safety/origins.rs::is_string_typed_expr [HAND-ROLLED]",
     "src/semantic/safety/return_borrows.rs::build_aliases_from_stmt [HAND-ROLLED]",
@@ -29672,6 +29682,142 @@ fn no_committed_conflict_markers() {
              Python REPL transcript, a shell heredoc and a setext underline. Either drop \
              the attribute or re-open the matcher design with that trade-off on the table.",
             path.display(),
+        );
+    }
+}
+
+/// Core #6 — the TUPLE-FIELD ALIAS has EXACTLY ONE resolver, and every consumer
+/// reads it through that accessor (Layering rule 3: one source of truth per
+/// axis).
+///
+/// ── WHY THIS EXISTS ───────────────────────────────────────────────────────
+/// Gorget spells a tuple element two ways, `t.0` and `t._0`, both ratified and
+/// co-equal. `parse_postfix` builds `Expr::TupleFieldAccess` only for the
+/// literal-integer form, so the alias arrives as
+/// `Expr::FieldAccess { field: "_0" }` and every consumer of a place AST has to
+/// decide whether that name is a tuple index. For a long time TWO of them
+/// decided it independently: the typechecker resolved the alias inline with a
+/// `strip_prefix('_')`, and the safety walk's `lvalue_value_type` did not
+/// resolve it at all (its `FieldAccess` arm needed a struct `DefId`, and a tuple
+/// has none). The two therefore DISAGREED about what `t._0` is — and because the
+/// ownership gates key on the safety walk's answer, `v.push(t.0)` was rejected
+/// while `v.push(t._0)` was accepted and DOUBLE-FREED, one character apart
+/// (`todo/t0943`, closed by unifying them).
+///
+/// Prose cannot hold that: the failure mode is a consumer that quietly
+/// re-implements the rule, and it is invisible until someone writes the other
+/// spelling in a memory-unsafe position. So the guard counts.
+///
+/// ── WHAT IT ASSERTS ───────────────────────────────────────────────────────
+/// 1. The accessor exists at the AST layer. It lives in `src/parser/ast.rs`
+///    rather than `src/semantic/`, because `ggdef` shares the lexer/parser/AST
+///    and is FENCED OUT of `semantic/` by `ggdef_import_ratchet` — a `semantic/`
+///    home would have forced a fourth copy into the definitional interpreter.
+/// 2. NO re-implementation. `strip_prefix('_')` appears nowhere outside the
+///    accessor's own body: that is the exact idiom the inline copy used, and
+///    respelling it is a decision the author has to make deliberately rather
+///    than by reflex.
+/// 3. Every consumer that resolves a tuple element from a FIELD name calls the
+///    accessor. Pinned as a call-site COUNT, because a name-scoped body scan
+///    only reaches the functions it lists and a brand-new consumer would evade
+///    it entirely (the `todo/t0875` lesson: four successive substring
+///    assertions were each evaded by respelling the thing they counted, and
+///    only a COUNT held).
+///
+/// ── IF THIS FAILS ─────────────────────────────────────────────────────────
+/// A new consumer of the alias: call `ast::tuple_field_alias_index` and bump
+/// `CALL_SITES`. A hand-rolled `strip_prefix('_')`: delete it and call the
+/// accessor — the two-resolver split is a live double-free, not a style point.
+/// A call site REMOVED: the consumer stopped resolving the alias, so a
+/// documented spelling just became invisible to whatever gate it feeds; say
+/// which gate and why that is safe before lowering the count.
+#[test]
+fn tuple_field_alias_has_exactly_one_resolver() {
+    let ast = fs::read_to_string(Path::new("src/parser/ast.rs")).expect("read src/parser/ast.rs");
+    assert!(
+        ast.contains("pub fn tuple_field_alias_index(field_name: &str) -> Option<usize>"),
+        "`tuple_field_alias_index` is missing from src/parser/ast.rs. It lives at the \
+         AST layer because it is a fact about the SURFACE SPELLING and because that is \
+         the only layer ggdef can reach (it is fenced out of `semantic/` by \
+         `ggdef_import_ratchet`). Moving it into `semantic/` forces a fourth copy of \
+         the rule into the definitional interpreter — which is the split this guard exists \
+         to prevent."
+    );
+
+    // The consumers, and what each would lose if it stopped reading the accessor.
+    const CONSUMERS: &[(&str, &str)] = &[
+        (
+            "src/semantic/typecheck.rs",
+            "the FieldAccess field-disposition over a ResolvedType::Tuple — types the READ; \
+             without it `t._0` is E_NoFieldFound on a documented spelling",
+        ),
+        (
+            "src/semantic/safety/helpers.rs",
+            "lvalue_value_type's FieldAccess arm — types the PLACE for every ownership gate \
+             (D53 unique locks, D4/D12 drop taint, the single-owner carve-out); without it \
+             `t._0` types as unknown and those gates walk past it (todo/t0943's double-free)",
+        ),
+        (
+            "spec/ggdef/src/elaborate/mod.rs",
+            "ggdef's infer_ast_ty FieldAccess arm — without it the definitional interpreter \
+             abstains on a spelling it rejects one character away, and the lanes diverge",
+        ),
+    ];
+    /// Total `tuple_field_alias_index(` CALL sites across the consumers — one
+    /// each. A count, not a per-file presence check: presence is evadable by
+    /// adding a second inline resolver beside the call, a count is not.
+    const CALL_SITES: usize = 3;
+
+    let mut total = 0usize;
+    for (path, role) in CONSUMERS {
+        let src = fs::read_to_string(Path::new(path)).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let n = src.matches("tuple_field_alias_index(").count();
+        assert!(
+            n >= 1,
+            "{path} no longer calls `tuple_field_alias_index`. That file is {role}. \
+             One axis, one resolver (Layering rule 3) — if this consumer genuinely \
+             stopped needing the alias, say which gate it feeds and why that gate is \
+             safe blind to a documented spelling, then update CONSUMERS."
+        );
+        total += n;
+    }
+    assert_eq!(
+        total, CALL_SITES,
+        "tuple-alias resolver call-site count changed (expected {CALL_SITES}). A NEW \
+         consumer must call the accessor and bump this pin; a consumer that stopped \
+         calling it has gone blind to `._N` on whatever gate it feeds. Never satisfy \
+         this by re-implementing the rule locally."
+    );
+
+    // No hand-rolled re-implementation anywhere in the tree, including the
+    // consumers above. The accessor's OWN body is the sole legitimate use.
+    for path in [
+        "src/parser/ast.rs",
+        "src/semantic/typecheck.rs",
+        "src/semantic/safety/helpers.rs",
+        "spec/ggdef/src/elaborate/mod.rs",
+    ] {
+        let src = fs::read_to_string(Path::new(path)).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        // CODE lines only. A doc comment that NAMES the idiom — as the accessor's
+        // own comment and the two consumers' comments do, explaining why they
+        // must not re-roll it — is prose, and failing on it would print advice
+        // ("call the accessor instead") that is wrong for a comment. That trap is
+        // recorded on `self_host_safety_place_probes_are_structural`; this guard
+        // does not walk into it.
+        let occurrences = src
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| l.contains("strip_prefix('_')"))
+            .count();
+        let allowed = if path == "src/parser/ast.rs" { 1 } else { 0 };
+        assert_eq!(
+            occurrences, allowed,
+            "{path} contains {occurrences} CODE occurrence(s) of `strip_prefix('_')` \
+             (allowed {allowed}). That is the exact idiom the inline tuple-alias resolver \
+             used before the two resolvers were unified. Call \
+             `ast::tuple_field_alias_index` instead — a second decision site for one \
+             spelling is how `v.push(t.0)` rejected while `v.push(t._0)` was accepted \
+             and double-freed (todo/t0943)."
         );
     }
 }

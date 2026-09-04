@@ -8,7 +8,7 @@ use crate::semantic::ids::{DefId, ScopeId};
 use crate::semantic::scope::DefKind;
 
 use super::{BorrowChecker, BorrowOrigin, FallibleState, VarState};
-use super::helpers::{expr_is_place, place_shape};
+use super::helpers::{expr_is_place, place_shape, render_place_expr};
 use super::type_utils::{needs_explicit_move, unique_lock_family};
 
 /// Collects `(method-name span start, does-this-call-write-its-receiver)` for
@@ -180,6 +180,65 @@ impl<'a> BorrowChecker<'a> {
                 arg.span,
             );
             return;
+        }
+        // By-design single-owner carve-out at a FIELD / TUPLE-ELEMENT place.
+        // The two arms above resolve a place STRUCTURALLY (`expr_is_place` +
+        // `lvalue_value_type`); this one used to key on `Expr::Identifier`
+        // alone, so the ratified rule — "the POSITION is the rule; the
+        // receiver's spelling is not part of it" (AGENTS.md § Ownership at
+        // Consuming Positions) — held for `g = f` and not for `g = h.f`.
+        // `Callable[T]` has no implicit-copy path in the lowering, so the bare
+        // field read binds a second owner of one closure env: two plain `h.f`
+        // reads are an `AddressSanitizer: attempting double-free`, and a
+        // re-read across a scope is a heap-use-after-free — both at `gg check`
+        // rc 0 before this arm existed.
+        //
+        // The gate keys on the OUTERMOST projection, which is the ratified
+        // PLACE/TEMP axis (`decisions.md` D31 ADDENDUM 2026-07-20: "the
+        // exemption keys on the compiler's PLACE/TEMP distinction
+        // (`expr_is_place`), never on syntax shape"). So a read THROUGH a
+        // container (`v[0].f` — outermost `FieldAccess`) is IN, while a bare
+        // INDEX place (`v[i]`, `d[k]`) is deliberately OUT: index places are
+        // equally unsound today (`todo/t1225`) but rejecting them forces a
+        // per-request closure-env clone on the httpserver dispatch hot path,
+        // which the owner's callee-borrow ruling (2026-09-04 — a call does not
+        // consume its callee) removes instead. Deferred behind that rule, not
+        // forgotten; naming the omitted cell is Core #12.
+        //
+        // `param_exempt` does NOT apply: it exists so re-binding a whole
+        // borrowed param copies a pointer, and a sub-place read of a param is
+        // not that — it is a fresh owning copy out of the callee's borrow,
+        // exactly like the unique-lock arm above, which takes no exemption
+        // either.
+        if matches!(&arg.node, Expr::FieldAccess { .. } | Expr::TupleFieldAccess { .. })
+            && expr_is_place(&arg.node)
+        {
+            if let Some(tid) = self.lvalue_value_type(arg) {
+                if needs_explicit_move(tid, self.types, self.scopes) {
+                    // Name the SUB-PLACE, not the root: the FieldIndex message
+                    // asserts its subject IS a single-owner type and offers
+                    // `<subject>.clone()`, and at `g = h.f` the root `h` is a
+                    // plain struct — both halves would be false. `t0453` keeps
+                    // the same polish for the two arms above, which still
+                    // render their root.
+                    let name = render_place_expr(&arg.node)
+                        .or_else(|| {
+                            self.find_root_def_id(arg)
+                                .map(|d| self.scopes.get_def(d).name.clone())
+                        })
+                        .unwrap_or_else(|| "<place>".to_string());
+                    self.error(
+                        SemanticErrorKind::MoveWithoutOperator {
+                            name,
+                            reason: MoveReason::SingleOwner,
+                            shape: place_shape(&arg.node),
+                            write_through_available: false,
+                        },
+                        arg.span,
+                    );
+                    return;
+                }
+            }
         }
         if let Expr::Identifier(_) = &arg.node {
             if let Some(&var_def_id) = self.resolution_map.get(&arg.span.start) {
@@ -600,11 +659,28 @@ impl<'a> BorrowChecker<'a> {
                 // CoW rule (b): a constructor (Variant/Newtype) arg no longer
                 // implicitly-moves / rejects a live CoW-eligible source — the
                 // lowering clones-if-live. But the single-owner carve-out types
-                // still require explicit `!` at a constructor (the carve-out in
+                // still require explicit `^` at a constructor (the carve-out in
                 // the `Ownership::Borrow` arm below), and that carve-out must NOT
                 // fire for a plain function call (where the arg is borrowed, no
-                // `!` needed) — so we still need to know whether the callee IS a
-                // constructor.
+                // sigil needed) — so we still need to know whether the callee IS
+                // a constructor.
+                //
+                // ⚠ THAT SENTENCE IS TRUE ONLY OF THE CONSTRUCTORS THIS PREDICATE
+                // ADMITS, AND `Box[T](…)` IS NOT ONE OF THEM (Core #14 — the
+                // comment used to assert it unqualified, and `todo/t0682` cell B
+                // falsifies it). `DefKind::Variant | DefKind::Newtype` does not
+                // match a builtin generic's constructor, so
+                // `Box[Box[String]](a)` never calls the carve-out helper at all
+                // and is ACCEPTED, while the byte-identical user-struct ctor
+                // `W(a)` REJECTS. That is not a hole in the carve-out's source
+                // arm — widening the arm reaches nothing, because the helper does
+                // not run. It is a POSITION WITH NO SUBJECT, and it stays open
+                // under `todo/t0682` with its own durable repro
+                // (`known_gaps/box_move_without_operator_missing_at_ctor_and_field.gg`,
+                // rc 0 today). Enforcing guard for the half that IS true:
+                // `tests/integration.rs::single_owner_subplace_reject_axis`'s
+                // `callable_field_ctor_reject.gg` cell (a user-struct ctor) —
+                // it goes red if this predicate stops admitting one.
                 let is_constructor = self
                     .resolve_callee_def_id(callee)
                     .map(|id| matches!(self.scopes.get_def(id).kind, DefKind::Variant | DefKind::Newtype))

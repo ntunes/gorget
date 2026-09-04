@@ -1,0 +1,27 @@
+# SINGLE-OWNER SUB-PLACE NEG — THE KEYING CELL. The gate keys on the OUTERMOST
+# PROJECTION, not on whether a container appears anywhere in the chain. `v[0].f`
+# is outermost a `FieldAccess`, so a read THROUGH a container IS in scope and
+# rejects; a BARE index place (`v[0]`) is not and does not.
+#
+# This cell exists because "INDEX places are deferred" reads as "reads out of
+# containers are deferred", and that is false. Without it the suite's scope claim
+# would be wrong in the direction that hides coverage nobody knows they have.
+#
+# The named omitted cell is the BARE index place only (`v[0]`, `d[k]`) —
+# todo/t1225, deferred behind the owner's callee-borrow ruling (2026-09-04).
+#
+# CELL: type=Callable · place=field THROUGH an index (`v[0].f`) · position=bind.
+# RED at 7bf11017e: `gg check` ACCEPTED (rc 0).
+# ggdef: ABSTAIN (todo/t1227).
+
+struct Holder:
+    Callable[int()] f
+
+Callable[int()] mk(int n):
+    return (): n + 1
+
+void main():
+    Vector[Holder] v = []
+    v.push(Holder(mk(40)))
+    Callable[int()] g = v[0].f
+    print(g())

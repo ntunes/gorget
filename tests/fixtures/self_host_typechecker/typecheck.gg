@@ -1031,6 +1031,45 @@ String place_root_name(Expr e):
         else:
             return "<place>"
 
+# The place's own SOURCE SPELLING, for a diagnostic whose subject is the
+# sub-place rather than the place's root. The root name alone makes a sub-place
+# message say something FALSE: at `Callable[int()] g = h.f` the root `h` is a
+# plain struct, so "`h` is a single-owner type — copy the sub-place with
+# `h.clone()`" names the wrong type AND the wrong remedy. Mirrors Rust
+# `render_place_expr` (src/semantic/safety/helpers.rs). Returns "" when the
+# place cannot be rendered exactly — an index whose subscript is not a simple
+# literal or identifier — and the caller falls back to the root name rather
+# than print a half-reconstructed place.
+String render_place_expr(Expr e):
+    match e:
+        case EIdentifier(name):
+            return name.clone()
+        case ESelfExpr():
+            return "self"
+        case EFieldAccess(obj, fname):
+            String base = render_place_expr((*obj).expr)
+            if base == "":
+                return ""
+            return f"{base}.{fname}"
+        case EIndex(obj, index):
+            String base = render_place_expr((*obj).expr)
+            if base == "":
+                return ""
+            String sub = ""
+            match (*index).expr:
+                case EIntLiteral(n):
+                    sub = f"{n}"
+                case EStringLiteral(s, _interp):
+                    String dq = "\""
+                    sub = dq + s + dq
+                case EIdentifier(n):
+                    sub = n.clone()
+                else:
+                    return ""
+            return f"{base}[{sub}]"
+        else:
+            return ""
+
 # The shape-aware D12 message (mirrors Rust A2-R2 `MoveWithoutOperator`
 # Display, src/semantic/errors.rs:1022). `{name}` is the place's ROOT
 # binding name (the exact sub-place text `hh.r.clone()` vs `hh.clone()` is
@@ -1159,6 +1198,17 @@ String single_owner_message(String name):
     String why = "a single-owner type (no implicit copy)"
     return f"cannot copy `{name}`: `{name}` is {why} — write `!{name}` to move or `{name}.clone()` to copy"
 
+# The SUB-PLACE flavour of the same reject (mirrors Rust MoveShape::FieldIndex +
+# MoveReason::SingleOwner). A bare `^` on a field/index sub-place is a partial
+# move and rejects under D10(a), so `.clone()` is the only remedy — and the
+# subject is the sub-place itself (`h.f`), never the root, because the root is
+# usually a plain struct and "`h` is a single-owner type" would be false.
+String single_owner_subplace_message(String place):
+    String why = "a single-owner type (no implicit copy)"
+    String head = f"cannot copy `{place}`: `{place}` is {why}"
+    String fix = f" — copy the sub-place with `{place}.clone()`"
+    return head + fix + " (a bare `!` on a field/index sub-place is a partial move and is rejected)"
+
 # Reject a BARE single-owner identifier at an ownership-init boundary. `e` is the
 # bind RHS / ctor / struct-literal / enum-variant arg. `!x` (EMove) and
 # `x.clone()` (EMethodCall) are not bare identifiers → naturally accepted, as is a
@@ -1184,6 +1234,36 @@ void reject_single_owner_init(SpannedExpr e, bool param_exempt, ScopeTable scope
             if place_is_whole(e.expr):
                 lock_shape = 0
             ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), unique_lock_message(place_root_name(e.expr), wrap, lock_shape)))
+            return
+        # By-design single-owner carve-out at a FIELD sub-place. The unique-lock
+        # arm above already resolved this place STRUCTURALLY; the arm below keys
+        # on a bare `EIdentifier`, so before this the ratified rule — "the
+        # POSITION is the rule; the receiver's spelling is not part of it" — held
+        # for `g = f` and not for `g = h.f`. `Callable[T]` has no implicit-copy
+        # path in the lowering, so the bare field read bound a second owner of
+        # one closure env: two plain `h.f` reads double-free.
+        #
+        # `EFieldAccess` is exactly the Rust lane's FIELD + TUPLE scope. This
+        # parser has no tuple-index node — `t.0` and `t._0` both fold into
+        # EFieldAccess (which is why this lane never had Rust's two-spellings
+        # split) — and `v[0].f` is an EFieldAccess over an EIndex, so a read
+        # THROUGH a container is in scope while a bare INDEX place is not.
+        # Bare index places are deferred behind the owner's callee-borrow ruling
+        # (2026-09-04: a call does not consume its callee), which removes the
+        # per-request clone that rejecting them would force on the httpserver
+        # dispatch hot path. Same omitted cell as the Rust twin (todo/t1225).
+        bool is_field_place = false
+        match e.expr:
+            case EFieldAccess(_fobj, _fname):
+                is_field_place = true
+            else:
+                pass
+        if is_field_place and is_single_owner_type(tid, scopes, types):
+            String sub_place = render_place_expr(e.expr)
+            if sub_place == "":
+                sub_place = place_root_name(e.expr)
+            String msg = single_owner_subplace_message(sub_place)
+            ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), msg))
             return
     match e.expr:
         case EIdentifier(_name):

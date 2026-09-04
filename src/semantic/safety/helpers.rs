@@ -44,6 +44,52 @@ pub(super) fn place_shape(e: &Expr) -> MoveShape {
     }
 }
 
+/// Render a PLACE expression back to its source spelling, for a diagnostic
+/// whose subject is the sub-place itself rather than the place's root.
+///
+/// The root name alone makes a sub-place message say something FALSE: at
+/// `Callable[int()] g = h.f` the root `h` is a plain struct, so
+/// "`h` is a single-owner type — copy the sub-place with `h.clone()`" names
+/// the wrong type AND the wrong remedy (`h.clone()` copies the whole struct;
+/// the fix is `h.f.clone()`). `find_root_def_id_with_path` cannot stand in:
+/// its `Index` arm deliberately does NOT append a segment (an index borrow is
+/// from the collection, not a sub-path of it — the CoW-borrow disjointness
+/// checker depends on that), so `v[0].f` would render as `v.f`.
+///
+/// A pure function of the AST: no resolution, no types. Returns `None` for a
+/// non-place, and for an index whose subscript is not a simple literal /
+/// identifier — the caller falls back to the root name rather than print a
+/// half-reconstructed place.
+///
+/// Scope note: this is the printer `todo/t0453` asks for, wired at the
+/// single-owner sub-place arm only. The pre-existing D53 unique-lock and
+/// D4/D12 drop-taint arms still render their root; migrating THEM is `t0453`,
+/// which stays filed.
+pub(super) fn render_place_expr(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Identifier(n) => Some(n.clone()),
+        Expr::SelfExpr => Some("self".to_string()),
+        Expr::FieldAccess { object, field } => {
+            Some(format!("{}.{}", render_place_expr(&object.node)?, field.node))
+        }
+        Expr::TupleFieldAccess { object, index } => {
+            Some(format!("{}.{}", render_place_expr(&object.node)?, index))
+        }
+        Expr::Index { object, index } => {
+            let subscript = match &index.node {
+                Expr::IntLiteral(n) => n.to_string(),
+                Expr::StringLiteral(s, interps) if interps.is_empty() => {
+                    format!("{:?}", s.as_plain_text())
+                }
+                Expr::Identifier(n) => n.clone(),
+                _ => return None,
+            };
+            Some(format!("{}[{subscript}]", render_place_expr(&object.node)?))
+        }
+        _ => None,
+    }
+}
+
 /// D10(b): two projection paths under the SAME root OVERLAP iff one is a prefix
 /// of the other. `zip` stops at the shorter path, so all-equal-so-far ⇒ the
 /// shorter is a prefix of the longer ⇒ overlap; a divergence at any position
@@ -996,6 +1042,22 @@ impl<'a> BorrowChecker<'a> {
                 }),
             Expr::FieldAccess { object, field } => {
                 let obj_tid = self.lvalue_value_type(object)?;
+                // A FieldAccess over a TUPLE is the ratified alias spelling
+                // `t._0` (`docs/language-reference.md` §4.2/§7.8): the parser
+                // only builds `TupleFieldAccess` for the literal-integer form,
+                // so `._0` arrives here as a named field. Resolve it through
+                // the SHARED spelling rule the typechecker and ggdef read (Layering
+                // rule 3), never a second inline `strip_prefix('_')`. Without
+                // this arm the tuple falls to the struct path below, has no
+                // `DefId`, types as unknown — and every ownership gate keyed on
+                // `lvalue_value_type` (D53 unique locks, D4/D12 drop taint, the
+                // single-owner carve-out) misses `t._0` while catching `t.0`
+                // one character away.
+                if let ResolvedType::Tuple(elems) = self.types.get(obj_tid) {
+                    return crate::parser::ast::tuple_field_alias_index(&field.node)
+                        .and_then(|idx| elems.get(idx))
+                        .copied();
+                }
                 let did = match self.types.get(obj_tid) {
                     ResolvedType::Defined(d) | ResolvedType::Generic(d, _) => *d,
                     _ => return None,

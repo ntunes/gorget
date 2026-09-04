@@ -1,0 +1,36 @@
+# KNOWN GAP (todo/t1226) — an explicit `^` move into a TUPLE LITERAL ICEs the
+# lowering. `gg check` rc 0, then `gg build` rc 101:
+#
+#   Tier 2a consume-site violation: 1 violation(s) in module '<unknown>'.
+#   First: fn @main bb0 i5 — StructInit(<tuple>, arg #1)
+#          — borrowed source consumed at consuming position.
+#
+# `^c` is the EXPLICITLY LEGAL spelling at a consuming position — it is what the
+# single-owner carve-out tells the user to write — so the compiler crashing on
+# it means the sanctioned remedy does not compile.
+#
+# ⚠ DISCRIMINATOR — this is NOT `todo/t0401`, and it is not source-dependent.
+# `t0401` is `v.push(^f)`, a `CollectionMutator` consume site reporting
+# "UNTRACKED source consumed", and there the crash depends on how the local was
+# bound (a closure-LITERAL-bound source ICEs, a call-result-bound source builds
+# rc 0). This one is a `StructInit(<tuple>)` consume site reporting "BORROWED
+# source consumed", and BOTH bindings ICE — measured with `c = (): base + 1` and
+# with `c = mk(40)`. Different consume-site class, different classification,
+# different trigger set. Nor is it `todo/t0055` (compound-index-assign
+# intermediates into `Dict.put`) or `todo/t0060` (no `Deque` arm in
+# `register_collection_method_sigs`). It joins `todo/t1236`'s Tier-2a census as
+# a fifth member with, unlike three of the four, a committed repro.
+#
+# ⚠ A USER-STRUCT constructor with the same argument is CLEAN: `Holder(^c)`
+# builds rc 0. The tuple literal is its own lowering path.
+#
+# INTENDED: builds and runs, printing `41`.
+# Measured at 7bf11017e: check rc 0, build rc 101.
+
+Callable[int()] mk(int n):
+    return (): n + 1
+
+void main():
+    Callable[int()] c = mk(40)
+    (int, Callable[int()]) t = (7, ^c)
+    print(t._1())
