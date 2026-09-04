@@ -253,6 +253,30 @@ owes a note + a filed subset gap.
   ⇒ **do NOT reassign a small surgical edit to another executor to avoid a "conflict"** — handing scope to a
   track already mid-flight is strictly worse, **and a retraction separated from the measurement that produced
   it is worthless: the next reader re-derives the false claim.**
+- ⛔⛔ **A RETRACTION CAN BE WRONG TOO — I STRUCK A *TRUE* FINDING ON A SOURCE-READ PREMISE.** N1's
+  Addendum 2 retracted *"the SIGSEGV is that seam firing"* because `Resource{GorgetClosure}` reads as
+  `is_aggregate()`, so the scalar-`Store` site looked unreachable. **Measured against the EMITTED CODE it is
+  false: `Vector[Callable].find` is rc 139 on BOTH lanes, at HEAD and after the fix** — the array's
+  `elem_size` is **16** while the HOF scaffold strides by **8**, and the C emitter widens the store to a
+  16-byte memcpy through an 8-byte function pointer.
+  ⇒ ⚡ **A RETRACTION IS A CLAIM AND OWES THE SAME EVIDENCE AS THE FINDING IT KILLS. A source-read may not
+  overturn a measurement** — and a reviewer who says *"one axis varied, here is the clean control"* has
+  already done the work the retraction skipped.
+- ⛔⛔ **A YIELD TABLE MEASURED ON ONE BACKEND IS NOT A YIELD TABLE.** N1's prescribed `_new_like` shape was
+  **7/7 rc 139 SIGSEGV on LLVM** while fully green on C: the `declare` and the call site disagree on `sret`,
+  because **the LLVM backend routes aggregate-returning runtime ctors through HARDCODED NAME ALLOW-LISTS**
+  (`backend/llvm/mod.rs:2241`, `:4791`, `:1675`) **and a BIR-synthesized ctor is in none of them.**
+  ⭐ **The fix was a BETTER SHAPE, not more plumbing: keep `gorget_array_new` and add
+  `gorget_array_adopt_hooks(dst, src)` so ALL new symbols are `void(ptr,ptr)` — no sret, no allow-lists.**
+  ⇒ **when a new runtime symbol RETURNS AN AGGREGATE, check the LLVM lane before anything else; the C lane
+  cannot see that class at all.**
+- ⭐ **A TWO-ROLE NEWTYPE CANNOT SEPARATE ROLES WHEN THE "FREE" ROLE HANDS BACK THE BARE VALUE.** N1's
+  prescribed guard hid the field (`E0616` ✓) **and the defect walked straight through `as_closure_arg()`,
+  compiling clean at `-D warnings`.** ⊕ And the census that justified it was **33 uses across 6 fields and 3
+  structs, not 15 across 2** — with **4 of the 7 consuming sites handing the borrow to a runtime helper that
+  CLONES INTERNALLY**, so a single "only route" accessor would **double-clone** there.
+  ⇒ **THREE ROLES, OR A RATCHET ON THE SINK. A type-level guard needs the roles to be genuinely disjoint at
+  the type level — count them before designing it.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
