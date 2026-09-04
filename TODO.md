@@ -158,6 +158,25 @@ owes a note + a filed subset gap.
   green at HEAD with `total_allocs=2 total_frees=2 live_bytes=0` — **the mint under-registers AND the pack
   under-consumes, netting exactly one owner.** ⇒ **fixing EITHER alone breaks it**, which is invisible to any
   instrument that only measures the net.
+- ⭐⭐ **"THE DIAGNOSIS SURVIVED; THE SCOPE NEVER DID" IS THE ROUND'S SIGNATURE SHAPE, AND IT IS NOT A
+  REVIEW FAILURE — IT IS WHAT THE GAUNTLET IS FOR.** Every track this round has held its ROOT CAUSE through
+  three-plus passes while EVERY blocking finding landed on the PRESCRIPTION or the CELL SET. ⇒ **budget the
+  passes accordingly: the cheap question ("is the diagnosis right?") settles in pass 1; the expensive one
+  ("does the prescribed edit close the CLASS?") takes three or four.** ⊕ **AGENTS.md already encodes the
+  right response — scope growth inside a sound design does NOT reset the streak. Use it; do not restart a
+  track that is converging.**
+- ⛔ **A CENSUS OF "WHICH CALLERS GET A HINT" CANNOT SEE A CONSUMING POSITION THAT CALLS NO ONE.**
+  M2's pack reaches every method arg via `lower_call_arg` — and **`lower_index_assign` (`assigns.rs:1332`)
+  never calls it**, so `d[k] = box` and `v[i] = box` stay rc 135 *under the fix*. ⚡ **SIX Q#4 for the fourth
+  time this round, and the code names its own sibling: `CLAUDE.md`'s Ownership table lists `v[i] = x` as a
+  consuming position and `methods.rs:2920`'s comment names `lower_index_assign` as its owner.**
+  ⇒ **when a fix is routed through ONE dispatcher, enumerate the consuming positions that DO NOT GO THROUGH
+  IT — that set is never empty.**
+- ⛔⛔ **`known_gaps/` AND `robustness_map/` ARE *OUT* OF THE SANITIZE CORPUS (`CORPUS_MANIFEST.txt:123`,
+  `:143`) — SO CORE #11's "SHIP THE FIXTURE" CAN RED THE ROUND-CLOSE BATTERY.** A fixture placed at
+  `tests/fixtures/` top level with a known leak trips `sanitize_sweep.sh:721` *"❌ NEW LEAK(S) — no row in
+  LEAK_LIST at all"*. **R49 already parked six fixtures for exactly this.** ⇒ **every brief that orders a new
+  leaking-but-correct fixture must name the PLACEMENT, or the executor obeys Core #11 and reds the sweep.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
