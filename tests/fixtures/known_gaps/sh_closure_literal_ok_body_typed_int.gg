@@ -18,11 +18,20 @@
 #       `compute_closure_sig` peels its `GtFnPtr` and answers. THIS HALF WORKS.
 #
 #   `o.unwrap_or_else((String e): e)` — a BUILTIN-METHOD argument. The ambient
-#       expected type here is the RECEIVER's own `Result` (regenerate: `grep -n
-#       'ctx.expected_type = _combinator_et' \
-#       tests/fixtures/self_host_lowerer/lower_expr.gg`), which names no return
-#       type at all, so the peel correctly DECLINES and the body inference is on
+#       expected type here is the receiver's PAYLOAD — `enum_category.ok_type`,
+#       NOT the wrapper (regenerate: `grep -n \
+#       '_combinator_et = _recv_ec_uoe.ok_type' \
+#       tests/fixtures/self_host_lowerer/lower_expr.gg`, whose own comment says
+#       "uoe returns the PAYLOAD (Some_0 / Ok_0), not the wrapper"). The
+#       sibling combinators `or`/`and_then`/`flat_map`/`or_else` DO take a
+#       peeled Option/Result wrapper. Here the payload is a `String`, which
+#       names no return type, so the peel DECLINES and the body inference is on
 #       its own. THIS HALF IS THE GAP.
+#
+# ⛔ AND THE PEEL DECLINES BECAUSE OF THE TYPE, NOT THE POSITION. Make the
+# payload a callable — `Option[Callable[String()]] o`, `o.unwrap_or_else((): h)`
+# — and it FIRES, one level too deep, emitting `Str __Closure_0__call` for a
+# closure that must return the whole `Callable[String()]`. `todo/t1303`.
 #
 # ⇒ No widening of a body-shape rule reaches it. It needs the arms themselves:
 # Tier-1c closure-param registration, a `lookup_local` beside the `EIdentifier`

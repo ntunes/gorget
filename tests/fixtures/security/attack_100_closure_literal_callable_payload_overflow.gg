@@ -1,0 +1,29 @@
+# SECURITY KNOWN GAP (`todo/t1303`) — a closure literal at `unwrap_or_else`
+# over a receiver whose PAYLOAD is a `Callable` reads 16 bytes past a stack
+# object on the RUST lane, in a program with no unsafe, no ownership operator
+# and no FFI.
+#
+# `AddressSanitizer: stack-buffer-overflow`, `READ of size 32` at a `memcpy`
+# whose source `__coal0` is a 16-byte `GorgetClosure`: the `unwrap_or_else`
+# result is a `Callable[String()]` and the destination slot is typed `Str`
+# (32 B). The lowering took the PAYLOAD'S OWN return type (`String`) for the
+# closure's, one level too deep, instead of the payload type.
+#
+# ⚠ IT PRINTS THE RIGHT ANSWER AND EXITS 0 in an ordinary build, which is why
+# no value lane can see it and why this pin is ASan-gated rather than
+# stdout-gated. The self-host lane fails LOUDLY on the same source (`cc`
+# rejects the emitted C) — the safe failure is on the lane that cannot build
+# it, and the unsafe one on the reference.
+#
+# ⚠ THE CLOSURE LITERAL IS LOAD-BEARING: `o.unwrap_or(h)` — same payload, same
+# types, no closure — is ASan-clean.
+#
+# INTENDED: prints `hello`, rc 0, ASan/UBSan-clean.
+String hello():
+    return "hello"
+
+void main():
+    Option[Callable[String()]] o = None()
+    Callable[String()] h = hello
+    Callable[String()] f = o.unwrap_or_else((): h)
+    print(f())

@@ -1,0 +1,20 @@
+# A factory lambda that hands back an interface value -- the shape every OO
+# tutorial reaches for once it has introduced both closures and interfaces.
+# The closure's declared return type is the trait box, and the body builds a
+# concrete implementor.
+from std.collections import Box
+
+trait Greeter:
+    String greet(self)
+
+struct English:
+    String name
+
+equip English with Greeter:
+    String greet(self):
+        return "Hello, " + self.name
+
+void main():
+    Callable[Box[Greeter]()] make = (): Box.new(English("Ada"))
+    Box[Greeter] g = make()
+    print(g.greet())

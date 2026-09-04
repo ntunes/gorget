@@ -19,10 +19,15 @@
 #
 # ⚠ THE DISCRIMINATOR IS THE POSITION, NOT THE BODY SHAPE. These same two body
 # shapes still fail at a BUILTIN-METHOD argument (`o.unwrap_or_else((String e):
-# e)`), where the ambient expected type is the receiver's own `Option`/`Result`
-# type rather than a callable, so the peel finds no `GtFnPtr`, correctly
+# e)`), where the ambient expected type is an Option/Result WRAPPER
+# (`or`/`and_then`/`flat_map`/`or_else`) or the receiver's PAYLOAD
+# (`unwrap_or_else`) rather than a callable, so the peel finds no `GtFnPtr`,
 # declines, and the body inference has to answer alone. That residual is
 # `todo/t0877`.
+#
+# ⚠ The position is only a PROXY for "the ambient type is not a callable", and
+# the proxy has a hole: a payload that IS a callable makes the peel fire one
+# level too deep (`todo/t1303`).
 #
 # Both lanes print `hello` then `world`, rc 0.
 

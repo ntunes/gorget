@@ -22,10 +22,15 @@
 #   bare param  — a body that is nothing but the parameter identifier.
 #
 # The omitted cell of that axis is a BUILTIN-METHOD argument
-# (`o.unwrap_or_else((String e): e)`), where the ambient expected type is the
-# receiver's own `Result`/`Option` type rather than a `Callable`, so it names no
+# (`o.unwrap_or_else((String e): e)`), where the ambient expected type is an
+# `Option`/`Result` WRAPPER (`or`/`and_then`/`flat_map`/`or_else`) or the
+# receiver's PAYLOAD (`unwrap_or_else`) rather than a `Callable`, so it names no
 # return type to honour and the body inference has to answer alone. That cell is
 # `todo/t0877` and is deliberately not exercised here.
+#
+# ⚠ The position is only a PROXY for "the ambient type is not a callable", and
+# the proxy has a hole: a payload that IS a callable makes the peel fire one
+# level too deep (`todo/t1303`).
 
 String mk(String a, String b):
     return a + b

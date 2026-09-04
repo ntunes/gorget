@@ -1,7 +1,7 @@
 - [2026-09-04] **`t0877` RE-SCOPED BY POSITION, NOT CLOSED (R49 Track T1) — the self-host inferred a closure's
   return type from its BODY while the DECLARATION already named it, and a read site does not get to disagree
-  with its writer. 13 lines; seven cells CC-FAIL → MATCH; and the one cell it does NOT fix is the one whose
-  identical body shape passes three lines away.**
+  with its writer. 13 lines; SIX cells CC-FAIL → MATCH and a seventh CC-FAIL → CRASH; and the one cell it does NOT fix is
+  the one whose identical body shape passes three lines away.**
   **THE DEFECT AND ITS LAYER.** `compute_closure_sig` (`grep -n 'ClosureSig compute_closure_sig'
   tests/fixtures/self_host_lowerer/lower_closures.gg`) derived a closure literal's return type from its body
   even where the ambient expected type was already a `Callable[R(...)]`. Rust gg prefers the ambient `R`
@@ -25,15 +25,27 @@
   call `ctx.expected_type` is the CALLEE's declared param type (`grep -n 'int prev_expected_arg =
   ctx.expected_type' tests/fixtures/self_host_lowerer/lower_expr.gg` — the `-1` beside it is an initial clear,
   **immediately overwritten**, so the long-standing *"call arguments carry `-1`"* claim was false); at a
-  builtin-method argument it is the **RECEIVER's** own `Option`/`Result` (`grep -n 'ctx.expected_type =
-  _combinator_et' <same file>`), which is not a `GtFnPtr`, so the peel correctly DECLINES.
+  builtin-method argument it is whatever `_combinator_et` set, and **that is not one thing** (`grep -n
+  '_combinator_et' <same file>`): `or`/`and_then`/`flat_map`/`or_else` take a peeled `Option`/`Result`
+  **WRAPPER**, while `unwrap_or_else` takes `enum_category.ok_type`, the receiver's **PAYLOAD** — that site's
+  own comment says *"uoe returns the PAYLOAD (Some_0 / Ok_0), not the wrapper"*. Neither is a `GtFnPtr` for the
+  types the corpus puts there, so the peel DECLINES.
+  ⛔ **AND THAT LAST CLAUSE IS CONTINGENT, NOT STRUCTURAL — Six Questions #6, caught by review, not by me.**
+  The peel declines because of the TYPE in play, not the POSITION; the position is only a proxy, and the proxy
+  has a hole. Give `unwrap_or_else` a payload that IS a callable (`Option[Callable[String()]] o`, then
+  `o.unwrap_or_else((): h)`) and the peel FIRES one level too deep, emitting `Str __Closure_0__call` for a
+  closure that must return the whole `Callable[String()]`; `cc` rejects it and Rust gg runs the program.
+  **MEASURED both sides of this landing: pre-fix that call emitted `int64_t` and `cc` rejected THAT** — a
+  different wrong type, the same CC-FAIL — so it is pre-existing and not T1 inflow. Filed as `todo/t1303`
+  with a durable repro.
   ⇒ `t0877` now reads: arms (a)–(d) are closed WHEREVER ambient `expected_type` is a `Callable`/FnPtr — a
   declared destination or a direct-call argument — and all four survive at a BUILTIN-METHOD argument.
   **SIX Q#4 is the crux: the surviving case has NO SUBJECT in a body-shape taxonomy**, so no widening of that
   rule reaches it. Closing it needs the other half Rust carries — Tier-1c closure-param registration, a
   `lookup_local` beside the `EIdentifier` arm's `fn_sigs` read, and element-type propagation through
   `EMethodCall`.
-  **SEVEN PINS FOR SEVEN CHANGED CELLS**, `|pinned| == |changed|`. Three new self-host pins for Track L's
+  **SEVEN CHANGED CELLS, ALL SEVEN PINNED** — `|pinned| == |changed|`, which is the readiness criterion;
+  the pins are TEN test functions, because five cells are asserted on both lanes. Three new self-host pins for Track L's
   capture-ownership cells; a Rust `run_gg` **and** a self-host pin for `sound_move_operand_closure_tail_allowed`,
   which had **no test whatsoever** — a committed positive control whose intent lived only in its header, and
   the wiring lint that would have caught it governs `known_gaps/` only; the graduation of
@@ -62,9 +74,45 @@
   **CC-FAIL in both columns**, so nothing observes it: its closure-return error disappears and a second,
   unrelated error (`assigning to type 'Str' from type 'size_t'`) still fails the build. It is not a pin
   candidate and it is not a regression; it is the cell that would otherwise look like an unexplained delta.
-  **MERGE.** Landed on Track L's tip. `PHASE_D_PROXY_BUDGET` and `ALLOWED_UNWIRED` were each on NEITHER side —
+  **MERGE.** Landed on `bc762d0d3` — Track L's tip AT THE TIME; L's branch moved afterwards, so "L's tip"
+  was already false when written. Name the commit, not the branch head. `PHASE_D_PROXY_BUDGET` and `ALLOWED_UNWIRED` were each on NEITHER side —
   both branches removed independently, so the merged truth is the union of the removals, and the ratchet's own
   site census confirms the proxy figure. Both `PHASE_D_PROXY_BUDGET` doc paragraphs are kept.
+  **⊕ ERRATUM ADDENDUM (post-output-review fold, 2026-09-04 — precedence: this addendum > the body above).**
+  Two statements in the body were FALSE and a reviewer caught both.
+  1. **The safety premise for the new override was false at the one case its own repro exercises.**
+  `_combinator_et` is not one thing: `or`/`and_then`/`flat_map`/`or_else` take a peeled Option/Result WRAPPER,
+  `unwrap_or_else` takes `enum_category.ok_type` — the **PAYLOAD**. So the peel declines because of the TYPES
+  IN PLAY, never because of the POSITION; the position is a proxy and **the proxy has a hole.** Corrected at
+  **8 sites** (the count is 8, not the 7 the review named — the 8th is `todo/t0877`'s front-matter `mechanism`
+  field, which the generated index renders).
+  ⭐ **And chasing it found a HIGH memory-safety defect nobody had:** with a `Callable` payload the peel FIRES
+  one level too deep, and **Rust gg then reads 16 bytes past a 16-byte `GorgetClosure`** — `AddressSanitizer:
+  stack-buffer-overflow`, `READ of size 32` — while printing the right answer and exiting 0. The self-host
+  fails LOUDLY on the same source. Core #8 in one program: the lanes do not agree, and the "working" lane is
+  the unsafe one. **Pre-existing, not this track's inflow — measured on BOTH sides of the landing** (pre: the
+  self-host emitted `int64_t` and `cc` rejected THAT; a different wrong type, the same CC-FAIL). Filed
+  `todo/t1303` with two RED-verified pins, one per lane.
+  2. **The pin declared "the only durable record" of a SEGV could not record one.** `ExitStatus::code()` is
+  `None` for every signal death, so it read `Crashed { exit_code: None }` — indistinguishable from SIGABRT.
+  **Fixed the INSTRUMENT, not the text, and at the CLASS:** `reported_exit_code` spells a signal death
+  `128 + signo` at **all three** `Crashed` constructions in `tests/integration.rs` (the review named one), the
+  convention `gg run`/`gg test` already use. Verified printing `Crashed { exit_code: Some(139) }`.
+  3. **Closed the blindness instead of only documenting it** (Core #6): `robustness_map.py` has a `selfhost`
+  lane and simply had no cell, so the round-close battery now carries `trait_box_returned_from_closure`
+  (C WORKS / LLVM WORKS / **selfhost CRASH** / DIVERGENT), hand-derived expectation, verified `[known]`.
+  ⊕ Running its topic also surfaced `trait_dynamic_dispatch_box` drifting `[selfhost] TRAP → CRASH` with
+  PROGRESS on both Rust lanes — same family, recorded on `todo/t1084`.
+  4. Also corrected: the headline said "seven cells CC-FAIL → MATCH" when one goes CC-FAIL → CRASH; "SEVEN
+  PINS" undercounted ten test functions over seven cells; and "landed on Track L's tip" was false when written
+  (it landed on `bc762d0d3`; L's tip moved after). ⊕ `todo/t0877`'s position table now says it is a SELECTION
+  (~25 `ctx.expected_type` writers exist), and its erratum note had the `unwrap_or_else`/`and_then`
+  coincidence INVERTED.
+  ⊕ Filed `todo/t1304`: the fixture-wiring lint governs `known_gaps/` only, so **46 top-level fixtures are
+  asserted by nothing** — 15 of them the `sound_move_operand_*` reject/allow axis, the same family whose
+  unwired member this track tripped over. No filing was needed for the signal-masking defect: the fix covers
+  the class.
+
   **GATES, bare rc.** `cargo build` 0 · `--lib` 0 (1186 passed) · `--test lints` 0 (229) ·
   `--test spec_conformance` 0 (3) · `--test integration self_host` (C, minus `runtime_diff`,
   `GG_STAGE1_TIMEOUT_SECS=1800`) 0 — **83 passed, 0 failed**, `self_host_bootstrap` and

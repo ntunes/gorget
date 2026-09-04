@@ -2481,10 +2481,18 @@ fn box_trait_closure_return() {
 /// severity rise is real and belongs to `t1084`, whose other cells are
 /// `known_gaps/` repros — this one is a live top-level fixture.
 ///
-/// ⚠ NOTHING ELSE OBSERVES IT: the robustness map has no entry here,
-/// `sanitize_sweep.sh` has no self-host lane, and the parity ledger is
-/// bucket-neutral (non-MATCH as CC-FAIL before, non-MATCH as CRASH now). This
-/// pin is the durable record.
+/// ⚠ AND THE PIN HAD TO BE MADE ABLE TO RECORD WHAT IT CLAIMS. It promises rc
+/// 139, but `ExitStatus::code()` is `None` for every signal death, so this
+/// read `Crashed { exit_code: None, stderr_first: "(no stderr)" }` —
+/// indistinguishable from SIGABRT or SIGILL. `reported_exit_code` now spells a
+/// signal death `128 + signo` at all three `Crashed` constructions in this
+/// file, and the pin reports `Crashed { exit_code: Some(139) }`. A claim that
+/// is true about the world and invisible through the instrument is Core #13.
+///
+/// ⚠ WHAT ELSE OBSERVES IT: `sanitize_sweep.sh` has no self-host lane and the
+/// parity ledger is bucket-neutral (non-MATCH as CC-FAIL before, non-MATCH as
+/// CRASH now), so this pin plus the `robustness_map` cell added alongside it
+/// are the durable record.
 #[test]
 #[ignore = "KNOWN GAP t1084 (closure-return cell): the self-host has no \
 GIR-level trait-object pack, so a closure declared to return Box[Trait] returns \
@@ -6394,10 +6402,18 @@ fn fstring_interp_match_scrutinee_binding() {
 /// `Callable[R(..)]` parameter type IS the ambient expected type, the
 /// `GtFnPtr` peel answers, and that half compiles and runs. At
 /// `o.unwrap_or_else((String e): e)` the ambient expected type is the
-/// RECEIVER's own `Result` (regenerate: `grep -n 'ctx.expected_type =
-/// _combinator_et' tests/fixtures/self_host_lowerer/lower_expr.gg`), which
-/// names no return type, so the peel correctly declines and the body inference
-/// is on its own.
+/// receiver's PAYLOAD — `enum_category.ok_type`, NOT the wrapper (regenerate:
+/// `grep -n '_combinator_et = _recv_ec_uoe.ok_type'
+/// tests/fixtures/self_host_lowerer/lower_expr.gg`; the sibling combinators
+/// `or`/`and_then`/`flat_map`/`or_else` DO take a peeled Option/Result
+/// wrapper, so "the receiver's own Option/Result" is true of them and false
+/// here). Either way it is not a `GtFnPtr`, so the peel declines and the body
+/// inference is on its own.
+///
+/// ⚠ THAT IS A FACT ABOUT THE TYPES, NOT THE POSITION, and the position is
+/// only a PROXY for it — one with a hole: a payload that IS a callable makes
+/// the peel fire one level too deep (`todo/t1303`). This cell is green for a
+/// reason unrelated to the rule it appears to demonstrate.
 ///
 /// ⇒ No widening of a BODY-SHAPE rule reaches this. It needs the arms
 /// themselves: Tier-1c closure-param registration, a `lookup_local` in the
@@ -6409,8 +6425,9 @@ fn fstring_interp_match_scrutinee_binding() {
 /// helper's `SMatch`/`SIf`-tail arm returning UNIT.
 #[test]
 #[ignore = "KNOWN GAP t0877: at a BUILTIN-METHOD argument the ambient expected \
-type is the receiver's own Option/Result rather than a Callable, so the FnPtr \
-peel declines and self-host guess_return_type still types the closure literal \
+type is an Option/Result wrapper (or/and_then/flat_map/or_else) or the \
+receiver's PAYLOAD (unwrap_or_else) rather than a Callable, so the FnPtr peel \
+declines and self-host guess_return_type still types the closure literal \
 int64_t. The same body shape at a direct-call argument now works; TODO.md."]
 #[serial(self_host_lowerer_driver)]
 fn sh_closure_literal_ok_body_typed_int() {
@@ -6418,6 +6435,40 @@ fn sh_closure_literal_ok_body_typed_int() {
         "known_gaps/sh_closure_literal_ok_body_typed_int.gg",
         "sh_closure_literal_ok_body_typed_int",
         "hello?\nbad",
+    );
+}
+
+/// KNOWN GAP `t1303`, SELF-HOST lane — THE HOLE IN THE PROXY the sibling pin
+/// above relies on.
+///
+/// That pin's reasoning is "at a builtin-method argument the ambient type is
+/// not a callable, so the peel declines". At `unwrap_or_else` the ambient type
+/// is the receiver's PAYLOAD, so the reasoning holds only while no payload is a
+/// callable — which is a fact about the corpus, not about the rule (Six
+/// Questions #6). Make the payload `Callable[String()]` and the peel FIRES,
+/// takes that callable's own RETURN type, and emits `Str __Closure_0__call` for
+/// a closure that must return the whole callable. `cc` rejects it.
+///
+/// ⚠ AND THE RUST LANE IS WORSE, not better: it builds, prints `hello`, exits
+/// 0, and reads 16 bytes past a 16-byte `GorgetClosure` doing it
+/// (`AddressSanitizer: stack-buffer-overflow`, `READ of size 32`). Core #8 —
+/// the lanes do not agree here, and the one that "works" is the unsafe one.
+/// `security_closure_literal_callable_payload_overflow` pins that half.
+///
+/// ⚠ PRE-EXISTING, NOT the ambient-return override's inflow: measured both
+/// sides of that landing, the self-host emitted `int64_t` here before and
+/// `cc` rejected THAT. A different wrong type, the same CC-FAIL.
+#[test]
+#[ignore = "KNOWN GAP t1303: a closure literal at unwrap_or_else over a \
+Callable-typed payload makes the ambient FnPtr peel fire one level too deep, so \
+the self-host emits Str-returning C and cc rejects it. Rust gg builds and runs \
+it with a stack-buffer-overflow. Asserts the INTENDED hello; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn sh_closure_literal_callable_payload_unwrap_or_else() {
+    sh_known_gap_expect(
+        "known_gaps/closure_literal_callable_payload_unwrap_or_else.gg",
+        "sh_closure_literal_callable_payload",
+        "hello",
     );
 }
 
@@ -6532,9 +6583,12 @@ fn sh_closure_clone_escape_env_field_leak() {
 ///
 /// ⚠ THE DISCRIMINATOR IS THE POSITION, NOT THE BODY SHAPE. These very shapes
 /// still fail at a BUILTIN-METHOD argument, where the ambient expected type is
-/// the receiver's own `Option`/`Result` rather than a callable, so the peel
-/// finds no `GtFnPtr` and correctly declines. `sh_closure_literal_ok_body_typed_int`
-/// pins that residual; `todo/t0877` is its item.
+/// an Option/Result WRAPPER (`or`/`and_then`/`flat_map`/`or_else`) or the
+/// receiver's PAYLOAD (`unwrap_or_else`) rather than a callable, so the peel
+/// finds no `GtFnPtr` and declines. `sh_closure_literal_ok_body_typed_int`
+/// pins that residual; `todo/t0877` is its item. ⚠ The position is a PROXY for
+/// "the ambient type is not a callable" and the proxy has a hole — a payload
+/// that IS a callable (`todo/t1303`).
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn sh_closure_string_body_local_and_method_chain() {
@@ -36527,7 +36581,7 @@ fn self_host_e2e() {
             let first = stderr.lines().next().unwrap_or("(no stderr)").to_string();
             return Outcome::RuntimeCrashed {
                 fixture: fname,
-                exit_code: self_run.status.code(),
+                exit_code: reported_exit_code(&self_run.status),
                 stderr_first: first,
             };
         }
@@ -40234,7 +40288,7 @@ fn self_host_full_program() {
         if !run.status.success() {
             let stderr = String::from_utf8_lossy(&run.stderr);
             results.push((fname.to_string(), Outcome::Crashed {
-                exit_code: run.status.code(),
+                exit_code: reported_exit_code(&run.status),
                 stderr_first: stderr.lines().next().unwrap_or("(no stderr)").to_string(),
             }));
             continue;
@@ -41097,6 +41151,35 @@ fn with_silent_panic_hook<R>(f: impl FnOnce() -> R) -> R {
 /// Build a fixture through the self-host driver (`F lib --emit-c`) → `cc` →
 /// run, returning the trimmed stdout on success or a non-Match outcome on any
 /// failure. `tmp_root` must already exist; the caller owns its cleanup.
+/// The exit code to REPORT for a finished process, with a signal death spelled
+/// the way a shell spells it: `128 + signo`.
+///
+/// ⚠ `ExitStatus::code()` IS `None` FOR EVERY SIGNAL DEATH, so a bare
+/// `exit_code: status.code()` collapses SIGSEGV, SIGABRT, SIGILL and SIGBUS
+/// into one indistinguishable `None` and a reader sees
+/// `Crashed { exit_code: None, stderr_first: "(no stderr)" }`. A pin written to
+/// record a SEGV then cannot record one: the claim is true about the world and
+/// UNOBSERVABLE THROUGH THE INSTRUMENT, which is Core #13's failure mode rather
+/// than a cosmetic gap. `box_trait_closure_return_self_host` is exactly such a
+/// pin, and it is the only durable record of that cell.
+///
+/// The repo already settled this convention on the compiler side — `gg run` and
+/// `gg test` both propagate `128 + signo` instead of masking it (`grep -n
+/// "128 + " tests/integration.rs`), one of them specifically so the self-host
+/// driver's SIGSEGV survives. This is the same convention on the HARNESS side,
+/// applied at every `Crashed` construction rather than at the one that prompted
+/// it, so the next call site cannot reintroduce the mask.
+#[cfg(unix)]
+fn reported_exit_code(status: &std::process::ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.code().or_else(|| status.signal().map(|s| 128 + s))
+}
+
+#[cfg(not(unix))]
+fn reported_exit_code(status: &std::process::ExitStatus) -> Option<i32> {
+    status.code()
+}
+
 fn self_host_emit_cc_run(
     driver_exe: &Path,
     lib_dir: &Path,
@@ -41184,7 +41267,7 @@ fn self_host_emit_cc_run(
     if !run.status.success() {
         let stderr = String::from_utf8_lossy(&run.stderr);
         return Err(RuntimeParityOutcome::Crashed {
-            exit_code: run.status.code(),
+            exit_code: reported_exit_code(&run.status),
             stderr_first: stderr.lines().next().unwrap_or("(no stderr)").chars().take(200).collect(),
         });
     }
