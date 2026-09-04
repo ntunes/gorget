@@ -307,9 +307,12 @@ folded: scan the whole tail for `t`+4 digits and assert the count matches, plus 
 landed breadcrumb for `t1305`, against pending-only — clear it at close.
 
 ⊖ **Superseded: TRACK INT-B IS COMPLETE — output-review LIVE.** `cargo test --test lints` **rc 0** — **the round's declared red is CLOSED.** Full sweep: `new_class`
-0, `retire_fatal` 0, `fixed_leak` 0. Constants **300/497/2262/8/480**, predicted from the executor's own
-census BEFORE `figures.py check`. Column 3 forced 21 → 19, re-derived independently and matching. No `.gg`
-touched, so parity correctly not re-measured.
+0, `retire_fatal` 0, `fixed_leak` 0. **All five constants predicted from the executor's own
+census BEFORE `figures.py check`, then confirmed by it** — regenerate with
+`python3 scripts/figures.py check sanitize.leak.{rows,class_pairs,records,loose_signatures,uncited_class_pairs}.pin`.
+⛔ **DO NOT WRITE THEIR VALUES HERE — the uncited pin's new value is covered, and spelling it in this file is
+what reddened `figures_db_values_have_one_spelling` at integration.** Column 3 forced 21 → 19, re-derived
+independently and matching. No `.gg` touched, so parity correctly not re-measured.
 ⭐ **ACCEPTANCE 6b AND 6d WERE SEEN RED FIRST** (35 and 1 examined rows against the pre-fix sweep) — Core #13
 on the acceptance set itself, which is what five passes of axis-hunting were for.
 ⭐ **THE LEDGER'S VERDICT ON WHO WAS RIGHT: of 44 measured rows, the RE-SEED on 22, N2 on 13, L on 8 — and
