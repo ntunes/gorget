@@ -675,6 +675,67 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔⛔ **S-a PASS 2 = BLOCKING ×4. THE TRACK SPLITS INTO S-a1 / S-a2 / S-a3, AND S-a3 IS AN OWNER DESIGN ASK.**
+Measured at `4acc2cee0`. §1's byte table regenerates exactly; A2's three witnesses present; A4 confirmed at
+source. **A track that cannot get its design signed off is REBUILT or SPLIT, never reviewed harder.**
+
+⛔ **R1 — THE DESIGN NAMES 2 OF ≥5 FACES, AND ONE FACE HAS NO SUBJECT AT ALL (SIX Q#4, textbook).**
+Independent in-repo witness `src/ir/lowering/builtins.rs:1289-1294`: the `Named("Callable__…")` form for
+collection element / dict value / Option payload, reading `drop_fn: "gorget_closure_free"` and
+`elem_drop_fn` from `src/lir/types.rs:98`. A plain `Vector[Callable[int()]]` leaks **242 B / 6 allocs**.
+⭐⭐ **AND A PER-CLOSURE TypeDef CANNOT REACH IT.** Two closures with DIFFERENT env types in ONE
+`Vector[Callable[int()]]` emit **`__Closure_0__drop` AND `__Closure_1__drop`** while **`elem_drop_fn` is a
+SINGLE SLOT.** ⇒ **no amount of TypeDef reachability names both.** It needs per-value drop pointer / vtable
+slot / refcount — **the three the runtime's own comment enumerates and rejects for the 16-byte layout.**
+⇒ ⚖ **THAT IS AN ABI/LAYOUT DECISION, NOT AN IMPLEMENTATION CHOICE ⇒ OWNER ASK (S-a3).**
+
+⛔ **R2 — THE STRUCT-FIELD FACE IS MEMORY-UNSAFE AT HEAD, AND THE CARVE-OUT GATE IS MISSING EXACTLY THERE.**
+`struct Holder: Callable[int()] f` then `Callable[int()] g = h.f` → **`AddressSanitizer: attempting
+double-free`, rc 1, NO FIX APPLIED.** Two `gorget_closure_free` on one env; the field read is a raw 16-byte
+struct copy because `Holder` is `[drop: None, copy: Copy]` per `t0948`.
+
+| source shape | `gg check` verdict |
+|---|---|
+| `Callable[int()] g = f` (bare local) | **rejected** `E_MoveWithoutOperator` ✓ |
+| `Callable[int()] g = h.f` (struct field) | **ACCEPTED → double-free** |
+| `Callable[int()] g = fns.get(0).unwrap()` | **ACCEPTED → 122 B leak** |
+
+⇒ `t0948` characterises this as a *leak*; **it is a DOUBLE-FREE**, which outranks every leak in this track.
+⊕ **It is a check-time REJECT ⇒ Core #9, all three lanes + cross-lane fixture. No owner ask — the carve-out
+already rules it.**
+
+⛔ **R3 — "DROP AND CLONE TOGETHER" IS TWO OF *THREE* HALVES; THE FOLDED DESIGN GREENS 1 OF 5.** Applying A2's
+teardown line-anchored with a `must_replace` assertion: c5 **0 B ASan-CLEAN rc 0**; c3 8→**4**; c2 12→**6**;
+c4 **unchanged**; c1 needs `Pair__drop` first. **The residue is PRODUCER-SIDE**: the STACK env's field is
+cloned, memcpy'd into the heap env, and the stack copy abandoned.
+⛔⛔ **AND THAT FALSIFIES MY OWN A7 BY MEASUREMENT.** I wrote *"Scope note, no action … Charter question, not
+soundness. Do not mistake it for part of the leak."* **It IS half the leak in two of the three env-field
+cells.** ⚡ **I demoted a cell to "charter, not soundness" from a source read, inside the very addendum whose
+headline was that a source read had produced an unsafe prescription.**
+
+⛔ **R4 — `closure_capture_then_mutate_source_uaf` IS NOT IN THE CLASS. FOURTH ATTRIBUTION ERROR ON THE SAME
+FIVE-CELL TABLE.** It **already calls `__Closure_0__drop`**; half 2 greens 0 bytes there. Its 6 B is a
+`v.get(0).unwrap()` materialisation inside the closure **BODY** (`t0949` family) — no `__gorget_closure_env_alloc`
+and no `gorget_closure_free` in user code at all. **`str_alloc_copy` is shared by c2/c3/c4/c5, so the frame
+cannot separate the POSITION — the exact class named one entry above.** ⇒ **`todo/t1210` LISTS c4 WRONGLY;
+correct the item before acting on it**, and the exit criterion "all five cells go clean" is **unreachable as
+scoped**.
+
+⊕ **N1: the sibling list is STILL a selection — 7 named of 17.** Missing and load-bearing: `src/lir/types.rs:98`;
+`builtins.rs:1300/1315/1330/1345`; `drops.rs:784` (**whose own doc says removing it makes httpserver fixtures
+DOUBLE-FREE**); and `src/backend/llvm/mod.rs:1581,1759`, preamble declarations where an unmirrored drop-fn
+rename **fails to LINK on the LLVM lane**. ⊕ **N3: A4 over-stated the SH's protection** — the make-site gate
+buys freedom from double-free, **not** memory safety; a clone that outlives its make-site and is called is a
+UAF. **The SH is the right precedent for WHERE to emit, not for WHAT to gate on.**
+
+⭐ **THE SPLIT (each its own track THIS ROUND — a split is division, never deferral):**
+**S-a1** = bare-`FnPtr`-local face: field drop **+** typed clone routing **+ producer-side stack-env ownership**
+(the third half). Exit: c5, c3, c2 ASan-clean. `t1210` proper, **minus c4**.
+**S-a2** = struct-field / enum-payload face: `t0948` **+ the missing `E_MoveWithoutOperator`**. Memory-safety;
+outranks the leaks.
+**S-a3** = collection-element face — ⚖ **OWNER DESIGN ASK.**
+**c4 leaves this ledger** → file under the `t0949` family.
+
 ⛔⛔⛔ **L'S FOLD CORRECTS *BOTH* THE ORCHESTRATOR AND THE REVIEWER ON THE SAME CELL — THE THIRD ATTRIBUTION
 ERROR IN ONE CHAIN, AND ALL THREE HAD THE SAME CAUSE. `t0953` OWNS *NONE* OF THE FIVE LEAKING CELLS.**
 Commit `bc762d0d3`. I attributed all five to `t0953`; the reviewer corrected me to "greens 0 of 5, 72 of 110
