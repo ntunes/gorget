@@ -38,7 +38,8 @@ parent and getting the identical failure. **It goes green at merge because `TODO
 verify that after merging rather than assuming it.**
 **→ R50:** W + S-a3 (merged, brief measured against source three times) · U1 · U2 · S-a1 · S-b · T2.
 
-⚖ **ONE OWNER ASK OPEN:** admit `vector_hof_result_element_sizing` (`__gorget_closure_env_alloc*5`, cite
+✅ **NO OWNER ASK IS OPEN — RULED 2026-09-04, see the ⚖⚖ block below.** (Historical: the ask was to admit
+`vector_hof_result_element_sizing` (`__gorget_closure_env_alloc*5`, cite
 `t0953`) — its leak is measured irreducible, since a named callee with the same body sizes correctly, so the
 closure literal IS the defect's entry condition.
 
@@ -209,7 +210,17 @@ It governs `vector_hof_result_element_sizing` and carries the measured discrimin
 accumulator correctly; a closure LITERAL does not) plus why its sibling `vector_hof_result_element_drop`
 correctly has NO row. **No sweep recovers it — a sweep reports that a fixture leaks, not that an ask was
 formulated.** Locate: `git show "0d9f9cebe:tests/sanitize/LEAK_ALLOWLIST.txt" | grep -n '^# ⚖ ADMITTED ('`.
-⛔⛔ **THIS IS NOW A REAL OWNER ASK AND THE ROUND HOLDS §2 FOR IT.** `tests/sanitize/LEAK_ALLOWLIST.txt`'s
+✅✅ **OWNER RULING, 2026-09-04 — THE ASK IS ANSWERED AND THE ROUND HAS NO OPEN OWNER ASK.**
+Three options were put: **(a)** admit the row, one line, TEMPORARY, cited to `t0953`, retiring when `t0953`
+lands; **(b)** amend the header to permit extension-by-analogy under standing autonomy; **(c)** argue the
+graduation clause already covers it. **The owner's reply, VERBATIM: _"Lets go with (a)."_**
+⛔ **THAT IS THE WHOLE PROVENANCE. It admits THIS row.** It is not a paraphrase, not an extension to
+neighbouring rows, and **not a rule about future new-inflow rows** — the header clause was **SATISFIED, not
+overridden**: it said new inflow *remains an owner ask*, and the ask was made and answered.
+⭐ **Acceptance 1, 2 and 5 are unblocked; INT-B executes the whole brief.**
+⊕ The block records: the verbatim reply · what (a) was · N2's reasoning ATTRIBUTED TO N2 · `# RETIRES: t0953`.
+
+⊖ **Superseded — THIS IS NOW A REAL OWNER ASK AND THE ROUND HOLDS §2 FOR IT.** `tests/sanitize/LEAK_ALLOWLIST.txt`'s
 **own OWNER-ATTRIBUTED header** says: *"A row whose leak is genuinely NEW INFLOW remains an OWNER ASK, and a
 row with no `⚖ ADMITTED` block remains outside both rulings."* **A decide-by-analogy CONTRADICTS a rule the
 file records as owner-sourced** — and N2 reasoned to exactly that conclusion and DECLINED to assert otherwise.
