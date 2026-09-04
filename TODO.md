@@ -522,6 +522,29 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   my rewritten ledger comment **no longer re-spells the value**, making the R48 waiver dead — **retired
   rather than carried.** **Two guards, two catches, both on my own edits.**
 
+- **📋 R49 ROUND-CLOSE CHECKLIST — STAGED NOW so it runs MECHANICALLY, not from memory.** ⛔ **Every leg
+  AFTER A1-I integrates**, on the integration branch, **every rc read off the BARE command.**
+  1. `scripts/convergence.sh` — **FIRST, before the sweeps** (owner 2026-08-06: a fail means fix or ask
+     BEFORE burning ~30 min). Quote its line into the `DONE.md` entry — **a MEASUREMENT, not a gate.**
+  2. **C sweep:** `GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 scripts/run_integration.sh` — **both
+     knobs, the wrapper, never a hand-rolled thread count.**
+  3. **THEN the LLVM sweep — SEQUENTIALLY, NEVER in parallel with the C sweep** (owner 2026-07-29: linker
+     thrash + `/tmp` scratch collisions).
+  4. **The cargo targets `--test integration` never touches:** `-p ggdef` · `--test spec_conformance` ·
+     `--test security` · `--test lints` · **`--test c_runtime`** · `--lib`.
+  5. **The two SCRIPT gates NO cargo target reaches** (added by H this round):
+     `scripts/known_gaps_census.sh --check` and
+     `GG_STAGING_MOVE_GUARD=fatal scripts/staging_move_burndown.sh --check`.
+  6. `scripts/sanitize_sweep.sh` (~25 min). 7. `python3 scripts/robustness_map.py` — **all five lanes.**
+  ⚠ **CARRIED OBLIGATIONS, each owed by a specific track:** H's two new top-level fixtures are parity-corpus
+  inflow and **the floors are RELEASE-ONLY — confirm the release `self_host_runtime_diff` line** · K's SH
+  port must still show **no new nondeterministic rows** · A1-I's `closure_identity/` MATCH is **a
+  measurement, not a gate** (by ruling) so it will NOT appear in the sweep — **re-run it by hand or say it
+  was not re-run.**
+  ⛔ **A RED BATTERY IS NEVER WAIVABLE.** ⊕ Then: `DONE.md` entry · handover rewritten IN PLACE
+  (pending-only, **invariants and commands, never numbers** — that rule caught me three times this round) ·
+  prune worktrees and `/tmp` · **report to the owner BEFORE opening R50.**
+
 - **⚡ A1-I · FOLLOW-UP LANDED (`2de5d0f06`, RECORDS ONLY) — the in-flight output-review was WARNED its base
   moved.** ⚠ **A branch moving under a live reviewer is a real hazard and it nearly happened silently.**
   ⭐ **AND THE EXECUTOR RECORDED A DISTINCTION I DID NOT ASK FOR AND SHOULD HAVE.** The `OUT` row now carries
