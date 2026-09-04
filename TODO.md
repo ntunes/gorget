@@ -214,6 +214,31 @@ needs the RESULT element type's TYPED metadata, which already exists and is one 
 ⊕ N2's two edits are **ORDER-COUPLED**: freeing flat_map's `sub` without first installing the result hooks
 turns a 531 B leak into a **heap-use-after-free**. Neither lands alone.
 
+⭐ **F-G SCOUT RETURNED; PASS 1 LAUNCHED. THE CHARTER WAS FALSE AND THE SCOUT PROVED IT — D46 IS
+UNIMPLEMENTED ON ALL FOUR ENGINES, not "the ggdef lane only".** `gg check` accepts; C and LLVM answer by
+**ADDRESS IDENTITY** (the `a==a` TRUE / `a==b` FALSE pair holds on **every** aggregate, **including unit enum
+variants — so it is not even a tag comparison**); the self-host returns bool with no Equatable check in
+**all three driver copies**; **ggdef accepts and answers STRUCTURALLY.**
+⚡ **C, LLVM and ASan ALL AGREE — AND ALL THREE DISAGREE WITH THE DEFINITION. "Both backends agree" is
+exactly the trap Core #8 names.**
+⛔ **AND THE ORDERING SIBLINGS ARE ALLOCATOR-DEPENDENT:** C implies `a > b`, **ASan — SAME backend, only the
+allocator changed — implies `a < b`**, and LLVM answers all four comparisons `false`, **which is not a
+possible total order.** ⇒ **allocation addresses leak into program semantics; a program that sorts by `<`
+changes behaviour when you link a different allocator.**
+⛔ **`Some(1) == Some(1)` PRINTS `false`** — the shape a user is most likely to write — **and the entire
+3,350-file corpus contains ZERO `Option[T] == Option[T]` comparisons. Zero coverage on the axis; that is why
+it survived.**
+⛔ **A SECOND GUARD THAT GREEN-LIGHTS ITS OWN CLASS:** in `spec_conformance_ggdef.rs` a `FrontendError` scores
+**GGDEF-SKIP with the fixture's committed `expect:` NEVER COMPARED** — not exit, not stdout, not the `E_`
+code — and **there is NO CEILING ON `skipped`.** **13 of 18 skipped rows are green for an unrelated reason,
+and one is an ACCEPT seed wearing the `production-v1` REJECT label.** ⇒ a new reject seed shaped as an
+`ElabError` lands as SKIP and **nothing goes red.**
+🆕 **UNFILED, and outside `t0013`/`t0683`/D46: ggdef's `==` NEVER DISPATCHES a user `equip … with Equatable`
+impl** (control: `a.eq(b)` spelled explicitly **does**) ⇒ **lane divergence on ACCEPTED, CORRECT, DOCUMENTED
+code.**
+⛔ **`t0013` STILL READS AS BLOCKED** on an owner ask **D46 ANSWERED on 2026-08-27** — the single most
+misleading line in the item; a reader at HEAD concludes the work cannot start.
+
 ⭐ **TRACK F-G SCOUT LAUNCHED 2026-09-04 — ID BLOCK `t1126`–`t1135`, WRITTEN HERE IN THE SAME ACTION.**
 **D46 (`==` without `Equatable`) — RATIFIED 2026-08-27 AND UNIMPLEMENTED.** ⚠ **`t0013`'s own headline is
 STALE:** D46's measured table says the current answer is **address identity, NONDETERMINISTIC ACROSS LANES**,
