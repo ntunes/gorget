@@ -683,6 +683,33 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔ **N2's CONFIRMING REVIEW: THE TRACK'S OWN TWO NEW TOP-LEVEL FIXTURES LEAK, ARE UNALLOWLISTED, AND WOULD
+HAVE REDDED THE ROUND-CLOSE SANITIZE GATE.** `vector_hof_result_element_drop` (`__gorget_closure_env_alloc*4`)
+and `…_sizing` (`*5`), both STABLE across three reps, **neither in the allowlist**. The chain is mechanical
+and every link was MEASURED: `corpus_paths()` opens with `find tests/fixtures -maxdepth 1` so both are swept
+(**no exclusion list exists**); the sweep's **own** `verdict.py` classifies both as `LEAK`; an unallowlisted
+leak routes to `new_leak`; a non-empty `new_leak` is **rc 1, fatal.**
+⚡⚡ **AND THE REASON IT SLIPPED IS THE SHARPEST FRAMING OF THE ROUND: the four constants are internally
+consistent with the allowlist FILE, but 293 is not what the TREE PRODUCES. The `lints.rs` comment's
+"294 → 293 rows … a GENUINE BURN-DOWN" NETS THIS ROUND'S OWN INFLOW AGAINST THE BURN-DOWN AND REPORTS ONLY
+THE CREDIT SIDE.** ⇒ **A NET FIGURE THAT HIDES INFLOW — the second face of the census-as-selection the same
+track already corrected once.**
+⊕ Correction simulated exact (`rows=295 pairs=488 records=2256`), with `=t0953` citations keeping
+`UNCITED` at **481** rather than 483 — **cite them, and regenerate from the census rather than applying
+deltas by hand.**
+⭐ **THE REVIEW ITSELF IS A MODEL OF NOT SPOT-CHECKING:** it re-derived **all four constants three independent
+ways** (its own parser of the lint's rules, `figures.db`'s awk, the lint itself — all agreeing), re-measured
+**ALL 14 moved rows** rather than two (all stable, all byte-matching), verified the deleted row clean itself,
+and **reverted `src/` to the merge base and REBUILT** to independently confirm both RED claims. ⊕ It also
+confirmed the fold's `src/` diff is **comment-only across 30 lines**, so declining the bootstrap and
+`spec_conformance` was justified — *a claim I would otherwise have had to take on trust.*
+⊕ **It validated the `self_host_gaps/` call on all three legs:** `runtime_parity_corpus` really is a top-level
+`read_dir` (a subdirectory is not scanned), the `t0969` precedent argues verbatim the same thing, the manifest
+row is exact, **and no parity ceiling was moved.**
+⊕ **`measured_at` convention clarified, not a defect:** it names the **tree measured**, not where the value
+holds — the previous row carried a different commit while holding a value that commit's allowlist does not
+yield.
+
 📋 **ROUND-CLOSE PREPARATION STARTED 2026-09-04 — C SWEEP PRE-RUN ON THE 14-TRACK INTEGRATION BRANCH**
 (`GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 scripts/run_integration.sh`, rc read off the BARE
 command, log under `/tmp/integration-preclose-*.log`). ⚡ **Running it BEFORE the last tracks land surfaces
