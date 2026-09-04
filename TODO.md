@@ -683,6 +683,29 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **L's FOLD 4: THE SANITIZE SWEEP IS GREEN — `BARE_RC=0`, and it is an EXACT MATCH, NOT HEADROOM.**
+`scanned 2239 · covered 1819 (floor 1743) · leaks 300 (allowlisted 300) · corruption 1 (allowlisted 1) ·
+flaky 0 · class-drift 0`, zero `❌`/`⛔`, **`retire_due` EMPTY — no cited row is stale.** Confirming review
+launched (told to re-run the full sweep itself; a simulation is not a measurement).
+⭐⭐ **AND IT RETIRED A ROW RATHER THAN ONLY ADDING THEM.** The sweep reported `cow_closure_deferred_mutate`
+no longer leaking; it measured both ways — **96 B / 3 allocs at this track's base, ASan-CLEAN after** —
+**Track L's own capture fix closed it** — and **deleted the row rather than leaving the advisory for a later
+reader.** ⚡⚡ **AND THE DIRECTION MATTERS: because that row was UNCITED, `UNCITED_LEAK_CLASS_PAIRS` fell BY
+FIXING A PAIR RATHER THAN BY CITING ONE — which is what the owner's burn-down ruling actually asks for.**
+*"The round that earned the burn-down does the removal."*
+⊕ **Row arithmetic stated so it can be checked: 294 + 7 admitted − 1 retired = 300**, all four `figures.db`
+mirrors moved with it. ⊕ **It caught its own arithmetic error** — `DONE.md` said "+6 admitted"; it is **+7** —
+and corrected it **showing the full sum** so the next reader can verify rather than trust.
+⊕ **`t1290` admitted with an `⚖ ADMITTED` block recording it is NOT new inflow** (identical figure from a
+base-built compiler, both lanes, fixture closure-free since 2026-04-07) ⇒ **orchestrator call, no owner ask**
+— **and the cause hypothesis is left explicitly unnamed, with "bisect first" in the item.**
+⚠ **Two findings recorded and DELIBERATELY UNACTIONED, correctly:** **21 further rows leak LESS than they
+admit** (`httpserver_router` admits x36 against a measured x21, plus 20 more) — **all uncited, so advisory by
+design; tightening them is a row-by-row adjudication, not a side effect of this track** — *"the debt is
+shrinking on its own and the rows are not tracking it."* And a `figures.db` waiver was needed because a value
+**collides with the digits inside a GIT HASH** in a `todo/` item — ⚡ **a decimal scanner cannot tell a hash
+substring from a figure**, which is the same lint that fired on my own handover prose an hour ago.
+
 ✅ **M2 INTEGRATED** (`f8507a843`) — **FIFTEEN TRACKS LANDED.** `build_rc=0 · lib_rc=0 · lints_rc=0 ·
 todo_rc=0`.
 ⭐⭐ **AND THE MERGE REDDED `--test lints` AT rc 101 BEFORE I COMMITTED IT — CAUGHT BY GATING, NOT BY LUCK.**
