@@ -294,6 +294,46 @@ owes a note + a filed subset gap.
   Rust's `[T: Trait]` against a **type-first** language whose form is `[Trait T]`. ⇒ **when a probe says
   "this does not parse", CHECK THE SPELLING AGAINST THE GRAMMAR before concluding the feature is absent** —
   `grep` the parser for what it *does* accept.
+- ⛔⛔ **A *WIRED* TEST CAN STILL BE A BLIND ASSERT — AND THE ONLY WAY TO FIND OUT IS TO BREAK THE FIX AND
+  WATCH IT.** M2's executor broke its own registration hunk by line and found
+  `box_new_discarded_trait_pack_leak` **still printing `1` at rc 0**: the test asserted a VALUE on a lane
+  where the defect is a LEAK, so **it could never have failed**. ⇒ ⚡ **"the repro is wired to a test"
+  satisfies the lint and proves NOTHING about coverage.** Rewired through `assert_gg_sanitize_clean`, and
+  both `t0697` repros reach **absolute ASan silence** under the fix — **so the assertion is ABSOLUTE, not a
+  delta, and `t0697`'s "ASan-CLEAN is RETRACTED" was over-conservative for its own repros.**
+  ⭐ **THE PROCEDURE: for every fixture a track claims as coverage, BREAK THE FIX BY LINE AND CONFIRM THAT
+  FIXTURE — not merely the suite — GOES RED. A fixture whose lane cannot see the defect class is a lint
+  satisfier, not a net.**
+- ⭐ **WIDEN THE LINT RATHER THAN ADOPTING ITS BLIND SPOT.** `pack_trait_object_call_sites_count` stayed
+  **green at 12 through a real new formation site**, because it counted only literal calls to the producer
+  and the new site routed via a wrapper. **M2 widened it to 14 covering both spellings instead of recording
+  the blind spot and moving on.** ⇒ **when a review finds a guard blind, the default is to WIDEN IT in the
+  same diff; "adopt it with the blind spot stated" is the fallback, not the plan.**
+- ⚠ **AN UN-IGNORE IN PLACE CAN DISCHARGE A CENSUS OBJECTIVE AT ZERO CEILING MOVEMENT.** Graduating
+  `vec_box_trait_pushed_no_helper` would have forced **both** a forbidden `RUNTIME_DIFF_NONMATCH_CEILING`
+  raise (the SH still crashes) **and** a `LEAK_ALLOWLIST` row for a `t0700` leak this round did not create.
+  **Un-ignoring it where it sits satisfies the census's whole objective and moves neither gate.** Precedent:
+  `cow_loop_bare_param_tuple_assign`. ⇒ **check whether the graduation the census "wants" costs two ceilings
+  before paying them.**
+- ⛔⛔ **I LAUNCHED AN EXECUTOR ON A SIGN-OFF THAT WAS RETRACTED MINUTES LATER — THE FIX IS SEQUENCING, NOT
+  CARE.** Track R's pass 2 signed off; I briefed and launched its executor; the **same reviewer then sent a
+  REVISED report retracting the sign-off** and making the outcome conditional on an unrun measurement. The
+  executor was halted mid-flight and told to revert.
+  ⚡ **A reviewer can send more than one report, and the LAST one is the verdict.** ⇒ ⭐ **DO NOT LAUNCH AN
+  EXECUTOR IN THE SAME TURN A SIGN-OFF ARRIVES.** Fold, then launch on the NEXT heartbeat — the cost is one
+  cycle, and the alternative is an executor building on a retracted premise.
+- ⛔⛔ **A LIVE AGENT'S WORKTREE WAS DELETED MID-RUN AND IT COST AN EXACT MEASUREMENT.** R's pass 2 was killed
+  with *"its working directory no longer exists and the only recovery target is the parent session's shared
+  checkout. Refusing to run there"* — **while running the x86_64 cross-check that decides the track's
+  outcome.** ⇒ **`t1146` (the cleanup-script keep-list gap) now has a SECOND instance, and this one has a
+  measured cost.** ⊕ **Its `/tmp` artifacts survived because they were namespaced OUTSIDE the worktree —
+  MA-9's `/tmp` rule is what made the work recoverable.**
+- ⭐ **A PROSE FIELD IN A FILED ITEM CAN BE ARITHMETICALLY WRONG WHILE ITS RAW DATA IS RIGHT.** `t0729`'s prose
+  says *"two stack slots 0x18 apart, copied 0x18 bytes — an 8-byte overlap"*; **24 apart with 24 copied is NO
+  overlap.** The filed ADDRESSES show **24 long, 16 apart** — a real 8-byte overlap. ⇒ **when an item's
+  narrative and its captured data disagree, THE DATA IS THE ITEM**; and here the difference decided a design
+  question, because *distinct* 24-byte allocas cannot sit 16 apart at `-O0` — **so the original aliasing was
+  expressed IN THE IR, not produced by frame layout.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
@@ -530,6 +570,8 @@ retiring. More arms may be the wrong fix.**
 ⚡ **THE RULING'S PRINCIPLE, WHICH OUTLIVES THE TWO ASKS: an inflow ceiling is not a place to put a defect
 you have just discovered you own. Both of my "admit" recommendations were the designing-around-a-gap shape —
 the fixtures were the load-bearing artifact and I proposed bending the ceiling around them.**
+⊕ **`t1085` RETURNED TO THE POOL 2026-09-04** — M2 filed `t1081`–`t1084` and left it unused. Free for
+re-issue, like `t1053` and `t1056`–`t1063`.
 ⚡ **FIRST UNISSUED ID IS NOW `t1187`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
