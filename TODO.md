@@ -522,6 +522,43 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   my rewritten ledger comment **no longer re-spells the value**, making the R48 waiver dead — **retired
   rather than carried.** **Two guards, two catches, both on my own edits.**
 
+- **⚖ OWNER RULING 2026-09-04 — THE LEAK ROW IS ADMITTED, GATED ON ALL THREE ITEMS.** *"I would also say
+  admit the row, gated on all three items rather than `t0948` alone."* ⇒ A1-M's row stands with retirement
+  requiring **`t0948` ∧ `t0971` ∧ `t0972`**; landing `t0948` alone only tightens it.
+  ⚡ **CONSEQUENCE THE EXECUTOR PRE-RECORDED, NOW LIVE:** A1-I kept its six `closure_identity/` fixtures out
+  of the top-level sanitize scan **only** to avoid putting a second identical question to the owner while
+  this one was pending. **That reason is now spent.** Its manifest row's SECOND trigger fires — the row is
+  **DELETED, not waited on**, and moving them top-level buys back the continuously-enforced SH parity gate.
+  **Owed as a follow-up, not a blocker: one `git mv`, six `⚖ ADMITTED` rows citing `t0953`, the path prefix
+  off six `run_gg` calls.**
+
+- **⚖ OWNER ASK 2026-09-04 — "close the drop side this round? or too much work?" ANSWERED WITH THE GATE.**
+  ⛔ **`t0948` IS NOT A THIS-ROUND FIX, and its own HARD GATE says why** (added by A1-M, measured):
+  *"FLIPPING THIS PREDICATE ARMS A DOUBLE-FREE ON EVERY PLAIN `Callable`-FIELD READ, AND R49 TOOK THAT
+  SURFACE FROM ONE SPELLING TO FOUR."* **The defect is on the READ side** — `Callable[int(int)] g = h.f`
+  with no `.clone()` binds the field's `GorgetClosure` by value without materializing, so `main` and
+  `Holder__drop` free the same region. ⇒ **it needs a read-side materializer that does not exist. That is a
+  CoW-layer design track, not a fold.**
+  ✅ **`t0971` + `t0972` ARE tractable AS ONE TRACK** — both are enum-payload drop-EMISSION defects, both
+  with durable RED repros **already committed by A1-M**, and **`t0972` is GENERAL, not `Callable`-specific**,
+  which widens its value. ⚠ **But both are MED leaks — LAST on the owner's severity ranking — so CRITICALs
+  outrank them for the same capacity.**
+
+- **⚖ OWNER DIRECTION 2026-09-04 — BRING MORE CRITICALS IN BEFORE ROUND CLOSE. THE SIZING HOLD IS LIFTED.**
+  **The CRITICAL set is TEN** (`grep -l 'severity = "CRITICAL"' todo/*.md`, not a selection): `t0011` ·
+  `t0036` · `t0045` · `t0680` · `t0697` · `t0703` · `t0704` · `t0709` · `t0771` · `t0988`.
+  ⭐ **SEVEN OF THE TEN FALL INTO TWO CLASSES, which is the Core #4 leverage:**
+  **CLOSURE-CAPTURE (3):** `t0703` · `t0704` · `t0771` — a captured/aliased handle is a BORROW, so a source
+  realloc or a scope exit frees it under the closure. ⊕ **This round already sharpened `t0704`'s scope**
+  (the class is wider than "collection" — a captured plain `String` corrupts the same way).
+  **BOX / TRAIT-OBJECT (4):** `t0011` (`Box[T](struct.field)` shallow copy) · `t0680` (live miscompile,
+  silent wrong on C + hard `llc` error on LLVM) · `t0697` (root measured by K's scout:
+  `pack_trait_object_for_smart_ptr_ctor`, `calls.rs:1038-1041` — assign + `set_owned_fresh`, **never
+  consumes the source**) · `t0709` (`Vector[Box[Trait]]` from a helper, rc 139).
+  **STANDALONE (3):** `t0036` (plain READ of safe syntax) · `t0045` (`for x in &coll` + assign) ·
+  `t0988` (⭐ **corrected THREE times this round by F and its axis is FINALLY right — unusually
+  well-prepared, cheap leverage**).
+
 - **📋 R49 ROUND-CLOSE CHECKLIST — STAGED NOW so it runs MECHANICALLY, not from memory.** ⛔ **Every leg
   AFTER A1-I integrates**, on the integration branch, **every rc read off the BARE command.**
   1. `scripts/convergence.sh` — **FIRST, before the sweeps** (owner 2026-08-06: a fail means fix or ask
