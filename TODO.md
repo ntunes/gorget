@@ -209,9 +209,16 @@ It governs `vector_hof_result_element_sizing` and carries the measured discrimin
 accumulator correctly; a closure LITERAL does not) plus why its sibling `vector_hof_result_element_drop`
 correctly has NO row. **No sweep recovers it — a sweep reports that a fixture leaks, not that an ask was
 formulated.** Locate: `git show "0d9f9cebe:tests/sanitize/LEAK_ALLOWLIST.txt" | grep -n '^# ⚖ ADMITTED ('`.
-⚖ **STATUS: the orchestrator DECIDED this autonomously earlier** (admit temporarily, cite `t0953`) on the
-owner's own prior ruling for the identical shape — *"land L and admit the rows, admission temporary"*. **It is
-NOT blocking the round.** But the BLOCK must survive as the record of the ask.
+⚖⚠ **PROVENANCE — CORRECTED 2026-09-04, AND I HAD BEEN OVERSTATING IT.** I have been writing *"OWNER RULING,
+APPLY IT"* for this row. **THE OWNER NEVER RULED ON IT.** The owner ruled on **L's** rows (*"land L and admit
+the rows… I would like the row admission to be temporary"*, and later *"the ruling still holds at 5-of-8"*).
+**For THIS row the orchestrator decided, under the standing autonomy directive, BY ANALOGY to that ruling** —
+and surfaced it to the owner, who did not reverse it.
+⛔ **THE RECORD MUST SAY THAT AND NOT MORE.** A brief that tells an executor to write a block naming *"the
+ruling, its date, its verbatim words"* while supplying none of them **makes the executor invent owner
+provenance** — the same defect as v1's *"record of an open ask when the owner had ruled"*, in the opposite
+direction. **The block records an ORCHESTRATOR DECISION citing the L precedent, names the round/track that
+carried the ask, and quotes nothing it cannot source.** It is NOT blocking the round.
 ⚠ **AND A MEMORY-SAFETY COMPOSITION RISK NOBODY MEASURED:** `closure_fstring_capture` is the ONE row edited by
 BOTH L and N2, **in OPPOSITE directions** — L widens it, N2 tightens it. L makes closure captures materialise
 owned values; N2 makes HOF result arrays carry element drop hooks; both decide who owns a materialised value.
