@@ -683,6 +683,29 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐ **U's FILING DELIVERABLE LAUNCHED AS ITS OWN EXECUTOR (2026-09-04) — fix work DEFERRED, filing is NOT.**
+U's 33-site enumeration, its detector method and three genuinely-new defects exist **only in a `/tmp` brief**,
+which round close prunes. ⇒ **an executor scoped to the FILING ALONE**, discharging the Cardinal Rule
+regardless of whether the fix ever lands this round. **Four rows, not one** — an executor told to file "33 OOB
+writes" as a single item would re-file the conflation a review already took apart:
+**(a)** the `unwrap()`-in-`Result`-context **semantic** defect, **30 of 33 sites, BOTH lanes**, a documented
+panic silently replaced by error propagation copying a 48-byte error into a 32-byte field — **Core #8's gate,
+tripped**; **(b)** the combinator result-slot type, 1 site, with *"minting `unit` was already tried and
+measured rc 139 on both backends"* recorded so nobody re-tries it; **(c)** the memset/type disagreement,
+2 sites, **filed with its consequence: a bounds ratchet keyed on `memset` DRIFTS WHEN THE MEMSET MOVES**;
+**(d)** the named-void-function **Core #10 lower-or-reject** violation — `gg check` OK, **C won't compile,
+LLVM rc 139** — **and it has NO over-long copy at all, so a bounds detector cannot see it**, which is what
+makes it a row rather than a 34th site.
+⭐⭐ **THE ITEM MUST CARRY THE DETECTOR'S *METHOD*, NOT ITS NUMBER** — *compare the `memset` stating a slot's
+believed size against the `memcpy` length actually written, resolving GEP/bitcast offsets, over emitted LLVM
+IR.* **A reviewer rebuilt it from that sentence alone and reproduced 33-in-18 exactly, with a positive
+control.** The prototype is `/tmp`-only and will not survive; **the sentence will.**
+⛔ **And the adjudication is filed HONESTLY: 33 EMITTED out-of-bounds copies; 2 shapes ADJUDICATED LIVE; the
+remainder UNADJUDICATED because no instrument in the tree can see them.** Not *"33 live"* — that was my
+overclaim, corrected. ⊕ With the reason recorded: **the emitted user IR is not instrumented, only the runtime
+C is**, and **`sanitize_sweep.sh` has no backend selection — it runs the C lane ONLY**, so round close never
+looks at the LLVM lane.
+
 ✅ **F-G INTEGRATED** (`e743229a4`) — **THIRTEEN TRACKS LANDED.** Bare rcs: `build_rc=0 · lib_rc=0 ·
 lints_rc=0 · todo_rc=0 · census_rc=0`.
 ⚠ **ITS MERGE NEEDED REAL ADJUDICATION, NOT KEEP-BOTH** — three conflicts including `tests/lints.rs`'s
