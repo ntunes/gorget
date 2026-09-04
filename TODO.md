@@ -93,44 +93,34 @@ express a `*N+` LOOSE MARKER** (`cut -f4 <verdicts.tsv> | grep -c '+'` → 0 acr
 allowlist carries **7** (`grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -c '+'`). A straight
 derivation silently switches all 7 racy rows' count checks back ON and reintroduces the exact flap the gate
 exists to remove. **Carry `+` forward by (stem, class) from the union.**
-📋 **THE PROCEDURE IS `/tmp/brief_INT_v2.md` (Track INT) — v1 WAS REBUILT after pass 1 returned NINE
-BLOCKING reservations; streak reset to 0.** v1's three fatal defects, all now fixed in v2: its stopping rule
-was a SELECTION that omitted **a class ADDED to an already-listed row** — the mutation this round performs on
-~28 rows; its "regenerate the constants last" step **disarmed every guard that could catch a bad derivation**
-(a pin regenerated from the artifact it pins is a MIRROR — filed as `t1302`); and its confirming sweep tested
-only the direction that cannot fail. v2 states the rule over **(stem, class) PAIRS** with a measured rename
-discriminator, ships the derivation as a **committed script + empty-diff lint** (Core #6), and requires
-`shrunk_class` and `retire_fatal` **EMPTY**, not merely "zero ❌".
-⚠ **`CORPUS_MANIFEST.txt` DECIDES THE DERIVATION'S INPUT POPULATION and v1 omitted it entirely** — four
-distinct hashes across the five blobs, and its counts are REGENERATED post-merge, never merged.
-🔲 **T1's hash is a LAUNCH-TIME BLANK in the brief** — T1 has not committed. Fill it before launching.
-📎 **`/tmp/brief_INT_addendum_A.md` FOLDS ON PASS 2's RETURN** (precedence: addendum > body). It carries the
-TWO READINESS-FIVE ROWS v2 DOES NOT MEET: `|pinned| == |changed|` is never stated as a number (fixed by making
-step 9's disposition table a COMPLETE ledger over the changed set, with the equality asserted), and the
-inherited counts are quoted from two output-reviews' runs on trees that no longer exist rather than
-regenerated (fixed by making the executor re-measure each and report ITS number beside the brief's).
-**Neither resets the streak — they grow scope inside a sound design.**
-
-⚠ **ORCHESTRATOR CONDUCT — CORRECTED 2026-09-04 AFTER RE-READING `AGENTS.md`, and the next orchestrator should
-check itself the same way:**
-- **I filed `t1300`/`t1301` with my own hands from a TRACK's findings.** MA-0's carve-out is a typo, a stale
-  figure, or a one-line correction **"never on a TRACK's behalf"**, and the default is to incorporate a
-  finding into the track's SCOPE, filing only when genuinely disjoint. **Findings route back to the track;
-  a disjoint filing goes to an executor.**
-- **I was not running the READINESS FIVE at all.** It is binary and checkable without judgement, and applying
-  it to a brief that had already survived a hostile pass still found two unmet rows. **Run it on every brief
-  before the executor launches, not as a formality at the end.**
-- **I pruned worktrees by hand instead of `scripts/round_cleanup.sh --dry-run` first.** The substance was
-  right (clean check, capture-then-prune, keep-list for live agents) but the script exists so the keep-list
-  is not a judgement call. It also splits
-the commits: re-derivation closes `t0572`'s over-declaration backlog as a SIDE EFFECT (22 `shrunk_class`
-rows tighten, `LEAK_CEILING` moves because a fixture disappears), so **the merge resolution and the
-tightening land as SEPARATE commits** — the record must distinguish a row that moved because of a merge from
-one that moved because a defect was fixed.
-
-✅ **THE `vector_hof_result_element_sizing` OWNER ASK IS ALREADY DISCHARGED BY N2's OWN INFLOW** — the row
-`__gorget_closure_env_alloc*5` cited to `t0953` is committed at `0d9f9cebe`. It was never separate work; the
-orchestrator nearly launched a track to redo it. **Check the pending branches before launching anything.**
+📋 **THE PROCEDURE IS `/tmp/brief_INT_v3.md` (Track INT) — SECOND REBUILD; v1 and v2 are DELETED, do not
+look for them. Passes returned 9 then 7 BLOCKING. Streak 0.** ⭐ **v3 CHANGED THE MECHANISM.** v1/v2 wanted to
+GENERATE the allowlist from a sweep and guard it with a lint that re-derives and diffs. **Both halves were
+refuted by measurement:**
+- **THE LINT CANNOT EXIST.** `verdicts.tsv` is written ONLY by `scripts/sanitize_sweep.sh` into `$OUT` and
+  **none is committed** (`git ls-files | grep -i verdict`). A lint needing it must run a 25-min sweep, pin
+  against a stored measurement that rots **for the same reason the allowlist rotted**, or skip — inert. The
+  brief specified WHAT it reads and never WHEN it can run.
+- **A GENERATED FILE CANNOT REPRODUCE THIS ONE.** 806 lines, **512 comments**, ⚖ ADMITTED blocks bound
+  POSITIONALLY above the row they admit, and **row order is NOT sorted** (3 rows out of order).
+- **THE RENAME DISCRIMINATOR WAS THE WRONG HALF.** v2 used the frame-adjacency census — that was the
+  re-seed's CORROBORATION. Its real discriminator is **record count unchanged ∧ every other class untouched**.
+  `__gorget_array_reserve_one` is called from BOTH push variants, so **any** push-allocated leak — including
+  genuine new inflow — shows that frame one out. v2's rule would have ADMITTED REAL LEAKS.
+⭐ **v3: MERGE NORMALLY, THEN RECONCILE ROW-BY-ROW IN PLACE — the sweep ADJUDICATES, it does not GENERATE** —
+and **the pins are PREDICTED THEN CONFIRMED via `figures.py check`, never auto-regenerated**, which is what
+actually closes v1's mirror defect.
+⚠ **THREE MEASURED CORRECTIONS v3 CARRIES:** take **L's side** on the allowlist then reconcile (it holds 12
+cited rows + an OWNER-RULED ⚖ block admitting five new-inflow rows); the `+` rule is
+**`count := max(observed, union)`** because a count-drift census over 3 reps names only **one of seven**
+known-racy rows; and **`shrunk_class` is a READING, not a gate** — its class-GONE loop does not skip loose
+classes, so a correctly reconciled row lands there.
+⚠ **v2's expected-red list was written for the WRONG TREE and would have halted a correct run at its first
+gate.** v3 enumerates the reds the merged tree actually produces, including L-only `retire_fatal` firing
+fatally on two cited rows — **already adjudicated as `t1295`, not a stop.**
+🔲 **T1's hash is a LAUNCH-TIME BLANK in the brief.** Fill it before launching.
+⊕ **The three follow-up filings from pass 2 are IN the brief as TRACK SCOPE** (executor writes them, ids
+issued on request) — correcting the orchestrator's earlier drift of filing on a track's behalf.
 
 ⛔ **DISK — AND `df` LIES HERE. DO NOT USE ITS `Available` COLUMN.** Owner 2026-09-04: it printed 371G free
 when **real free was under 100G**. The overlay reports the apparent device size, not the host's
