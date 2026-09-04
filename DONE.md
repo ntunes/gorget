@@ -9,9 +9,12 @@
   element. Neither showed up as a wrong answer.
   ⭐ **THE FIRE COUNT IS A `Drop` BODY, NOT A LEAK COUNT.** `Vector[Cust] r = v.map((s): Cust(s))` printed
   `2`; the push-built control holding the same two values in the same scope printed its two `drop-cust`
-  lines. Same
-  values, same scope, only the minting writer differed — `__gorget_dtor_Cust` was DEFINED AND NEVER
-  REFERENCED. That reframes the class from a leak to silent-wrong-output.
+  lines. Same values, same scope, only the minting writer differed — `__gorget_dtor_Cust` was DEFINED AND
+  NEVER REFERENCED. That reframes the class from a leak to silent-wrong-output.
+  ⊕ *Erratum for anyone grepping: that closure-literal spelling is how the cell was MEASURED and is no
+  longer how the fixture READS. `vector_hof_result_element_drop.gg` now calls a named `wrap_cust`, because
+  a closure literal carries `todo/t0953`'s environment leak and the fixture is asserted ASan-clean. Grep it
+  for `via_map`.*
   ⚡ **AND THE UNDERSIZED CASE IS A HEAP OVERFLOW THAT SIX REVIEW PASSES MEASURED AS A LEAK.**
   `Vector[int] → Vector[String]` mints 8-byte slots for a 32-byte element. `gorget_array_extend` reserves a
   MINIMUM of eight slots, so with a two-element source every 32-byte write still lands inside the
