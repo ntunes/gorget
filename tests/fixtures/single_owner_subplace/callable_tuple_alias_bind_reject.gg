@@ -7,7 +7,7 @@
 # needed a struct `DefId` to index `struct_field_names`, a tuple has none, so the
 # alias typed as unknown and EVERY ownership gate keyed on that resolver walked
 # straight past it while catching `t.1` one character away. Fixed by giving the
-# alias ONE resolver (`type_utils::tuple_field_alias_index`, Layering rule 3),
+# alias ONE resolver (`ast::tuple_field_alias_index`, Layering rule 3),
 # read by the typechecker AND the safety walk — the shape the self-host lane has
 # always had (`tuple_field_index`, self_host_typechecker/infer.gg).
 #

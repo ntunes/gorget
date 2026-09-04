@@ -29713,10 +29713,18 @@ fn no_committed_conflict_markers() {
 ///    rather than `src/semantic/`, because `ggdef` shares the lexer/parser/AST
 ///    and is FENCED OUT of `semantic/` by `ggdef_import_ratchet` — a `semantic/`
 ///    home would have forced a fourth copy into the definitional interpreter.
-/// 2. NO re-implementation. `strip_prefix('_')` appears nowhere outside the
-///    accessor's own body: that is the exact idiom the inline copy used, and
-///    respelling it is a decision the author has to make deliberately rather
-///    than by reflex.
+/// 2. NO re-implementation IN THE FOUR FILES THE SCAN WALKS: `src/parser/ast.rs`
+///    (where the accessor's own body is the single allowed occurrence),
+///    `src/semantic/typecheck.rs`, `src/semantic/safety/helpers.rs` and
+///    `spec/ggdef/src/elaborate/mod.rs`. `strip_prefix('_')` is the exact idiom
+///    the inline copy used, so respelling it is a decision the author has to
+///    make deliberately rather than by reflex.
+///    ⚠ THAT SCAN IS THOSE FOUR PATHS, NOT THE TREE. A re-implementation in a
+///    FIFTH file is caught only if it also stops one of the three consumers
+///    calling the accessor, which trips the `CALL_SITES` count in clause 3; a
+///    brand-new fifth consumer that hand-rolls the rule while leaving all three
+///    existing call sites intact evades BOTH clauses. Widen this list the
+///    moment a fourth consumer appears.
 /// 3. Every consumer that resolves a tuple element from a FIELD name calls the
 ///    accessor. Pinned as a call-site COUNT, because a name-scoped body scan
 ///    only reaches the functions it lists and a brand-new consumer would evade

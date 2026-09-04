@@ -11,12 +11,15 @@
 # dispatch hot path — the charter breach the owner's callee-borrow ruling
 # (2026-09-04: a call does not consume its callee) removes instead.
 #
-# ⚠ THE READS ARE DELIBERATELY TWO, AND THE SOURCE IS DELIBERATELY A LOCAL.
-# A single read is ACCIDENTALLY clean, and a read through a `&` BORROW PARAM is
-# clean however many times it runs — which is the only reason
-# `lib/xtd/httpserver.gg` is not shipping this today. Nothing enforces that
-# property, so any refactor of a stdlib site to a local container reintroduces
-# it silently.
+# ⚠ THE TWO READS ARE DELIBERATELY OF THE *SAME* ELEMENT — THAT IS THE AXIS.
+# Each read of one element binds another owner of its single heap value. A
+# single read is clean, and so are two reads of DISTINCT elements: add
+# `v.push(mk(50))` after the push below and make the second bind `v[1]`, and
+# this same program runs CLEAN (`41`/`51`, rc 0). The container's spelling is
+# NOT the axis — the same same-element loop reached through a `&` BORROW PARAM
+# is a use-after-free too. So `lib/xtd/httpserver.gg` is safe only because each
+# of its 8 dispatch sites binds a DISTINCT key or index, and nothing enforces
+# that: a refactor that reads one element twice reintroduces this silently.
 #
 # INTENDED: either the callee-borrow rule lands and a call-only bind is a
 # BORROW (no second owner, no clone, no free), or the reject is widened to index
