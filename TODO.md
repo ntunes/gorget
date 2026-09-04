@@ -539,6 +539,14 @@ it survived.**
 code — and **there is NO CEILING ON `skipped`.** **13 of 18 skipped rows are green for an unrelated reason,
 and one is an ACCEPT seed wearing the `production-v1` REJECT label.** ⇒ a new reject seed shaped as an
 `ElabError` lands as SKIP and **nothing goes red.**
+⛔⛔ **STALENESS FENCE (orchestrator, 2026-09-04): EVERYTHING BELOW ABOUT `t0013` / D46 DESCRIBES THE
+PRE-F-G TREE AND GOES FALSE THE MOMENT TRACK F-G INTEGRATES (`b1ae8c650`, output-review returned).** At that
+commit D46's REJECT half ships on **all four lanes**, `t0013` is **closed and `git rm`'d**, and the "ggdef
+never dispatches a user `equip`" gap is **filed as `t1130`**. ⚡ **Flagged rather than rewritten because the
+work is NOT YET ON THIS BRANCH — asserting either state would be wrong. REWRITE THIS BLOCK AT F-G's
+INTEGRATION, not before.** *(This is R48's costliest erratum class: a handover that decayed under a landing
+sibling. The fence is the fix — a claim that names the commit it holds at cannot rot silently.)*
+
 🆕 **UNFILED, and outside `t0013`/`t0683`/D46: ggdef's `==` NEVER DISPATCHES a user `equip … with Equatable`
 impl** (control: `a.eq(b)` spelled explicitly **does**) ⇒ **lane divergence on ACCEPTED, CORRECT, DOCUMENTED
 code.**
@@ -1700,6 +1708,7 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
     / `__zip` undefined; `gorget_map_iter` implicit-declaration; `pair_joinwords_c_fold` **ICEs** at
     `ir/lowering/mod.rs:2144`. `t0167` names the family for self-host; **the Rust-lane `fold` failure is
     sharper than what is filed.**
+  - ⛔ **STALE-ON-F-G-INTEGRATION — see the staleness fence above; D46's reject half ships on all four lanes at `b1ae8c650` and `t0013` is closed there.**
   - **M3 · `==` without `Equatable` — RATIFIED AND UNIMPLEMENTED, no owner ask needed.** **D46 (2026-08-27)**
     already rules it: check-time rejection for structs/enums, intrinsic structural equality for tuples.
     ⚠ **`t0013`'s own headline is STALE** — D46's measured table says the current answer is *address
