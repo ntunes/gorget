@@ -683,6 +683,34 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐⭐ **S-a2 EXECUTOR COMPLETE (`55323d628`) — AND FOUR OF MY FIVE "FILE IT" DIRECTIVES WERE ALREADY FILED.**
+`t0873(a)` (durable repro, sequenced behind `t0406`) · **`t0771` — CRITICAL, filed 2026-08-29, whose repro is
+my cell's mechanism VERBATIM** · `t0939` · `t0401` (HIGH). ⚡⚡ **THREE REVIEW PASSES AND I EACH SAID "FILE IT"
+FOR A DEFECT ALREADY FILED AS CRITICAL FIVE DAYS EARLIER. The GREP-BEFORE-YOU-FILE rule is the only thing
+that caught it, and it caught it at the LAST possible moment — the executor.**
+⛔⛔ **AND IT CONTRADICTED A BRIEF-REVIEW AND WAS RIGHT: "filing 2 does not reproduce" WAS A SELECTION.** It
+reproduces at HEAD, and the **axis pass 4 missed is HOW THE LOCAL WAS BOUND** — `c = (): base + 1` → build
+**rc 101**; `c = mk(40)` → **rc 0**. Four shapes were probed and all four sat on one side of that axis.
+⇒ It gave **`t0401` the durable repro it never had** and corrected the item's own "identifier-specific".
+⭐ **DECLINED THE D27 `!`→`^` FLIP, CORRECTLY:** `decisions.md` assigns it to **D27's own bootstrap-gated
+track**, and the code carries `# D27: !→^` breadcrumbs marking each site. ⚡ **A partial flip leaves a THIRD
+state and makes that track's breadcrumb grep UNDER-COUNT.** ⊕ My site list was stale; regenerated it is
+**four** in the block plus two elsewhere — **and its arm reuses existing text, adding no new drift site.**
+⭐ **The `._N` unification lives at the AST layer, not `semantic/`, because `ggdef_import_ratchet` FENCES
+ggdef OUT of `semantic/` — a `semantic/` home would force a FOURTH copy.** ⊕ And it **declined `t0943`'s own
+advice** to normalise at the parser: the formatter prints `TupleFieldAccess` as `.N`, so folding `._0` in
+would make **`gg fmt` rewrite every `._N` in the corpus and lose a documented spelling.** *Recorded as a
+refusal with a reason, not silence.*
+⊕ **`t0943` CLOSED** (this fix is its cited mechanism), fixture graduated out of `known_gaps/`, test
+un-`#[ignore]`d on both lanes. ⊕ **Corpus sweep: exactly ONE verdict change across 4508 `.gg` files**, and
+`httpserver.gg` stays rc 0 — **the deferral's whole premise, measured.** ⊕ Three double-frees confirmed at
+pristine HEAD with `gg check` rc 0 (`h.f`, `t._1`, `v[0].f`). ⊕ `self_host_bootstrap_fixed_point` **1/0**.
+⊕ **G5/N1 fixed in-track**: the diagnostic now names the **sub-place** (`h.f.clone()`), and
+`find_root_def_id_with_path` **could not stand in** — its `Index` arm appends nothing, so `v[0].f` would have
+rendered `v.f`.
+⊕ **Its one lint failure was PRE-EXISTING AND MINE**, proved by swapping in `git show HEAD:TODO.md` — and it
+is **already fixed on the current integration branch**; their base predates the fix.
+
 ⛔⛔⛔ **T1 PASS 2 CHANGES THE INTEGRATION ORDER: TRACK L, INTEGRATING ALONE, MAY BREACH THE PARITY CEILING
 — AND NO DEBUG RUN WOULD EVER SHOW IT.** `runtime_parity_corpus` scans top-level fixtures **non-recursively
 with no scan-time exclusions**; **L adds 11 top-level fixtures and deletes 3, and THREE of the 11 are CC-FAIL
