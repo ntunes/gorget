@@ -43,6 +43,27 @@ red rows to **one** — `string_enum_variants`, which **goes green the moment L'
 The advisory half is reworded; **the fatal half is `t1295`, still open.** A frame rename is indistinguishable
 from a fixed leak to this gate, which is the reusable finding, not the 27 rows.
 
+🛑 **`tests/sanitize/LEAK_ALLOWLIST.txt` MUST NOT BE MERGED TEXTUALLY — IT IS A MEASUREMENT ARTIFACT, NOT
+SOURCE.** Three pending branches rewrite it and **their rows were measured against DIFFERENT COMPILERS**:
+- `git merge-base --is-ancestor b5356f361 0d9f9cebe` → **rc 1. N2's branch does not contain the frame rename.**
+  It carries 24 `gorget_array_push` rows and ZERO `__gorget_array_reserve_one` rows; HEAD has the rename.
+- **Five rows are edited by BOTH N2 and the re-seed, with OPPOSITE claims.** N2 *deletes* the
+  `gorget_array_push` class (it fixed the HOF-result-element drop); the re-seed *keeps* it under the new name
+  (at HEAD it is live). `builtin_oracle_sync_vector · test_higher_order_named_fn · test_vector_advanced ·
+  test_vector_all · vector_hof_cross_type_map`. Regenerate the list with the `comm -12` of the two
+  `git diff … | cut -f1 | sort -u` row-name sets.
+- ⛔ **git reporting NO conflict is the DANGEROUS outcome here** — taking the re-seed's side silently ADMITS
+  FIVE LEAKS A SIBLING TRACK FIXED, the sweep goes green, and no gate catches an over-declaration.
+⭐ **THE REFERENCE-GRADE SHAPE: merge all CODE first, then RE-DERIVE column 2 from a sweep on the FINAL tree**
+(the mechanical path exists — `verdicts.tsv` column 4 → allowlist column 2; the re-seed executor used it),
+**carrying column 3 CITATIONS forward from the union of branches, because citations are NOT derivable.**
+This is with the re-seed's output-reviewer for adjudication; it may report the per-row answer needs a
+post-merge sweep, which is an acceptable answer. **Do not hand-resolve these five rows at the merge.**
+
+✅ **THE `vector_hof_result_element_sizing` OWNER ASK IS ALREADY DISCHARGED BY N2's OWN INFLOW** — the row
+`__gorget_closure_env_alloc*5` cited to `t0953` is committed at `0d9f9cebe`. It was never separate work; the
+orchestrator nearly launched a track to redo it. **Check the pending branches before launching anything.**
+
 ⚠ **DISK IS A STANDING CONSTRAINT** — the box crashed on it. **Every agent builds its own compiler**; prune
 finished **reviewers'** scratch too, not just executors'. Keep pending agents' worktrees AND their `/tmp`.
 
