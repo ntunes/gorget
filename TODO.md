@@ -477,7 +477,16 @@ working as intended: a five-id block met a two-id need.**
 self-host. ⛔ **THE ACCEPT PREDICATE MUST NOT LAND BEFORE ITS LOWERINGS** — an intermediate state where the
 predicate accepts what the lowering answers wrong is **ratified silent-wrong-output** and fights Core #8.
 ⊕ **EQL carries its own unruled question: `Set`/`Dict` ORDER-INDEPENDENCE** — not settled by D46.
-⚡ **FIRST UNISSUED ID IS NOW `t1157`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
+⭐ **TRACK R OPENED 2026-09-04 — ID BLOCK `t1157`–`t1166`, WRITTEN HERE IN THE SAME ACTION AS THE BRIEF.**
+**Subject: the THREE round-close gates red at pristine HEAD.** Opens at brief, no scout — **Track L's
+executor and the orchestrator already did the scouting and it is recorded on `t0729`.** ⛔ **A red battery is
+NEVER waivable, so R49 cannot close until these are adjudicated** — and the census script's own header sets
+the order: **GRADUATE > REWIRE > allowlist-with-a-reason-code.**
+⚠ **THE QUESTION THE TRACK MUST ANSWER FIRST IS A SIX-Q#6: IS THE DEFECT FIXED, OR IS THE *TRIGGER* STALE?**
+A live defect whose repro no longer reaches it, graduated, is how a security bug gets marked closed.
+**The discriminator is mechanical and the script names it: break the cited fix site BY LINE and watch the
+test go red.**
+⚡ **FIRST UNISSUED ID IS NOW `t1167`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
