@@ -683,6 +683,23 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐ **W PASS 3 UNBLOCKED WITHOUT THE OWNER — I CHECKED WHETHER THE COST QUESTION ANSWERS ITSELF, AND IT
+HALF DOES.** The tempting inference was: *if a non-capturing closure sets `env = NULL` and skips the
+allocation, there is no header to fill, so Y1's undeclared-symbol failure disappears and the cost question is
+moot.* **Half true — and the failing half is the important one.** The two sets differ:
+**zero-size env** (non-capturing) → no drop emitted ⇒ hits Y1 **and** is covered by the skip ✔; but an
+**env capturing a `Callable`** (the *droppable-but-excluded* third axis value) is **NON-zero-size and STILL
+emits no drop**, because `field_is_transitively_droppable` excludes `FnPtr` fields ⇒ **hits Y1 and is NOT
+covered by the skip.**
+⇒ ⛔ **Y1's fix — read the typed `drop_fn`/`clone_fn` via `src_ty`, pass NULL when absent — IS REQUIRED
+REGARDLESS. It is not a cost trade-off; it is the fix for a COMPILE FAILURE.** ⇒ ⚖ **only the ADDITIONAL
+zero-size allocation skip is an owner call (8 B → 0 rather than 8 B → 24), and pass 3 will say whether it
+belongs here or in its own track.**
+⚡⚡ **RECORDED BECAUSE I NEARLY SHIPPED THE TEMPTING VERSION: TWO FIXES THAT SHARE A SYMPTOM ARE NOT THE SAME
+FIX — ENUMERATE THE SETS BEFORE COLLAPSING THEM.** *This is the round's own dominant defect class, caught on
+myself before it reached a brief rather than after — and pass 3 is told the set analysis is mine and
+unverified, with "if there is a THIRD shape neither covers, that is BLOCKING."*
+
 ⭐⭐ **S-a2 PASS 4 = SIGN OFF ON THE RE-SCOPE (streak 3, executor LAUNCHED) — and it produced a launchability
 result no earlier pass had.** It **built the field/tuple-only restriction** and swept the corpus:
 **ZERO verdict changes across all 4544 `.gg` files** in `lib/` + `tests/fixtures/` — 822 fail at HEAD, the
