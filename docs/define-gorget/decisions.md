@@ -516,6 +516,27 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-09-04 — **⚠ OPEN, owner-raised, NOT decided: SHOULD `String` BECOME `Comparable`?** *(Owner leans YES; prior art requested before ratifying.)*
+  **Why it is a question at all.** `String` is registered `Equatable` and `Hashable` but **not `Comparable`** (`is_numeric_trait` gates ordering to numerics). So the D46-shaped gate on `<` `>` `<=` `>=`, applied naively, **rejects `"ab" < "ac"`** — working, ubiquitous code. Measured: **938 ordering sites across 91 files, and 929 of them are `String`.** And `Comparable` is **not derivable at all**, so the teaching diagnostic cannot say *"add `@derive`"*.
+  **Why it is not merely D46's next row.** D46's *"Owed:"* names the `==` path; ordering is a different class by size (938 vs 4) and by remedy. Measured at HEAD, ordering on a struct is **allocator-dependent**: C implies `a > b`, ASan — the same backend with only the allocator changed — implies `a < b`, and LLVM answers all four comparisons `false`, **which is not a possible total order**.
+  **What the answer must also settle:** if `String` becomes `Comparable`, **on what ordering** — byte-wise on UTF-8, code-point, or normalized — and whether that ordering is consistent with the byte equality `String` already has under `Equatable`.
+
+  ⭐⭐ **MEASURED 2026-09-04, AND IT REFRAMES THE QUESTION: STRING ORDERING ALREADY WORKS, CORRECTLY, TODAY.** `String a = "a"+"b"; String b = "a"+"c"` → `a < b` **true**, `b < a` **false**, `a <= a` **true**, `"Z" < "ab"` **true**; `gg check` rc 0, build rc 0, run rc 0. The runtime helper `gorget_str_cmp` (`src/backend/c/runtime/runtime_string.c:551`) is byte-wise `memcmp` with a length tiebreak, it is registered in the LIR runtime table (`src/lir/runtime.rs:303` `StrCmp`), it is reached from `src/lir/lower/insts.rs:282`, **and `src/bir/synth.rs:894` already uses it to order string keys in the sort machinery.**
+  ⇒ **The question is NOT whether to ADD a capability. The implementation already performs byte-lexicographic ordering; the TRAIT REGISTRY does not record it.** Registering `String: Comparable` makes the registry tell the truth about the compiler — and the naive-gate hazard (`"ab" < "ac"` rejected) exists **precisely because** the registry and the lowering disagree.
+
+  **PRIOR ART (surveyed 2026-09-04 at the owner's request).** Every mainstream language makes strings orderable; the near-universal choice is **code-unit / code-point lexicographic, explicitly NOT linguistic collation**, with locale-aware comparison as a separate opt-in API.
+  - **Rust** — `str`/`String` impl `Ord`, byte-wise over UTF-8 (`as_bytes().cmp(..)`). Because UTF-8 byte order **equals** code-point order, this is both. Collation lives in ICU crates, never in `std`.
+  - **Go** — `<` is a **builtin operator** on `string`, byte-wise; `sort.Strings` uses it. `x/text/collate` is the separate locale path.
+  - **Python** — `str` `<` compares by code point; `locale.strcoll` / PyICU are separate.
+  - **Java** — `String implements Comparable<String>`; `compareTo` is **UTF-16 code-unit** lexicographic (which differs from code-point order for supplementary planes — a known wart). `java.text.Collator` is the locale path.
+  - **C++** — `std::string::operator<` is byte lexicographic via `char_traits::compare`.
+  - **Haskell** — `Ord String` lexicographic on `Char` (code points).
+  - ⚠ **Swift — the principled divergence.** `String: Comparable`, but comparison is over **Unicode canonical equivalence** on grapheme clusters, so `"e\u{301}"` and `"\u{e9}"` compare **equal**. Swift documents `<` as *not* suitable for user-facing sorting and points to `localizedStandardCompare`. It can afford this **because it normalizes in equality too** — ordering and equality agree by construction.
+  - ⛔ **C# — the cautionary tale.** `String.CompareTo` and `Array.Sort` were **culture-sensitive by default**, so a program's sort order changed with the machine's locale. Widely treated as a design error; `StringComparer.Ordinal` is the remedy and .NET 5 changed globalization defaults partly over this class of bug.
+
+  ⚡ **THE C# LESSON IS DIRECTLY ON POINT FOR THIS ROUND.** The ordering defect measured above is that struct `<` gives **allocator-dependent** answers. Adopting a locale-dependent string order would swap one environment-dependent answer for another — **the same class of bug from a different source.**
+  ⭐⭐ **AND THE DECIDING ARGUMENT IS INTERNAL, NOT COMPARATIVE: Gorget's `String` equality is `memcmp` on bytes with NO normalization** (`gorget_string_eq`, `runtime_string.c:273`). **Byte-lexicographic order is the only choice that preserves `a == b` ⟺ `!(a < b) && !(b < a)`.** Swift may normalize in ordering because it normalizes in equality; Gorget does not, so **a normalizing order would break antisymmetry against its own ratified `Equatable`.** That is a coherence requirement, not a preference.
+
 - 2026-09-03 — **D54 RATIFIED (owner): THE IMPLICIT `it` CLOSURE PARAMETER IS REMOVED FROM THE SURFACE.**
   `it` is an ordinary identifier at every naming position. A single-parameter closure names its parameter
   like any other, with the type omittable where context fixes it. `E_UndefinedName` on `it` carries a
@@ -1577,7 +1598,11 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
 
   **⚖ ESCAPE-SAFETY IS A SEPARATE CONCERN (owner 2026-07-26: *"I accept that escape-safety is a separate concern"*).** Three successive attempts to make ONE sentence generate every answer were each refuted by measurement — the third added an "the owner outlives that scope" clause which gauntlet pass 2 killed with **five counterexamples**: an escaping `&`-capture (the doc contradicted itself two paragraphs apart — *"a closure CAN outlive the scope that made it"*), `spawn` (a spawned callee does not finish first, by design), `return &v` of a **`&`-parameter** (the referent is NOT gone — it lives in the caller), and the receiver cases. ⚠ **AND THE EXCLUSIVITY RATIONALE COULD NOT EXPLAIN THE CASE IT WAS ADDED FOR:** in the escaping-capture bug there is exactly **ONE** writable path once the owner is gone, so the one-writer rule is SATISFIED and the program still dangles; the compiler's own diagnostic there is `E_DanglingReturn`, a **lifetime** message.
   **THE RATIFIED SHAPE:** the sigil vocabulary says what may happen to a value **across one boundary**, and says **nothing** about how long a borrow stays valid once it has crossed. Escape-safety is governed by its own rules with their own reasons — no returned or field-stored borrows · no local `&`-binding (exclusivity) · a closure holds a reference capture exclusively while live. **Gorget has no lifetimes by design, so it constrains where a borrow may TRAVEL rather than tracking how long it LIVES, and that constraint is not derivable from the table.** ⚠ **LESSON: the table survived every pass; every attempt to extend one rule over escape-safety failed. Stating the uniform part as the rule and NAMING the separate concern is the honest shape — a fourth unification attempt would have been the same error faster.**
-  ⚠ **OPEN, owner-raised 2026-07-26, NOT decided: *"I don't think `return !f` makes sense to support."*** Returning a closure that captured a local is the shape behind the escaping-capture memory bug. Options span: reject escaping closures that hold a `&`-capture (implementable without lifetimes) · require by-value/`!` captures for any closure that escapes · keep it and enforce via a real escape check. **Not folded into anything; decide it as its own question.**
+  ⚖ **CLOSED 2026-09-04 (owner) — CLOSURE CAPTURE IS AN ORDINARY CONSUMING POSITION.** *(Raised 2026-07-26 as: "I don't think `return !f` makes sense to support." Returning a closure that captured a local is the shape behind the escaping-capture memory bug. The options were: reject escaping closures holding a `&`-capture · require by-value/`^` captures for any closure that escapes · keep it and enforce via a real escape check.)*
+  **THE RULING: capture obeys the existing CoW table — clone-if-live, move-if-dead — exactly as every other consuming position does (ctor, `push`, return, field init).** No new concept and no new syntax.
+  **Why NOT "require by-value captures on escape":** it depends on **D7's per-variable capture list, which is unimplemented** (`(&count)():` is a parse error at HEAD, recorded above). It would hand users a diagnostic **whose fix-it cannot be spelled** — the worst available state.
+  **Measured before ratifying:** the escape guard has arms for `Expr::Identifier`, `Expr::StructLiteral` and `Expr::ArrayLiteral` and **none for `Expr::Closure`**, so a returned closure *literal* is never inspected — it covers **1 of 4** cells of the param/local × literal/named matrix, and **three are live use-after-frees**. The ruling's shape closes all three, and reaches the CoW charter optimum (0 clones when the capture source is dead, 1 when live).
+  ⚠ **ONE CELL STAYS OPEN REGARDLESS OF THIS RULING, and it is D7's, not this one's:** a closure capturing a `Callable`/`Box`/`Owned`/`Task`/`Guard`. Those are ratified single-owner carve-outs, so **clone breaches the carve-out, move breaches it under D31, and reject cannot be spelled until D7's capture list exists.** It ships as a `known_gaps` repro asserting the correct answer, with D7 named as its gate.
 
   **SCOPE:** accept/reject surface change ⇒ full gauntlet, all three lanes (Rust gg C+LLVM · ggdef · self-host), NEG fixture per rejected position, doc write-through (`language-reference.md` §9.3, `language-design.md`). Own scout → brief → ≥3 fresh reviews → executor → output-review.
 
@@ -2945,6 +2970,35 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   **Owed:** the tuple path (intrinsic), the reject path with a teaching diagnostic naming `Equatable` and
   suggesting `@derive`, cross-lane fixtures for all five rows of the table above, and a doc
   write-through. Filed as `todo/t0013.md`.
+
+  **⚖ RIDER — EXTENDED TO THE NON-ANNOTATABLE AGGREGATES (owner 2026-09-04).** Intrinsic structural
+  equality also covers **`Option[T]` · `Result[T,E]` · `Vector[T]` · `Set[T]` · `Dict[K,V]` · `Array[T,N]` ·
+  `Range`**, on the same gate as tuples: **whenever their elements are themselves comparable.** `Option[P]`
+  where `P` has no `Equatable` **rejects**, exactly as a tuple containing `P` does. **`Box[Trait]` and
+  `Callable[T]` REJECT** — a trait object and a closure have no structural equality to give; they are named
+  here so the axis has no unnamed cell.
+  **The reason is half 1's own reason.** *"There is nowhere to write `@derive(Equatable)`"* is a statement
+  about **annotatability**, and it is equally true of every type above — all of them are prelude or builtin
+  types the user cannot annotate. Half 1's text named tuples because tuples were the cell in front of it;
+  the rationale was always wider. The line the language draws is therefore: **declarable ⇒ require
+  `@derive`; non-declarable ⇒ intrinsic when the elements are comparable.**
+  ⚠ **`Option` and `Result` are ENUMS, so the literal text of half 2 would have rejected them forever** —
+  including `Some(1) == Some(1)`, the shape a user is most likely to write. That collision between half 2's
+  letter and half 1's reason is what this rider settles.
+  **Measured before ratifying:** `Some(1) == Some(1)` prints **`false`** on C and LLVM and **`true`** on
+  ggdef; the entire 3,350-file fixture corpus contains **zero** equality comparisons on any of these types,
+  so the rider costs no migration — only implementation.
+  ⚠ **AND THE PREDICATE IS NOT THE WORK.** Measured: with the accept-predicate alone, `(1,2)==(1,2)`,
+  `Some(1)==Some(1)` and `[1,2]==[1,2]` **still print `false`**, because the eq lowering is a
+  `format!("{type_name}__eq")` dispatch with **no structural fallback**. Shipping the predicate without the
+  lowerings would **ratify a wrong answer** and fight Core #8. ⇒ **the ACCEPT predicate MUST NOT LAND BEFORE
+  ITS LOWERINGS.**
+
+  ⚠ **CORRECTION TO "Owed:" (2026-09-04).** That paragraph scopes the debt to the `==` path only. The
+  **ordering siblings (`<` `>` `<=` `>=`) are a different class**, not one more row: measured, **938 sites
+  across 91 files against 4 for `==`**, and **929 of the 938 are `String`**, which is `Equatable`/`Hashable`
+  but **not `Comparable`** — so a naive gate rejects `"ab" < "ac"`, working ubiquitous code. See the open
+  question dated 2026-09-04.
 
 - 2026-08-16 — **🎯 THE SILENT ARM-KILLER = REJECT, on two rules (owner, live session).**
   A `case` naming something that does not exist must not silently become a catch-all.
