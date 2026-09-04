@@ -58453,30 +58453,30 @@ fn llvm_extern_allocator_respects_declared_return_type() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// t0729 — a nested `match` over a nested `Option` emits an aggregate copy as a
-/// `memcpy` between OVERLAPPING stack slots on the LLVM lane (UB).
-///
-/// Invisible to a stdout check: the program currently produces the right
-/// answer, which is exactly why the defect survived. The assertion is
-/// ASan-cleanliness.
+/// Build a `tests/fixtures`-relative fixture with `--sanitize --backend=llvm`,
+/// run it under `detect_leaks=1:halt_on_error=1:exitcode=99`, and assert BOTH
+/// ASan-cleanliness and stdout.
 ///
 /// Pins `--backend=llvm` EXPLICITLY rather than routing through
 /// `assert_gg_sanitize_clean`, which selects the backend only when
-/// `GG_BACKEND` is set. The C lane genuinely IS clean here, so a
+/// `GG_BACKEND` is set. Every caller below is ASan-clean on the C lane, so a
 /// `GG_BACKEND`-driven version reports GREEN on a plain
 /// `cargo test -- --ignored` run — and a green `known_gaps` test reads as a
 /// fixed gap to anyone auditing whether these still fail. Its sibling
 /// `llvm_extern_allocator_respects_declared_return_type` makes the same choice
-/// for the same reason; all four gap tests in this group redden regardless of
-/// the environment.
-#[test]
-#[ignore = "KNOWN GAP t0729: LLVM aggregate copy uses memcpy on overlapping \
-stack slots (ASan: memcpy-param-overlap); reddens attack_64 and attack_70."]
-fn llvm_nested_option_match_no_memcpy_overlap() {
+/// for the same reason.
+///
+/// ⚠ THE INSTRUMENT IS NARROW, AND EVERY CALLER MUST KNOW IT. The emitted USER
+/// IR is not ASan-instrumented — only the runtime C is — so a stack
+/// out-of-bounds write is invisible here unless it trips the `memcpy`
+/// interceptor's OVERLAP check, which needs the overrun to land EXACTLY on the
+/// source buffer. A green result is evidence about THIS cell, never evidence
+/// that no overrunning aggregate copy exists.
+fn assert_llvm_sanitize_clean_stdout(fixture_rel: &str, tag: &str, expected_stdout: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let src = manifest_dir
-        .join("tests/fixtures/known_gaps/llvm_nested_option_match_memcpy_param_overlap.gg");
-    let dir = std::env::temp_dir().join(format!("gg_t0729_{}", std::process::id()));
+    let src = manifest_dir.join("tests/fixtures").join(fixture_rel);
+    assert!(src.exists(), "Fixture not found: {}", src.display());
+    let dir = std::env::temp_dir().join(format!("gg_{tag}_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let staged = dir.join("probe.gg");
     std::fs::copy(&src, &staged).expect("stage fixture");
@@ -58490,7 +58490,7 @@ fn llvm_nested_option_match_no_memcpy_overlap() {
         .expect("run gg build");
     assert!(
         build.status.success(),
-        "t0729 probe failed to build.\nstderr: {}",
+        "{tag}: `gg build --sanitize --backend=llvm {fixture_rel}` failed.\nstderr: {}",
         String::from_utf8_lossy(&build.stderr)
     );
 
@@ -58501,11 +58501,96 @@ fn llvm_nested_option_match_no_memcpy_overlap() {
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(
         !stderr.contains("AddressSanitizer") && !stderr.contains("SUMMARY:"),
-        "t0729: `--backend=llvm` emitted an aggregate copy as a memcpy between \
-         overlapping stack slots.\nstderr: {stderr}"
+        "{tag}: `--backend=llvm` emitted an aggregate copy that ASan rejected for \
+         {fixture_rel}.\nstderr: {stderr}"
     );
-    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "inner-none");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        expected_stdout.trim(),
+        "{tag}: wrong stdout on the sanitized LLVM lane for {fixture_rel}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// LIVE REGRESSION FIXTURE (graduated from `t0729`). A nested `match` over a
+/// nested `Option` with the inner `None()` built inline used to allocate that
+/// temp with the OUTER Option's type, so the payload copy took its LENGTH from
+/// the wrong type and wrote 8 bytes past a 16-byte field. The overrun landed on
+/// the source slot, so ASan reported `memcpy-param-overlap`.
+///
+/// Invisible to a stdout check: the program produced the right answer before
+/// AND after, which is exactly why the defect survived. The assertion here is
+/// ASan-cleanliness; `nested_option_match_inline_some_none` pins the stdout on
+/// the default lane, where the C lane was always the oracle.
+///
+/// RED-verified against the filing-era compiler (`c53d6d833`): rc 99,
+/// `memcpy-param-overlap`, `#0 __interceptor_memcpy #1 main`, with x86_64
+/// `memcpy(224(%rsp), 240(%rsp), 24)` — [224,248) against [240,264).
+///
+/// THE FIX IS ARCH-INDEPENDENT, AND THAT IS DECIDABLE FROM THE IR ALONE.
+/// Verify at HEAD (`gg build --backend=llvm --sanitize <fixture>`, then read the
+/// kept `.ll`): `%s2 = alloca %Option__int64_t` / `memset(%s2, 0, 16)` — the
+/// inner temp now carries its OWN type, not the outer Option's 24 — and
+/// `%v53 = getelementptr %s3, i64 8` / `memcpy(%v53, %s2, i64 16)`, writing 16
+/// bytes into a 16-byte payload field. The LENGTH is a CONSTANT OPERAND, so no
+/// frame layout on any target can turn it back into an overrun.
+#[test]
+fn llvm_nested_option_match_no_memcpy_overlap() {
+    assert_llvm_sanitize_clean_stdout(
+        "nested_option_match_inline_some_none.gg",
+        "t0729_graduated",
+        "inner-none",
+    );
+}
+
+/// The default-lane half of the same graduated fixture. The LLVM/ASan test
+/// above cannot stand alone: a C-lane regression to `outer-none` would leave
+/// every gate in the tree green, because top-level enrolment
+/// (`runtime_parity_corpus`, `c_emit_comparison`) is diagnostic-always-pass.
+#[test]
+fn nested_option_match_inline_some_none() {
+    run_gg("nested_option_match_inline_some_none.gg", "inner-none");
+}
+
+/// t0729, RE-SCOPED — the aggregate-copy class the graduated fixture's fix did
+/// NOT retire. `Option[T].map(f)` with `f` a VOID-returning `Callable`
+/// PARAMETER allocates the result slot as `Option[int64]`
+/// (`%s17 = alloca %Option__int64_t`, 16 bytes) and copies the receiver's real
+/// payload into its 8-byte field (`memcpy(%s17+8, %s16, i64 32)`) — a 32-byte
+/// `GorgetString`, 24 bytes out of bounds.
+///
+/// TWO defects, one loud. The mistyped slot is UPSTREAM of both backends —
+/// the C lane emits `__gg_Option__int64_t __s17` for the same source. What
+/// differs is the copy LENGTH: C takes it from the DESTINATION FIELD
+/// (`sizeof(int64_t)`, in bounds but a truncated `String`), LLVM takes it from
+/// the SOURCE VALUE. So the C lane's cleanliness is not a vindication of the
+/// lowering (Core #8) — it is clean because a void `map` discards its result
+/// and nothing reads the truncated payload — and fixing only the LLVM length
+/// would silence ASan while leaving the type disagreement, which is exactly
+/// the trap `t0729`'s original `llvm.memmove` prescription was.
+///
+/// ⚠ THIS IS NOT A HYPOTHETICAL AND NOT A SIDE ISSUE: the top-level, GREEN,
+/// non-`#[ignore]`d `combinator_callable_param_same_type.gg` contains this cell
+/// (`void_map`) and trips identically under `--backend=llvm --sanitize`. A
+/// plain `--backend=llvm` build exits 0 with correct output — benign BY LUCK,
+/// which Core #8 refuses.
+///
+/// The fix is in `src/`, outside the zone that filed this, and the surviving
+/// class is broader than this one cell. What the result TYPE of a void `map`
+/// should be is an open design question, deliberately not prescribed here:
+/// the `I64_TYPE` fallback is a documented retreat (minting `unit` measured
+/// rc 139 on both backends), not an oversight.
+#[test]
+#[ignore = "KNOWN GAP t0729: Option.map with a void-returning Callable PARAM \
+allocates the result slot as Option[i64] and copies the receiver's real \
+payload into it — a 24-byte stack OOB write (ASan: memcpy-param-overlap) on \
+the LLVM lane. Intended stdout on both lanes is hello%."]
+fn llvm_option_map_void_callable_no_oob_memcpy() {
+    assert_llvm_sanitize_clean_stdout(
+        "known_gaps/llvm_option_map_void_callable_result_slot_oob.gg",
+        "t0729_void_map",
+        "hello%",
+    );
 }
 
 /// t0732 — a `shared(atomic) int` is never freed. Leaks 8 bytes on BOTH lanes.
@@ -62691,7 +62776,19 @@ true",
 /// outside both the top-level `runtime_parity_corpus` scan and the top-level
 /// `scripts/sanitize_sweep.sh` walk, whose leak allowlist is shrink-only. The
 /// top-level-function spelling of the same cell IS a top-level fixture
-/// (`combinator_callable_param_same_type.gg`) and is ASan-clean.
+/// (`combinator_callable_param_same_type.gg`).
+///
+/// ⛔ CORRECTION — that sentence used to end "and is ASan-clean", which is TRUE
+/// ON C AND FALSE ON LLVM. Measured: `gg build --sanitize --backend=llvm` on
+/// `combinator_callable_param_same_type.gg`, run under
+/// `detect_leaks=1:halt_on_error=1:exitcode=99` → rc 99,
+/// `AddressSanitizer: memcpy-param-overlap`, `#1 void_map`. That fixture's
+/// `void_map` cell — a VOID-returning `Callable` PARAM — allocates the `map`
+/// result as `Option[int64]` and copies the receiver's 32-byte `GorgetString`
+/// into its 8-byte payload field: a 24-byte stack OOB write, filed as
+/// `todo/t0729` with the minimised repro
+/// `known_gaps/llvm_option_map_void_callable_result_slot_oob.gg`. The claim was
+/// never measured on the LLVM lane; a leak sweep on the C lane cannot see it.
 #[test]
 fn combinator_callable_param_result_type_erased_sbo() {
     run_gg(

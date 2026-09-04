@@ -1,0 +1,55 @@
+# LIVE REGRESSION FIXTURE (graduated from `todo/t0729`). A nested `match` over
+# a nested `Option` whose inner `None()` is built INLINE at the local binding.
+#
+# ── WHAT IT PINS ──
+# The inner `None()` temp used to be allocated with the OUTER Option's type:
+#
+#   %s3 = alloca %Option__Option__int64_t   ; 24 bytes
+#   %s2 = alloca %Option__Option__int64_t   ; 24 bytes  <- the INNER None()
+#   call ptr @memcpy(ptr %s3+8, ptr %s2, i64 24)
+#
+# The payload field at `%s3+8` is 16 bytes; the copy length followed the temp's
+# wrong type and wrote 24, overrunning by 8. The overrun landed on the source
+# slot, so ASan's memcpy interceptor reported it as an overlap:
+#
+#   ERROR: AddressSanitizer: memcpy-param-overlap: memory ranges
+#     [0xfffff103f7a8,0xfffff103f7c0) and [0xfffff103f7b8,0xfffff103f7d0) overlap
+#     #0 __interceptor_memcpy   #1 main
+#
+# At HEAD `%s2` is `%Option__int64_t` (`memset(%s2, 0, 16)` — its OWN type, not
+# the outer Option's 24) and the copy is `memcpy(%s3+8, %s2, i64 16)` — exactly
+# the destination field's size. The length is a CONSTANT OPERAND in the emitted
+# IR, so in-bounds-ness is decidable from the IR alone and no frame layout on
+# any target can change it. Corroborated on x86_64: filing-era
+# `memcpy(224(%rsp), 240(%rsp), 24)` — [224,248) against [240,264), the 8-byte
+# overlap; HEAD `memcpy(232(%rsp), 248(%rsp), 16)` — [232,248) against
+# [248,264), disjoint.
+#
+# ── WHY TWO TESTS ──
+# `nested_option_match_inline_some_none` pins stdout on the default lane; the
+# C lane was always the oracle here and is what a stdout regression would break.
+# `llvm_nested_option_match_no_memcpy_overlap` builds with `--sanitize
+# --backend=llvm` and pins ASan-cleanliness, because the stdout was ALWAYS right
+# — that is precisely why the defect survived, and why stdout alone cannot see
+# this class.
+#
+# ⚠ ASan ON THE LLVM LANE IS A NARROW INSTRUMENT. The emitted USER IR is not
+# instrumented, only the runtime C is, so a stack out-of-bounds write is
+# invisible here unless it trips the memcpy interceptor's OVERLAP check — which
+# needs the overrun to land EXACTLY on the source buffer. This defect was found
+# by that accident. ASan-clean on this lane is therefore not evidence that no
+# overrunning aggregate copy exists; surviving members of the class are filed
+# under `todo/t0729`, whose repro is
+# `tests/fixtures/known_gaps/llvm_option_map_void_callable_result_slot_oob.gg`.
+#
+# Expected on both backends, sanitized: stdout `inner-none`, exit 0, no ASan
+# report.
+
+void main():
+    Option[Option[int]] p = Some(None())
+    match p:
+        case Some(a):
+            match a:
+                case Some(b): print(b)
+                case None(): print("inner-none")
+        case None(): print("outer-none")

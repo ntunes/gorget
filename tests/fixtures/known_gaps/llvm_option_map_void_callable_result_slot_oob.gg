@@ -1,0 +1,81 @@
+# KNOWN GAP (todo/t0729): `Option[T].map(f)` with `f` a VOID-returning
+# `Callable` PARAMETER allocates the result slot as `Option[int64]` and then
+# copies the receiver's real payload — a 32-byte `GorgetString` — into its
+# 8-byte payload field. On `--backend=llvm` that is a 24-byte stack write past
+# the end of the slot.
+#
+#   ERROR: AddressSanitizer: memcpy-param-overlap: memory ranges
+#     [0xffffc20238b8,0xffffc20238d8) and [0xffffc20238c0,0xffffc20238e0) overlap
+#     #0 __interceptor_memcpy   #1 void_map
+#
+# ASan calls it an OVERLAP because the overrun happens to land on the copy's own
+# SOURCE, which sits immediately after the destination slot. It is an
+# out-of-bounds DESTINATION WRITE; the overlap is how it became visible.
+#
+# ── THE MISTYPED SLOT IS UPSTREAM OF BOTH BACKENDS. THE COPY LENGTH IS NOT. ──
+# Measured on THIS source at HEAD, same compiler, both lanes:
+#
+#   LLVM   %s17 = alloca %Option__int64_t            ; 16 B = 8 tag + 8 payload
+#          call ptr @memcpy(ptr %s17+8, ptr %s16, i64 32)   <- SOURCE-sized
+#   C      __gg_Option__int64_t __s17 = {0};
+#          memcpy(__v44, __v30, sizeof(int64_t));           <- DEST-FIELD-sized
+#
+# BOTH lanes allocate the result of a void `map` as `Option[int64]`, so the
+# mistyping is upstream of the backends. What differs is the aggregate copy's
+# LENGTH: the C backend takes it from the DESTINATION FIELD and writes 8 bytes
+# — in bounds, but a TRUNCATED `String` — while the LLVM backend takes it from
+# the SOURCE VALUE and writes 32. Two defects; only one of them is loud.
+#
+# ⚠ SO THE C LANE'S CLEANLINESS IS NOT A VINDICATION OF THE LOWERING (Core #8).
+# It prints the intended answer and is ASan-clean only because a void `map`
+# DISCARDS its result, so nothing ever reads the truncated payload. And fixing
+# the LLVM LENGTH alone would silence ASan while leaving the type disagreement
+# in place — the same trap `t0729`'s original `llvm.memmove` prescription was.
+#
+# ── WHAT IS INTENDED, AND WHAT IS OPEN ──
+# INTENDED (not open): stdout `hello%`, exit 0, no ASan report, on BOTH
+# backends. That is what ggdef and the C lane produce and what the top-level
+# `combinator_callable_param_same_type.gg` asserts.
+# OPEN (an owner/design call, deliberately NOT prescribed here): what the result
+# TYPE of a void `map` should be. `combinator_callable_param_same_type.gg`'s
+# header records that `callable_param_return_type` DROPS a `unit` recovery on
+# purpose — minting `unit` as the result payload measured rc 139 on both
+# backends — so the `I64_TYPE` fallback is a deliberate retreat, not an
+# oversight, and the annotated sibling `Option[String] r = o.map(void_f)` is
+# REJECTED with "the result is `Option[void]`". Resolving that is what makes
+# this repro green honestly.
+#
+# ── WHY A PLAIN LLVM BUILD LOOKS FINE ──
+# `--backend=llvm` without `--sanitize` exits 0 and prints `hello%`. Correct BY
+# LUCK: the write lands on a live neighbouring slot that is not read afterwards.
+#
+# ── WHY NO GATE SAW IT ──
+# The emitted USER IR is not ASan-instrumented; only the runtime C is. A stack
+# out-of-bounds write is invisible to this lane's sanitizer unless it trips the
+# memcpy interceptor's OVERLAP check, which needs the overrun to land EXACTLY on
+# the source buffer. This cell does; most members of the class do not. `t0729`'s
+# ORIGINAL repro was found by the same accident, and the class outlived it.
+#
+# ── SHAPE NOTES ──
+# Minimised from the `void_map` cell of
+# `tests/fixtures/combinator_callable_param_same_type.gg` — GREEN,
+# non-`#[ignore]`d and TOP-LEVEL — which trips identically under
+# `--backend=llvm --sanitize`. The `Callable` PARAMETER is load-bearing: it is
+# the one closure shape whose GIR local type is erased, so a closure literal or
+# a directly-named top-level function does not reproduce. `mk` exists so the
+# payload is a heap-built `String` rather than a static literal.
+#
+# GRADUATES to a live regression fixture the round t0729 is fixed.
+
+String mk(String a, String b):
+    return a + b
+
+void shout(String s):
+    print(mk(s, "%"))
+
+void void_map(Callable[void(String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    o.map(f)
+
+void main():
+    void_map(shout)
