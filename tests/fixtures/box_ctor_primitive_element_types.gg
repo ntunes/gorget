@@ -18,8 +18,21 @@
 # FAIL). Leading with a `double` element makes the collapse observable on the
 # very next line.
 #
-# All ten primitive widths are covered because the defect is per-element-type:
-# a fixture sampling one value of a typed axis is an anecdote, not a net.
+# ⛔ THE AXIS HAS ELEVEN CELLS AND THIS FIXTURE COVERS TEN. The omitted one is
+# `float32`, and it is NAMED here rather than left to be discovered, because a
+# net that quietly samples ten of eleven is the same anecdote it was written to
+# replace (Core #12: cover every value, or name each omitted cell).
+#
+# WHY `float32` IS OUT, and it is not "one more row": it fails on a DIFFERENT
+# axis and would make this fixture assert two unrelated things at once. Here
+# the defect was the element NAME — every unnamed element collapsing onto one
+# `Box__int64_t`. For `float32` the name is derived CORRECTLY as `"float"`, and
+# the generated `__gorget_box_alloc_float` BODY takes and stores a `double`, so
+# the value is written eight bytes wide and read back four: C prints
+# `0.000000`, LLVM refuses at `llc`. Measured identical before and after the
+# element-naming fix — the `float32` arm was never reached by it.
+# Pinned separately, with its own repro and its own `#[ignore]`d test:
+# `tests/fixtures/known_gaps/box_float32_element_reads_zero.gg`.
 
 void main():
     Box[float] a = Box[float](1.5)

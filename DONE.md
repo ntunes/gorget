@@ -45,6 +45,13 @@
   double deref: SEGV on C, silent garbage on LLVM), `t1078` (the SH resource-field-read `void*`), `t1079`
   (two parallel primitive tables + 30 `unwrap_or("int64_t")` sites), `t1080` (`E_MoveWithoutOperator` still
   teaches the pre-D27 `!`).
+  **THE AXIS HAS ELEVEN ARMS AND THE FIXTURE COVERS TEN — said here rather than discovered later.** The
+  omitted cell is `F32_TYPE`, named in the fixture header and the test doc with its reason: `float32` fails
+  on a DIFFERENT axis (the element NAME is right; the generated `__gorget_box_alloc_float` BODY takes and
+  stores a `double` while the reader is `*(float *)`), measured identical before and after this fix, so
+  folding it in would make one fixture assert two mechanisms. Filed with its own repro as `t1197`, beside
+  `t1198` — the `float` literal is rejected at a local bind and a plain call argument and ACCEPTED at the
+  Box ctor, the struct ctor and a collection push, all three then storing zero.
 - [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
   STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,
   garbage or empty stdout on BOTH backends. Two producer sites now stamp the View tag; 12 cells RED→GREEN.**

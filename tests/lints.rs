@@ -28663,8 +28663,16 @@ fn box_typedef_registration_sites_count() {
         &format!(
             "The roster these must match lives on `ensure_box_type_def` in \
              `src/ir/lowering/exprs/type_reg.rs`. Sites found:\n  {}\n\n\
-             Regenerate with:\n  \
-             grep -rn --include='*.rs' 'is_box: true' src/",
+             Regenerate with — and the ANCHOR is the filter, not decoration:\n  \
+             grep -rnE '^[[:space:]]*is_box: true' src/\n\n\
+             The count above is CONSTRUCTION SITES: the field written at the \
+             start of a line, inside a struct literal. The unanchored \
+             `grep -rn 'is_box: true' src/` returns more, because the roster \
+             comment and the two site markers MENTION the spelling in prose — \
+             at the time of writing, 7 lines for 4 sites. Quoting that command \
+             beside this constant would ship an enumeration its own command \
+             contradicts, which is the failure this file asks other tables not \
+             to make.",
             sites.join("\n  "),
         ),
     );
@@ -28684,10 +28692,29 @@ fn box_typedef_registration_sites_count() {
 /// silently becomes a generic struct literal with no mint behind it; nothing
 /// else in the tree asserts the membership.
 ///
+/// The condition really is load-bearing rather than belt-and-braces, and that
+/// was measured on the PRISTINE tree rather than reasoned: with `"Box"` dropped
+/// from the list, an imported `Box[float](1.5)` routes through
+/// `lower_struct_literal` and builds against the arm that is now deleted.
+///
 /// **If this fails**: either restore `"Box"` to `COLLECTION_TYPES`, or, if the
 /// rewrite genuinely should produce a `StructLiteral` for `Box`, give
 /// `lower_struct_literal` a real Box arm that DELEGATES to the `exprs/calls.rs`
 /// mint — do not hand-copy it back.
+///
+/// ## What this does NOT check (Core #12: name the omitted cells)
+///
+/// It pins LIST MEMBERSHIP, not the EARLY-RETURN BEHAVIOUR that membership is
+/// supposed to cause. Move the `COLLECTION_TYPES.contains(..)` test below the
+/// construction site, put it behind a condition, or change what the early
+/// return does, and this stays green while the premise it exists to protect is
+/// gone. It also does not check that the list is COMPLETE — a collection type
+/// added to the language and not to the list is invisible here.
+///
+/// The behavioural half has no guard today. It is watched only indirectly, by
+/// every `Box`/`Vector`/`Dict` fixture in the suite going red if the
+/// constructor stops reaching its mint — which is real coverage but is not
+/// this assertion, and should not be read as if it were.
 #[test]
 fn rewrite_collection_types_excludes_struct_literal() {
     let content = fs::read_to_string("src/semantic/rewrite.rs")

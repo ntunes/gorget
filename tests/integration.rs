@@ -63152,6 +63152,18 @@ fn vector_user_struct_capacity_ctor() {
 /// 70 `Box`-mentioning top-level fixtures, the ctor mint fires 23 times across
 /// 12 of them, and NOT ONE fire carries a non-`int64_t` primitive element. This
 /// fixture is the only instrument in the tree for the axis.
+///
+/// ⛔ SCOPE, STATED RATHER THAN IMPLIED: `c_type_name_for_id` has ELEVEN
+/// primitive arms and this fixture covers TEN. The omitted cell is
+/// **`F32_TYPE` / `float32`**, and it is still broken — but on a different
+/// axis, which is why it is not simply an eleventh row here. Its element name
+/// is derived CORRECTLY as `"float"`; the generated
+/// `__gorget_box_alloc_float` BODY takes and stores a `double`, so the value
+/// is written eight bytes wide and read back four (C prints `0.000000`; LLVM
+/// refuses at `llc`). Measured identical before and after the element-naming
+/// fix — the `float32` arm was never reached by it, so folding it in here
+/// would make one fixture assert two unrelated mechanisms. Pinned by
+/// `box_float32_element_reads_zero` (`todo/t1197`).
 #[test]
 fn box_ctor_primitive_element_types() {
     run_gg(
@@ -63337,5 +63349,58 @@ fn box_nested_double_deref_reads_garbage() {
     run_gg(
         "known_gaps/box_nested_double_deref_reads_garbage.gg",
         "aaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbb",
+    );
+}
+
+/// `todo/t1197` — the ELEVENTH primitive arm. `Box[float32]` reads
+/// `0.000000`: the allocator's NAME and its BODY disagree about how wide the
+/// element is. `c_type_name_for_id(F32_TYPE)` is `"float"`, which is right,
+/// and the emitted call really is `__gorget_box_alloc_float` — but the
+/// generated body is `__gorget_box_alloc_float(double val)` storing
+/// `sizeof(double)`, while the reader is `*(float *)`. Eight bytes written,
+/// four read, and the low four bytes of `1.5` are zero.
+///
+/// ⚠ MEASURED ON BOTH SIDES of the element-naming fix and IDENTICAL: C build
+/// rc 0 / run rc 0 / `0.000000`, LLVM build rc 1 at `llc`. The `float32` arm
+/// was never reached by that fix, so this is a pre-existing sibling, not a
+/// regression from it.
+///
+/// The fixture writes `1.5 as float32` deliberately: with an explicit cast the
+/// source really is `float32`, so the checker has nothing to say and this
+/// emitter defect is the only one left standing. A bare `1.5` there would also
+/// trip `todo/t1198` and the repro would adjudicate neither.
+#[test]
+#[ignore = "KNOWN GAP (todo/t1197): `Box[float32]` prints 0.000000 on the C \
+lane and fails at `llc` on LLVM — `__gorget_box_alloc_float` is generated with \
+a `double` parameter and `sizeof(double)` storage while the reader is \
+`*(float *)`. Fixture: tests/fixtures/known_gaps/box_float32_element_reads_zero.gg."]
+fn box_float32_element_reads_zero() {
+    run_gg("known_gaps/box_float32_element_reads_zero.gg", "1.500000");
+}
+
+/// `todo/t1198` — the `float` → `float32` type check holds at a declared slot
+/// and a plain call argument and is ABSENT at every consuming position.
+///
+/// `float32 x = 1.5` and `takes(1.5)` are both rejected with
+/// `E_TypeMismatch: expected float32, found float`. The same literal is
+/// ACCEPTED at `Box[float32](1.5)`, at `S(1.5)` where `S.f: float32`, and at
+/// `v.push(1.5)` on a `Vector[float32]` — and all three then store an `f64`
+/// into an `f32` slot and read back `0.000000`.
+///
+/// ⚠ THE ASSERTION IS THE REJECTION, NOT THE OUTPUT. If an implicit f64→f32
+/// narrowing at consuming positions is ever ratified, the fixture's three rows
+/// must print `1.500000` instead; what cannot stand is today's accept-and-
+/// store-zero. Written as a `gg check` reject so the test fails the moment
+/// either disposition lands, rather than pinning one of two open answers.
+#[test]
+#[ignore = "KNOWN GAP (todo/t1198): a `float` literal at a CONSUMING position \
+(Box ctor / struct ctor / collection push) is accepted into a `float32` slot \
+and silently stores zero, where the identical literal at a local bind or a \
+plain call argument is rejected with E_TypeMismatch. Asserts the rejection. \
+Fixture: tests/fixtures/known_gaps/float32_consuming_positions_accept_float_literal.gg."]
+fn float32_consuming_positions_accept_float_literal() {
+    check_gg_fails(
+        "known_gaps/float32_consuming_positions_accept_float_literal.gg",
+        "expected `float32`",
     );
 }
