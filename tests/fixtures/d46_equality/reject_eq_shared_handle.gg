@@ -1,0 +1,29 @@
+# D46 — the D53 SINGLE-OWNER HANDLE family. `Shared[T]` is not in the rider's
+# intrinsic-equality set, so `==` on it is refused like any other type with no
+# `Equatable` implementation.
+#
+# ⚠ THE PRE-D46 ANSWER WAS WRONG IN THE MOST EMBARRASSING WAY AVAILABLE: `b = a`
+# makes `b` the SAME handle as `a`, and the comparison still printed `false`.
+# So this is not an over-reject on working code — there was no working code.
+#
+# What this fixture pins is the DIAGNOSTIC, not just the rejection. The blame
+# type is a builtin wrapper, so `derive_possible` is cleared from the typed
+# `deref_wrapper_kind` flag and the message must NOT say "add
+# `@derive(Equatable)` to `Shared`" — advice the author cannot take.
+#
+# ⚖ The DISPOSITION is an open question, not settled here: D46's rider claims
+# its list is complete ("named here so the axis has no unnamed cell") while
+# naming only `Box[Trait]` and `Callable`, and its stated general rule —
+# non-declarable aggregates get intrinsic equality on element comparability —
+# would put `Shared[int]` in ACCEPT. Tracked as `todo/t1265`. If it is ruled
+# ACCEPT, this fixture flips to an accept cell; until then REJECT is the
+# defensible reading, because guessing what equality means for a handle is
+# exactly what D46 exists to stop.
+#
+# Asserted by `d46_eq_shared_handle_rejects_without_derive_advice`
+# in tests/integration.rs.
+
+void main():
+    Shared[int] a = Shared[int](42)
+    Shared[int] b = a
+    print(a == b)

@@ -1809,9 +1809,11 @@ impl std::fmt::Display for SemanticError {
                         return write!(
                             f,
                             "operator `{op}` is not defined for type `{type_name}` — \
-                             a closure or trait object has no structural equality \
-                             to compare; compare a value you can derive \
-                             `Equatable` for instead"
+                             there is no `Equatable` implementation you can add for \
+                             it: a closure, a trait object and the single-owner \
+                             handle types have no structural equality to give. \
+                             Compare a value whose type you can derive `Equatable` \
+                             for instead"
                         );
                     }
                     return write!(

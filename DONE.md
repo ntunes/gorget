@@ -41,24 +41,44 @@
   it carries its own `E_` code: an `ElabError` would have been a `FrontendError` and therefore a GGDEF-SKIP,
   whose committed `expect:` is never compared. `GGDEF_SKIP_CEILING` (shrink-only, seeded at 18) is the new
   guard that forces that shape — the MATCH floor could only see the other direction.
-  **MEASURED — the pre-fix and post-fix compilers, `gg check` over every `.gg` in the tree.** THIRTEEN
-  files flip 0→1 and **ZERO flip 1→0**. Eleven of the thirteen are this round's own new seeds and
-  fixtures, which makes the same run their RED-verification: each was ACCEPTED by the pre-fix compiler,
-  so none was green on arrival (Core #12). The two PRE-EXISTING files are both `robustness_map` cells —
-  `doc_b06_struct_eq_no_derive.gg`, whose MANIFEST row already recorded `expected = REJECTED`, and
-  `doc_b06_enum_variant_construction.gg`, which used `==` on a bare enum as scaffolding to print a
-  construction result and now observes it through `match` instead. Plus the graduated repro, which moved
-  out of `known_gaps/`. The ACCEPT branch is a no-op fall-through: RUN output byte-identical to the
-  pre-fix compiler on the whole accept set.
+  **MEASURED — the pre-fix and post-fix compilers, `gg check` over every `.gg` in the tree.** Against the
+  SHIPPED tree the differential is **TWELVE files flipping 0→1 and ZERO flipping 1→0**, and eleven of the
+  twelve are this round's own new seeds and fixtures — which makes the same run their RED-verification:
+  each was ACCEPTED by the pre-fix compiler, so none was green on arrival (Core #12). The one PRE-EXISTING
+  file is `robustness_map/cells/doc_b06_struct_eq_no_derive.gg`, whose MANIFEST row already recorded
+  `expected = REJECTED`. Plus the graduated repro, which moved out of `known_gaps/`.
+  ⚠ **A run made DURING the round saw thirteen, and the difference is not a discrepancy — it is which
+  text of one file you scan.** `doc_b06_enum_variant_construction.gg` used `==` on a bare enum as
+  scaffolding to print a construction result; that text flips, and the same commit rewrites the cell to
+  observe through `match`, so the shipped text does not. **TWELVE is the number a reader can regenerate**
+  (Core #5); thirteen is only reachable from the pre-commit working tree.
+  The ACCEPT branch is a no-op fall-through: RUN output byte-identical to the pre-fix compiler on the
+  whole accept set.
   **AND THE GATE HAD TO JUDGE THE OPERANDS, NOT THE UNIFIED TYPE.** `unify` hands back an
   inference-poisoned type for `d == Direction.North` (the parenless variant path), so the first shape of
   the gate accepted it while refusing `d == e` on the same enum — position-dependent, and it showed up as
   a self-host-vs-Rust divergence in the robustness map rather than in any test. Falling back to the
   operand types when the unified type carries no verdict closes it, and cannot widen the reject.
+  ⛔ **AND THAT ARM OWNS ITS OWN WITNESS, because for one review cycle it had none.** The only file in the
+  tree carrying the parenless shape was the robustness cell this same commit rewrites, so the round
+  briefly net-REMOVED coverage on the one axis where it had found a silent accept. Closed by
+  `reject_eq_parenless_variant.gg` — a four-lane spectest seed plus a fast-suite twin. **Verified by line:
+  neutering the fallback flips exactly those two artifacts rc 1 → rc 0 while all eleven other D46 reject
+  artifacts stay rc 1.** The parentheses are the whole variable; a parenthesised sibling does not cover it.
+  **THE D53 HANDLE FAMILY IS A NEWLY-REJECTING CELL THE RIDER NEVER NAMES.** `Shared[int] b = a; a == b`
+  printed `false` pre-fix — wrong even as address identity, since `b` IS `a` — and now rejects. That is an
+  improvement, not an over-reject, but the rider's general rule would have put it in ACCEPT while its
+  explicit list names only `Box[Trait]` and `Callable`. Filed as `t1265` with the fixture that pins it.
+  The message it gave was *"add `@derive(Equatable)` to `Shared`"* — advice the author cannot take, which
+  is precisely what `derive_possible` exists to prevent; the flag is now cleared for the family from the
+  TYPED `deref_wrapper_kind` already seeded at registration. ⊕ **ggdef has no `derive_possible` split at
+  all**, so its text still suggests a derive for `Callable`; message-only, nothing red (the seeds compare
+  the `E_` code and no `Callable` seed exists), recorded on `t1265`.
   **STILL OWED, filed:** `t1132` the seven intrinsic structural-equality lowerings (every accepted aggregate
   still answers address identity); `t1126` the ordering siblings; `t1127` `@derive(Equatable)` on a generic
   struct records no `T: Equatable`; `t1128` the self-host gate accepts every `RTGeneric`; `t1129` self-host
-  spans; `t1130` ggdef's `==` never dispatches a user `equip`; `t1131` the f-string caret.
+  spans; `t1130` ggdef's `==` never dispatches a user `equip`; `t1131` the f-string caret; `t1265` the
+  D53 handle family's unruled disposition.
   ⭐ **AND ONE PREMISE THAT DID NOT SURVIVE RE-MEASUREMENT, RECORDED SO IT IS NOT RE-FILED:** the reject
   was briefed as blocked by a bug where `@derive(Equatable) struct Pair[Equatable T]` reports `T` failing
   its OWN declared bound. That does not reproduce. The bound spelling parses, the derive accepts it, and

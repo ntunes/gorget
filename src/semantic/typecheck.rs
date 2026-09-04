@@ -1810,18 +1810,44 @@ impl<'a> TypeChecker<'a> {
                                 let type_name = self
                                     .type_key_for_trait_lookup(blame)
                                     .unwrap_or_else(|| self.describe_resolved_type(blame));
-                                // Typed, from the resolved blame — a closure or
-                                // trait object can never carry an `Equatable`
-                                // impl, so it must not be told to add one.
-                                let derive_possible = !matches!(
-                                    self.types.get(self.resolve_type(blame)),
-                                    ResolvedType::TraitObject(_)
-                                        | ResolvedType::CallableTrait(_)
-                                        | ResolvedType::MutCallableTrait(_)
-                                        | ResolvedType::ConsumeCallableTrait(_)
-                                        | ResolvedType::BoxedCallable { .. }
-                                        | ResolvedType::Function { .. }
-                                );
+                                // Typed, from the resolved blame. A closure, a
+                                // trait object and the D53 single-owner handle
+                                // family can never carry a meaningful
+                                // `Equatable` impl, so none of them may be told
+                                // to add one — telling an author to
+                                // `@derive(Equatable)` on `Shared` is advice
+                                // they cannot take.
+                                //
+                                // The handle half reads `deref_wrapper_kind`,
+                                // the flag already seeded at registration for
+                                // the builtin wrapper family (`Box` / `Guard` /
+                                // `ReadGuard` / `WriteGuard` / `Shared` /
+                                // `Weak` / `Mutex` / `RWLock`) — a typed fact,
+                                // not a name match, and a USER struct sharing
+                                // one of those names carries `None` and still
+                                // gets the derive advice, correctly.
+                                // ⚠ `Task` / `TaskGroup` / `Channel` / `Future`
+                                // are single-owner too but carry no wrapper
+                                // kind, so they still get the derive text; that
+                                // remaining cell is `todo/t1265`.
+                                let blame_resolved = self.resolve_type(blame);
+                                let blame_is_wrapper = match self.types.get(blame_resolved) {
+                                    ResolvedType::Defined(def_id)
+                                    | ResolvedType::Generic(def_id, _) => {
+                                        self.scopes.get_def(*def_id).deref_wrapper_kind.is_some()
+                                    }
+                                    _ => false,
+                                };
+                                let derive_possible = !blame_is_wrapper
+                                    && !matches!(
+                                        self.types.get(blame_resolved),
+                                        ResolvedType::TraitObject(_)
+                                            | ResolvedType::CallableTrait(_)
+                                            | ResolvedType::MutCallableTrait(_)
+                                            | ResolvedType::ConsumeCallableTrait(_)
+                                            | ResolvedType::BoxedCallable { .. }
+                                            | ResolvedType::Function { .. }
+                                    );
                                 self.error(
                                     SemanticErrorKind::UnsupportedOperator {
                                         op: Self::op_display(*op, false).to_string(),

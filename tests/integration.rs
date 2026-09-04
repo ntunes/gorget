@@ -2165,7 +2165,22 @@ fn d46_eq_tuple_element_not_equatable_rejects() {
 fn d46_eq_callable_rejects_without_derive_advice() {
     check_gg_fails(
         "d46_equality/reject_eq_callable.gg",
-        "has no structural equality to compare",
+        "no `Equatable` implementation you can add",
+    );
+}
+
+/// The D53 single-owner HANDLE family, whose disposition D46's rider never
+/// names (`todo/t1265`). Pinned here for the DIAGNOSTIC as much as the verdict:
+/// the blame is a builtin wrapper, so `derive_possible` is cleared from the
+/// typed `deref_wrapper_kind` flag and the author must not be told to write
+/// `@derive(Equatable)` on `Shared`. Exclusive on purpose — the wording is the
+/// half that would regress silently.
+#[test]
+fn d46_eq_shared_handle_rejects_without_derive_advice() {
+    check_gg_fails_exclusive(
+        "d46_equality/reject_eq_shared_handle.gg",
+        "no `Equatable` implementation you can add",
+        "add `@derive(Equatable)` to `Shared`",
     );
 }
 
@@ -2195,6 +2210,34 @@ fn d46_eq_accept_side_still_checks() {
 #[test]
 fn d46_eq_generic_param_exempt() {
     check_gg_ok("d46_equality/accept_eq_generic_param.gg");
+}
+
+/// THE PARENLESS VARIANT PATH. `Direction.North` with no parentheses leaves
+/// `unify` with an inference-poisoned result type, so a gate judging only the
+/// unified type ACCEPTS it while refusing `d == e` on the same enum one line
+/// away — position-dependent, and invisible to every other reject fixture here.
+/// This is the ONLY witness for the operand fallback: neuter it and this goes
+/// green alone. The four-lane half is `spectests/run/reject_eq_parenless_variant.gg`.
+#[test]
+fn d46_eq_parenless_variant_rejects() {
+    check_gg_fails(
+        "d46_equality/reject_eq_parenless_variant.gg",
+        "not defined for type `Direction`",
+    );
+}
+
+/// The ARITHMETIC sibling of the f-string whitelist arm. `print(f"{a + a}")` on
+/// a struct with no `Add` compiled and ran at HEAD while `P c = a + a` was
+/// refused; adding `UnsupportedOperator` to the interpolation whitelist for
+/// equality's sake closed it too. This cell is what makes the arm's scope
+/// honest — it is about the KIND, not about D46 — so narrowing it back to
+/// equality has something to trip.
+#[test]
+fn d46_fstring_arith_unsupported_rejects() {
+    check_gg_fails(
+        "d46_equality/reject_fstring_arith_unsupported.gg",
+        "equip with `Add[P]`",
+    );
 }
 
 /// THE ACCEPT PATH, RUN — because a `gg check` exit code is not evidence that a

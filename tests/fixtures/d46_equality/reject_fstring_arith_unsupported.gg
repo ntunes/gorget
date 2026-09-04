@@ -1,0 +1,22 @@
+# THE ARITHMETIC SIBLING of D46's f-string whitelist arm — pre-existing, wider
+# than equality, and closed as a side effect.
+#
+# The checker deliberately truncates most errors raised inside `f"{...}"` to a
+# whitelist of kinds worth showing. `E_UnsupportedOperator` was not on it, so
+# `print(f"{a + a}")` on a struct with no `Add` implementation COMPILED AND RAN
+# at HEAD — silently, while the identical expression at `P c = a + a` was
+# refused. Adding the kind for equality's sake closed the arithmetic half too.
+#
+# ⚠ THIS IS THE CELL THAT MAKES THE ARM'S SCOPE HONEST. The equality seed
+# (`spectests/run/reject_eq_no_equatable_in_fstring.gg`) proves the whitelist
+# retains `==`; only this one proves the arm is about the KIND and not about
+# D46, so a later "narrow it back to equality" edit has something to trip.
+#
+# Asserted by `d46_fstring_arith_unsupported_rejects` in tests/integration.rs.
+
+struct P:
+    int a
+
+void main():
+    P a = P(1)
+    print(f"{a + a}")
