@@ -386,6 +386,22 @@ owes a note + a filed subset gap.
   **SILENCED ASan WHILE PRESERVING THE 8-BYTE OVERRUN**, converting a detectable defect into an invisible
   one. ⇒ **read an item's `fix` field as a hypothesis, never as a plan; the mechanism here was a MIS-TYPED
   SLOT, so `memmove` addresses the symptom's detector rather than the cause.**
+- ⛔⛔ **A TRACK THAT SPENT FOUR PASSES HUNTING SIX-Q#3 ON A TYPED AXIS THEN ASSERTED TOTALITY OVER THAT AXIS
+  AND MISSED A CELL.** M1's fixture header reads *"All ten primitive widths are covered … a fixture sampling
+  one value of a typed axis is an anecdote, not a net"* — but the accessor it pins has **ELEVEN** primitive
+  arms. The omitted `F32_TYPE` cell is **still broken**: `Box[float32]` prints `0.000000` after the fix,
+  because **the helper is NAMED correctly and its BODY is not** — the name axis the track fixed and the
+  body-generation axis still disagree on exactly the uncovered arm.
+  ⇒ ⚡ **CORE #12 SAYS *COVER EVERY VALUE OR NAME EACH OMITTED CELL* — ASSERTING TOTALITY IS THE THIRD
+  OPTION AND IT IS NOT ALLOWED.** ⭐ **THE MECHANICAL CHECK: count the arms of the accessor you are pinning
+  and compare to the cells you shipped. A totality claim owes that arithmetic in the header.**
+  ⊕ **And the Core #8 direction is the wrong way: on that shape the fix turns an LLVM BUILD REFUSAL into a
+  program that RUNS and prints a wrong value with `gg check` clean.**
+- ⭐ **THE COUNTERFACTUAL THAT PROVES A CONDITIONAL-UNREACHABILITY CLAIM MUST BE RUN ON THE *PRISTINE* TREE,
+  NOT THE FIXED ONE.** M1's executor measured "drop the list entry and the deleted arm becomes reachable" on
+  its own tree, where the arm is already gone; **the output-review re-ran it at the PRE commit and got the
+  decisive result — builds rc 0, prints `1.500000`, the arm WAS live.** ⇒ **a claim about what the OLD code
+  would have done is only measurable on the OLD code.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
@@ -645,7 +661,9 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
-⚡ **FIRST UNISSUED ID IS NOW `t1197`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
+⊕ **M1's BLOCK EXTENDED 2026-09-04: `t1197`–`t1199`** (its original `t1076`–`t1080` was fully spent; the
+output-review's reservation owes one more filing).
+⚡ **FIRST UNISSUED ID IS NOW `t1200`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
