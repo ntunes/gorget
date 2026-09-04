@@ -402,6 +402,20 @@ owes a note + a filed subset gap.
   its own tree, where the arm is already gone; **the output-review re-ran it at the PRE commit and got the
   decisive result — builds rc 0, prints `1.500000`, the arm WAS live.** ⇒ **a claim about what the OLD code
   would have done is only measurable on the OLD code.**
+- ⛔⛔ **A MEASUREMENT RECORDED IN `DONE.md` IS NOT A PIN — AND ONE SAT THERE FOR A YEAR.** `DONE.md:3167`
+  records that the self-host deliberately uses a drain-until-empty post-pass, *"NOT Rust's snapshot loop,
+  **which CRASHES on nested closures**"*. ⇒ **the Rust-lane nested-closure ICE was OBSERVED, WRITTEN DOWN,
+  AND NEVER FILED.** ⚡ **Core #11: a fix ships a FIXTURE, not a sentence. A war-story in `DONE.md` is
+  history; only a `todo/` item with a durable repro is a claim on future work.**
+  ⊕ **And the defect is TWO bugs, not one:** `mem::take(&mut ctx.closures)` leaves `next_id: 0` so the inner
+  literal re-mints `__Closure_0` → `DuplicateTypeName` → panic; **but the loop is also a SNAPSHOT, so the
+  nested closure's `__Closure_N__call` body is NEVER EMITTED AT ALL.** ⇒ **a filing that only re-seeds
+  `next_id` leaves the nested body missing — A MISCOMPILE HIDING BEHIND AN ICE.**
+- ⭐ **A GAP IN AN ITEM'S OWN AXIS TABLE IS INDEPENDENT EVIDENCE THAT THE CELL IS UNPINNED.** `t0953`'s table
+  carries a capturing-literal row, a plain-user-fn row and a named-function NEGATIVE CONTROL — **but no
+  named-closure-local row**, which is exactly the cell measured leaking. ⊕ Corroborated by a corpus sweep:
+  **no fixture anywhere passes a `Callable` local to a builtin Vector HOF.** ⇒ **read the FILED table as a
+  coverage map, and treat its holes as leads.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
@@ -661,9 +675,103 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔ **TRACK L'S ERRATUM (b) IS FALSE — AND IT CORRUPTED A FILED ITEM'S `mechanism` FIELD (T's scout, 2026-09-04).**
+L asserted *"read at HEAD: `guess_return_type` has NO `EIdentifier` arm at all"* and **rewrote `todo/t0877`'s
+front-matter `mechanism` to say so.** The arm **EXISTS** at `tests/fixtures/self_host_lowerer/lower_closures.gg:809`
+(regenerate: `grep -n 'case EIdentifier' tests/fixtures/self_host_lowerer/lower_closures.gg`), present at L's
+OWN tip, added by `4ffec3b36`. **The ORIGINAL `t0877` text was right:** the arm reads `fn_sigs` **only**, so
+it is **INERT** for a bare local or a param and falls through to the `I64_TYPE` default.
+⚡⚡ **THE ROUND'S THIRD INSTANCE OF ONE SHAPE: "THE SYMPTOM IS IDENTICAL" IS NOT EVIDENCE ABOUT THE MECHANISM.**
+An INERT arm and an ABSENT arm emit the same output; only reading the source separates them — and the erratum
+claimed the source HAD been read. ⊕ L's arms **(c)** and **(d)** are GENUINE, reproduced. Only (b) is false.
+⊕ Sent to L's fold as **ADDENDUM 6/D7**: restore the `mechanism` field, delete (b), do NOT touch the `.gg`.
+
+⭐⭐ **TRACK T's SCOUT — THE FIX IS A 13-LINE PORT IN ONE FILE, AND THE ENUMERATION HAS A COMPILER FOR A WITNESS.**
+`compute_closure_sig` never peels an ambient `GtFnPtr`; Rust gg does, at `src/ir/lowering/closures.rs:238-248`.
+Measured: **3 of L's blocked fixtures go CC-FAIL → MATCH, plus a 4th parity cell FREE**
+(`sound_move_operand_closure_tail_allowed`, ceiling **−1**). **Zero regressions over 2228 fixtures**; fire count
+**69 fires / 3 answer-changes** over 1998 lowered fixtures — overwhelmingly a CONFIRMING read, which is *why*
+it is safe. ⊕ One new cell: `box_trait_closure_return` CC-FAIL → **SEGV** (file as `t1177` with a `known_gaps`
+repro asserting `R2`; severity RISES, so it is owed).
+⭐ **THE INDEPENDENT WITNESS IS THE COMPILER ITSELF (Readiness #2, best instance this round):** the scout
+**deleted the `else: pass`** and let `E_NonExhaustiveMatch` name the unhandled set — **42 `Expr` variants, 12
+handled, 30 answering `I64_TYPE` silently.** A structural script over `ast.gg` reproduced the list byte-identically.
+⇒ **`t0877` names 4 cells of a 30-member class. Its scope is wrong in BOTH directions.**
+⭐ **AND THE SCOUT KILLED ITS OWN PREFERRED VARIANT BY MEASURING IT.** It predicted a narrower guard
+(`… and ret_type == I64_TYPE`) would dodge the SEGV; it **built variant B and got identical results on all five
+cells** — the self-host types `Box.new(Robot(…))` as `I64_TYPE` too. **No trade-off exists; take the
+Rust-faithful unconditional form.** ⚡ *This is what "prototype it end-to-end and MEASURE" is for.*
+⛔ **T SPLITS: T1 = the port + graduate L's 3 cells + file `t1177` + repair `t0877` (this round).
+T2 = the 30-variant fall-through**, which is where `t0877` arm (a) actually lives and which needs three further
+Rust ports — Tier-1c param registration, `lookup_local` in the `EIdentifier` arm, and
+`resolve_builtin_method_return_type` replacing `guess_return_type`'s hardcoded method-name lists at `:790-796`,
+**a LIVE Core #2 violation** (`if mname == "upper" or mname == "lower" …` deciding a TYPE). Fold `t0230`(b) into T2.
+⚠ **T1 MUST BASE ON TRACK L'S TIP** — on pristine base the Rust lane panics/garbles/SEGVs on those three cells,
+so the MATCH assertion is uncheckable without L. ⇒ **CHAIN: S-a → L → T1**, with T1 developing in parallel off
+L's tip (its only source file is `lower_closures.gg`; **no `src/` changes at all**).
+⭐ **AND THE REFERENCE LAGS THE SELF-HOST ON TWO CELLS** — with the 13-line SH fix alone the self-host prints the
+CORRECT output for (c) and (d), which pristine **Rust** gets wrong. Succession-plan hygiene: fix the Rust side.
+
+⭐ **N1 EXECUTOR RETURNED — output-review launched.** Producer-side fix (Core #3): `expand_find`/`expand_filter`
+were sinking `ctx.elem_ptr`, **a pointer INTO the source buffer**, into an `Option` payload / a fresh array.
+Shipped `gorget_array_adopt_hooks` + `push_cloned` + `clone_elem_inplace`, all `void(ptr,ptr)` — **`sret` dodged
+entirely, so the LLVM ctor allow-list never applies.** 18 cells RED at pristine HEAD on BOTH backends
+(14 BAD / 4 control-OK); guard RED on **8 mutants, each `build_rc=0`**. Filed `t1086`–`t1090`; closed `t0988`.
+⚠ **Two things for the reviewer to press:** it moved the three helpers OUT of Rust string literals in
+`emit_types.rs` into `runtime_array.c` (uninstructed, architecturally right, large), and it declined to file the
+new 5 B `match v.find(…): case Some(s):` leak on the ground that a no-HOF control leaks *the same byte count* at
+HEAD — ⛔ **byte counts are not class keys; that is the exact attribution shape that just blocked L.**
+
+⛔⛔⛔ **L'S CONFIRMING REVIEW BLOCKS — AND IT BREAKS THE ORCHESTRATOR'S OWN ROUTING (2026-09-04).**
+I had L "waiting on S" because L's five residual leak cells were said to be `t0953`'s mechanism. **MEASURED
+FALSE FOR 4 OF THE 5.** `grep -c __gorget_closure_env_alloc` over the five ASan logs → **`1,0,0,0,0`.**
+⇒ **closing `t0953` as scoped greens 1 of 5 cells and 72 of 110 bytes.** The other four have **no filed owner**.
+⚡ **Provenance of MY error: the brief said "residual leaks are `t0953`'s pre-existing class", the fold
+RE-MEASURED THE COUNT (3→5) and INHERITED THE ATTRIBUTION.** ⇒ **Core #5 applies CLAUSE BY CLAUSE, not to
+the sentence. Re-deriving the NUMBER in a claim does not re-derive its ATTRIBUTION — and a half-regenerated
+claim reads exactly like a fresh one.**
+⊕ **And 2 of the 5 are not "residue" at all — they are the FIX'S OWN INFLOW** (a `__Closure_0__clone` at the
+capture site with no matching free, plus a free the track REMOVED). `tests/sanitize/LEAK_ALLOWLIST.txt:29-35`
+reserves genuinely-new inflow to an **OWNER ASK** — which is avoided entirely if S closes the face first.
+
+⭐⭐ **THE SECOND FACE, ROOT-CAUSED BY THE ORCHESTRATOR AT `src/lir/lower/drops.rs:107-114`** (regenerate:
+`grep -n 'gorget_closure_free' src/lir/lower/drops.rs`). The `GirType::FnPtr` arm **hardcodes**
+`DropStrategy::Trivial("gorget_closure_free")`, and `gorget_closure_free`
+(`src/backend/c/runtime/runtime_string.c:153-161`) frees **the env BLOCK only**. Meanwhile the emitted C
+*contains* `__Closure_0__drop`, which frees the captured fields — **defined and NEVER CALLED ANYWHERE.**
+⇒ **The env's FIELDS leak while its BLOCK is reclaimed, and the compiler's own generated drop fn is dead code.**
+⚡ **This is Core #1 + #2 in one line:** a READ-SITE hardcode standing in for metadata the WRITER has — and
+L's own erratum-1 landed `drop_strategy: env_drop` on the closure TypeDef at
+`src/ir/lowering/closures.rs:182-183`, which **this arm cannot see because a bare `Callable` local is
+`GirType::FnPtr`, not `GirType::Named`** — the SAME `unit`/FnPtr erasure S-b exists to fix.
+⇒ ⭐⭐ **S-a AND S-b AND `t0953` ARE ONE CLASS (Core #4): the closure env's drop is TWO HALVES — REGISTRATION
+(the block, `t0953`) and the CUSTOM DROP FN (the fields, this arm) — and the erasure is why the second half
+was hardcoded. Scope S-a to BOTH halves; a fix that lands one leaves the sweep red.**
+⊕ **REVISED ORDERING: L integrates AFTER S-a, and then there is NO allowlist row and NO owner ask.** L admits
+nothing — verified `git diff <base> <fold> -- tests/sanitize/ scripts/sanitize_sweep.sh` **EMPTY**.
+
+⭐⭐ **TRACK S SPLITS INTO S-a + S-b (2026-09-04), AND S-b IS NOT A NEW DIAGNOSIS — IT ADVANCES A FILED
+HIGH ITEM.** **S-a = the LIR leak, block `t1167`–`t1176`. S-b = the `unit`-erasure blocker, block
+`t1200`–`t1209`.** ⛔ **S-a MUST NOT LAND WITHOUT S-b.**
+⭐ **S-b advances `todo/t0942` (HIGH), whose cited mechanism at `src/ir/lowering/types.rs:190` is already
+exact:** *"a Callable PARAMETER lowers to GIR `unit` (and `Callable &` to `*mut unit`), erasing the type
+before any GirType arm can see it."* ⇒ **S-b is `t0942`'s mechanism surfacing at a SECOND POSITION** — the
+scout measured the **return-boundary** face, where the same erasure makes `ensure_owned_at_boundary` skip the
+clone and hand back an aliasing 16-byte copy, while `t0942` files the `.clone()`-SEGV face.
+⇒ ⭐ **Check whether the reference-grade fix — give the param a type that carries its closure-ness — closes
+BOTH faces at once. If it does, S-b is a larger and far more valuable track than "add a clone at returns".**
+⊕ **L's hold is on S-a specifically** (its five rows are `t0953`'s call-arg env mechanism).
+
+⭐⭐ **GREP-BEFORE-YOU-FILE PAID OFF THREE TIMES IN ONE REPORT — worth noting because the rule usually costs
+more than it saves:** the Vector-literal-of-closures SEGV **is already `t0873(a)`** (HIGH, with a durable
+repro and an `#[ignore]`d test) — **do NOT file; contribute the exact faulting read as EVIDENCE**; the
+`Callable`-local→HOF failure is a **family member of `t0878`**; and the scout's own root cause is **`t0942`**.
+⚠ **And `t0873.md:21` SEQUENCES (a) BEHIND `t0406`:** a fix that stops at the sizing turns rc 139 into
+**rc 0 printing garbage on C and rc 139 on LLVM.**
+
 ⊕ **M1's BLOCK EXTENDED 2026-09-04: `t1197`–`t1199`** (its original `t1076`–`t1080` was fully spent; the
 output-review's reservation owes one more filing).
-⚡ **FIRST UNISSUED ID IS NOW `t1200`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
+⚡ **FIRST UNISSUED ID IS NOW `t1215`** ⊕ **L EXTENDED `t1210`–`t1214`; T1 gets `t1177`+** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
