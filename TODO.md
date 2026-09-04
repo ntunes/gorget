@@ -254,6 +254,24 @@ executor should be told to REPORT.**
 - ⛔ **§9 could not brief INT-B** — a reviewer tried and listed seven unanswerable questions, now required
   report contents. ⊕ **The report goes to `/tmp`**: it must quote a figures-DB-covered spelling, which no
   COMMITTED file may contain, and `/tmp` is outside the scan roots.
+📋 **INT-B IS BRIEFED AT `/tmp/brief_INTB_v1.md`, pass 1 running — and it is the FIRST brief in this chain
+whose every load-bearing number was MEASURED on a real tree.** Its executor is gated on INT-A's output-review
+signing off. **Four obligations, all measured:**
+1. **CLOSE THE +2 — it is ONE ROW.** Adopting N2's `vector_hof_cross_type_map` row alone takes the uncited
+   count to the pinned value with **no constant change**. ⛔ **The +2 is NOT a citation debt — do NOT file
+   replacement items.** N2 deleted `t0954`/`t0955` because both mechanisms are FIXED; **the pairs DISAPPEAR
+   from column 2, they are not re-cited.**
+2. **⚖ RESTORE THE OWNER-ASK ROW AND ITS BLOCK** for `vector_hof_result_element_sizing` — top-level, swept,
+   leaking, **and with NO row at all** in the shipped file, so the sweep reports `❌ NEW LEAK`. **RULING
+   APPLIED: admit TEMPORARILY, cite `t0953`** (same shape the owner ruled for L's rows; the leak is measured
+   irreducible — a NAMED callee sizes the accumulator correctly, so **the closure literals are the defect's
+   ENTRY CONDITION** and respelling them would delete the defect being pinned). **Block inventory 10 → 11.**
+3. **RECONCILE THE RE-KEY BY MEASUREMENT** — five rows corrected to DELETE/TIGHTEN, **23 unmeasured**.
+4. **PORT the rename header** into a file where it is true, with its three corrections.
+⊕ **`shrunk_class` is a READING, not a gate** — account for every row, do not treat it as red.
+⊕ **When the red goes green, FOUR asserts execute for the FIRST TIME** (the `t0951` positive control plus
+three evasion negatives) — they sit AFTER `uncited` and have never run on this tree.
+
 ✅✅ **INT-A IS COMPLETE — ALL FIVE BRANCHES ARE IN ONE TREE. Branch `worktree-agent-a1a7ca4acbc53bfa5`, tip
 `8f7391db4`, base `85cd4529e`. Output-review live.** Merge order T1 `c089fe6ac` → L → N2 → S-a2 → re-seed;
 per-branch merge bases in the executor's report. **All three acceptance lines rc 0**, `--test lints` red on
