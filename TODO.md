@@ -83,6 +83,25 @@ owes a note + a filed subset gap.
   credited a fix to the arm it was testing; measured, **the metadata line ALONE fixed the cell** — by
   synthesising `__Closure_N__clone` and DOUBLE-CLONING at the escape. Both arms deleted, still green.
   ⇒ **ablate the PLUMBING too, never only the arms you think are load-bearing.**
+- ⭐⭐ **AN rc/STDOUT GRID CANNOT DISTINGUISH *"THE MECHANISM IS SAFE"* FROM *"THE MECHANISM NEVER RAN"* —
+  AND THAT IS HOW THE ROUND'S FIFTH SIX-Q#6 GOT INTO A BRIEF'S OWN TABLE.** Track N scored `expand_map` as
+  *"safe by construction"* off two green cells. Measured: **those are the ONLY two of nine cells that emit a
+  user-space call** — `from std.iter import Iterable` routes `map` to the `equip Vector` wrapper in
+  `lib/std/iter.gg`, which installs its own hooks. ⇒ **THE TWO CLEAN CELLS IN THE SET WERE THE TWO THAT
+  BYPASSED THE EXPANDER THE ROW ACQUITTED.** Drop the import and `expand_map` leaks.
+  ⚡ **THE COUNTERMEASURE IS MECHANICAL: every cell that scores a lowering path CARRIES A PATH WITNESS**
+  (`grep -c "Vector__[A-Za-z_]*__<method>__" <emitted>.c == 0`). **A green cell is not evidence until you
+  can show the code under test executed.**
+- ⚠ **A `use`-adjacent IMPORT CAN SILENTLY RE-ROUTE THE PATH UNDER TEST.** `std.iter` shadows five builtin
+  HOFs with `equip` wrappers. **A fixture grid that carries an import in its preamble is testing a different
+  compiler path than one that does not** — vary the import as an AXIS, never as boilerplate.
+- ⛔ **A GUARD PROPOSED FOR A CLASS MUST BE MEASURED AGAINST A PLANT OF THAT CLASS *BEFORE* IT IS BRIEFED.**
+  R49's own `t1066` brief proposed detecting committed conflict markers via an items-vs-pointers count
+  mismatch. **Planted: no mismatch appears at all** — marker lines are not pointer lines, so they cannot
+  perturb either count — **and the mismatch that DOES appear is the routine signature of a normal filing.**
+  ⇒ **SIX Q#2 fired on the guard's own section.** ⊕ Corollary: `OK — N item(s), N−k pointer(s)` is NOT a
+  near-miss; a `--write` printout must **state its own effect** (`k inserted, 0 removed`), or it manufactures
+  false forensics.
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
