@@ -1,0 +1,9 @@
+# Ch7: Dict.filter with an untyped (k, v) closure.
+# Green at HEAD -- a CONTROL.
+# Expected: 1
+void main():
+    Dict[String, int] d = Dict[String, int]()
+    d.put("a", 1)
+    d.put("b", 2)
+    Dict[String, int] big = d.filter((k, v): v > 1)
+    print(f"{big.len()}")

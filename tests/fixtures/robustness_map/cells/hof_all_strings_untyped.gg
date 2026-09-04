@@ -1,0 +1,7 @@
+# Ch5: all with an UNTYPED closure on Vector[String].
+# Green at HEAD -- a CONTROL for the carrier swap.
+# Expected: true
+void main():
+    Vector[String] words = ["abc", "de"]
+    bool nonempty = words.all((s): s.len() > 0)
+    print(f"{nonempty}")

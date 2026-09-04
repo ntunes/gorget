@@ -1,0 +1,7 @@
+# Ch7: HashSet.each with an UNTYPED closure. HashSet aliases Set's
+# method table -- the second aliasing pair after Deque/Vector.
+# Expected: 3
+void main():
+    HashSet[String] words = HashSet[String]()
+    words.add("fig")
+    words.each((s): print(f"{s.len()}"))

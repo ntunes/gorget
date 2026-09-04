@@ -1,0 +1,11 @@
+# Ch5: fold whose INITIAL ACCUMULATOR is a runtime-built String
+# rather than a literal -- the heap-accumulator half of the
+# accumulator axis.
+# Expected: <abc
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] parts = ["a", "b", "c"]
+    String joined = parts.fold(mk("<", ""), (acc, e): acc + e)
+    print(joined)

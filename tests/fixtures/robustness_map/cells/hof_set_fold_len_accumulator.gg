@@ -1,0 +1,9 @@
+# Ch7: Set[String].fold with an `int` accumulator -- the per-protocol
+# sibling of the Vector accumulator cell.
+# Expected: 5
+void main():
+    Set[String] words = Set[String]()
+    words.add("ab")
+    words.add("cde")
+    int total = words.fold(0, (acc, e): acc + e.len())
+    print(f"{total}")

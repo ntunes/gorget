@@ -1,0 +1,8 @@
+# Ch5: filter with an UNTYPED closure on Vector[String].
+# Green at HEAD -- a CONTROL for the carrier swap.
+# Expected: abc / def
+void main():
+    Vector[String] words = ["abc", "de", "def"]
+    Vector[String] long = words.filter((s): s.len() == 3)
+    for w in long:
+        print(w)

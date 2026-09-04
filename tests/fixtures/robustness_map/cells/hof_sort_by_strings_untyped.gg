@@ -1,0 +1,8 @@
+# Ch5: sort_by with an UNTYPED comparator on Vector[String] --
+# the spelling docs/book/05-collections.md teaches.
+# Expected: fig / apple / banana
+void main():
+    Vector[String] words = ["banana", "fig", "apple"]
+    words.sort_by((a, b): a.len() - b.len())
+    for w in words:
+        print(w)

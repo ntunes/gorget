@@ -1,0 +1,13 @@
+# Ch5+Ch6: sort_by with an UNTYPED comparator over a struct vector.
+# Expected: Bob 25 / Alice 30
+struct Person:
+    String name
+    int age
+
+void main():
+    Vector[Person] ps = Vector[Person]()
+    ps.push(Person("Alice", 30))
+    ps.push(Person("Bob", 25))
+    ps.sort_by((a, b): a.age - b.age)
+    for p in ps:
+        print(f"{p.name} {p.age}")

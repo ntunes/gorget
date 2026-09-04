@@ -1268,6 +1268,198 @@ fn function_body_prescans_are_centralised() {
 ///     required (DictLiteral / TupleLiteral pattern: extract K/V hints
 ///     from decl_type_hint, set per-child decl_type_hint, restore).
 ///
+/// Every `CLOSURE_SHAPES` method row names a method that actually takes a
+/// callback — checked against INDEPENDENT witnesses, per protocol family.
+///
+/// ⚠ **WHY THIS EXISTS AND WHY ITS SIBLING IS NOT ENOUGH.** The defect the
+/// closure-shape table was built to retire was a MISSING METHOD in a
+/// hand-maintained `matches!` list. Its unit-test sibling
+/// `closure_shape_rows_are_total` iterates `ALL_PROTOCOLS` and catches a
+/// missing PROTOCOL — a different axis. It green-lit a fabricated
+/// `("Dict", "update")` row on the first try: `Dict.update` is a map MERGE
+/// (`gorget_map_update(void*, GorgetMap)`) with no HofOp arm anywhere, and it
+/// looked like a callback method only because its `BuiltinMethodDecl` carries
+/// `params: key_val_params` under a `// Higher-order` banner. A guard that
+/// cannot catch its own class is worse than none.
+///
+/// ⛔ **THE WITNESS IS DELIBERATELY NOT `protocol.methods`.** That list is the
+/// source that fabricated the bad row; checking the table against it would
+/// ratify the mistake. The witnesses are:
+///
+///   1. **The LIR HofOp dispatch arms** (`src/lir/lower/insts.rs`) — the sites
+///      that actually build a callback. Classified per family by the HofOp
+///      variant's own prefix (`HofOp::Set*` → Set/HashSet, `HofOp::Dict*` →
+///      Dict/HashMap, bare → Vector/Deque), so a Vector-only op cannot vouch
+///      for a Dict row.
+///   2. **The user-space `equip [T] Vector[T]:` / `equip [T] Set[T]:` blocks**
+///      (`lib/std/iter.gg`) — where `each` / `for_each` / `find` / `find_index`
+///      live. These have NO `BuiltinMethodDecl` at all, which is the whole
+///      reason the shape table is ungated.
+///   3. An explicit allowlist for the two SURFACE-only spellings.
+///
+/// ⚠ **THE TWO WITNESSES ARE NOT INDEPENDENT FOREVER.** `lib/std/iter.gg:396-401`
+/// states an intention to DELETE the builtin HOF entries once every caller
+/// migrates to the user-space wrappers. If `HofOp::Fold` / `HofOp::Map` go, rows
+/// like `Vector.fold` fall back to witness 2 alone — which is fine, because the
+/// equip block declares them, but ONLY while that scrape actually sees them.
+/// It did not, at first: the naive version tokenized `A fold[A, F](…)` to `F]`
+/// and dropped `fold` and `map` from both blocks. The anchors below pin exactly
+/// those names so the guard cannot quietly lose a witness the day the other one
+/// is retired.
+///
+/// ⊕ Witness 2 is why `Set.for_each` / `Set.find` / `Set.find_index` are
+/// legitimate rows even though `SET.methods` stops at `filter`/`fold`/`each`/
+/// `any`/`all`: `equip [T] Set[T]` declares them, and they resolve whenever
+/// `std.iter` is imported. Probing them WITHOUT the import gives
+/// `E_NoMethodFound` and reads like proof they do not exist — the same
+/// hold-one-axis-constant mistake `todo/t0987` and `todo/t0988` each made.
+#[test]
+fn closure_shape_rows_have_a_callback_witness() {
+    use gorget::ir::lowering::builtins;
+
+    // The two spellings the effective-name rewrite consumes before dispatch:
+    // `sort`/1 → `sort_by` and `sorted`/1 → `sorted_by` (an array receiver),
+    // so no HofOp arm is spelled `sort`. Listed here, never silently skipped.
+    const SURFACE_ONLY: [(&str, &str); 4] = [
+        ("Vector", "sort"), ("Vector", "sorted"),
+        ("Deque", "sort"), ("Deque", "sorted"),
+    ];
+
+    let insts = fs::read_to_string("src/lir/lower/insts.rs")
+        .expect("src/lir/lower/insts.rs must be readable");
+    let iter_gg = fs::read_to_string("lib/std/iter.gg")
+        .expect("lib/std/iter.gg must be readable");
+
+    // Witness 1: `"name" => (HofOp::Variant, …)` arms, bucketed by variant prefix.
+    let (mut vec_ops, mut dict_ops, mut set_ops) =
+        (Vec::new(), Vec::new(), Vec::new());
+    for line in insts.lines() {
+        let Some((lhs, rhs)) = line.split_once("=> (HofOp::") else { continue };
+        let Some(name) = lhs.split('"').nth(1) else { continue };
+        let variant = rhs.split(|c: char| !c.is_alphanumeric()).next().unwrap_or("");
+        if variant.starts_with("Set") {
+            set_ops.push(name.to_string());
+        } else if variant.starts_with("Dict") {
+            dict_ops.push(name.to_string());
+        } else {
+            vec_ops.push(name.to_string());
+        }
+    }
+    assert!(
+        !vec_ops.is_empty() && !dict_ops.is_empty() && !set_ops.is_empty(),
+        "HofOp arm scrape found nothing for one of the families \
+         (vec={}, dict={}, set={}) — the dispatch tables moved or changed \
+         shape, and this guard is now vacuous. Fix the scrape, do not delete \
+         the test.",
+        vec_ops.len(), dict_ops.len(), set_ops.len(),
+    );
+
+    // Witness 2: method names declared in a BARE `equip [T] X[T]:` block
+    // (no `with Trait`), which is where the user-space HOF wrappers live.
+    let equip_methods = |header: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        let mut inside = false;
+        for line in iter_gg.lines() {
+            if line.starts_with("equip ") {
+                inside = line.trim_end() == header;
+                continue;
+            }
+            if !inside {
+                continue;
+            }
+            // Method DECLARATIONS sit at exactly four spaces; their bodies at
+            // eight or more. Accepting any `    ` prefix scraped body lines too
+            // and yielded `self.iter` from `return self.iter().find[F](p)`.
+            if !line.starts_with("    ") || line.starts_with("        ") {
+                continue;
+            }
+            if line.trim_start().starts_with('#') || !line.contains('(') {
+                continue;
+            }
+            // `Option[T] find[F](&self, F p):` → `find`
+            // `A fold[A, F](&self, A init, F f):` → `fold`
+            //
+            // The generic list is stripped by cutting at its OPENING bracket,
+            // not by splitting the last whitespace token on `[`: a multi-param
+            // list contains a space, so `A fold[A, F]` tokenizes to `F]` and the
+            // naive form dropped `fold` and `map` from both blocks entirely —
+            // leaving them vouched for by the HofOp arms alone, which is exactly
+            // the single-witness dependency this guard exists to remove.
+            let mut head = line.split('(').next().unwrap_or("").trim_end();
+            if head.ends_with(']') {
+                if let Some(cut) = head.rfind('[') {
+                    head = &head[..cut];
+                }
+            }
+            if let Some(name) = head.split_whitespace().last() {
+                out.push(name.to_string());
+            }
+        }
+        out
+    };
+    let vec_equip = equip_methods("equip [T] Vector[T]:");
+    let set_equip = equip_methods("equip [T] Set[T]:");
+    // Anchors include `fold` deliberately: it is the multi-generic decl
+    // (`A fold[A, F](…)`) the naive scrape silently dropped, and it is also the
+    // row most exposed if the builtin HOF entries are ever retired — see below.
+    for (block, methods, anchors) in [
+        ("Vector", &vec_equip, ["for_each", "fold", "map"].as_slice()),
+        ("Set", &set_equip, ["for_each", "find", "find_index", "fold"].as_slice()),
+    ] {
+        for anchor in anchors {
+            assert!(
+                methods.iter().any(|m| m == anchor),
+                "equip-block scrape lost the anchor {block}.{anchor} — \
+                 lib/std/iter.gg moved or the decl shape changed, and this \
+                 guard is now vacuous for that row. Fix the scrape, do not \
+                 delete the anchor. scraped={methods:?}",
+            );
+        }
+    }
+
+    let mut orphans = Vec::new();
+    for (protocol, rows) in builtins::closure_shape_rows() {
+        let (ops, equip) = match *protocol {
+            "Vector" | "Deque" => (&vec_ops, &vec_equip),
+            "Dict" | "HashMap" => (&dict_ops, &Vec::new()),
+            "Set" | "HashSet" => (&set_ops, &set_equip),
+            _ => {
+                assert!(
+                    rows.is_empty(),
+                    "protocol {protocol} has closure-shape rows but no witness \
+                     family in this guard — add one rather than widening the \
+                     allowlist",
+                );
+                continue;
+            }
+        };
+        for (method, _) in *rows {
+            if SURFACE_ONLY.contains(&(protocol, method))
+                || ops.iter().any(|o| o == method)
+                || equip.iter().any(|e| e == method)
+            {
+                continue;
+            }
+            orphans.push(format!("{protocol}.{method}"));
+        }
+    }
+
+    assert!(
+        orphans.is_empty(),
+        "CLOSURE_SHAPES row(s) with NO callback witness:\n  {}\n\n\
+         Each names a (protocol, method) pair that no HofOp dispatch arm and no \
+         user-space `equip` block declares as taking a callback. A row like this \
+         is inert today — the accessor is only consulted for a method that \
+         resolved — but it is a false claim in the table the lowering treats as \
+         the single typed source of truth for closure shapes, and the next reader \
+         will believe it.\n\n\
+         Do NOT satisfy this by consulting `BuiltinMethodDecl.params`: that is the \
+         source that produced the fabricated `Dict.update` row this guard was \
+         written to catch.",
+        orphans.join("\n  "),
+    );
+}
+
 /// **If the count went DOWN:** lower BUDGET to lock the new floor.
 #[test]
 fn container_literal_arms_count() {

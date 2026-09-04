@@ -1,0 +1,9 @@
+# Ch7: Dict.fold summing values. Green at HEAD only because K and V
+# happen to be Str/int -- a CONTROL, not a pin.
+# Expected: 3
+void main():
+    Dict[String, int] d = Dict[String, int]()
+    d.put("a", 1)
+    d.put("b", 2)
+    int total = d.fold(0, (acc, k, v): acc + v)
+    print(f"{total}")

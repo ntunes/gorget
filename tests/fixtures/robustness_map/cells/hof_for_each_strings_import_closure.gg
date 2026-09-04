@@ -1,0 +1,9 @@
+# Ch5: Vector.for_each with an UNTYPED closure and the std.iter
+# import. Measured at HEAD: the import alone does NOT save it -- the
+# annotation is a second axis todo/t0987's grid does not carry.
+# Expected: 3 / 2
+from std.iter import Iterable
+
+void main():
+    Vector[String] words = ["abc", "de"]
+    words.for_each((s): print(f"{s.len()}"))

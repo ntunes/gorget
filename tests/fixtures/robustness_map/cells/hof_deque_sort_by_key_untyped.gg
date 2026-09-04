@@ -1,0 +1,9 @@
+# Ch6: Deque.sort_by_key with an UNTYPED closure.
+# Expected: fig / banana
+void main():
+    Deque[String] words = Deque[String]()
+    words.push("banana")
+    words.push("fig")
+    words.sort_by_key((s): s.len())
+    for w in words:
+        print(w)

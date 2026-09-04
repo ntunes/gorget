@@ -1,0 +1,9 @@
+# Ch5: map with an UNTYPED closure on Vector[String].
+# Green at HEAD -- a CONTROL that discriminates the element-type
+# carrier swap (it goes BUILD-FAIL under a wrong protocol binding).
+# Expected: 3 / 3
+void main():
+    Vector[String] words = ["abc", "def"]
+    Vector[int] lens = words.map((s): s.len())
+    for n in lens:
+        print(f"{n}")

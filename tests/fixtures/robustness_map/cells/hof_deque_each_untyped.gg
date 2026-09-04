@@ -1,0 +1,9 @@
+# Ch6: Deque.each with an UNTYPED closure. Deque aliases Vector's
+# method table, so a protocol-keyed hint table that omits Deque
+# silently drops it.
+# Expected: 3 / 5
+void main():
+    Deque[String] words = Deque[String]()
+    words.push("fig")
+    words.push("apple")
+    words.each((s): print(f"{s.len()}"))

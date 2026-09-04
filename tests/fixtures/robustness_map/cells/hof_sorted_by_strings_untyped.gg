@@ -1,0 +1,11 @@
+# Ch5: sorted_by with an UNTYPED comparator on Vector[String] --
+# the DIRECT spelling. Pairs with vec_sorted_structs_comparator,
+# which writes the SURFACE `sorted(cmp)` that the effective-name
+# rewrite maps here; neither cell alone distinguishes the two keys,
+# which is why the closure-shape table lists both names.
+# Expected: fig / apple / banana
+void main():
+    Vector[String] words = ["banana", "fig", "apple"]
+    Vector[String] by_len = words.sorted_by((a, b): a.len() - b.len())
+    for w in by_len:
+        print(w)

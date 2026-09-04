@@ -1,0 +1,7 @@
+# Ch5: reduce with an UNTYPED closure on Vector[String]. `reduce` is
+# declared with an `int` return type while its result is an element.
+# Expected: abc
+void main():
+    Vector[String] parts = ["a", "b", "c"]
+    String all = parts.reduce((x, y): x + y)
+    print(all)

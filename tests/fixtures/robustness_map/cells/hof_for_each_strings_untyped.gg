@@ -1,0 +1,7 @@
+# Ch5: Vector.for_each WITHOUT the std.iter import. The lowering's
+# runtime-callee catch-all fabricates `gorget_array_for_each`, which
+# exists nowhere.
+# Expected: 3 / 2
+void main():
+    Vector[String] words = ["abc", "de"]
+    words.for_each((s): print(f"{s.len()}"))

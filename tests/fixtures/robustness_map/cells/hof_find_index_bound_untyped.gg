@@ -1,0 +1,12 @@
+# Ch5: find_index with an UNTYPED predicate, result BOUND.
+# lib/std/iter.gg declares `Option[int] find_index`, the builtin decl
+# declares `ret_int`; the two disagree.
+# Expected: 1
+void main():
+    Vector[String] words = ["banana", "fig", "apple"]
+    Option[int] at = words.find_index((s): s.len() == 3)
+    match at:
+        case Some(i):
+            print(f"{i}")
+        else:
+            print("none")

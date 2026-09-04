@@ -1,0 +1,11 @@
+# Ch6: Deque.map with an UNTYPED closure. Deque's `map` inherits
+# Vector's `ret_self` declaration but the HOF expansion strips only
+# the `Vector__` prefix.
+# Expected: 3 / 5
+void main():
+    Deque[String] words = Deque[String]()
+    words.push("fig")
+    words.push("apple")
+    Deque[int] lens = words.map((s): s.len())
+    for n in lens:
+        print(f"{n}")

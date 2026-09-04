@@ -52,6 +52,7 @@ invariant. The invariants Gorget tracks, and where they live as typed fields:
 | View-vs-fresh result of a builtin | `BuiltinMethodDecl.returns_view` / `.returns_fresh`, `src/ir/lowering/builtins.rs:71,79` |
 | Box inner type for drop/alloc codegen | `StructDef.box_inner_type: Option<String>`, `src/lir/mod.rs:1541` |
 | Receiver convention (by-ptr vs by-value) | `BuiltinMethodDecl.self_conv: SelfConvention`, `src/ir/lowering/builtins.rs:65` |
+| Callback shape of a higher-order builtin (how many params, and where each type comes from) | `enum ClosureShape` + the per-protocol `CLOSURE_SHAPES` table, read through `builtins::closure_shape_for`, `src/ir/lowering/builtins.rs:117,166` |
 | Borrow-vs-value provenance of a `Ptr`-represented operand | the GIR type itself — `GirType::Ptr` / `MutPtr` *is* the borrow, `src/ir/types.rs` |
 | Whether a type's `clone_fn` is a by-value incref or a deep copy | `TypeMetadata.clone_fn` + `copy_semantics`, read through `TypeRegistry::is_refcount_clone_type`, `src/ir/types.rs` |
 | Why a compiler-inserted clone happened | `Instruction::Call.reason: Option<ImplicitCloneReason>`, `src/ir/instructions.rs` (GIR-only — see below) |

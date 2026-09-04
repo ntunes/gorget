@@ -90,6 +90,198 @@ impl CombinatorKind {
     }
 }
 
+/// The parameter shape of the closure a higher-order builtin method calls back.
+///
+/// This is what an UNTYPED closure param's type is resolved FROM. It is a
+/// property of the (protocol, method) pair — never of the closure's own
+/// syntax, never of a name prefix on the receiver's mangled symbol.
+///
+/// ⚠ Two things this deliberately does NOT reuse:
+///
+///  * **`BuiltinMethodDecl::params`.** That field is the RUNTIME callee's
+///    parameter list, and it disagrees with the closure's shape in both
+///    directions: `Vector.sort_by` declares `elem_param` (ONE TypeId) while its
+///    comparator takes TWO, and `sorted` declares `no_params` while its
+///    one-argument form takes a comparator. Driving hints from it was measured
+///    producing a SCRAMBLED sort — a silent wrong answer in place of a visible
+///    no-op.
+///  * **The decl set as a gate.** `Vector.each` / `Vector.for_each` are
+///    user-space `equip Vector` methods (`lib/std/iter.gg:413-417`) with NO
+///    `BuiltinMethodDecl` at all — that table means "builtin-lowered", not
+///    "Vector can do this". Requiring a decl before consulting this table was
+///    measured turning `Vector[Person].each(…)` into `0 0 / 0 0`.
+///
+/// So this table is UNGATED and keyed on (protocol base name, method name),
+/// and `closure_shape_for` returns `None` for any pair it does not list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClosureShape {
+    /// One parameter: the element. `filter` / `map` / `find` / `sort_by_key` / …
+    Elem,
+    /// Two parameters, both the element: a comparator (`sort_by` / `sorted_by`)
+    /// or `reduce`.
+    ElemPair,
+    /// Two parameters: the ACCUMULATOR, then the element. Sequence `fold`.
+    ///
+    /// ⭐ The accumulator's type is a property of the CALL SITE — it is the type
+    /// of the fold's first argument (`v.fold("", …)` accumulates a `String`,
+    /// `v.fold(0, …)` an `int`) — so it is supplied to `closure_param_hints`
+    /// separately and cannot be derived from the receiver type at all. Both
+    /// receiver-only answers were measured shipping a defect: `[elem, elem]`
+    /// keeps the `fold(0, (acc, e): acc + e.len())` ICE, and `[I64, elem]`
+    /// turns `fold("", (acc, e): acc + e)` into a silent wrong answer.
+    AccElem,
+    /// Two parameters: the key, then the value. Dict/HashMap `filter` / `each` / …
+    KeyVal,
+    /// Three parameters: the ACCUMULATOR, then the key, then the value.
+    /// Dict/HashMap `fold`.
+    AccKeyVal,
+}
+
+impl ClosureShape {
+    /// How many parameters the callback takes. The hint vector this shape
+    /// produces always has exactly this length, so a closure with fewer
+    /// annotated params can never fall through to the `I64_TYPE` default
+    /// for a trailing one (`closures.rs:178` gates on `i < hints.len()`).
+    pub fn arity(self) -> usize {
+        match self {
+            Self::Elem => 1,
+            Self::ElemPair | Self::AccElem | Self::KeyVal => 2,
+            Self::AccKeyVal => 3,
+        }
+    }
+}
+
+/// Closure shapes for every higher-order method on every builtin protocol.
+///
+/// ⚠ **ONE ROW PER PROTOCOL IN `ALL_PROTOCOLS`, AND AN EMPTY METHOD LIST IS AN
+/// EXPLICIT "this protocol declares no higher-order method"** — never "nobody
+/// filled this in". `closure_shape_rows_are_total` locks that at unit-test
+/// time, and it is not decoration: `DEQUE.methods = VECTOR.methods` and
+/// `HASHSET.methods = SET.methods`, so a protocol whose row is merely *absent*
+/// silently loses hints its aliased twin keeps — measured, `Deque[String]
+/// .sort_by_key((s): s.len())` goes back to `undefined reference to
+/// 'int64_t__len'` while every Vector cell stays green. The corpus cannot
+/// witness that (it has no Deque HOF cells until this round), so the totality
+/// test IS the independent witness.
+static CLOSURE_SHAPES: &[(&str, &[(&str, ClosureShape)])] = &[
+    // ── Sequences ────────────────────────────────────────────────────────
+    //
+    // Keyed on the EFFECTIVE method name (`methods.rs:2165` rewrites `sort`/1 →
+    // `sort_by` and `sorted`/1 → `sorted_by` for any array receiver), which is
+    // also the vocabulary `lir/lower/insts.rs`'s HofOp table uses. `sort` and
+    // `sorted` are listed anyway: the rewrite is conditional on the receiver
+    // resolving to `CollectionKind::Array`, and a hint is inert for the
+    // zero-argument form.
+    //
+    // `each` / `for_each` / `find` / `find_index` have no `BuiltinMethodDecl` on
+    // VECTOR — they are the user-space `equip Vector` wrappers. They are here
+    // because this table is ungated; that is the whole point of it.
+    //
+    // Not listed, deliberately: `enumerate` / `unique` / `reversed` / `sorted` /
+    // `sort` in their zero-argument forms take no closure, and `zip`'s argument
+    // is another sequence, not a callback.
+    ("Vector", VECTOR_CLOSURE_SHAPES),
+    // Deque aliases Vector's whole method table; it needs its own row here for
+    // exactly that reason.
+    ("Deque", VECTOR_CLOSURE_SHAPES),
+
+    // ── Maps ─────────────────────────────────────────────────────────────
+    ("Dict", DICT_CLOSURE_SHAPES),
+    ("HashMap", DICT_CLOSURE_SHAPES),
+
+    // ── Sets ─────────────────────────────────────────────────────────────
+    ("Set", SET_CLOSURE_SHAPES),
+    ("HashSet", SET_CLOSURE_SHAPES),
+
+    // ── Option / Result: DELIBERATELY EMPTY ──────────────────────────────
+    //
+    // Their combinators (`map`/`filter`/`and_then`/`flat_map`/`or_else`/
+    // `map_err`) are higher-order, but a SECOND hint setter already owns them —
+    // `try_lower_option_result_combinator` (`methods.rs:4105-4111`), which sets
+    // the same field keyed on the SURFACE name with one entry each. An
+    // Option/Result receiver whose combinator `is_gir_adapter()` returns from
+    // `lower_method_call` at `:1984` and never reaches the collection setter, so
+    // claiming these pairs here would put two writers on one axis for no gain.
+    // Pinned by `hof_option_map_untyped`.
+    ("Option", &[]),
+    ("Result", &[]),
+
+    // ── Everything else: no higher-order method at all ───────────────────
+    //
+    // Handles, locks, atomics and the Callable family. Each is listed so the
+    // totality test can tell "no HOFs" from "not yet filled in".
+    ("Channel", &[]),
+    ("Shared", &[]),
+    ("Weak", &[]),
+    ("Mutex", &[]),
+    ("Guard", &[]),
+    ("RWLock", &[]),
+    ("ReadGuard", &[]),
+    ("WriteGuard", &[]),
+    ("Thread", &[]),
+    ("Heap", &[]),
+    ("GorgetString", &[]),
+    ("AtomicInt", &[]),
+    ("AtomicBool", &[]),
+    ("Barrier", &[]),
+    ("WaitGroup", &[]),
+    ("Semaphore", &[]),
+    ("OnceFlag", &[]),
+    ("TaskGroup", &[]),
+    ("Callable", &[]),
+    ("MutCallable", &[]),
+    ("ConsumeCallable", &[]),
+    ("GorgetClosure", &[]),
+];
+
+static VECTOR_CLOSURE_SHAPES: &[(&str, ClosureShape)] = &[
+    ("sort", ClosureShape::ElemPair),
+    ("sort_by", ClosureShape::ElemPair),
+    ("sorted", ClosureShape::ElemPair),
+    ("sorted_by", ClosureShape::ElemPair),
+    ("reduce", ClosureShape::ElemPair),
+    ("sort_by_key", ClosureShape::Elem),
+    ("sorted_by_key", ClosureShape::Elem),
+    ("filter", ClosureShape::Elem),
+    ("map", ClosureShape::Elem),
+    ("flat_map", ClosureShape::Elem),
+    ("any", ClosureShape::Elem),
+    ("all", ClosureShape::Elem),
+    ("each", ClosureShape::Elem),
+    ("for_each", ClosureShape::Elem),
+    ("find", ClosureShape::Elem),
+    ("find_index", ClosureShape::Elem),
+    ("count", ClosureShape::Elem),
+    ("fold", ClosureShape::AccElem),
+];
+
+// ⛔ `update` is NOT here, and the omission is load-bearing. `Dict.update` is a
+// map MERGE — `gorget_map_update(void* dst, GorgetMap other)` — minted as a
+// runtime callee at `lir/lower/calls.rs`, with no HofOp arm anywhere. It reads
+// like a callback method only because its `BuiltinMethodDecl` carries
+// `params: key_val_params` under a `// Higher-order` banner, which is exactly
+// the source this table exists NOT to reuse. `d.update((k, v): v + 1)` passes
+// `gg check` and then fails with `incompatible type for argument 2 of
+// 'gorget_map_update'`. Pinned by `closure_shape_rows_have_a_callback_witness`.
+static DICT_CLOSURE_SHAPES: &[(&str, ClosureShape)] = &[
+    ("filter", ClosureShape::KeyVal),
+    ("each", ClosureShape::KeyVal),
+    ("any", ClosureShape::KeyVal),
+    ("all", ClosureShape::KeyVal),
+    ("fold", ClosureShape::AccKeyVal),
+];
+
+static SET_CLOSURE_SHAPES: &[(&str, ClosureShape)] = &[
+    ("filter", ClosureShape::Elem),
+    ("each", ClosureShape::Elem),
+    ("for_each", ClosureShape::Elem),
+    ("any", ClosureShape::Elem),
+    ("all", ClosureShape::Elem),
+    ("find", ClosureShape::Elem),
+    ("find_index", ClosureShape::Elem),
+    ("fold", ClosureShape::AccElem),
+];
+
 /// A single method on a builtin type.
 pub struct BuiltinMethodDecl {
     /// Method name as written in Gorget (e.g., "push", "get", "len").
@@ -1205,6 +1397,34 @@ pub fn c_runtime_alias_for_mangled_name(mangled: &str) -> Option<&'static str> {
     protocol_for_mangled_name(mangled).and_then(|p| p.c_runtime_alias)
 }
 
+/// The closure shape a higher-order builtin method calls back with, or `None`
+/// when this (receiver, method) pair passes no closure.
+///
+/// `mangled` is the receiver's monomorphized name (`Vector__GorgetString`,
+/// `Dict__GorgetString__int64_t`); `method` is the EFFECTIVE method name
+/// (post-`sort`/1 → `sort_by` rewrite). The protocol is recovered through
+/// `protocol_for_mangled_name`, the one sanctioned name-shape recognizer —
+/// never by `strip_prefix("Vector__")` at the consumer, which is the
+/// anti-pattern CLAUDE.md § "No name matching" names verbatim and which has no
+/// Dict arm at all.
+/// The closure-shape table as data, for cross-table guards.
+///
+/// Exposed so `tests/lints.rs` can check every `(protocol, method)` row against
+/// INDEPENDENT witnesses — the LIR HofOp dispatch arms and the user-space
+/// `equip` blocks — rather than against the `BuiltinMethodDecl` list this table
+/// deliberately does not derive from. `closure_shape_rows_are_total` proves the
+/// PROTOCOL axis is complete; it structurally cannot see a wrong METHOD, which
+/// is the axis the original defect lived on.
+pub fn closure_shape_rows() -> &'static [(&'static str, &'static [(&'static str, ClosureShape)])] {
+    CLOSURE_SHAPES
+}
+
+pub fn closure_shape_for(mangled: &str, method: &str) -> Option<ClosureShape> {
+    let protocol = protocol_for_mangled_name(mangled)?;
+    let row = CLOSURE_SHAPES.iter().find(|(name, _)| *name == protocol.base_name)?.1;
+    row.iter().find(|(name, _)| *name == method).map(|(_, shape)| *shape)
+}
+
 /// Check if a type uses by-value receiver convention (Copy-semantics pointer handles).
 /// Used by the generic dispatch path to skip borrow creation for these types.
 pub fn is_by_value_receiver(type_name: &str) -> bool {
@@ -1337,6 +1557,94 @@ mod tests {
                 "protocol {} sets owns_buffered_elements but has no mutating \
                  (element-ingesting) method — nothing aliases into the buffer",
                 protocol.base_name,
+            );
+        }
+    }
+
+    /// Closure-shape invariant: EVERY protocol in `ALL_PROTOCOLS` carries an
+    /// EXPLICIT row in `CLOSURE_SHAPES`, and an empty method list is that
+    /// explicit answer for a protocol with no higher-order method.
+    ///
+    /// This is the independent witness the fixture corpus cannot supply. The
+    /// table is keyed by `&str`, so nothing in the type system forces a row to
+    /// exist, and the failure mode is silent: `DEQUE.methods = VECTOR.methods`
+    /// and `HASHSET.methods = SET.methods`, so a protocol whose row is merely
+    /// MISSING keeps working for every method whose closure params happen to be
+    /// annotated and drops the untyped ones back to the `I64_TYPE` default —
+    /// which is a link failure on String elements and a silent no-op on struct
+    /// elements. Verified RED by deleting the `Deque` row: this test names it,
+    /// and both Deque cells go BUILD-FAIL.
+    #[test]
+    fn closure_shape_rows_are_total() {
+        for protocol in ALL_PROTOCOLS {
+            assert!(
+                CLOSURE_SHAPES.iter().any(|(name, _)| *name == protocol.base_name),
+                "protocol {} has no explicit closure-shape row — add one to \
+                 CLOSURE_SHAPES (an empty method list IS the answer for a \
+                 protocol with no higher-order method; omitting the row \
+                 silently drops the protocol's untyped closure hints)",
+                protocol.base_name,
+            );
+        }
+        for (name, _) in CLOSURE_SHAPES {
+            assert!(
+                ALL_PROTOCOLS.iter().any(|p| p.base_name == *name),
+                "CLOSURE_SHAPES has a row for {name}, which is not a protocol \
+                 in ALL_PROTOCOLS — `closure_shape_for` resolves the protocol \
+                 first, so this row is unreachable",
+            );
+        }
+        for (proto, row) in CLOSURE_SHAPES {
+            let mut seen: Vec<&str> = Vec::new();
+            for (method, _) in *row {
+                assert!(
+                    !seen.contains(method),
+                    "closure-shape row {proto} lists {method} twice — \
+                     `closure_shape_for` takes the first match, so the second \
+                     entry is dead",
+                );
+                seen.push(method);
+            }
+        }
+    }
+
+    /// `ClosureShape::arity` pinned to CONCRETE numbers, so the `debug_assert`
+    /// that compares it against the hint vector at the write site is a
+    /// cross-check between two matches rather than a self-comparison. Each
+    /// number is the callback's parameter count as the language spells it:
+    /// `(e)`, `(a, b)`, `(acc, e)`, `(k, v)`, `(acc, k, v)`.
+    #[test]
+    fn closure_shape_arity_is_pinned() {
+        for (shape, expected) in [
+            (ClosureShape::Elem, 1usize),
+            (ClosureShape::ElemPair, 2),
+            (ClosureShape::AccElem, 2),
+            (ClosureShape::KeyVal, 2),
+            (ClosureShape::AccKeyVal, 3),
+        ] {
+            assert_eq!(
+                shape.arity(), expected,
+                "{shape:?}.arity() changed — the hint vector built at the \
+                 write site must change with it, or a trailing closure param \
+                 silently falls back to I64_TYPE",
+            );
+        }
+    }
+
+    /// Aliased method tables must carry aliased closure shapes. `Deque` reuses
+    /// `VECTOR.methods` and `HashSet` reuses `SET.methods`; a shape row that
+    /// diverges from its twin would give the same method two different closure
+    /// arities depending only on which spelling the user reached for.
+    #[test]
+    fn aliased_protocols_share_closure_shapes() {
+        let row_of = |base: &str| -> &'static [(&'static str, ClosureShape)] {
+            CLOSURE_SHAPES.iter().find(|(n, _)| *n == base)
+                .unwrap_or_else(|| panic!("no closure-shape row for {base}")).1
+        };
+        for (alias, source) in [("Deque", "Vector"), ("HashSet", "Set"), ("HashMap", "Dict")] {
+            assert_eq!(
+                row_of(alias), row_of(source),
+                "{alias} aliases {source}'s method table but not its closure shapes",
             );
         }
     }

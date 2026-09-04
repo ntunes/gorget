@@ -1,0 +1,7 @@
+# Ch5: fold whose accumulator type EQUALS the element type.
+# Green at HEAD -- a CONTROL for the accumulator axis, not a pin.
+# Expected: abc
+void main():
+    Vector[String] words = ["a", "b", "c"]
+    String joined = words.fold("", (acc, e): acc + e)
+    print(joined)

@@ -1,0 +1,9 @@
+# Ch7: Dict.fold whose closure calls a method on the KEY. The
+# key/value types must both reach the closure's params.
+# Expected: 5
+void main():
+    Dict[String, int] d = Dict[String, int]()
+    d.put("ab", 1)
+    d.put("cde", 2)
+    int total = d.fold(0, (acc, k, v): acc + k.len())
+    print(f"{total}")

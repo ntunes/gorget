@@ -1,0 +1,8 @@
+# Ch5: fold whose ACCUMULATOR type differs from the element type --
+# `int` accumulator over `Vector[String]`. The accumulator is a
+# property of the CALL SITE, not of the receiver type.
+# Expected: 5
+void main():
+    Vector[String] words = ["ab", "cde"]
+    int total = words.fold(0, (acc, e): acc + e.len())
+    print(f"{total}")

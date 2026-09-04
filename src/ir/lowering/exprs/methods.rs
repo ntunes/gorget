@@ -2700,20 +2700,16 @@ pub(super) fn lower_method_call(
             Vec::new()
         };
 
-        // For higher-order methods (filter/map/fold/etc.), set closure parameter type hints
-        // so untyped closure params get the correct element type instead of defaulting to I64.
+        // Closure-parameter type hints for higher-order methods, so an UNTYPED
+        // closure param gets the receiver's real element/key/value type instead
+        // of `closures.rs:182`'s `I64_TYPE` fallback.
+        //
+        // ⚠ THE TAKE STAYS HERE, PAIRED WITH ITS RESTORE BELOW; the SET happens
+        // per-argument inside the arg-lowering loop, because the hint must be
+        // live at the moment the CLOSURE lowers and the closure's index is
+        // method-dependent (0 for every one-argument HOF, 1 for `fold`).
+        // See `set_closure_param_hints`.
         let prev_hints = std::mem::take(&mut ctx.func_state.closure_param_type_hints);
-        if matches!(method_name, "filter" | "map" | "flat_map" | "any" | "all" | "each" | "for_each" | "find" | "count" | "reduce" | "enumerate") {
-            if let Some(elem_type_id) = extract_elem_type_id_from_type_name(ctx, &type_name) {
-                ctx.func_state.closure_param_type_hints = vec![elem_type_id];
-            }
-        } else if method_name == "fold" {
-            // fold closure has (accumulator, element) — use element type for both params
-            // as a reasonable default. Explicitly-typed params override the hint.
-            if let Some(elem_type_id) = extract_elem_type_id_from_type_name(ctx, &type_name) {
-                ctx.func_state.closure_param_type_hints = vec![elem_type_id, elem_type_id];
-            }
-        }
 
         // Save/restore frame for expected_type around method-arg lowering.
         // Combinator dual-rule forces live only inside
@@ -2788,9 +2784,15 @@ pub(super) fn lower_method_call(
                 }
                 _ => (None, None),
             };
+        // Argument 0's LOWERED type, for a `fold`'s accumulator slot. `None`
+        // until argument 0 has actually lowered — see `set_closure_param_hints`.
+        let mut acc_ty: Option<TypeId> = None;
         let mut lowered_method_args: Vec<Operand> = args.iter()
             .enumerate()
             .map(|(i, arg)| {
+                // ⚠ BEFORE `lower_call_arg`, NOT AFTER. If this argument is the
+                // closure, its params are typed inside that call.
+                set_closure_param_hints(ctx, &type_name, effective_method, acc_ty);
                 let prev_expected = ctx.func_state.expected_type;
                 let callee_pt = method_param_types.get(i).copied();
                 if let Some(pt) = callee_pt {
@@ -2803,6 +2805,25 @@ pub(super) fn lower_method_call(
                 // Method args: i is 0-based for non-self args, but fn_param_ownerships
                 // includes self at index 0, so offset by 1.
                 let op = lower_call_arg(ctx, builder, arg, callee_pt, &effective_name, i + 1);
+                if i == 0 {
+                    // ⛔ TRAP: `infer_operand_type` (`type_reg.rs:285`) is the
+                    // 2-argument sibling of this call. It scans only
+                    // `ctx.locals_iter()` and answers `I64_TYPE` for a local that
+                    // exists solely in the builder — so `v.fold(make_acc(), …)`
+                    // would silently get an
+                    // `int` accumulator hint, the exact silent-wrong-answer class
+                    // this carrier exists to prevent. Pass the builder.
+                    //
+                    // ⭐ GATED, not merely asserted: swapping this to the 2-arg
+                    // sibling flips `robustness_map` cell
+                    // `hof_fold_nonconstant_accumulator` on the LLVM lane from
+                    // WORKS (`<abc`) to BUILD-FAIL (`llc: '%v6' defined with type
+                    // 'ptr' but expected 'i64'`). Its `llvm` baseline is WORKS, so
+                    // the map scores a REGRESSION and exits 1. ⚠ The C lane cannot
+                    // see it — that cell is BUILD-FAIL there either way (todo/t0991),
+                    // so a C-only run reads this line as untested.
+                    acc_ty = Some(infer_operand_type_full(ctx, &op, builder));
+                }
                 ctx.func_state.expected_type = prev_expected;
                 op
             })
@@ -5251,17 +5272,89 @@ fn resolve_inner_type(ctx: &mut LoweringContext, inner_name: &str) -> TypeId {
     }
 }
 
+/// Publish the closure-parameter type hints for the argument that is about to
+/// lower, resolved from the typed `(protocol, method)` closure-shape table.
+///
+/// ⚠ **CALL THIS AT THE TOP OF THE ARG-LOWERING LOOP BODY, BEFORE
+/// `lower_call_arg`.** An untyped closure's params are typed *inside* that
+/// call (`closures.rs:178`), so a hint published afterwards is dead. The
+/// closure's own index is method-dependent — 0 for every one-argument HOF
+/// (`sort_by`, `map`, `find`, `sort_by_key`, …) and 1 only for `fold` — which
+/// is precisely why this is called for every argument rather than for a
+/// computed closure position: written this way the caller never has to know
+/// where the closure is.
+///
+/// `acc_ty` is argument 0's LOWERED type and is `None` on the `i == 0` call for
+/// EVERY method, `fold` included — the accumulator does not exist yet when its
+/// own argument is about to lower. `AccElem` / `AccKeyVal` therefore fall back
+/// rather than assert; the fallback is only ever consulted for an argument that
+/// is not the callback.
+fn set_closure_param_hints(
+    ctx: &mut LoweringContext,
+    type_name: &str,
+    effective_method: &str,
+    acc_ty: Option<TypeId>,
+) {
+    use crate::ir::lowering::builtins::{self, ClosureShape};
+
+    let Some(shape) = builtins::closure_shape_for(type_name, effective_method) else {
+        return;
+    };
+    // `closure_shape_for` already resolved the protocol; this cannot fail.
+    let Some(protocol) = builtins::protocol_for_mangled_name(type_name) else {
+        return;
+    };
+    let (elem, key, val, _, _) = ctx.builtin_type_args_from_name(protocol, type_name);
+
+    let hints = match shape {
+        ClosureShape::Elem => vec![elem],
+        ClosureShape::ElemPair => vec![elem, elem],
+        ClosureShape::AccElem => vec![acc_ty.unwrap_or(elem), elem],
+        ClosureShape::KeyVal => vec![key, val],
+        ClosureShape::AccKeyVal => vec![acc_ty.unwrap_or(I64_TYPE), key, val],
+    };
+    // Two matches on `ClosureShape` — the one above and `arity()` — must agree.
+    // Rust's exhaustiveness covers a NEW variant; what it cannot see is an
+    // existing variant's arity changing in one match and not the other, which
+    // is a silently-short hint vector (`closures.rs:178` gates on
+    // `i < hints.len()`, so a missing trailing hint falls to `I64_TYPE`).
+    // `arity()`'s own numbers are pinned to concrete values by
+    // `closure_shape_arity_is_pinned`, so this is not a self-comparison.
+    debug_assert_eq!(
+        hints.len(), shape.arity(),
+        "closure shape {shape:?} for {type_name}.{effective_method} produced \
+         {} hints for a {}-parameter callback",
+        hints.len(), shape.arity(),
+    );
+    ctx.func_state.closure_param_type_hints = hints;
+}
+
 /// Extract the element TypeId from a collection type name like "Vector__Str", "Set__int64_t".
 /// Returns None if the type name doesn't match a known collection pattern.
 ///
 /// Deque shares Vector's element-type-in-suffix mangling and its
-/// element-typed HOF (each/map/filter/fold/reduce/…) + push_back/
-/// push_front value-arg hints. Round XXVII Track B added the `Deque__`
-/// arm (Core #4 sibling arm-add): pre-fix, `Deque[T].each((x): ...)` with
-/// an UNTYPED closure param fell through to `None`, so the closure-
-/// param type hint (see caller at methods.rs:2438) defaulted to
-/// `I64_TYPE` and non-int Deque elements executed the body with a
-/// wrong-typed parameter (runtime type-mismatch / garbage prints).
+/// push_back/push_front value-arg hints. Round XXVII Track B added the
+/// `Deque__` arm (Core #4 sibling arm-add): pre-fix, `Deque[T].each((x): ...)`
+/// with an UNTYPED closure param fell through to `None`, so the closure-param
+/// type hint defaulted to `I64_TYPE` and non-int Deque elements executed the
+/// body with a wrong-typed parameter (runtime type-mismatch / garbage prints).
+/// That closure-hint consumer no longer reads this function — see below — but
+/// the Deque arm stays load-bearing for the value-arg hint.
+///
+/// ⛔ **DEPRECATED SHAPE — one caller left, and it is filed.** This is the
+/// `strip_prefix("Vector__")` anti-pattern CLAUDE.md § "No name matching" names
+/// verbatim: it decides a semantic fact (the element type) by string-prefixing a
+/// mangled runtime symbol, it enumerates four protocols by hand, and it has NO
+/// Dict arm at all — so every Dict receiver silently answered `None`.
+///
+/// The closure-hint consumer was migrated off it to
+/// `LoweringContext::builtin_type_args_from_name` +
+/// `builtins::protocol_for_mangled_name`, the sanctioned name-shape recognizer,
+/// which is Dict-aware and reads the protocol table. **The remaining caller is
+/// the owning-VALUE-arg ownership hint above** (`push`/`put`/`set`/…), which is
+/// a CoW consume-position decision rather than a closure-typing one; migrating
+/// it is a separate change with a separate blast radius. Filed as `todo/t0992`.
+/// Do not add a third caller.
 fn extract_elem_type_id_from_type_name(ctx: &LoweringContext, type_name: &str) -> Option<TypeId> {
     let elem_str = if let Some(rest) = type_name.strip_prefix("Vector__") {
         Some(rest)

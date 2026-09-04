@@ -1,0 +1,10 @@
+# Ch5: Vector.for_each with a NAMED function and NO std.iter import.
+# This is the exact corner a prelude of std.iter would flip, so it is
+# the import half's only possible witness once that lands.
+# Expected: 3 / 2
+void show(String s):
+    print(f"{s.len()}")
+
+void main():
+    Vector[String] words = ["abc", "de"]
+    words.for_each(show)

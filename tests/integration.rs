@@ -4916,6 +4916,27 @@ fn closure_forelse_freevar_outer_local() {
     run_gg("known_gaps/closure_forelse_freevar_outer_local.gg", "99");
 }
 
+// KNOWN GAP todo/t0988 (filed R49 Track F) — `Vector[String].find(<pred>)`
+// double-frees. `gg check` is clean, the program builds, and it dies at rc 134
+// with `free(): double free detected in tcache 2` on BOTH backends.
+//
+// Heap-forced elements and an explicit `from std.iter import Iterable` are both
+// load-bearing: the import is a live axis on this defect's grid, and without it
+// the program dies at LINK time on an unrelated defect (todo/t0987) that MASKS
+// the crash. Three earlier versions of the filing each named a wrong
+// discriminator for exactly this reason.
+//
+// ⚠ There is no green control to pair with this. The one shape that survives to
+// rc 0 — `match v.find(…): case Some(s):` — prints `abc` but leaks 8 bytes at
+// `__gorget_closure_env_alloc` (todo/t0953), so wiring it would pin an invalid
+// program as good.
+#[test]
+#[ignore = "KNOWN GAP: Vector[String].find(pred) double-frees — rc 134 on C and \
+LLVM with gg check clean; todo/t0988."]
+fn vector_string_find_double_free() {
+    run_gg("known_gaps/t0988_vector_string_find_double_free.gg", "abc");
+}
+
 /// Division by zero: the integer/float asymmetry, ratified 2026-08-26.
 ///
 /// An integer divisor of zero traps (`T_DivByZero`); a float divisor of zero

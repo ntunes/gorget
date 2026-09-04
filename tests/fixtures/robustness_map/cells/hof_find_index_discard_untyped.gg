@@ -1,0 +1,7 @@
+# Ch5: find_index with an UNTYPED predicate on Vector[String],
+# result discarded. The BOUND spelling is a separate cell.
+# Expected: searched
+void main():
+    Vector[String] words = ["banana", "fig", "apple"]
+    words.find_index((s): s.len() == 3)
+    print("searched")

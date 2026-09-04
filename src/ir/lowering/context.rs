@@ -872,18 +872,24 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    /// Resolve a builtin method's return type on-the-fly from the protocol table.
-    /// Used as a fallback when fn_sigs doesn't have an entry (late-registered types).
-    /// Also populates fn_sigs and runtime_callees for future lookups.
-    pub fn resolve_builtin_method_return_type(&mut self, type_name: &str, method_name: &str) -> Option<TypeId> {
-        use crate::ir::lowering::builtins::{self, LookupCtx, BuiltinTypeArgs};
-
-        let protocol = builtins::protocol_for_mangled_name(type_name)?;
-
-        // Find the method in the protocol
-        let method = protocol.methods.iter().find(|m| m.name == method_name)?;
-
-        // Extract type args
+    /// Reconstruct a builtin collection's element / key / value types from its
+    /// monomorphized name.
+    ///
+    /// ⚠ **THE ONE SOURCE OF TRUTH FOR THIS AXIS** (layering rule 3). The
+    /// protocol is recovered through `protocol_for_mangled_name`, which reads
+    /// `base_name` off the protocol table and understands the two-type-arg
+    /// split — so `Dict__GorgetString__int64_t` yields `(key = Str, val = int)`
+    /// rather than nothing. Every consumer goes through here; nobody
+    /// re-implements `strip_prefix("Vector__")` at the read site.
+    ///
+    /// Returns `(elem, key, val, elem_name, val_name)`. For a single-type-arg
+    /// protocol all three TypeIds are the element type, mirroring
+    /// `BuiltinTypeArgs`' own convention.
+    pub fn builtin_type_args_from_name(
+        &self,
+        protocol: &'static crate::ir::lowering::builtins::BuiltinTypeProtocol,
+        type_name: &str,
+    ) -> (TypeId, TypeId, TypeId, String, String) {
         let suffix = type_name.strip_prefix(protocol.base_name)
             .and_then(|s| s.strip_prefix("__"))
             .unwrap_or("");
@@ -905,9 +911,7 @@ impl<'a> LoweringContext<'a> {
             }
         };
 
-        let self_type = self.type_mapper.lookup_named(type_name).unwrap_or(I64_TYPE);
-
-        let (elem, key, val, elem_name_str, val_name_str) = if protocol.type_arity == 2 {
+        if protocol.type_arity == 2 {
             if let Some(pos) = suffix.find("__") {
                 let key_name = &suffix[..pos];
                 let val_name = &suffix[pos + 2..];
@@ -922,7 +926,24 @@ impl<'a> LoweringContext<'a> {
             (e, e, e, suffix.to_string(), suffix.to_string())
         } else {
             (I64_TYPE, I64_TYPE, I64_TYPE, "int64_t".to_string(), "int64_t".to_string())
-        };
+        }
+    }
+
+    /// Resolve a builtin method's return type on-the-fly from the protocol table.
+    /// Used as a fallback when fn_sigs doesn't have an entry (late-registered types).
+    /// Also populates fn_sigs and runtime_callees for future lookups.
+    pub fn resolve_builtin_method_return_type(&mut self, type_name: &str, method_name: &str) -> Option<TypeId> {
+        use crate::ir::lowering::builtins::{self, LookupCtx, BuiltinTypeArgs};
+
+        let protocol = builtins::protocol_for_mangled_name(type_name)?;
+
+        // Find the method in the protocol
+        let method = protocol.methods.iter().find(|m| m.name == method_name)?;
+
+        let self_type = self.type_mapper.lookup_named(type_name).unwrap_or(I64_TYPE);
+
+        let (elem, key, val, elem_name_str, val_name_str) =
+            self.builtin_type_args_from_name(protocol, type_name);
 
         let type_args = BuiltinTypeArgs {
             elem, key, val,

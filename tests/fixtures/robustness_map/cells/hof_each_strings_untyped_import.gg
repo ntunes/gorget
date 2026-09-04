@@ -1,0 +1,10 @@
+# Ch5: Vector.each with an UNTYPED closure, WITH the std.iter import.
+# The import is a live axis: it decides which dispatch path `each`
+# and `for_each` take. Same import spelling as every other cell on
+# this axis, so the axis is the only thing that varies.
+# Expected: 3 / 2
+from std.iter import Iterable
+
+void main():
+    Vector[String] words = ["abc", "de"]
+    words.each((s): print(f"{s.len()}"))

@@ -511,7 +511,15 @@ def main():
                     help="fold PROGRESS rows into the baseline (never expectations); "
                          "refuses to write MANIFEST.tsv if any REGRESSION or NEW "
                          "divergence is present")
+    ap.add_argument("--accept-drift", action="store_true", dest="accept_drift",
+                    help="ALSO record intra-quadrant DRIFT rows (non-good -> a "
+                         "DIFFERENT non-good). Separate from --accept on purpose: "
+                         "a drift can be a SEVERITY ESCALATION (WRONG -> CRASH), and "
+                         "recording one must be a deliberate act after triage, never "
+                         "a side effect of folding progress. Same refusal rules.")
     args = ap.parse_args()
+    if args.accept_drift and not args.accept:
+        ap.error("--accept-drift requires --accept (it widens what --accept writes)")
 
     lanes = ALL_LANES if args.lanes == "all" else [l.strip() for l in args.lanes.split(",") if l.strip()]
     for lane in lanes:
@@ -549,6 +557,7 @@ def main():
     # Divergence is a question about VALUE lanes only (module docstring).
     div_lanes = [l for l in lanes if l in VALUE_LANES]
     topics, regressions, progress, divergences, new_div = {}, [], [], [], []
+    drifts = []
     both_wrong_ggdef_right, ggdef_disagree = [], []
     for row in rows:
         res = measured.get(row[COL_CELL])
@@ -624,25 +633,74 @@ def main():
             # C=REJECTED -- `doc_b06_struct_eq_no_derive` and
             # `doc_b12_borrow_conflict_shared_plus_mut_neg` are C=WRONG).
             good = "REJECTED" if row[COL_EXPECTED].startswith("REJECTED") else "WORKS"
+            drifted = False
             if base:                       # never measured => nothing to regress from
                 if base == good and bucket != good:
                     regressions.append((row[COL_CELL], f"[{lane}] {base} -> {bucket}: {actual}"))
                 elif base != good and bucket == good:
                     progress.append((row[COL_CELL], f"[{lane}] {base} -> {good}"))
-            if args.accept and bucket == good and base != good:
-                # Fold PROGRESS only. A regression stays in the in-memory row
-                # as the old baseline; the file write below is refused when
-                # any regression or new divergence is present.
+                elif base != bucket:
+                    # THE THIRD QUADRANT: broken before, broken after, broken
+                    # DIFFERENTLY. Until this branch existed the scorer had
+                    # exactly two, so BUILD-FAIL -> SANITIZE-FAIL, BUILD-FAIL ->
+                    # WRONG and WRONG -> CRASH all scored as NOTHING AT ALL --
+                    # and a whole class of real change was invisible to a
+                    # round-close gate. (Measured on this very round: fixing the
+                    # closure-shape carrier moves `hof_reduce_strings_untyped`
+                    # from ICE to BUILD-FAIL, exposing a second defect
+                    # underneath the first. Nothing in the old scorer could see
+                    # that happen.)
+                    #
+                    # ⚠ REPORT-ONLY, DELIBERATELY, AND THIS IS STAGE ONE OF A
+                    # RATCHET (Core #6, devbook/25). 673 cell-lanes sit at a
+                    # non-good baseline today and none has ever been checked for
+                    # intra-quadrant drift, so making this fatal in one step
+                    # would red the map on drift nobody caused. The staging is:
+                    # report -> measure the whole map -> burn the census down ->
+                    # THEN promote to `regressions`. Do not promote it before
+                    # the census is owned, and do not leave it report-only
+                    # forever either -- a ratchet needs both directions.
+                    drifts.append((row[COL_CELL], f"[{lane}] {base} -> {bucket}: {actual}"))
+                    drifted = True
+            if (args.accept and bucket == good and base != good) or \
+               (args.accept_drift and drifted):
+                # PROGRESS folds under `--accept`. DRIFT folds ONLY under the
+                # separate `--accept_drift`, and the separation is the point.
+                #
+                # Nothing else can write a non-good bucket, so without SOME way
+                # to record a drift the first DRIFT block is permanent
+                # unclearable noise. But a drift is not a progress row: `WRONG ->
+                # CRASH` and `TRAP -> CRASH:sig11` are SEVERITY ESCALATIONS, and
+                # folding those into the baseline as a side effect of a routine
+                # `--accept` would ratchet a segfault into the record while the
+                # operator was reading a "6 progress rows folded" summary. The
+                # flag has to be typed deliberately, and it prints what it did.
+                #
+                # A REGRESSION still stays in the in-memory row as the old
+                # baseline; the file write below is refused when any regression
+                # or new divergence is present.
                 row[LANE_COL[lane]] = bucket
             topics.setdefault(row[COL_TOPIC], {}).setdefault(lane, {})
             t = topics[row[COL_TOPIC]][lane]
             t[bucket] = t.get(bucket, 0) + 1
-        # Only a multi-VALUE-lane run can say anything about divergence; a
+        # Only a run that measured EVERY value lane can retire a divergence; a
         # single-lane --accept (or a `c,asan` run, which has one value lane) must
         # leave the recorded verdict alone rather than erase it.
         # Fold PROGRESS only: clear a resolved known divergence. Never write a
         # NEW DIVERGENT flag here -- those are `new_div` and refuse the file.
-        if args.accept and len(div_lanes) > 1:
+        #
+        # ⚠ THE GUARD IS `== len(VALUE_LANES)`, NOT `> 1`, AND THE DIFFERENCE IS
+        # 137 ERASED ROWS. `--lanes c,llvm --accept` has two value lanes, so it
+        # passed a `> 1` test -- and then cleared DIVERGENT on every row whose
+        # divergence is against the THIRD lane it never ran. Measured: 137 rows,
+        # every one of them `c`/`llvm` in agreement and `selfhost` disagreeing
+        # (`str_slice_colon` selfhost=WRONG, `func_closure_reassign`
+        # selfhost=WORKS -- the succession-plan finding). `diverges` is computed
+        # over `div_lanes` alone, so an unmeasured lane's disagreement is
+        # invisible to it and reads as "resolved". That is exactly the erasure
+        # the paragraph above forbids; the old condition just did not implement
+        # its own comment.
+        if args.accept and len(div_lanes) == len(VALUE_LANES):
             if row[COL_DIVERGE] == "DIVERGENT" and not diverges:
                 row[COL_DIVERGE] = ""
 
@@ -743,8 +801,17 @@ def main():
                     print(f"  {bucket:<10} [{lane}] {row[COL_CELL]}: got {actual!r} "
                           f"want {row[COL_EXPECTED]!r}")
 
+    if drifts:
+        # Its own heading, because it is neither of the two verdicts the map has
+        # always printed: the cell was broken and is still broken, in a
+        # different way. NOT part of the exit code -- see the scoring branch.
+        print(f"\n=== intra-quadrant DRIFT: {len(drifts)} "
+              f"(non-good -> a DIFFERENT non-good; report-only, does not gate) ===")
+
     for cell, why in progress:
         print(f"  PROGRESS   {cell}: {why}")
+    for cell, why in drifts:
+        print(f"  DRIFT      {cell}: {why}")
     for cell, why in regressions:
         print(f"  REGRESSION {cell}: {why}")
 
@@ -755,8 +822,12 @@ def main():
         else:
             (MAP / "MANIFEST.tsv").write_text(
                 header + "\n" + "\n".join("\t".join(r) for r in rows) + "\n")
-            print(f"\nbaseline updated ({len(progress)} progress rows folded) - "
-                  "review this diff")
+            recorded = (f", {len(drifts)} DRIFT rows recorded"
+                        if args.accept_drift else
+                        f" ({len(drifts)} DRIFT rows LEFT ALONE — "
+                        f"pass --accept-drift after triage)" if drifts else "")
+            print(f"\nbaseline updated ({len(progress)} progress rows folded"
+                  f"{recorded}) - review this diff")
 
     if regressions or new_div:
         print(f"\n{len(regressions)} REGRESSION(S), {len(new_div)} NEW DIVERGENCE(S)")

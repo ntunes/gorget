@@ -1,0 +1,7 @@
+# Ch5: count with an UNTYPED closure on Vector[String].
+# Green at HEAD -- a CONTROL for the carrier swap.
+# Expected: 2
+void main():
+    Vector[String] words = ["abc", "de", "fgh"]
+    int n = words.count((s): s.len() == 3)
+    print(f"{n}")

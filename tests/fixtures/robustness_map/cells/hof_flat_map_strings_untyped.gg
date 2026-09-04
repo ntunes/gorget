@@ -1,0 +1,7 @@
+# Ch5: flat_map with an UNTYPED closure on Vector[String].
+# Expected: a / b / c / d
+void main():
+    Vector[String] pairs = ["ab", "cd"]
+    Vector[String] chars = pairs.flat_map((s): s.chars())
+    for c in chars:
+        print(c)

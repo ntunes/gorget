@@ -1,0 +1,11 @@
+# Ch10: Option.map with an UNTYPED closure -- the second hint-setting
+# site, on a protocol the collection table must NOT claim.
+# Expected: 5
+void main():
+    Option[String] name = Some("Alice")
+    Option[int] n = name.map((s): s.len())
+    match n:
+        case Some(v):
+            print(f"{v}")
+        else:
+            print("none")

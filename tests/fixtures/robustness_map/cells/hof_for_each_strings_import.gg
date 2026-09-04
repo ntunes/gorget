@@ -1,0 +1,12 @@
+# Ch5: Vector.for_each with a NAMED function and the std.iter import
+# -- todo/t0987's positive control, the spelling that resolves to the
+# user-space `equip Vector` wrapper.
+# Expected: 3 / 2
+from std.iter import Iterable
+
+void show(String s):
+    print(f"{s.len()}")
+
+void main():
+    Vector[String] words = ["abc", "de"]
+    words.for_each(show)

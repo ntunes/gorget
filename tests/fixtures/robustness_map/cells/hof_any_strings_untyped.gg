@@ -1,0 +1,7 @@
+# Ch5: any with an UNTYPED closure on Vector[String].
+# Green at HEAD -- a CONTROL for the carrier swap.
+# Expected: true
+void main():
+    Vector[String] words = ["abc", "de"]
+    bool has3 = words.any((s): s.len() == 3)
+    print(f"{has3}")

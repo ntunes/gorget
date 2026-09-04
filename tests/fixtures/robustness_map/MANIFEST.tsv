@@ -127,9 +127,9 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 06 Vector basics	vec_remove_insert	WORKS	20 / 10,30 / 10,99,30	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 06 Vector basics	vec_slice	REJECTED	3 / 2,3,4 / 5	E_NoMethodFound `len` on int (build)	Slice of an auto-inferred literal. Bare form COMPILES and prints garbage (281474292334296).	REJECTED	WORKS	DIVERGENT	REJECTED	WORKS
 06 Vector basics	vec_slice_typed	WORKS	3 / 2,3,4 / 5 / 0	(matches)		WORKS	WORKS		WORKS	WORKS
-06 Vector basics	vec_sort_by_key_strings	BUILD-FAIL	fig / apple	LINK FAIL: `int64_t__len`	Minimal form: the closure parameter is typed int64_t regardless of the element type.	BUILD-FAIL	BUILD-FAIL		BUILD-FAIL	NO-VERDICT
-06 Vector basics	vec_sort_structs_comparator	WRONG	25 / 30 / 40	30 / 25 / 40	Minimal form.	BUILD-FAIL	BUILD-FAIL	DIVERGENT	SANITIZE-FAIL	NO-VERDICT
-06 Vector basics	vec_sorted_structs_comparator	WRONG	25 / 30	30 / 25	.sorted(cmp) sibling.	BUILD-FAIL	BUILD-FAIL	DIVERGENT	SANITIZE-FAIL	NO-VERDICT
+06 Vector basics	vec_sort_by_key_strings	WORKS	fig / apple	LINK FAIL: `int64_t__len`	Minimal form: the closure parameter is typed int64_t regardless of the element type.	WORKS	BUILD-FAIL		BUILD-FAIL	NO-VERDICT
+06 Vector basics	vec_sort_structs_comparator	WORKS	25 / 30 / 40	30 / 25 / 40	Minimal form.	WORKS	BUILD-FAIL	DIVERGENT	SANITIZE-FAIL	NO-VERDICT
+06 Vector basics	vec_sorted_structs_comparator	WORKS	25 / 30	30 / 25	.sorted(cmp) sibling.	WORKS	BUILD-FAIL	DIVERGENT	SANITIZE-FAIL	NO-VERDICT
 06 Vector basics	vec_swap	WORKS	30,20,10	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 06 Vector basics	vec_typed_empty_push_string	WORKS	1 / alpha	(matches)		WORKS	WORKS		WORKS	WORKS
 06 Vector basics	vec_zip	REJECTED	alpha=1 / beta=2	E_UndefinedName `zip`	ALREADY FILED: TODO.md ~286.	REJECTED	REJECTED		REJECTED	NO-VERDICT
@@ -153,6 +153,11 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 07 Dict/Set basics	set_iterate	WORKS	3 / 1 / 2	(matches)		WORKS	WORKS		WORKS	WORKS
 07 Dict/Set basics	set_of_strings	WORKS	2	(matches)		WORKS	WORKS		SANITIZE-FAIL	WORKS
 07 Dict/Set basics	set_operations	WORKS	2 / 4 / 1 / false	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
+07 Dict/Set basics	hof_dict_fold_value_sum	WORKS	3	(matches)	CONTROL: green at HEAD only because K and V happen to be Str/int. Not a pin.	WORKS				
+07 Dict/Set basics	hof_dict_fold_key_len	WORKS	5	(matches)	The Dict PIN: the closure calls a method on the KEY, so key and value must both reach it. BUILD-FAIL (`int64_t__len`) at HEAD -- Dict's arity-3 fold got zero hints.	WORKS				
+07 Dict/Set basics	hof_dict_filter_untyped	WORKS	1	(matches)	CONTROL: accidentally correct at HEAD for the same Str/int reason.	WORKS				
+07 Dict/Set basics	hof_set_fold_len_accumulator	WORKS	5	(matches)	Per-protocol sibling of hof_fold_len_accumulator. ICE at emit_types.rs:850 at HEAD.	WORKS				
+07 Dict/Set basics	hof_hashset_each_untyped	WORKS	3	(matches)	HashSet CONTROL. `HASHSET.methods = SET.methods` -- the second aliasing pair after Deque/Vector.	WORKS				
 08 structs & methods	newtype_basic	WORKS	42	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 08 structs & methods	struct_basic	WORKS	1 / 2	(matches)		WORKS	WORKS		WORKS	WORKS
 08 structs & methods	struct_displayable	WORKS	(3, 4)	(matches)		WORKS	WORKS		WORKS	WORKS
@@ -190,6 +195,7 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 10 Option/Result & errors	res_methods	WORKS	10 / 10 / 99 / true / true / fail	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 10 Option/Result & errors	res_ok_error_match	WORKS	ok 42 / err boom	(matches)		WORKS	WORKS		WORKS	WORKS
 10 Option/Result & errors	res_throws	WORKS	5 / -1	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
+10 Option/Result & errors	hof_option_map_untyped	WORKS	5	(matches)	CONTROL for the SECOND hint setter (methods.rs:4085, the Option/Result combinators). The collection closure-shape table deliberately claims no Option/Result pair.	WORKS				
 11 closures & higher-order	clos_basic	WORKS	15 / 30	(matches)		WORKS	WORKS		WORKS	WORKS
 11 closures & higher-order	clos_counter_capture	WORKS	3	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 11 closures & higher-order	clos_inferred_params	WORKS	7	(matches)		WORKS	WORKS		WORKS	WORKS
@@ -204,6 +210,27 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 11 closures & higher-order	hof_map	WORKS	5 / 2 / 10	(matches)		WORKS	WORKS		SANITIZE-FAIL	REJECTED
 11 closures & higher-order	hof_map_strings	WORKS	ALPHA / BETA	(matches)		WORKS	WORKS		SANITIZE-FAIL	NO-VERDICT
 11 closures & higher-order	hof_reduce	WORKS	120	(matches)		WORKS	WORKS		SANITIZE-FAIL	NO-VERDICT
+11 closures & higher-order	hof_map_strings_untyped	WORKS	3 / 3	(matches)	Untyped-closure CONTROL on Vector[String]: green at HEAD and after the closure-shape carrier. Goes BUILD-FAIL under a wrong protocol binding, which is what it is for.	WORKS				
+11 closures & higher-order	hof_filter_strings_untyped	WORKS	abc / def	(matches)	Untyped-closure CONTROL on Vector[String]. Same role as hof_map_strings_untyped.	WORKS				
+11 closures & higher-order	hof_any_strings_untyped	WORKS	true	(matches)	Untyped-closure CONTROL on Vector[String].	WORKS				
+11 closures & higher-order	hof_all_strings_untyped	WORKS	true	(matches)	Untyped-closure CONTROL on Vector[String].	WORKS				
+11 closures & higher-order	hof_count_strings_untyped	WORKS	2	(matches)	Untyped-closure CONTROL on Vector[String].	WORKS				
+11 closures & higher-order	hof_flat_map_strings_untyped	WORKS	a / b / c / d	(matches)	Untyped-closure CONTROL on Vector[String].	WORKS				
+11 closures & higher-order	hof_each_strings_untyped	WORKS	3 / 2	(matches)	Vector.each is a user-space `equip Vector` wrapper with NO BuiltinMethodDecl. CONTROL for the ungated closure-shape table; without the import.	WORKS				
+11 closures & higher-order	hof_each_strings_untyped_import	WORKS	3 / 2	(matches)	Same as hof_each_strings_untyped WITH `from std.iter import Iterable` -- the import axis, which controls todo/t0987 and todo/t0988.	WORKS				
+11 closures & higher-order	hof_for_each_strings_import	WORKS	3 / 2	(matches)	todo/t0987's positive control: NAMED fn + the std.iter import is the spelling that resolves.	WORKS				
+11 closures & higher-order	hof_for_each_strings_untyped	BUILD-FAIL	3 / 2	LINK FAIL: implicit declaration of `gorget_array_for_each` (C) / undefined reference (LLVM)	todo/t0987 -- calls.rs:400's `_ =>` catch-all mints a runtime symbol from the method name. Expectation is the INTENDED output, not what the compiler prints.	BUILD-FAIL				
+11 closures & higher-order	hof_for_each_strings_import_closure	BUILD-FAIL	3 / 2	LINK FAIL: implicit declaration of `gorget_array_for_each`, WITH the import	todo/t0987, and it REFUTES that item's "the discriminator IS the import": with the import, an UNTYPED closure still fabricates the symbol while a named fn and a TYPED closure both resolve.	BUILD-FAIL				
+11 closures & higher-order	hof_find_index_discard_untyped	WORKS	searched	(matches)	find_index with an untyped predicate on Vector[String], result discarded. BUILD-FAIL at HEAD (`int64_t__len`).	WORKS				
+11 closures & higher-order	hof_find_index_bound_untyped	BUILD-FAIL	1	C: incompatible types assigning `__gg_Option__int64_t` from `int64_t`. LLVM: builds and answers `none`.	todo/t0068(b) -- builtins.rs declares find_index `ret_int`, lib/std/iter.gg:428 declares `Option[int]`. Orthogonal to the closure-shape carrier. LLVM does not reject it, it silently answers wrong.	WRONG		DIVERGENT		
+11 closures & higher-order	hof_fold_string_accumulator	WORKS	abc	(matches)	CONTROL for the accumulator axis: green at HEAD only because the accumulator type EQUALS the element type.	WORKS				
+11 closures & higher-order	hof_fold_len_accumulator	WORKS	5	(matches)	The accumulator PIN: an `int` accumulator over Vector[String]. ICE at emit_types.rs:850 at HEAD -- the accumulator is a call-site property, expressible by no receiver-only table.	WORKS				
+11 closures & higher-order	hof_fold_nonconstant_accumulator	BUILD-FAIL	<abc	C: incompatible types assigning `Str` from `Str *`. LLVM builds and prints `<abc`.	todo/t0991 -- the accumulator axis at its NON-constant value. Independent of the closure-shape carrier (identical before and after). LLVM confirms the expectation.	WORKS		DIVERGENT		
+11 closures & higher-order	hof_reduce_strings_untyped	BUILD-FAIL	abc	C: incompatible types assigning `int64_t` from `Str`. LLVM: llc `%v56 defined with type ptr but expected i64`.	todo/t0068 -- fourth cell of its class: builtins.rs declares Vector.reduce `return_type: ret_int` while the result is an element. ICE at HEAD; the carrier fixes the arity and exposes the return-type declaration underneath.	BUILD-FAIL				
+11 closures & higher-order	hof_deque_each_untyped	WORKS	3 / 5	(matches)	Deque CONTROL. `DEQUE.methods = VECTOR.methods`, so a protocol-keyed closure-shape table that omits Deque silently drops it -- this cell plus hof_deque_sort_by_key_untyped are the corpus's first Deque HOF cells.	WORKS				
+11 closures & higher-order	hof_deque_map_untyped	REJECTED	3 / 5	E_TypeMismatch: expected `int`, found `String`	todo/t0058 -- Deque.map inherits Vector's `ret_self` while the HOF expansion strips only the `Vector__` prefix. Narrow to `.map`: Deque.each and Deque.sort_by_key both work.	REJECTED				
+11 closures & higher-order	hof_for_each_strings_noimport_namedfn	BUILD-FAIL	3 / 2	LINK FAIL: implicit declaration of `gorget_array_for_each` (C) / undefined reference (LLVM)	todo/t0987 -- NAMED fn, NO import. The exact corner a std.iter prelude would flip, so it is the import half's only possible witness once that lands; the untyped-closure cells survive the prelude and would leave this axis unpinned.	BUILD-FAIL				
+11 closures & higher-order	hof_for_each_strings_import_typed	WORKS	3 / 2	(matches)	CONTROL: TYPED closure + import -- the third value of the callable-form axis. It is what makes hof_for_each_strings_import_closure's failure a claim about ANNOTATION rather than about closures.	WORKS				
 12 comprehensions	comp_dict	WORKS	5 / 6	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 12 comprehensions	comp_list_basic	WORKS	5 / 0 / 16	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 12 comprehensions	comp_list_filter	WORKS	5 / 0 / 8	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
@@ -213,13 +240,17 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 13 sorting & searching	search_binary	WORKS	3 / -1	(matches)		WORKS	WORKS		WORKS	WORKS
 13 sorting & searching	search_linear	WORKS	2 / missing	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 13 sorting & searching	sort_bubble_manual	REJECTED	1,2,3,4,5	parse error (build)	Hand-written bubble sort. Same root.	REJECTED	WORKS	DIVERGENT	REJECTED	REJECTED
-13 sorting & searching	sort_by_key_length	BUILD-FAIL	fig / apple / banana	LINK FAIL: undefined reference to `int64_t__len`	Book Ch5 verbatim on Vector[String]. Compiles clean, fails at LINK. Works on Vector[int].	BUILD-FAIL	BUILD-FAIL		BUILD-FAIL	NO-VERDICT
+13 sorting & searching	sort_by_key_length	WORKS	fig / apple / banana	LINK FAIL: undefined reference to `int64_t__len`	Book Ch5 verbatim on Vector[String]. Compiles clean, fails at LINK. Works on Vector[int].	WORKS	BUILD-FAIL		BUILD-FAIL	NO-VERDICT
 13 sorting & searching	sort_descending_comparator	WORKS	5,4,3,1,1	(matches)		WORKS	BUILD-FAIL	DIVERGENT	SANITIZE-FAIL	NO-VERDICT
 13 sorting & searching	sort_in_place	WORKS	1,1,3,4,5	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 13 sorting & searching	sort_reverse_vector	WORKS	3,2,1	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 13 sorting & searching	sort_sorted_copy	WORKS	1,3,4 / 3,1,4	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 13 sorting & searching	sort_strings_alpha	WORKS	apple / banana / cherry	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
-13 sorting & searching	sort_structs_by_field	WRONG	Bob 25 / Alice 30	Alice 30 / Bob 25	Vector[Struct].sort(cmp) is a SILENT NO-OP on C; on LLVM the same source emits invalid IR (llc: 'ret i64 %v6' where %v6 is ptr).	BUILD-FAIL	BUILD-FAIL	DIVERGENT	SANITIZE-FAIL	NO-VERDICT
+13 sorting & searching	sort_structs_by_field	WORKS	Bob 25 / Alice 30	Alice 30 / Bob 25	Vector[Struct].sort(cmp) is a SILENT NO-OP on C; on LLVM the same source emits invalid IR (llc: 'ret i64 %v6' where %v6 is ptr).	WORKS	BUILD-FAIL	DIVERGENT	SANITIZE-FAIL	NO-VERDICT
+13 sorting & searching	hof_sort_by_strings_untyped	WORKS	fig / apple / banana	(matches)	sort_by with an UNTYPED comparator on Vector[String] -- the spelling docs/book/05-collections.md teaches. BUILD-FAIL (`int64_t__len`) at HEAD.	WORKS				
+13 sorting & searching	hof_sorted_by_strings_untyped	WORKS	fig / apple / banana	(matches)	The DIRECT `sorted_by` spelling on String elements. Pairs with vec_sorted_structs_comparator, which writes the SURFACE `sorted(cmp)` that the effective-name rewrite maps here -- neither cell alone distinguishes the two keys, which is why the shape table lists both names. BUILD-FAIL at HEAD.	WORKS				
+13 sorting & searching	hof_sort_by_structs_untyped	WORKS	Bob 25 / Alice 30	(matches)	sort_by with an UNTYPED comparator over a struct vector. SILENT NO-OP at HEAD (printed `Alice 30 / Bob 25`).	WORKS				
+13 sorting & searching	hof_deque_sort_by_key_untyped	WORKS	fig / banana	(matches)	The Deque PIN: BUILD-FAIL (`int64_t__len`) at HEAD, green once Deque has its own closure-shape row.	WORKS				
 14 classic exercises	ex_anagram	WORKS	true / false	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 14 classic exercises	ex_average	WORKS	3.50	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 14 classic exercises	ex_caesar_cipher	WORKS	def	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
@@ -801,7 +832,7 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 20 docs/book examples	doc_b05_vec_capacity	WORKS	true	(matches)	book ch05 § Basic Operations mentions v.capacity(); its VALUE is unspecified, so this pins only capacity() >= len()	WORKS	WORKS		WORKS	NO-VERDICT
 20 docs/book examples	doc_b05_vec_sort_natural	WORKS	1,1,2,3,4,5,6,9	(matches)	book ch05 § Sort, in-place natural order	WORKS	WORKS		WORKS	NO-VERDICT
 20 docs/book examples	doc_b05_vec_sorted_copy	WORKS	1,1,2,3,4,5,6,9 / 3,1,4,1,5,9,2,6	(matches)	book ch05 § Sort: .sorted() returns a NEW vector and the original is unchanged	WORKS	WORKS		WORKS	NO-VERDICT
-20 docs/book examples	doc_b05_vec_sorted_by_key_strings	BUILD-FAIL	fig / apple / banana	/tmp/tmpx0xjh2o3/doc_b05_vec_sorted_by_key_strings.c: In function ‘gorget_map_new’:	Book ch05 § Sort: `.sorted_by_key` on Vector[String] compiles then LINK-FAILS on `int64_t__len` -- the SIBLING of the already-mapped sort_by_key_length / vec_sort_by_key_strings cells (closure param typed int64_t regardless of element type).	BUILD-FAIL	BUILD-FAIL		BUILD-FAIL	NO-VERDICT
+20 docs/book examples	doc_b05_vec_sorted_by_key_strings	WORKS	fig / apple / banana	/tmp/tmpx0xjh2o3/doc_b05_vec_sorted_by_key_strings.c: In function ‘gorget_map_new’:	Book ch05 § Sort: `.sorted_by_key` on Vector[String] compiles then LINK-FAILS on `int64_t__len` -- the SIBLING of the already-mapped sort_by_key_length / vec_sort_by_key_strings cells (closure param typed int64_t regardless of element type).	WORKS	BUILD-FAIL		BUILD-FAIL	NO-VERDICT
 20 docs/book examples	doc_b05_vec_sort_by_key_ints	WORKS	1,2,3	(matches)	book ch05 § Sort: sort_by_key on Vector[int] (the element type that is NOT already filed)	WORKS	BUILD-FAIL	DIVERGENT	SANITIZE-FAIL	NO-VERDICT
 20 docs/book examples	doc_b05_vec_windows	WORKS	1,2,3 / 2,3,4 / 3,4,5	(matches)	book ch05, VERBATIM incl. its own annotated result	WORKS	BUILD-FAIL	DIVERGENT	WORKS	NO-VERDICT
 20 docs/book examples	doc_b05_vec_chunks	WORKS	3 / 1,2 / 3,4 / 5	(matches)	book ch05, VERBATIM incl. its own annotated result	WORKS	BUILD-FAIL	DIVERGENT	WORKS	NO-VERDICT

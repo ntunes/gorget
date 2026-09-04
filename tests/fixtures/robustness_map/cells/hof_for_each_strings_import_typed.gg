@@ -1,0 +1,10 @@
+# Ch5: Vector.for_each with a TYPED closure and the std.iter import --
+# the third value of the callable-form axis, alongside the named-fn
+# and untyped-closure cells. Green, and it is what makes the untyped
+# cell's failure a claim about ANNOTATION rather than about closures.
+# Expected: 3 / 2
+from std.iter import Iterable
+
+void main():
+    Vector[String] words = ["abc", "de"]
+    words.for_each((String s): print(f"{s.len()}"))

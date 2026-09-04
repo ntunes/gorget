@@ -1,0 +1,7 @@
+# Ch5: Vector.each with an UNTYPED closure, WITHOUT the std.iter
+# import. `each` is a user-space `equip Vector` wrapper with no
+# BuiltinMethodDecl -- the hint table must still reach it.
+# Expected: 3 / 2
+void main():
+    Vector[String] words = ["abc", "de"]
+    words.each((s): print(f"{s.len()}"))
