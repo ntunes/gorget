@@ -36,8 +36,16 @@ closure literal IS the defect's entry condition.
 ⛔ **ROUND-CLOSE BLOCKERS — ⚠ THE PREVIOUS TEXT HERE WAS WRONG ON BOTH FIGURES, corrected 2026-09-04 by
 re-reading the tree.** It said the `T1`+`L` merge needs `PHASE_D_PROXY_BUDGET` and `ALLOWED_UNWIRED` set to
 values "on NEITHER side". Measured:
-- **`PHASE_D_PROXY_BUDGET` IS IDENTICAL ON HEAD AND L — there is NOTHING TO RESOLVE.**
-  `git show HEAD:tests/lints.rs | grep -n PHASE_D_PROXY_BUDGET` vs the same on `2f7eb9b58`.
+- **`PHASE_D_PROXY_BUDGET`: base 91, N2 UNCHANGED at 91, HEAD 90 → three-way merge yields 90. DO NOT TOUCH.**
+  ⚠ **THE PREVIOUS VERSION OF THIS BULLET SAID "identical on HEAD and L" AND THAT WAS FALSE** — I checked
+  HEAD and L and **did not check N2**, which sits at 91. The conclusion survived by accident; the premise was
+  a SELECTION presented as a census, which is the exact failure this round has now hit twice. Regenerate ALL
+  branches with `for r in HEAD 832a3039d 0d9f9cebe 2f7eb9b58 36e9f57eb bcf703ee1; do git show
+  "${r}:tests/lints.rs" | grep "const PHASE_D_PROXY_BUDGET"; done`. **An executor who sees 91 vs 90 and
+  "resolves" to 91 reds an EXACT ratchet.**
+  ⊕ ⚠ **zsh APPLIES `:t` AS A HISTORY MODIFIER** — `"$r:tests/lints.rs"` silently becomes `HEADests/...`.
+  **Always write `"${r}:path"`.** This produced three convincing wrong results this round before it was
+  caught, including the one that made the bullet above wrong.
 - **`ALLOWED_UNWIRED` DOES differ** (`git show <rev>:tests/lints.rs | grep -n "const ALLOWED_UNWIRED"`), but
   it is **NOT a value to hand-pick** — it is a LIST, and its lint is **BIDIRECTIONAL** (`tests/lints.rs`
   `arrivals` fails on an unwired `.gg` missing from the list; `departed` fails on a listed row that is now
@@ -85,7 +93,17 @@ express a `*N+` LOOSE MARKER** (`cut -f4 <verdicts.tsv> | grep -c '+'` → 0 acr
 allowlist carries **7** (`grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -c '+'`). A straight
 derivation silently switches all 7 racy rows' count checks back ON and reintroduces the exact flap the gate
 exists to remove. **Carry `+` forward by (stem, class) from the union.**
-📋 **THE FULL 8-STEP PROCEDURE IS `/tmp/brief_INT_v1.md` (Track INT), in brief-review now.** It also splits
+📋 **THE PROCEDURE IS `/tmp/brief_INT_v2.md` (Track INT) — v1 WAS REBUILT after pass 1 returned NINE
+BLOCKING reservations; streak reset to 0.** v1's three fatal defects, all now fixed in v2: its stopping rule
+was a SELECTION that omitted **a class ADDED to an already-listed row** — the mutation this round performs on
+~28 rows; its "regenerate the constants last" step **disarmed every guard that could catch a bad derivation**
+(a pin regenerated from the artifact it pins is a MIRROR — filed as `t1302`); and its confirming sweep tested
+only the direction that cannot fail. v2 states the rule over **(stem, class) PAIRS** with a measured rename
+discriminator, ships the derivation as a **committed script + empty-diff lint** (Core #6), and requires
+`shrunk_class` and `retire_fatal` **EMPTY**, not merely "zero ❌".
+⚠ **`CORPUS_MANIFEST.txt` DECIDES THE DERIVATION'S INPUT POPULATION and v1 omitted it entirely** — four
+distinct hashes across the five blobs, and its counts are REGENERATED post-merge, never merged.
+🔲 **T1's hash is a LAUNCH-TIME BLANK in the brief** — T1 has not committed. Fill it before launching. It also splits
 the commits: re-derivation closes `t0572`'s over-declaration backlog as a SIDE EFFECT (22 `shrunk_class`
 rows tighten, `LEAK_CEILING` moves because a fixture disappears), so **the merge resolution and the
 tightening land as SEPARATE commits** — the record must distinguish a row that moved because of a merge from
@@ -6297,6 +6315,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t1236`](todo/t1236.md) **MED** — 🆕🧹 [MED — Core #4 census owed. Inherited from t0389, which R49 Track A2-α closed; this is the clause that would otherwis…
 - [`t1090`](todo/t1090.md) **MED** — [MED — the reference-grade instrument for the borrow-into-an-owning-destination class; filed 2026-09-04 by R49 Track N1,…
 - [`t1255`](todo/t1255.md) **MED** — 🆕🧹 [MED — TODO.md HAS NO FINAL NEWLINE, so every >> append silently CORRUPTS the last pointer row; found 2026-09-04 by R…
+- [`t1302`](todo/t1302.md) **MED** — 🆕🛡 [MED — A PIN REGENERATED FROM THE ARTIFACT IT PINS IS A MIRROR, NOT A GUARD; found 2026-09-04 by R49 Track INT's firs…
 ### Low
 
 - [`t0606`](todo/t0606.md) — 🧹 (G1 follow-up) lint-file-scope: widen g1_projected_materialize_sites_untrack files[] IF a projected-materialize cow_be…
