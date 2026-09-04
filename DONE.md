@@ -1,3 +1,36 @@
+- [2026-09-04] **`t1305` CLOSED — THE R49 FIVE-BRANCH LEAK ALLOWLIST RECONCILED FROM MEASUREMENT (R49 Track INT-B), not from either branch's blob: 37 of 46 examined stems changed, three constants moved, and the row count held at 300 as a COMPENSATING WASH the ceiling structurally cannot see.**
+  **WHAT THE MERGE HAD DONE.** INT-A took Track L's `tests/sanitize/LEAK_ALLOWLIST.txt` blob whole — the right
+  call, since the blob is the census L's constants pin — and the cost was three discarded edits by two other
+  branches: Track N2's tightened `vector_hof_cross_type_map` row, the owner ask N2 formulated for
+  `vector_hof_result_element_sizing`, and the re-seed's `__gorget_array_reserve_one` frame re-key.
+  `cargo test --test lints` was RED on `sanitize_allowlists_shrink_only`'s `uncited` assert by +2.
+  **NEITHER BRANCH WAS UNIFORMLY RIGHT, AND ONE ROW BELONGED TO NEITHER.** The examined set was defined before
+  any edit — (L-vs-N2 divergent stems) ∪ (the re-seed's re-keyed stems) = 24 ∪ 27 = **46** — and every stem in
+  it was set to its MEASURED column 4 from a full corpus sweep. `closure_fstring_capture` measured
+  `__gorget_closure_env_alloc*1,str_alloc_copy*1`: L over-admitted a `gorget_string_format` record it no longer
+  leaks, N2 dropped a `str_alloc_copy` it still does, and only the measurement carries L's `t1210` citation
+  through. `shared_callable` was L's; the four Vector-HOF rows were N2's; `linked_list` shed its push class
+  rather than re-keying it.
+  **THE RE-KEY WAS LIVE AND MANDATORY.** `b5356f361` hoisted the array growth policy into a `static inline`
+  `__gorget_array_reserve_one`, one frame above the realloc every `gorget_array_push` record was keyed on.
+  Without it the full sweep is hard red: `❌ NEW LEAK CLASS` on 22 rows and `retire_fatal` on two. 22 rows now
+  carry the new frame; `self_whole_move_ok` is the one CITED row it reaches and re-keys column 3 with column 2.
+  **THE CONSTANTS.** pairs 511→497, records 2308→2262, uncited 493→480; loose 8 held; rows 300 HELD — and that
+  is `+1` for the admitted row and `-1` for `test_higher_order_named_fn`, measured fully clean and deleted. The
+  `+1` is visible to the block inventory; NOTHING sees the `-1`, so both are written out separately in
+  `tests/lints.rs` rather than netted. All five `sanitize.leak.*.pin` rows re-stamped; the uncited row's
+  waiver keyed to the digits `493` retired and two genuine collisions on `480` in `docs/devbook/` declared.
+  **CORE #6, AND THE GUARD IS NOT A COUNT.** The shipped block said *"RETIRES only when ALL THREE of `t0953`,
+  `t0954` and `t0955` have landed"* while two of the three had already landed and been deleted — a live row, a
+  green tree, and a condition telling the next reader to wait for nothing. A block COUNT cannot catch that
+  (the block was never deleted), and "every id named anywhere must exist" red-lights the CORRECT answer (the
+  replacement narrates both retired items in the past tense). `sanitize_leak_admitting_blocks_declare_a_live_retire_condition`
+  reads the `# RETIRES:` line only: ≥1 per admitting block, `t[0-9]{4}` tokens, every one must still exist.
+  Seen RED both ways, anchored by line — a landed item still named, and a block with its condition removed.
+  **AND THE SWEEP'S ADVISORY HALF, ACCOUNTED FOR RATHER THAN READ.** `fixed_leak` named exactly one row
+  corpus-wide, and it is the one deleted above. `shrunk_class` named 51: 35 are this reconciliation, and the
+  other 16 were measured against a compiler built at the merge base and come back BYTE-IDENTICAL — pre-existing
+  `todo/t0572` debt, proven rather than assumed, and appended there as evidence.
 - [2026-09-04] **`t0877` RE-SCOPED BY POSITION, NOT CLOSED (R49 Track T1) — the self-host inferred a closure's
   return type from its BODY while the DECLARATION already named it, and a read site does not get to disagree
   with its writer. 13 lines; SIX cells CC-FAIL → MATCH and a seventh CC-FAIL → CRASH; and the one cell it does NOT fix is

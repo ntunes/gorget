@@ -81,7 +81,7 @@ by MEASUREMENT not inference** (pre-T1 driver emits a *different* wrong type, sa
 literal is load-bearing: `o.unwrap_or(h)` with the same payload and types is ASan-CLEAN.
 ⊕ **`t1304`** (MED) — the wiring-lint class is **bigger than the review's "~40": 49 unwired top-level fixtures,
 3 legitimately exempt ⇒ 46 orphans, and 15 of them are ONE `sound_move_operand_*` reject/allow axis** — the
-family whose unwired member T1 tripped over. ⊕ **`t1305`** (HIGH) — R49 Track INT-A's leak-allowlist reconciliation debt, taken from that block; ⊕ `t1306`–`t1310` remain FREE.
+family whose unwired member T1 tripped over. ⊕ **`t1305`** — R49 Track INT-A's leak-allowlist reconciliation debt — CLOSED by Track INT-B, see `DONE.md`. ⊕ **`t1306`** (MED, PENDING AN OWNER ASK) — a new-inflow fixture leaking `t0953`'s mechanism with no allowlist row, filed by INT-B's pre-flight; ⊕ `t1307`–`t1310` remain FREE.
 ⊕ **The instrument fix went to the CLASS**: `128 + signo` folded into **all three** `Crashed` constructions,
 not the one named; zero `.status.code()` maskers remain, so that filing was not needed.
 ⊕ **A robustness-map cell was added** for the SEGV (hand-derived expectation, beginner idiom per the map's
@@ -6439,7 +6439,7 @@ when it passes cleanly (per Task Continuity).
 - [`t0925`](todo/t0925.md) **HIGH** — 🆕🚨 [HIGH — THE ROUND-CLOSE SWEEP CAN PASS HAVING RUN ZERO TESTS, AND EXIT 0; observed 2026-08-31 by the R48 Track-D2 exe…
 - [`t0924`](todo/t0924.md) **HIGH** — 🆕🚧 [HIGH — A GATE THAT NO-OPS IN THE PROFILE EXECUTORS RUN, demonstrated by a live breach it let through 2026-08-31] RUN…
 - [`t0993`](todo/t0993.md) **HIGH** — 🆕🔬 [HIGH — THE DRIFT CENSUS. Stage 2 of a three-stage ratchet (Core #6, devbook/25): report → burn
-- [`t1305`](todo/t1305.md) **HIGH** — 🆕🛡 [HIGH — THE LEAK ALLOWLIST IS UNRECONCILED AFTER THE R49 FIVE-BRANCH MERGE, AND cargo test --test lints IS RED UNTIL…
+- [`t1306`](todo/t1306.md) **MED** — ⚖🆕 [PENDING AN OWNER ASK — the sweep is RED and no agent may clear it. Found 2026-09-04 by R49 Track INT-B's five-build…
 ### Medium
 - [`t0590`](todo/t0590.md) **LOW** — 🆕🧹 [LOW — lint ergonomics; flagged by the R42 Track-B executor 2026-08-15 (bit three times in one track), filed by the o…
 

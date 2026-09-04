@@ -923,7 +923,7 @@ sanitize.leak.rows.pin.regen_extract = census: rows=(?P<value>[0-9]+) pairs=
 sanitize.leak.rows.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
 sanitize.leak.rows.pin.regen_env = none
 sanitize.leak.rows.pin.instrument = an awk census over the allowlist, applying the same non-comment/non-blank filter as tests/lints.rs::sanitize_allowlists_shrink_only's `read()` helper
-sanitize.leak.rows.pin.measured_at = bc762d0d3
+sanitize.leak.rows.pin.measured_at = 54dafc26d
 sanitize.leak.rows.pin.home = tests/lints.rs:LEAK_CEILING
 sanitize.leak.rows.pin.scan = none
 sanitize.leak.rows.pin.caveat = scan = none — 294 has 33 unmasked spellings across the roots (14 in tests/integration.rs, 3 in scripts/clone_meter.spec, one each in nine todo/ items) because it is also the R47 cross-checkout clone discrepancy; a waiver farm on that scale is how a guard dies. ⚠ AND A ROW COUNT IS NOT LEAK VOLUME: it counts FIXTURES, and one fixture's row can tolerate five mechanisms and dozens of records — read it with `records` and `class_pairs` or not at all
@@ -951,7 +951,7 @@ sanitize.leak.rows.round_open.mirror = none
 sanitize.leak.rows.round_open.input = none
 
 row = sanitize.leak.records.pin
-sanitize.leak.records.pin.value = 2308
+sanitize.leak.records.pin.value = 2262
 sanitize.leak.records.pin.unit = leak records the allowlist tolerates in total
 sanitize.leak.records.pin.polarity = exact-pin
 sanitize.leak.records.pin.provenance = derived
@@ -961,7 +961,7 @@ sanitize.leak.records.pin.regen_extract = census: rows=[0-9]+ pairs=[0-9]+ recor
 sanitize.leak.records.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
 sanitize.leak.records.pin.regen_env = none
 sanitize.leak.records.pin.instrument = the awk census over tests/sanitize/LEAK_ALLOWLIST.txt (shares one run with the other three HEAD-side leak rows)
-sanitize.leak.records.pin.measured_at = bc762d0d3
+sanitize.leak.records.pin.measured_at = 54dafc26d
 sanitize.leak.records.pin.home = tests/lints.rs:LEAK_RECORDS
 sanitize.leak.records.pin.scan = none
 sanitize.leak.records.pin.caveat = scan = none since this became a four-digit figure — four-digit values collide with `file:line` CITATIONS, which churn every round: when the value was 2283 the unrelated spellings were `src/main.rs:2283` quoted in docs/devbook/01 and a self-host line pair 2280/2283 in todo/t0944, neither a mirror of anything. Waiving line numbers means re-waiving them whenever a file moves, and a waiver that must be renewed is a waiver nobody reads. The mirror to LEAK_RECORDS is what actually holds this row, exactly as for sanitize.leak.class_pairs.pin. ⊕ the `*N+` signatures are counted at their FLOOR — a `+` means at-least-N and switches that row's count check off, so this total is a lower bound on what the concurrency rows may actually leak; see sanitize.leak.loose_signatures.pin for how many rows are in that state
@@ -989,7 +989,7 @@ sanitize.leak.records.round_open.mirror = none
 sanitize.leak.records.round_open.input = none
 
 row = sanitize.leak.class_pairs.pin
-sanitize.leak.class_pairs.pin.value = 511
+sanitize.leak.class_pairs.pin.value = 497
 sanitize.leak.class_pairs.pin.unit = (fixture, leak-class) pairs the allowlist names
 sanitize.leak.class_pairs.pin.polarity = exact-pin
 sanitize.leak.class_pairs.pin.provenance = derived
@@ -999,7 +999,7 @@ sanitize.leak.class_pairs.pin.regen_extract = census: rows=[0-9]+ pairs=(?P<valu
 sanitize.leak.class_pairs.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
 sanitize.leak.class_pairs.pin.regen_env = none
 sanitize.leak.class_pairs.pin.instrument = the awk census over tests/sanitize/LEAK_ALLOWLIST.txt (shares one run with the other three HEAD-side leak rows)
-sanitize.leak.class_pairs.pin.measured_at = bc762d0d3
+sanitize.leak.class_pairs.pin.measured_at = 54dafc26d
 sanitize.leak.class_pairs.pin.home = tests/lints.rs:LEAK_CLASS_PAIRS
 sanitize.leak.class_pairs.pin.scan = none
 sanitize.leak.class_pairs.pin.caveat = scan = none since R49 Track E — 500 is a round three-digit number with 32 legitimate spellings across the roots (18 in tests/integration.rs, 12 in tests/lints.rs — `> 500` size thresholds and the re-seed ledger — one each in todo/t0154 and todo/t0605), and a waiver farm on that scale is how a guard dies. It carried `scan = standard` only while the value happened to be 501. The mirror to LEAK_CLASS_PAIRS is what actually holds this row. ⊕ the PAIR is the citation unit precisely because the ROW is not: most rows carrying multiple mechanisms would leave the majority of pairs unobliged under a per-row rule. This count says how many obligations exist, never whether any is discharged — that is sanitize.leak.uncited_class_pairs.pin
@@ -1037,7 +1037,7 @@ sanitize.leak.loose_signatures.pin.regen_extract = census: .* loose=(?P<value>[0
 sanitize.leak.loose_signatures.pin.regen_fires = \(scanned [1-9][0-9]* lines\)
 sanitize.leak.loose_signatures.pin.regen_env = none
 sanitize.leak.loose_signatures.pin.instrument = the awk census over tests/sanitize/LEAK_ALLOWLIST.txt (shares one run with the other three HEAD-side leak rows)
-sanitize.leak.loose_signatures.pin.measured_at = dc0b0024b
+sanitize.leak.loose_signatures.pin.measured_at = 54dafc26d
 sanitize.leak.loose_signatures.pin.home = tests/lints.rs:LEAK_LOOSE_SIGNATURES
 sanitize.leak.loose_signatures.pin.scan = none
 sanitize.leak.loose_signatures.pin.caveat = a single-digit value the uniqueness scanner structurally cannot police — 8 has over fifteen hundred unmasked spellings in the roots — so figures_db_mirrors_agree plus this regen are the whole enforcement. ⚠ NOT a debt-magnitude number: it is an ADMISSION count, and each `+` is a row whose record count no longer gates. Earned only by a row the sweep's own count-drift census has named
@@ -1046,7 +1046,7 @@ sanitize.leak.loose_signatures.pin.mirror = tests/lints.rs:LEAK_LOOSE_SIGNATURES
 sanitize.leak.loose_signatures.pin.input = none
 
 row = sanitize.leak.uncited_class_pairs.pin
-sanitize.leak.uncited_class_pairs.pin.value = 493
+sanitize.leak.uncited_class_pairs.pin.value = 480
 sanitize.leak.uncited_class_pairs.pin.unit = (fixture, leak-class) pairs with no citation naming a todo/ item that exists AND names the pair's top frame
 sanitize.leak.uncited_class_pairs.pin.polarity = exact-pin
 sanitize.leak.uncited_class_pairs.pin.provenance = derived
@@ -1056,14 +1056,15 @@ sanitize.leak.uncited_class_pairs.pin.regen_extract = leak-allowlist uncited pai
 sanitize.leak.uncited_class_pairs.pin.regen_fires = leak-allowlist pairs scanned=[1-9][0-9]*
 sanitize.leak.uncited_class_pairs.pin.regen_env = none
 sanitize.leak.uncited_class_pairs.pin.instrument = an awk + grep join over the allowlist and todo/, reproducing tests/lints.rs::sanitize_allowlists_shrink_only's own two-part citation test (the item must EXIST and must NAME the symbol)
-sanitize.leak.uncited_class_pairs.pin.measured_at = 572e93a04
+sanitize.leak.uncited_class_pairs.pin.measured_at = 54dafc26d
 sanitize.leak.uncited_class_pairs.pin.home = tests/lints.rs:UNCITED_LEAK_CLASS_PAIRS
 sanitize.leak.uncited_class_pairs.pin.scan = standard
 sanitize.leak.uncited_class_pairs.pin.caveat = TARGET IS 0, so this number is EVIDENCE OF A GAP, not of health. ⚠ AND THE TOKEN CHECK IS A FLOOR, NOT A LOCK: two frames account for the majority of rows, so one item naming both would satisfy a pair on every one of them. What stops that is the pair granularity plus a reviewer reading the row's ⚖ ADMITTED block — the number says how much is uncited, the block says whether the citation is true
 sanitize.leak.uncited_class_pairs.pin.cost_secs = 120
 sanitize.leak.uncited_class_pairs.pin.mirror = tests/lints.rs:UNCITED_LEAK_CLASS_PAIRS
-sanitize.leak.uncited_class_pairs.pin.waiver = tests/lints.rs 1 declared the constant's own SEEDED-AT note, which spells the value directly above the declaration as the evidence for not seeding at the pre-edit number
-sanitize.leak.uncited_class_pairs.pin.waiver = todo/t0614.md 1 declared NOT A SPELLING BUT A COLLISION: the digits occur inside the git hash `a93df493`, and a decimal scanner cannot tell a hash substring from a figure. Re-check this waiver if the value moves off 493 — it is keyed to the digits, not to the meaning
+sanitize.leak.uncited_class_pairs.pin.waiver = tests/lints.rs 1 declared the constant's own re-seed log, which spells `493 → 480` directly above the declaration. The log is the evidence for WHY the number moved and by what; deleting it to satisfy the scanner would trade a readable history for a silent one
+sanitize.leak.uncited_class_pairs.pin.waiver = docs/devbook/25-structural-guards.md 1 declared NOT A SPELLING BUT A COLLISION, and the one the citation-masker structurally cannot see: `:480` there is a BARE LINE CITATION into src/lir/validate.rs (`check_args_match_params`), not a figure. The masker recognises `file.rs:480` but a citation written as a bare `:480` beside a symbol name carries no filename to key on. ⚠ KEYED TO THE DIGITS, NOT THE MEANING — re-check when the value moves off 480, exactly as its `todo/t0614.md` predecessor had to be
+sanitize.leak.uncited_class_pairs.pin.waiver = docs/devbook/appendix-a-file-map.md 1 declared NOT A SPELLING BUT A COLLISION: `~480 total` is the approximate LINE COUNT of c_lir/emit_printf.rs + c_lir/emit_hof.rs in the file-map table. The sibling `~2,480` on the same table is masked by its thousands separator; this one is a bare three-digit count and is not. Keyed to the digits
 sanitize.leak.uncited_class_pairs.pin.input = none
 
 # ── grow-only × policy ─────────────────────────────────────────────────────

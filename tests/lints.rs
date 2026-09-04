@@ -10122,16 +10122,16 @@ fn sanitize_allowlists_shrink_only() {
     // `gg build --sanitize` and `--backend=llvm --sanitize` each report the same
     // 16 allocations, all `__gorget_closure_env_alloc`, and no corruption.
     // See the `⚠⚠ OWNER ASK` block in the allowlist.
-    // ── SUPERSEDED ADDENDUM (R49 sanitize re-seed) — PRECEDENCE: the Track L
-    //    block BELOW wins, and this block describes a FRAME RE-KEY THAT IS NOT
-    //    IN THIS FILE'S ALLOWLIST. R49 Track INT-A shipped Track L's allowlist
-    //    blob whole, so the rows here are still keyed on the OLD top frame
-    //    while `__gorget_array_reserve_one` is live in the runtime; applying
-    //    the re-key is R49 Track INT-B's obligation, and this block is the
-    //    record of how. ⚠ Its `todo/t0955` reference is STALE — that item was
-    //    deleted this round because its defect was FIXED, so only `todo/t0951`
-    //    survives to carry the erratum. Kept above all for the note on the
-    //    positive control, which spells the OLD symbol DELIBERATELY.
+    // ── SUPERSEDED ADDENDUM (R49 sanitize re-seed) — PRECEDENCE: the R49 Track
+    //    INT-B block at the constants below wins. THE RE-KEY THIS BLOCK
+    //    DESCRIBES IS NOW APPLIED: 22 rows in the allowlist are keyed on
+    //    `__gorget_array_reserve_one`, and `self_whole_move_ok` — the one cited
+    //    row the re-key reaches — carries the new frame in column 3 as well.
+    //    ⚠ Its `todo/t0955` reference is STALE — that item was deleted this
+    //    round because its defect was FIXED, so only `todo/t0951` survives to
+    //    carry the erratum, and it legitimately names BOTH spellings. Kept above
+    //    all for the note on the positive control, which spells the OLD symbol
+    //    DELIBERATELY.
     // ⚠ AND A ROUND CAN CHANGE EVERY CLASS KEY ON A ROW WITHOUT MOVING ANY OF THE
     // FOUR NUMBERS BELOW, WHICH IS WHY A READER WATCHING ONLY THEM WOULD MISS IT.
     // `b5356f361` hoisted the array growth policy into a `static inline`
@@ -10149,13 +10149,15 @@ fn sanitize_allowlists_shrink_only() {
     // `todo/t0951` legitimately names it, so the control keeps testing
     // `item_covers` rather than tracking whatever the allowlist happens to key on.
     //
-    // ── SUPERSEDED ADDENDUM (R49 Track N2) — PRECEDENCE: the Track L block
-    //    BELOW wins; this one describes N2's OWN branch census, not the
-    //    constants this file declares. Its "NET, which is what these constants
-    //    hold" line is FALSE of this tree — the allowlist here is Track L's
-    //    blob, so Track L's values are its census. Kept verbatim for its
-    //    selection-vs-enumeration lesson and its burn-down/inflow record,
-    //    which R49 Track INT-B acts on when it reconciles the allowlist.
+    // ── SUPERSEDED ADDENDUM (R49 Track N2) — PRECEDENCE: the R49 Track INT-B
+    //    block at the constants below wins; this one describes N2's OWN branch
+    //    census, not the constants this file declares. Its "NET, which is what
+    //    these constants hold" line was never true of the integration tree.
+    //    Kept verbatim for its selection-vs-enumeration lesson and for its
+    //    burn-down/inflow record, which INT-B RE-MEASURED rather than adopted:
+    //    every figure below was confirmed against a full corpus sweep, and the
+    //    reconciliation took the MEASURED column 4 on every examined row rather
+    //    than either branch's opinion of it.
     // ⬇ A BURN-DOWN AND AN INFLOW, STATED SEPARATELY — because a NET figure
     // that reports only the credit side is the same defect as a census that
     // enumerates only the row you started from, and this number made both
@@ -10198,8 +10200,29 @@ fn sanitize_allowlists_shrink_only() {
     // measured values, never rounded up, so any drift trips the gate — that is
     // what makes a widened row a measurement rather than a waiver.
     // LEAK_LOOSE_SIGNATURES is unchanged: no new row carries a `*N+` marker.
-    const LEAK_CLASS_PAIRS: usize = 511;
-    const LEAK_RECORDS: usize = 2308;
+    //
+    // ── ADDENDUM (R49 Track INT-B) — PRECEDENCE: this block wins over every
+    //    superseded one above, because it is the first census taken on the
+    //    RECONCILED file rather than on one branch's blob.
+    // 511 -> 497 pairs, 2308 -> 2262 records, taken from a FULL
+    // `scripts/sanitize_sweep.sh` over the merged tree: every row in the
+    // examined set was set to its MEASURED column 4, not to either branch's
+    // opinion of it. The pairs shed are the frame re-key's five class DROPS plus
+    // Track N2's Vector-HOF burn-down; the records follow them.
+    // ⚠ THE THREE MOVES THIS BLOCK MUST STATE SEPARATELY, because `LEAK_CEILING`
+    // CANNOT SEE THEM. Rows went 300 -> 300, and that is a COMPENSATING WASH,
+    // not a no-op:
+    //   +1  `vector_hof_result_element_sizing` — admitted under the owner ruling
+    //       recorded in its `⚖ ADMITTED` block (2026-09-04).
+    //   -1  `test_higher_order_named_fn` — measured fully CLEAN corpus-wide, so
+    //       the row went with the defect.
+    // A row count is a DIFFERENCE, and a difference of zero is the one reading a
+    // pinned total can never distinguish from "nothing happened". The item
+    // inventory below sees the `+1`; NOTHING sees the `-1` (an uncited row whose
+    // fixture goes clean lands in the sweep's advisory `fixed_leak` bucket and
+    // sets no rc), which is why both are written out here rather than netted.
+    const LEAK_CLASS_PAIRS: usize = 497;
+    const LEAK_RECORDS: usize = 2262;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────
@@ -10227,8 +10250,14 @@ fn sanitize_allowlists_shrink_only() {
     // class).  Regenerate:
     //   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -v '^$' \
     //     | cut -f2 | awk -F, '{n[NF]++; p+=NF} END{for (k in n) print k, n[k]; print "pairs", p}'
-    // `vector_hof_cross_type_map` is the live proof: three classes, three
-    // SEPARATE filed items, and one class splitting between two of them.
+    // `callable_literal_at_consuming_positions` is the live proof: ONE class
+    // whose records THREE separate filed items own between them, so a per-row
+    // citation would have discharged it with any one of the three.
+    // ⚠ IT USED TO BE `vector_hof_cross_type_map` (three classes, three items,
+    // one class splitting between two). R49 Track N2 FIXED two of those three
+    // mechanisms, so that row now carries one class and one citation — the
+    // example was retired by the burn-down it was illustrating, which is the
+    // outcome this ratchet exists to produce.
     //
     // ⚠ IT IS AN `assert_eq!`, NOT A `<=`, for the reason stated forty lines
     // above about `LEAK_CEILING`: under `<=` a burn-down that forgets to lower
@@ -10271,7 +10300,14 @@ fn sanitize_allowlists_shrink_only() {
     // in 3 allocations at this track's base, ASan-CLEAN after the
     // capture-ownership fix), so the row went and its pair went with it. This is
     // the direction the owner's ruling asks for — burnt down, not accounted for.
-    const UNCITED_LEAK_CLASS_PAIRS: usize = 493;
+    // ⚠⚖ 493 → 480 (R49 Track INT-B). NOT a citation drive: every one of the 13
+    // is a pair that CEASED TO EXIST. Twelve are classes the full sweep measured
+    // GONE from rows the merge left over-admitting (Track N2's Vector-HOF fix
+    // plus the five class DROPS the frame re-key exposed), and the thirteenth is
+    // `test_higher_order_named_fn`'s whole row. The one pair ADDED in the same
+    // commit — `vector_hof_result_element_sizing` — is CITED to `todo/t0953`, so
+    // it lands on the other side of this count and does not offset the 13.
+    const UNCITED_LEAK_CLASS_PAIRS: usize = 480;
 
     // A `todo/` item counts as citable for a pair only if it EXISTS and its body
     // NAMES the pair's top-frame symbol. Cached: 293 rows would otherwise re-read
@@ -10298,8 +10334,10 @@ fn sanitize_allowlists_shrink_only() {
         );
         // Column 3 — the per-class citation, `<class>=<todo-id>[,…]`. A class MAY
         // repeat when more than one filed item owns records of that frame in this
-        // fixture (the DIRECT/INDIRECT split on `vector_hof_cross_type_map` is the
-        // in-tree example). Absent column = every pair on the row is uncited,
+        // fixture (`callable_literal_at_consuming_positions` is the in-tree
+        // example: one frame, three owners. The DIRECT/INDIRECT split on
+        // `vector_hof_cross_type_map` used to be, until R49 Track N2 fixed both
+        // halves of it). Absent column = every pair on the row is uncited,
         // which is a counted debt, not a malformed row.
         let mut citations: Vec<(&str, &str)> = Vec::new();
         if let Some(col3) = cols.get(2) {
@@ -10458,6 +10496,158 @@ fn sanitize_allowlists_shrink_only() {
              must REJECT a citation appended to column 2, not read it as a number"
         );
     }
+}
+
+/// Every block that ADMITS a leak row declares what retires it, on a canonical
+/// line, and every `todo/` item that line names still exists.
+///
+/// **The defect this retires (R49 Track INT-B, measured 2026-09-04 on the
+/// five-branch integration tree).** `vector_hof_cross_type_map`'s `⚖ ADMITTED`
+/// block closed *"RETIRES only when ALL THREE of `todo/t0953`, `todo/t0954` and
+/// `todo/t0955` have landed"* — and two of those three had already landed, in
+/// the same round, deleting both items. The row was live, its counts were
+/// pinned, every existing gate was green, and the block was telling the next
+/// reader to wait for two obligations that no longer existed. A retire
+/// condition rots in exactly one direction: it OVER-STATES its blockers, and an
+/// over-stated blocker is what keeps an admission alive past its defect.
+///
+/// **Why it is not a block COUNT** (SIX QUESTIONS #2 — a guard that cannot catch
+/// its own class). `sanitize_allowlists_shrink_only`'s row ceiling and an
+/// inventory of `⚖ ADMITTED` banners both see a block DELETED WITH ITS ROW. The
+/// defect above deleted nothing: the block stayed, the row stayed, the count
+/// never moved. What went stale was the CONDITION, so the condition is what this
+/// test reads.
+///
+/// **Why it is not "every id named anywhere in the block must exist"** — that
+/// spelling RED-LIGHTS THE CORRECT ANSWER. The replacement block narrates the
+/// two retired items in the PAST TENSE (*"TWO OF THE THREE CLASSES HAVE SINCE
+/// LANDED"*), which is the whole point of keeping the history, and this file's
+/// header names them too. Scoping the subject to the `# RETIRES:` line is
+/// exactly what keeps that legal while still making the CLAIM checkable.
+///
+/// **Both ratchet directions (Core #6).** A block with no condition reds. A
+/// condition naming an item that has since LANDED reds. There is no allowlist,
+/// no `t0000` hole and no pre-existing debt to burn down — every block in the
+/// file satisfies it today.
+#[test]
+fn sanitize_leak_admitting_blocks_declare_a_live_retire_condition() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("tests/sanitize/LEAK_ALLOWLIST.txt");
+    let body = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let lines: Vec<&str> = body.lines().collect();
+
+    // The SUBJECT is every block that admits a row. `⚠⚠ OWNER ASK` is one of
+    // them: it admits `callable_literal_at_consuming_positions` and carries a
+    // retire condition, and a subject that named only `⚖ ADMITTED` would leave
+    // it with no rule at all rather than with a rule it passes (SIX QUESTIONS
+    // #4 — a case with no subject is not fixed by widening the rule's text).
+    let is_start =
+        |l: &str| l.starts_with("# ⚖ ADMITTED (") || l.starts_with("# ⚠⚠ OWNER ASK");
+    let starts: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| is_start(l))
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        starts.len() >= 10,
+        "only {} admitting block(s) found in {} — the banners this test keys on \
+         (`# ⚖ ADMITTED (` / `# ⚠⚠ OWNER ASK`) must have been respelled, which \
+         would make this guard silently vacuous",
+        starts.len(),
+        path.display()
+    );
+
+    let mut conditions = 0usize;
+    for &s in &starts {
+        // A block runs to the next banner or to the first data row, whichever
+        // comes first.
+        let mut e = s + 1;
+        while e < lines.len() && lines[e].starts_with('#') && !is_start(lines[e]) {
+            e += 1;
+        }
+        let block = &lines[s..e];
+        let retires: Vec<&&str> = block
+            .iter()
+            .filter(|l| l.starts_with("# RETIRES: "))
+            .collect();
+        // `>= 1`, NEVER "exactly one". One block admits two rows with two
+        // DIFFERENT conditions, and that per-row split is itself the correction
+        // of an earlier over-statement — collapsing it to a single line would
+        // re-introduce the exact defect this test retires.
+        assert!(
+            !retires.is_empty(),
+            "the admitting block starting at {}:{} has no `# RETIRES: <id>[, <id>…]` \
+             line.\n  {}\nAn admission with no stated end is permanent by default. \
+             Write what retires it on its own line; put the reasoning in prose \
+             around it.",
+            path.display(),
+            s + 1,
+            lines[s]
+        );
+        for r in &retires {
+            let rest = r.trim_start_matches("# RETIRES: ");
+            // Ids come from the segment BEFORE any trailing `— <prose>`, so a
+            // block admitting two rows can say which condition belongs to which
+            // without the prose smuggling an unchecked id past the check.
+            let (ids_part, tail) = match rest.split_once(" — ") {
+                Some((a, b)) => (a, Some(b)),
+                None => (rest, None),
+            };
+            // The TOKEN is `t<4 digits>`; a `(b)`-style sub-item suffix names a
+            // bullet inside an item, not a file, so it stays in the prose.
+            let ids: Vec<String> = ids_part
+                .split(',')
+                .filter_map(|tok| {
+                    let t = tok.trim();
+                    let d = t.strip_prefix('t')?;
+                    let digits: String = d.chars().take(4).collect();
+                    (digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()))
+                        .then(|| format!("t{digits}"))
+                })
+                .collect();
+            assert!(
+                !ids.is_empty(),
+                "`{r}` (block at {}:{}) names no `todo/` item. The line is the \
+                 CONDITION, so it must carry at least one `t<NNNN>` token.",
+                path.display(),
+                s + 1
+            );
+            if let Some(tail) = tail {
+                assert!(
+                    !tail.contains("todo/t") && !tail.contains(" t0") && !tail.contains(" t1"),
+                    "the prose after `— ` on `{r}` names a `todo/` item. Every id \
+                     on a retire condition goes BEFORE the dash, where it is \
+                     checked; the tail is for saying WHICH ROW the condition is \
+                     for."
+                );
+            }
+            for id in &ids {
+                let item = root.join("todo").join(format!("{id}.md"));
+                assert!(
+                    item.is_file(),
+                    "the block at {}:{} says it RETIRES with `{id}`, and \
+                     `todo/{id}.md` does not exist.\n  {r}\nEither the item \
+                     LANDED — in which case this admission has outlived one of \
+                     its blockers and the condition must shrink, and the row's \
+                     counts probably shrink with it — or the id is a typo. An \
+                     over-stated blocker is how an admission survives its own \
+                     defect: it was measured, on `vector_hof_cross_type_map`, \
+                     naming two items that had landed in the same round.",
+                    path.display(),
+                    s + 1
+                );
+            }
+            conditions += 1;
+        }
+    }
+    assert!(
+        conditions >= starts.len(),
+        "{conditions} condition(s) across {} block(s) — every block owes at \
+         least one",
+        starts.len()
+    );
 }
 
 /// Every `qsort` this compiler EMITS is guarded on `len > 1`.
