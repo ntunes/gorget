@@ -10085,6 +10085,22 @@ fn sanitize_allowlists_shrink_only() {
     // `gg build --sanitize` and `--backend=llvm --sanitize` each report the same
     // 16 allocations, all `__gorget_closure_env_alloc`, and no corruption.
     // See the `⚠⚠ OWNER ASK` block in the allowlist.
+    // ⚠ AND A ROUND CAN CHANGE EVERY CLASS KEY ON A ROW WITHOUT MOVING ANY OF THE
+    // FOUR NUMBERS BELOW, WHICH IS WHY A READER WATCHING ONLY THEM WOULD MISS IT.
+    // `b5356f361` hoisted the array growth policy into a `static inline`
+    // `__gorget_array_reserve_one`, inserting one frame above the realloc every
+    // `gorget_array_push` leak record was keyed on. The affected rows re-seeded
+    // to the new top frame on 2026-09-04; the allowlist header carries the
+    // per-record proof and the regeneration command. Rows, pairs, records and
+    // loose signatures are all UNCHANGED by it — a rename is bookkeeping, and it
+    // is a rename only where the RECORD COUNT held, which is what was checked.
+    // ⚠ `UNCITED_LEAK_CLASS_PAIRS` is the one that WOULD have moved: a re-seeded
+    // class orphans its column-3 citation, so the two cited rows re-seeded
+    // column 3 as well and `todo/t0951` / `todo/t0955` each name the new frame.
+    // The positive control at the bottom of this test still spells the OLD
+    // symbol on purpose: `gorget_array_push` is a live runtime function and
+    // `todo/t0951` legitimately names it, so the control keeps testing
+    // `item_covers` rather than tracking whatever the allowlist happens to key on.
     const LEAK_CLASS_PAIRS: usize = 501;
     const LEAK_RECORDS: usize = 2302;
     const LEAK_LOOSE_SIGNATURES: usize = 8;

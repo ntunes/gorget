@@ -133,6 +133,38 @@
 # move with trip counts and data sizes, and are a lower bound under a
 # conservative root set anyway.
 #
+# ⚠ SO THE KEY MOVES WHEN A FRAME IS EXTRACTED, AND THAT IS BOOKKEEPING, NOT A
+# LEAK. `b5356f361` hoisted the array growth policy out of `gorget_array_push`
+# into a `static inline __gorget_array_reserve_one` so three push variants share
+# one doubling rule. The realloc did not move; ONE FRAME WAS INSERTED ABOVE IT,
+# and every affected row read as a NEW CLASS the gate had never been told about.
+# Re-seeded 2026-09-04 to the frame the sweep now reports. Regenerate the set:
+#   grep -c '__gorget_array_reserve_one' tests/sanitize/LEAK_ALLOWLIST.txt
+# ⚠ RE-SEEDING IS NOT AN ADMISSION, AND THE DISCRIMINATOR IS THE RECORD COUNT —
+# the only quantity these rows pin. A row was re-seeded only where the count was
+# UNCHANGED and every other class on the row was untouched, which held for every
+# one of them; and the proof is per RECORD, not per row: in the sweep's own logs
+# each `__gorget_array_reserve_one` record has `gorget_array_push` as the very
+# next frame, i.e. the identical allocation site with the helper un-inlined.
+# A row whose COUNT also moved is a behaviour change and gets adjudicated, never
+# absorbed into a rename. `linked_list` is exactly that case and was DELIBERATELY
+# LEFT ALONE: its `gorget_array_push*1` record is GONE rather than renamed (it
+# reports no `__gorget_array_reserve_one` record at all), so it belongs to the
+# over-declaring population `todo/t0572` owns, not to this re-seed.
+# ⚠ WHAT THE RE-SEED COSTS, said rather than hidden: `gorget_array_push` and
+# `gorget_array_push_cloned` now RESERVE THROUGH THE SAME HELPER, so their
+# backing-store records share ONE key and column 2 can no longer tell them
+# apart. Two mechanisms behind one class key is the defect this column exists to
+# prevent, one level down. Nothing in the corpus exhibits it today — every
+# `__gorget_array_reserve_one` record in the sweep sits under `gorget_array_push`
+# — and `todo/t1296` owns it.
+# ⚠ AND A CITED ROW RE-SEEDS COLUMN 3 WITH COLUMN 2, plus the cited ITEM's body.
+# A citation for a class the row no longer names is dead text and
+# `sanitize_allowlists_shrink_only` panics on it; a citation counts only when the
+# item EXISTS and its body NAMES the pair's top-frame symbol, so `todo/t0951` and
+# `todo/t0955` each carry a marked erratum spelling the new frame. Skip either
+# half and `UNCITED_LEAK_CLASS_PAIRS` silently RISES on a pure rename.
+#
 # ONE ROW PER FIXTURE. The classes are columns, not extra rows, so the ceiling
 # in tests/lints.rs keeps counting FIXTURES and stays comparable to every value
 # it has ever held. `scripts/sanitize_sweep.sh` reads columns 1 and 2 — the
@@ -178,7 +210,7 @@ async_select	gorget_channel_new*4
 async_task_group_fire	gorget_channel_new*2
 atomic_int_amp_param	gorget_atomic_int_new*1
 borrow_field_lazy_dict_iter	gorget_dict_new*3,gorget_map_clone*24
-borrow_field_method_dispatch	gorget_array_push*1,gorget_dict_new*3,str_alloc_copy*2
+borrow_field_method_dispatch	__gorget_array_reserve_one*1,gorget_dict_new*3,str_alloc_copy*2
 box_trait_vector_lit	__gorget_box_alloc_Robot*1,str_alloc_copy*1
 # ⚖ ADMITTED (R48 Track R, 2026-09-02; attribution CORRECTED and the pins
 # RATIFIED the same day). TWO rows, both for fixtures this round ADDED to the
@@ -360,7 +392,7 @@ builtin_oracle_sync_deque	__gorget_closure_env_alloc*2
 builtin_oracle_sync_dict	__gorget_closure_env_alloc*6
 builtin_oracle_sync_hashmap	__gorget_closure_env_alloc*2
 builtin_oracle_sync_hashset	__gorget_closure_env_alloc*2
-builtin_oracle_sync_vector	__gorget_closure_env_alloc*5,gorget_array_push*1,gorget_string_format*1
+builtin_oracle_sync_vector	__gorget_array_reserve_one*1,__gorget_closure_env_alloc*5,gorget_string_format*1
 char_methods	str_alloc_copy*2
 cli_basic	str_alloc_copy*1
 clone_breaks_borrow_chain	__gorget_closure_env_alloc*2
@@ -385,14 +417,14 @@ coroutine_collections_advanced	__gorget_closure_env_alloc*1,str_alloc_copy*1
 coroutine_dict_higher_order	__gorget_closure_env_alloc*5
 coroutine_dict_set	__gorget_closure_env_alloc*4
 coroutine_result_combinators	str_alloc_copy*3
-coroutine_vector_ops	gorget_array_push*1
-cow_amp_ref_field_forward	gorget_array_push*2
+coroutine_vector_ops	__gorget_array_reserve_one*1
+cow_amp_ref_field_forward	__gorget_array_reserve_one*2
 cow_closure_deferred_mutate	str_alloc_copy*3
 cow_enum_bare_assign	str_alloc_copy*1
 cow_lazy_mut_borrow_write	str_alloc_copy*1
 crypto_hash	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*11,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
 crypto_x25519	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*17,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
-csv_delimiters	gorget_array_push*1,gorget_array_reserve*2,str_alloc_copy*2
+csv_delimiters	__gorget_array_reserve_one*1,gorget_array_reserve*2,str_alloc_copy*2
 d29_hardening_stdlib_shape	gorget_string_format*3
 dataframe_agg	str_alloc_copy*1
 dataframe_cast	gorget_array_reserve*14,gorget_parse_int*1,str_alloc_copy*3
@@ -401,10 +433,10 @@ dataframe_csv	str_alloc_copy*4
 dataframe_extra	str_alloc_copy*1
 dataframe_filter	str_alloc_copy*3
 dataframe_filter_sort	gorget_parse_float*2,str_alloc_copy*4
-dataframe_groupby	gorget_array_push*5,gorget_array_reserve*20,gorget_dict_new*15,str_alloc_copy*20
+dataframe_groupby	__gorget_array_reserve_one*5,gorget_array_reserve*20,gorget_dict_new*15,str_alloc_copy*20
 dataframe_nulls	__gorget_closure_env_alloc*2
 dataframe_ops	str_alloc_copy*1
-dataframe_tier2_groupby	gorget_array_push*2,gorget_array_reserve*8,gorget_dict_new*6,str_alloc_copy*8
+dataframe_tier2_groupby	__gorget_array_reserve_one*2,gorget_array_reserve*8,gorget_dict_new*6,str_alloc_copy*8
 dataframe_tier2_joins	str_alloc_copy*2
 dataframe_tier2_sort_arith	gorget_parse_float*2
 dataframe_transform	__gorget_closure_env_alloc*1
@@ -610,7 +642,7 @@ regex_extended	gorget_array_reserve*4,str_alloc_copy*2
 # `known_gaps/self_consuming_receiver_no_callee_drop.gg` (5 cells, 192 bytes in 3
 # allocations at HEAD on C and LLVM) and the `#[ignore]`d
 # `known_gap_self_consuming_receiver_no_callee_drop` asserting the clean run.
-self_whole_move_ok	gorget_array_push*1	gorget_array_push=t0951
+self_whole_move_ok	__gorget_array_reserve_one*1	__gorget_array_reserve_one=t0951
 semaphore_amp_param	gorget_semaphore_new*1
 semaphore_basic	__gorget_spawn_limited_work*3+
 serialize_collections	str_alloc_copy*7
@@ -652,7 +684,7 @@ shared_callable	__gorget_closure_env_alloc*1
 shared_early_return	gorget_mutex_new*2,gorget_shared_new*2
 shared_float	gorget_mutex_new*2,gorget_shared_new*2
 shared_int_spawn_control	gorget_mutex_new*2,gorget_shared_new*2
-shared_iterator_invalidation	gorget_array_push*1,gorget_mutex_new*2,gorget_shared_new*2
+shared_iterator_invalidation	__gorget_array_reserve_one*1,gorget_mutex_new*2,gorget_shared_new*2
 shared_keyword_local	gorget_mutex_new*2
 shared_multi_spawn	gorget_mutex_new*6,gorget_shared_new*6
 shared_multi_token	gorget_mutex_new*4,gorget_shared_new*4
@@ -672,15 +704,15 @@ shared_stale_writeback	gorget_mutex_new*2,gorget_shared_new*2
 shared_stress	gorget_mutex_new*2,gorget_shared_new*2
 shared_stress_yield	gorget_mutex_new*2,gorget_shared_new*2
 shared_string	gorget_shared_new*2
-shared_struct_field_clone	gorget_array_push*1
+shared_struct_field_clone	__gorget_array_reserve_one*1
 shared_transparent	gorget_mutex_new*2,gorget_shared_new*2
-shared_vector_elem	gorget_array_push*1
+shared_vector_elem	__gorget_array_reserve_one*1
 shared_with_blocking_refresh	gorget_mutex_new*2,gorget_shared_new*2
 shared_with_check_then_act	gorget_mutex_new*2,gorget_shared_new*2
 shared_with_refresh	gorget_mutex_new*2,gorget_shared_new*2
 shared_with_spawned_refresh	gorget_mutex_new*2,gorget_shared_new*2
 snag11_from_mediated_propagation	str_alloc_copy*1
-snag49a_throws_for_iter	gorget_array_push*1
+snag49a_throws_for_iter	__gorget_array_reserve_one*1
 snag54_result_out_fallthrough	str_alloc_copy*1
 snag55_dict_get_or_in_callee	str_alloc_copy*1
 spawn_blocking_multi	str_alloc_copy*3+
@@ -690,7 +722,7 @@ stdlib_io_stdout_typed	str_alloc_copy*2
 stdlib_io_writer	gorget_array_reserve*3,str_alloc_copy*1
 stdlib_iter_bounds_coverage	gorget_string_push_char*4,str_alloc_copy*8
 stdlib_iter_dict	gorget_map_clone*36
-stdlib_iter_drain	gorget_array_push*3,str_alloc_copy*5
+stdlib_iter_drain	__gorget_array_reserve_one*3,str_alloc_copy*5
 stdlib_iter_join	gorget_string_push_char*3,str_alloc_copy*3
 stdlib_iter_more_terminals	gorget_string_push_char*1,str_alloc_copy*1
 stdlib_iter_set	gorget_set_clone*24
@@ -720,14 +752,14 @@ string_parsing_patterns	str_alloc_copy*2
 string_word_frequency	str_alloc_copy*4
 sync_atomics	gorget_atomic_bool_new*1,gorget_atomic_int_new*1
 sync_barrier	gorget_barrier_new*1
-tensor_arithmetic	gorget_array_push*14
-tensor_basic	gorget_array_push*4
-tensor_broadcast	gorget_array_push*11
-tensor_extra	gorget_array_push*53
-tensor_float_frac	gorget_array_push*2
-tensor_linalg	gorget_array_push*12
-tensor_reduce	gorget_array_push*7
-tensor_reshape	gorget_array_push*2
+tensor_arithmetic	__gorget_array_reserve_one*14
+tensor_basic	__gorget_array_reserve_one*4
+tensor_broadcast	__gorget_array_reserve_one*11
+tensor_extra	__gorget_array_reserve_one*53
+tensor_float_frac	__gorget_array_reserve_one*2
+tensor_linalg	__gorget_array_reserve_one*12
+tensor_reduce	__gorget_array_reserve_one*7
+tensor_reshape	__gorget_array_reserve_one*2
 test_cleanup	gorget_format*1,str_alloc_copy*2
 test_closures_advanced	__gorget_closure_env_alloc*7
 test_closures_edge_cases	__gorget_closure_env_alloc*6
@@ -739,7 +771,7 @@ test_dict_int_keys	__gorget_closure_env_alloc*2
 test_failure	gorget_format*1,str_alloc_copy*2
 test_hashmap_all	__gorget_closure_env_alloc*4,str_alloc_copy*3
 test_hashset_all	__gorget_closure_env_alloc*4
-test_higher_order_named_fn	gorget_array_push*1
+test_higher_order_named_fn	__gorget_array_reserve_one*1
 test_method_chaining	__gorget_closure_env_alloc*12
 test_multiline_closures	__gorget_closure_env_alloc*1
 test_process_timeout	gorget_process_spawn*8
@@ -747,8 +779,8 @@ test_result_advanced	str_alloc_copy*7
 test_set_all	__gorget_closure_env_alloc*11
 test_set_string	__gorget_closure_env_alloc*4,str_alloc_copy*3
 test_should_panic	gorget_format*2,str_alloc_copy*4
-test_vector_advanced	__gorget_closure_env_alloc*15,gorget_array_push*1
-test_vector_all	__gorget_closure_env_alloc*14,gorget_array_push*1,gorget_array_reserve*1
+test_vector_advanced	__gorget_array_reserve_one*1,__gorget_closure_env_alloc*15
+test_vector_all	__gorget_array_reserve_one*1,__gorget_closure_env_alloc*14,gorget_array_reserve*1
 test_vector_bool	__gorget_closure_env_alloc*9
 test_vector_edge_cases	__gorget_closure_env_alloc*14,str_alloc_copy*1
 test_vector_float_higher_order	__gorget_closure_env_alloc*9
@@ -759,7 +791,7 @@ time_format	gorget_format_time*4
 tlsf_composable	gorget_tlsf_new*2
 toml_edge	str_alloc_copy*3
 toml_parse	str_alloc_copy*13
-toml_stringify	gorget_array_push*1,gorget_dict_new*9,gorget_map_clone*9,str_alloc_copy*21
+toml_stringify	__gorget_array_reserve_one*1,gorget_dict_new*9,gorget_map_clone*9,str_alloc_copy*21
 tracking_composable	gorget_tracking_new*1
 vector_any_all_bool	__gorget_closure_env_alloc*6
 vector_callable_two_locals	__gorget_closure_env_alloc*2
@@ -793,8 +825,8 @@ vector_higher_order	__gorget_closure_env_alloc*4
 # landed; each one alone TIGHTENS this row's counts. All three ship a durable
 # heap-forced `known_gaps` repro with a NAMED callee where the isolation needs one,
 # and an `#[ignore]`d `assert_gg_sanitize_clean` test asserting the clean run.
-vector_hof_cross_type_map	__gorget_closure_env_alloc*10,gorget_array_push*6,str_alloc_copy*13	__gorget_closure_env_alloc=t0953,gorget_array_push=t0955,str_alloc_copy=t0954,str_alloc_copy=t0955
-vector_methods2	__gorget_closure_env_alloc*4,gorget_array_push*1
+vector_hof_cross_type_map	__gorget_array_reserve_one*6,__gorget_closure_env_alloc*10,str_alloc_copy*13	__gorget_array_reserve_one=t0955,__gorget_closure_env_alloc=t0953,str_alloc_copy=t0954,str_alloc_copy=t0955
+vector_methods2	__gorget_array_reserve_one*1,__gorget_closure_env_alloc*4
 vector_sort_by	__gorget_closure_env_alloc*3
 vector_sort_by_key	__gorget_closure_env_alloc*3,str_alloc_copy*2
 vector_sort_stable	__gorget_closure_env_alloc*3
