@@ -160,8 +160,38 @@ markers** because git auto-merges some of N2's tightenings; and v1's gate carve-
 on **exactly one assert by exactly +2 for exactly one reason**, which turns acceptance from judgement into
 arithmetic.
 ⊕ **FILE AT INT-A (id on request):** `CORPUS_MANIFEST.txt`'s `known_gaps` row states a count its own recount
-command contradicts — stale AT HEAD, not introduced by the merge, and **nothing enforces it**. A declared
-corpus count with no ratchet.
+command contradicts — stale AT HEAD, and **nothing enforces it**. ⊕ **And a second, from pass 2: the repo has
+NO guard that a track's round entry SURVIVED an integration merge** — `DONE.md` is outside the figures scan
+roots and the only lint reading it pins round-close headline populations, not track entries. Core #6-shaped.
+
+🚨 **INT-A PASS 2 MERGED ALL FIVE BRANCHES, RESOLVED THEM PER THE BRIEF, AND RAN THE GATES. It CONFIRMED the
+mechanism, both v1-reversals and the acceptance ARITHMETIC TO THE DIGIT — and still returned SIX BLOCKING,
+every one a SPECIFICATION defect.** ⭐ **The diagnosis v3 acts on: this brief kept PRE-DECIDING what the
+executor should be told to REPORT.**
+- ⛔ **MY ACCEPTANCE CRITERION WAS INVERTED AGAINST GIT'S DEFAULT.** At the `t0955` modify/delete, git leaves
+  the re-seed's version in the tree; an executor who `git add`s it — **the obvious move** — keeps a file whose
+  body names both frames, **re-covering both pairs so ALL FIVE ASSERTS GO GREEN.** The *correct* resolution
+  reds. **That single red is the ONLY mechanical evidence the deletion was honoured**, and the brief never
+  said so. v3 adds the named check `test ! -e todo/t0954.md && test ! -e todo/t0955.md`.
+- ⛔ **THE `DONE.md` PRESERVATION CHECK FALSE-FAILS ON A CORRECT MERGE** — T1 shows ~46 missing lines because
+  **L legitimately SUPERSEDED T1's paragraph**, and re-inserting them would ship known-wrong text (Core #8).
+  ⚠ **Pass 1 proposed that check and only ever ran it against its own NAIVE merge — its PASS side was never
+  demonstrated (Core #13).** It is also ORDER- and DUPLICATE-blind.
+- ⛔ **THE MEMORY-SAFETY PROBE WAS UNSATISFIABLE AND MIS-SCOPED.** *"If it is not clean, STOP"* on a fixture
+  that **leaks by construction on every branch**; and the coupled surface is **~28 fixtures** (closure-env-alloc
+  row ∧ calls a Vector HOF), not the 1 row both branches edited. v3 defines *clean* = **zero ASan CORRUPTION
+  findings**, leaks expected, and authorises `FIXLIST REPS=1 COVERAGE_FLOOR=0` over the 28 — the cheap
+  instrument the brief had banned by name.
+- ⛔ **INT-A SHIPS AN ALLOWLIST KEYED ON A RETIRED TOP FRAME AND NO GATE IN ITS BRIEF CAN SEE IT** (the
+  arithmetic is a pure FILE read). Now an explicit REPORTED OBLIGATION to INT-B, with the count (**27**, not
+  25) and the `linked_list` exception.
+- ⛔ **§9 could not brief INT-B** — a reviewer tried and listed seven unanswerable questions, now required
+  report contents. ⊕ **The report goes to `/tmp`**: it must quote a figures-DB-covered spelling, which no
+  COMMITTED file may contain, and `/tmp` is outside the scan roots.
+⊕ **Corrections to my own reasoning:** `t1055` was never a content disagreement (both bases are Medium — the
+integration branch PROMOTED it after L and N2 forked); the `16-bir.md` conflict is **two COMPLEMENTARY
+SECTIONS**, not two versions of one paragraph, so a plain UNION is correct and "make it read as one" invites
+deleting one; and there are **THREE** prose blocks to keep, not two.
 ⊕ **Pass-3 errata worth keeping:** `t0310` is NOT L-only (it exists on every rev); only `t1290` is; and the
 `t1287`-orphan filing is a NON-FINDING — N2's tip commit IS the withdrawal.
 
