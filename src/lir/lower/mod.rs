@@ -111,9 +111,14 @@ pub(super) struct FuncLowering<'a> {
     /// under [`crate::ir::abi::indirect_callee_key`].
     pub(super) fn_param_abis:
         &'a rustc_hash::FxHashMap<String, Vec<crate::ir::lowering::context::ParamABI>>,
-    /// Pre-computed `__Closure_N__call` signatures, indexed by the
-    /// full call-function name (e.g. "__Closure_2__call"). The HOF
-    /// intercept uses `ret_ty` to resolve the closure's real return
+    /// Call signatures for EVERY GIR function, keyed by function name —
+    /// closure call bodies and ordinary functions alike (built at
+    /// `ModuleLowering::lower` from `gir.functions`). ⚠ Membership is
+    /// therefore NOT a closure-identity test: a bare `contains_key` answers
+    /// "is this a known function", not "is this a closure call body". Ask
+    /// `ClosureCallSig::takes_env` for the latter.
+    ///
+    /// The HOF intercept uses `ret_ty` to resolve the closure's real return
     /// type (which can diverge from the dst's declared element type
     /// for cross-typed maps) and `param_tys` to pick per-arg ABI
     /// tags that match the closure's actual signature.
@@ -141,6 +146,14 @@ pub(super) struct ClosureCallSig {
     pub(super) ret_ty: LirType,
     /// User params only (the `env` parameter at index 0 is skipped).
     pub(super) param_tys: Vec<LirType>,
+    /// CARRIER #3, read straight off [`crate::ir::Function::takes_env`]:
+    /// true iff this function's parameter 0 is the closure-environment
+    /// pointer, i.e. it is a lifted closure's call body whose arguments are
+    /// ALREADY packed and must not be wrapped again.
+    ///
+    /// This is the same fact the `skip` above encodes; both come from the one
+    /// typed source, so they cannot disagree.
+    pub(super) takes_env: bool,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -254,11 +267,11 @@ impl<'a> LoweringContext<'a> {
                     &self.gir.type_registry,
                     Some(&self.struct_reg),
                 );
-                let skip = if f.name.starts_with("__Closure_") && f.name.ends_with("__call") {
-                    1
-                } else {
-                    0
-                };
+                // Core #2: the env parameter is identified by GIR's typed
+                // `takes_env` flag, NOT by the function's spelling. The old
+                // `starts_with("__Closure_") && ends_with("__call")` test was
+                // a name-match on a mangled identifier.
+                let skip = usize::from(f.takes_env);
                 let param_tys: Vec<LirType> = f
                     .params
                     .iter()
@@ -271,7 +284,10 @@ impl<'a> LoweringContext<'a> {
                         )
                     })
                     .collect();
-                (f.name.clone(), ClosureCallSig { ret_ty, param_tys })
+                (
+                    f.name.clone(),
+                    ClosureCallSig { ret_ty, param_tys, takes_env: f.takes_env },
+                )
             })
             .collect();
 
@@ -363,14 +379,17 @@ impl<'a> LoweringContext<'a> {
 
                 // Closure struct is params[1].
                 let closure_ty = match ext.params.get(1) { Some(t) => t, None => continue };
-                let closure_struct_name = match closure_ty {
-                    LirType::Struct(sid) => self.module.structs.get(sid.0 as usize).map(|s| s.name.as_str()),
+                // CARRIER #2: the closure struct records its own call-body
+                // name. (This block's comment used to claim it read "a typed
+                // field on LirFunction" while the code was a `format!` — Core
+                // #14. Now the claim is true.)
+                let call_fn_name = match closure_ty {
+                    LirType::Struct(sid) => self.module.structs.get(sid.0 as usize)
+                        .and_then(|s| s.closure_call_fn.clone()),
                     _ => None,
                 };
-                let closure_struct_name = match closure_struct_name { Some(n) => n, None => continue };
+                let call_fn_name = match call_fn_name { Some(n) => n, None => continue };
 
-                // Look up the closure's __call return type (typed field on LirFunction).
-                let call_fn_name = format!("{closure_struct_name}__call");
                 let closure_ret = match self.module.functions.iter().find(|f| f.name == call_fn_name) {
                     Some(f) => f.return_type.clone(),
                     None => continue,
@@ -899,7 +918,7 @@ impl<'a> LoweringContext<'a> {
                 enum_kind: EnumKind::NotEnum,
                 is_union_layout: false,
                 computed_c_size: Some(16),
-                computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+                computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
             });
             self.struct_reg.register(&task_name, sid);
         }
@@ -999,7 +1018,7 @@ impl<'a> LoweringContext<'a> {
                         enum_kind: EnumKind::NotEnum,
                         is_union_layout: false,
                         computed_c_size: Some(16),
-                        computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: true, expects_drop_fn: false,
+                        computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: true, expects_drop_fn: false, closure_call_fn: None,
                     });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -1020,7 +1039,7 @@ impl<'a> LoweringContext<'a> {
             // Typed Box-inner metadata: the C backend reads this to emit
             // `__gorget_box_alloc_<inner>` / `_free_<inner>` and the per-type
             // `Box__<inner>__drop` wrapper without name-prefix matching.
-            box_inner_type: Some(inner_name.to_string()), is_trait_box: false, expects_drop_fn: false,
+            box_inner_type: Some(inner_name.to_string()), is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
                                   });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -1038,7 +1057,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
                               });
                 self.struct_reg.register(&def.name, sid);
                 continue;
@@ -1079,7 +1098,7 @@ impl<'a> LoweringContext<'a> {
                                 materialize_fn: rt_def.materialize_fn.clone(),
                                 c_runtime_alias: Some(rt.clone()),
                                 box_inner_type: rt_def.box_inner_type.clone(),
-                                is_trait_box: false, expects_drop_fn: false,
+                                is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
                             });
                             self.struct_reg.register(&def.name, sid);
                             // Skip deferred Pass-2: the GIR TypeDef has no
@@ -1102,6 +1121,9 @@ impl<'a> LoweringContext<'a> {
             elem_clone_fn: def.metadata.clone_inplace_fn.clone(),
             materialize_fn: def.metadata.materialize_fn.clone(),
             c_runtime_alias: def.metadata.c_runtime_alias.clone(),
+            // CARRIER #2 write-through: GIR's typed closure identity reaches
+            // the backends on the struct, not by re-deriving `{name}__call`.
+            closure_call_fn: def.metadata.closure_call_fn.clone(),
             box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
                                   });
                     self.struct_reg.register(&def.name, sid);
@@ -1238,7 +1260,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -1262,7 +1284,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -1278,7 +1300,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
                               });
                 self.struct_reg.register(name, sid);
             }
@@ -1505,6 +1527,10 @@ impl<'a> FuncLowering<'a> {
         let mut lir_func = LirFunction::new(gir_func.name.clone(), params, return_type);
         lir_func.is_test_fn = gir_func.is_test_fn;
         lir_func.display_name = gir_func.display_name.clone();
+        // Layering rule 4 (resolve once, write through): carry GIR's typed
+        // closure-identity flag into LIR instead of re-deriving it from the
+        // function name downstream.
+        lir_func.takes_env = gir_func.takes_env;
         // Propagate param name hints (GIR locals[1..N] are the params).
         lir_func.param_names = (0..gir_func.params.len())
             .map(|i| gir_func.locals.get(i + 1).and_then(|l| l.name_hint.clone()))
@@ -1781,6 +1807,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            takes_env: false,
         };
         module.functions.push(func);
         module
@@ -1852,6 +1879,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            takes_env: false,
         };
         module.functions.push(func);
 
@@ -1884,6 +1912,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            takes_env: false,
         });
         module.functions.push(Function {
             name: "caller".into(),
@@ -1909,6 +1938,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            takes_env: false,
         });
 
         let lir = lower_module(&module);
@@ -1956,6 +1986,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            takes_env: false,
         });
 
         let lir = lower_module(&module);
@@ -2003,6 +2034,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            takes_env: false,
         });
 
         let lir = lower_module(&module);

@@ -62919,3 +62919,212 @@ TODO.md."]
 fn for_direct_iterator_param_not_advanced() {
     run_gg("known_gaps/for_direct_iterator_param_not_advanced.gg", "2");
 }
+
+// ── R49 Track A1-IDENTITY — closure identity is typed metadata, not a name ──
+//
+// A user method named `call` (or `callback`, `caller`, `_call`) mangles to
+// `{Type}__{method}` — `Runner__call` — and the LIR call lowering decided "is
+// this callee a lifted closure's own call body, whose arguments are already
+// packed?" with `!func.contains("__call")`. A SUBSTRING test against a MANGLED
+// USER METHOD NAME. The user method matched, so its closure argument was never
+// packed into a `GorgetClosure` and the callee read a function pointer past the
+// end of the raw environment struct.
+//
+// The fix is the three typed carriers, not a narrower predicate (Core #2):
+//   • `ir::Function::takes_env` → `LirFunction::takes_env` →
+//     `ClosureCallSig::takes_env`, written where closure lowering pushes
+//     `__env` as parameter 0;
+//   • `TypeMetadata::closure_call_fn` / `closure_captures`, which also retired
+//     the `closure_info` name-keyed sidecar (Layering rule 3);
+//   • `StructDef::closure_call_fn`, the same fact at the LIR/backend layer,
+//     where the GIR registry is unreachable.
+//
+// ⚠⚠ THESE FIXTURES ARE THE CORE #6 GUARD FOR THIS CLASS, and they assert
+// STDOUT rather than an exit code ON PURPOSE. The failure had three shapes and
+// only one of them is loud:
+//
+//   env shape                   | before the fix
+//   ----------------------------|----------------------------------------
+//   capture-less                | exit 139, ASan: stack-buffer-overflow
+//   int-only captures           | exit 139
+//   first capture is a Callable | exit 0, prints 7028 where 7063 is correct,
+//                               | `gg check` clean, ASan AND UBSan SILENT
+//
+// A fix validated on `rc != 139` greens the two loud cells and leaves the third
+// live. Only a wired stdout diff sees it.
+//
+// ⚠ AND THE TEXTUAL RATCHET CANNOT REPLACE THEM. Measured three-state
+// demonstration (see `no_growth_in_closure_identity_name_matching` in
+// tests/lints.rs): with the carriers in place, re-inserting the name-match
+// through a one-line `const CALL_MARK: &str = concat!("__", "call");` leaves
+// the ratchet at its budget and `cargo test --test lints` fully green, while
+// these fixtures go RED with the identical pre-fix output. The behavioural
+// guard is the one that cannot be respelled around.
+//
+// AXIS COVERED, cell by cell:
+//   env shape        capture-less · int-only captures · Callable-first capture
+//   arg position     first · LAST · two closure args in one call
+//   receiver         `r.call(…)` · `self.call(…)` · `equip X with Trait:`
+//   method name      `call` · `call_both` · `_call` (`Runner___call`)
+//   return type      `int` · droppable `String` with a `String` capture
+//   scope control    a FREE function named `call` (green before AND after)
+//
+// OMITTED CELLS, NAMED (Core #12):
+//   • A stored closure VARIABLE (`Callable[int(int)] h = …; r.call(h, 4)`) is
+//     included inside `closure_arg_user_method_named_call.gg` but is NOT
+//     evidence: it was green before the fix too, because the `GorgetClosure`
+//     slot is materialised at the `let`. Marked non-discriminating there.
+//   • `callback` / `caller` as method names: same mangling, same `__call`
+//     substring, no new mechanism — `_call` already covers "the collision does
+//     not need the method to be spelled exactly `call`".
+//   • A closure argument to a user method through a TRAIT OBJECT variable
+//     (`Invoker i = r`): the trait-equip cell dispatches through the vtable
+//     already, which is the mechanism that cell exists to pin.
+//   • ggdef adjudication for the trait-equip cell — `item kind trait is
+//     outside the phase-0 subset`. Its oracles are the self-host lane and the
+//     non-trait twin, which ggdef does adjudicate.
+//
+// LANES. Every expected string below was adjudicated against ggdef (except the
+// trait cell, above) and every fixture COMPILES + RUNS + MATCHES on the
+// self-host lowerer lane, measured 2026-09-04 via
+// `driver F lib --emit-c` → `cc -O0 -w` → run. ⭐ The self-host was CORRECT on
+// all six shapes while Rust gg was wrong on five of them: this is the
+// succession plan's "reference lags the self-host" case, and the fix is oracle
+// hygiene on the Rust side, not a port.
+//
+// PLACEMENT — a SUBDIRECTORY, deliberately, and the reason is a gate not a
+// preference. Every one of these passes a closure LITERAL at a CALL-ARGUMENT
+// position, because that is the shape the defect needs; and that shape leaks
+// its environment through `__gorget_closure_env_alloc` — `todo/t0953`, the
+// single largest class in `tests/sanitize/LEAK_ALLOWLIST.txt`. Measured
+// IDENTICALLY at pristine HEAD (32 bytes / 1 allocation for the free-function
+// control, on the pre-fix compiler), so it is pre-existing debt, not inflow
+// from this change. Top-level `tests/fixtures/*.gg` is what
+// `scripts/sanitize_sweep.sh` sweeps, so landing them there would admit six
+// NEW allowlist rows for a pre-existing class — and that list is shrink-only,
+// with new inflow an explicit owner ask. `tests/sanitize/CORPUS_MANIFEST.txt`
+// carries the `OUT` row and the condition that retires it.
+//
+// ⚠ THE COST, STATED: out of the top-level scan also means out of
+// `runtime_parity_corpus`, so the self-host MATCH below is a MEASUREMENT taken
+// when these landed, not a continuously enforced one. Reproduce it with
+// `tests/fixtures/self_host_lowerer/driver F lib --emit-c
+// --runtime-dir=src/backend/c/runtime` → `cc -O0 -w` → run.
+//
+// RED-VERIFIED against the pre-fix compiler, 2026-09-04 (Core #12):
+//   closure_arg_user_method_named_call               exit 139
+//   ..._arg_positions                                exit 139
+//   ..._receivers                                    exit 0, "7028\n7028\ndone"
+//   ..._trait_equip                                  exit 0, "7028\ndone"
+//   ..._string_return                                exit 139
+//   closure_arg_free_function_named_call             GREEN (the scope control)
+
+#[test]
+fn closure_arg_user_method_named_call() {
+    run_gg(
+        "closure_identity/closure_arg_user_method_named_call.gg",
+        "56\n868\n7063\n7063\ndone",
+    );
+}
+
+#[test]
+fn closure_arg_user_method_named_call_arg_positions() {
+    run_gg(
+        "closure_identity/closure_arg_user_method_named_call_arg_positions.gg",
+        "7063\n7105\ndone",
+    );
+}
+
+#[test]
+fn closure_arg_user_method_named_call_receivers() {
+    run_gg(
+        "closure_identity/closure_arg_user_method_named_call_receivers.gg",
+        "7063\n7063\ndone",
+    );
+}
+
+#[test]
+fn closure_arg_user_method_named_call_trait_equip() {
+    run_gg(
+        "closure_identity/closure_arg_user_method_named_call_trait_equip.gg",
+        "7063\ndone",
+    );
+}
+
+#[test]
+fn closure_arg_user_method_named_call_string_return() {
+    run_gg(
+        "closure_identity/closure_arg_user_method_named_call_string_return.gg",
+        "v=4-end!\ndone",
+    );
+}
+
+/// SCOPE CONTROL, green before and after: only MANGLED METHOD names collide.
+#[test]
+fn closure_arg_free_function_named_call() {
+    run_gg("closure_identity/closure_arg_free_function_named_call.gg", "7063\ndone");
+}
+
+/// `todo/t0681`: `Box[Callable[…]](closure)` used to ICE ("call to undefined
+/// function @f", GIR validation) while `Box.new(closure)` compiled and printed
+/// 42 — two spellings of one operation, and the WORKING one is the spelling
+/// `docs/book/16-smart-pointers.md` teaches.
+///
+/// The cause was sibling-site drift (Core #4): the `Box.new` path in
+/// `exprs/methods.rs` carried a closure carve-out that returns the environment
+/// struct directly, and the `Box[T](…)` constructor arm in `exprs/calls.rs` did
+/// not. The carve-out itself was a `starts_with("__Closure_")` name-match,
+/// which is why the item was A1-IDENTITY's to claim: `CARRIER #1`
+/// (`TypeMetadata::closure_call_fn`) supplies the typed test both arms now use.
+///
+/// Stays in `known_gaps/` (out of `runtime_parity_corpus`) with a LIVE test:
+/// the self-host lane cannot yet compile the emitted C for this shape
+/// (`unknown type name '__gg_Callable__GorgetClosure'` at `cc`), so the fixture
+/// must not join the auto-scanned corpus. RED-verified against the pre-fix
+/// compiler 2026-09-04: rc 101, `panicked at src/ir/lowering/mod.rs`.
+///
+/// ⚠ NOT claimed by this test, and still filed: the SIBLING gap
+/// `known_gaps/box_callable_call_through_box_undefined_function.gg`
+/// (`Box.new(c.f)` where `c.f` is a `Callable`-typed STRUCT FIELD, not a
+/// closure literal) still ICEs — measured 2026-09-04. Its payload is a
+/// `Callable__…` value with no closure environment behind it, so
+/// `closure_call_fn` is legitimately `None` there and the carve-out does not
+/// and should not fire.
+#[test]
+fn box_ctor_closure_matches_box_new() {
+    run_gg("known_gaps/box_ctor_closure_ices_while_boxnew_works.gg", "42");
+}
+
+/// `todo/t0681`'s REMAINING half, after R49 Track A1-IDENTITY closed the ICE:
+/// `(*f)` on a `Box[Callable[...]]` is rejected with a diagnostic that denies
+/// its own premise — *"cannot dereference `*` a value of type
+/// `Box[Callable[int(int)]]` — `*` requires a `Box[T]`"* — when the value IS a
+/// `Box[T]`. Both construction spellings hit it, so it is independent of the
+/// constructor-vs-`Box.new` split that A1-IDENTITY fixed.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0681): `(*f)` on a `Box[Callable[...]]` is \
+rejected with `E_DerefNonBox: ... `*` requires a `Box[T]`` when the value IS a \
+`Box[T]`. Decide (a) the deref is meaningful and prints 42, or (b) it is \
+genuinely rejected and the message must say why. Fixture: \
+tests/fixtures/known_gaps/box_callable_deref_self_contradicting_diagnostic.gg."]
+fn box_callable_deref_self_contradicting_diagnostic() {
+    run_gg(
+        "known_gaps/box_callable_deref_self_contradicting_diagnostic.gg",
+        "42",
+    );
+}
+
+/// `todo/t1052`: `Vector[UserStruct](capacity)` does not compile on either
+/// backend — C ICEs with *"Ptr ABI received scalar value"* and LLVM fails at
+/// `llc` with *"'%v1' defined with type 'i64' but expected 'ptr'"*.
+/// `Vector[int](4)` is fine, so the discriminator is the element type.
+/// The `elem_size` name derivation that sends it to a wrong default is
+/// `todo/t1054`.
+#[test]
+#[ignore = "KNOWN GAP (todo/t1052): `Vector[UserStruct](capacity)` fails to \
+compile on BOTH backends -- C rc 101 `Ptr ABI received scalar value`, LLVM \
+`llc: '%v1' defined with type 'i64' but expected 'ptr'`. `Vector[int](4)` \
+works. Fixture: tests/fixtures/known_gaps/vector_user_struct_capacity_ctor.gg."]
+fn vector_user_struct_capacity_ctor() {
+    run_gg("known_gaps/vector_user_struct_capacity_ctor.gg", "0");
+}

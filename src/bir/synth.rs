@@ -69,11 +69,9 @@ pub(crate) struct ClosureSig {
 #[cfg(test)]
 pub(crate) fn closure_call_sig_of(module: &LirModule, name: &str) -> Option<ClosureSig> {
     let f = module.functions.iter().find(|f| f.name == name)?;
-    let skip = if name.starts_with("__Closure_") && name.ends_with("__call") {
-        1
-    } else {
-        0
-    };
+    // CARRIER #3 — the typed flag the production paths already read, instead
+    // of re-deriving closure identity from the function's spelling.
+    let skip = usize::from(f.takes_env);
     Some(ClosureSig {
         param_tys: f.params.iter().skip(skip).cloned().collect(),
         ret_ty: f.return_type.clone(),
@@ -1641,14 +1639,34 @@ mod tests {
     #[test]
     fn closure_call_sig_strips_env_for_closure_n() {
         let mut module = LirModule::new();
-        module.functions.push(LirFunction::new(
+        let mut f = LirFunction::new(
             "__Closure_3__call".into(),
             vec![LirType::Ptr, LirType::I64, LirType::I64],
             LirType::I64,
-        ));
+        );
+        // CARRIER #3 — the env parameter is identified by the typed flag, not
+        // by the function's name.
+        f.takes_env = true;
+        module.functions.push(f);
         let sig = closure_call_sig_of(&module, "__Closure_3__call").unwrap();
         assert_eq!(sig.param_tys, vec![LirType::I64, LirType::I64]);
         assert_eq!(sig.ret_ty, LirType::I64);
+    }
+
+    /// The env-stripping decision follows CARRIER #3, not the spelling: a
+    /// function NAMED like a closure body but not flagged keeps every param.
+    /// This is the shape that made `Runner__call` (a USER method) collide with
+    /// `contains("__call")`.
+    #[test]
+    fn closure_call_sig_keeps_all_for_unflagged_call_named_fn() {
+        let mut module = LirModule::new();
+        module.functions.push(LirFunction::new(
+            "Runner__call".into(),
+            vec![LirType::Ptr, LirType::I64, LirType::I64],
+            LirType::I64,
+        ));
+        let sig = closure_call_sig_of(&module, "Runner__call").unwrap();
+        assert_eq!(sig.param_tys, vec![LirType::Ptr, LirType::I64, LirType::I64]);
     }
 
     #[test]
@@ -1711,7 +1729,7 @@ mod tests {
             enum_kind: crate::lir::EnumKind::NotEnum,
             is_union_layout: false,
             computed_c_size: Some(64),
-            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         let _ = gorget_array_sid;
 
@@ -1866,7 +1884,7 @@ mod tests {
             enum_kind: crate::lir::EnumKind::NotEnum,
             is_union_layout: false,
             computed_c_size: Some(16),
-            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         // Greeter_VTable { greet: Ptr } — single method slot at index 0.
         let vtable_sid = module.add_struct(StructDef {
@@ -1875,7 +1893,7 @@ mod tests {
             enum_kind: crate::lir::EnumKind::NotEnum,
             is_union_layout: false,
             computed_c_size: Some(8),
-            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         let _ = vtable_sid;
 

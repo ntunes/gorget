@@ -127,6 +127,37 @@ The former `structural-guards.md` deep-dive organized the invariants into three 
 - **LLVM entry-block alloca hoisting.** *Class:* a frontend-emitted `alloca` left in a loop-body block leaks a fresh stack slot per iteration (LLVM never reclaims non-entry-block allocas across iterations), so a body-block temp turns a large-module fixpoint into a stack-overflow SIGSEGV — and the enumerable hand-list of emit sites that spill temps is exactly the wrong fix (it missed ~30 sites). *Guard:* after `emit_function` hoists every body alloca to the entry block, it asserts zero `= alloca ` lines remain in the body buffer, so the next emit arm that spills a body temp is caught structurally rather than by the next overflow ([Chapter 19](19-llvm-backend.md)'s entry-block alloca section).
 - **Method dispatch that resolves no name.** *Class:* everything `lower_method_call` can do lives inside one `if let Some(type_name)` block, so a receiver whose GIR representation the dispatch-name ladder has no arm for makes the whole call fall out as a unit constant — the caller then memcpys `sizeof(T)` out of a unit slot. The ladder is hand-written and has forgotten a representation before: its own `I64_TYPE` arm carries the war story, and the closure-value (`GirType::FnPtr`) representation reproduced it as a segfault on both backends with `gg check` clean. *Guard:* a Core #10 lower-or-reject at the **consumer** — the dispatch gate itself, not the producer — scoped to `clone`, the method the compiler is contracted to lower. It catches every receiver representation, including ones nobody has written yet, and it converts the representations no `GirType` arm can reach (a `Callable` parameter erases to `unit`) from silent segfaults into honest build failures. *Why not the two cheaper shapes:* a totality guard on the clone-fn accessor guards a function that is not on the defect's path and would have stayed green through the whole segfault; an arm-count ratchet on the ladder never moves, because the missing representation was never in the ladder to be counted. *Why the method and not the receiver type:* a broken `Callable[..] &` parameter and a healthy derive-generated `write_int` receiver reach the gate with byte-identical types, since the unit type and the erased-Callable type are the same `TypeId`. Only the method name separates them, and that is what makes a hard failure affordable — the `clone`-scoped population of unresolved receivers across the whole fixture corpus is a single source site. *Escalation state:* FATAL from day one, on the same reasoning as the view-producer enumeration — measure the population with `gg build`, never `gg check`, which does not lower and therefore reports a meaningless zero.
 
+- **Closure identity, and why the guard for it is a fixture.** *Class:* a
+  lifted closure's own call body is the one callee whose arguments arrive
+  already packed, so the call lowering must not pack them again. That question
+  was answered from the callee's spelling — `contains("__call")` — and a user
+  method mangles to `{Type}__{method}`, so `equip Runner: int call(self,
+  Callable[int(int)] f, …)` became `Runner__call`, matched, and had its closure
+  argument left as the raw environment struct. The failure has three shapes and
+  only two are loud: a capture-less closure faults on a one-byte object, an
+  int-capturing one faults, and a closure whose first capture is itself a
+  `Callable` puts a valid code pointer where an integer belongs and **prints a
+  plausible wrong number with a clean exit code, silent under ASan and UBSan**.
+  *Fix:* three typed carriers — `TypeMetadata::closure_call_fn` /
+  `closure_captures` (which also retired the `struct_name → info` sidecar),
+  `StructDef::closure_call_fn` for the layers that cannot reach the GIR
+  registry, and `Function::takes_env`, written by the expression that pushes
+  `__env` as parameter 0. *Guard:* the behavioural fixture family
+  `tests/fixtures/closure_arg_user_method_named_call*.gg`, asserting **stdout**,
+  because a fix validated on exit codes greens the two loud cells and leaves the
+  silent one live. *Why the textual ratchets are not the guard:* they are
+  labelled bookkeeping, and the labelling is a measurement, not modesty — with
+  the carriers in place, re-introducing the name-match through a one-line
+  `const CALL_MARK: &str = concat!("__", "call");` restores the miscompile while
+  `no_growth_in_closure_identity_name_matching` stays exactly at its budget and
+  the whole lint suite stays green. **A counter over spellings cannot retire a
+  class that can be respelled; only a guard that tests behaviour can.** *The
+  residual, stated:* the carriers ADD a typed route, they do not make the name
+  unavailable — an `assert_eq!` comparing `func.contains("__call")` against the
+  typed answer still compiles and still fires. Carrying the callee's identity on
+  the instruction itself is the form that would, and it is filed rather than
+  hidden.
+
 ## How to add one
 
 The checklist (from the former `structural-guards.md`, condensed):

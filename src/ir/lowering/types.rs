@@ -1026,6 +1026,8 @@ pub(super) fn register_collection_alias(
                 enum_category: None,
                 c_runtime_alias: protocol.c_runtime_alias.map(String::from),
                 is_closure_env: false,
+                closure_call_fn: None,
+                closure_captures: Vec::new(),
                 is_box: false,
             },
         };
@@ -1156,6 +1158,8 @@ pub(super) fn register_callable_alias(
             enum_category: None,
             c_runtime_alias: protocol.c_runtime_alias.map(String::from),
             is_closure_env: false,
+            closure_call_fn: None,
+            closure_captures: Vec::new(),
                 is_box: false,
         },
     };

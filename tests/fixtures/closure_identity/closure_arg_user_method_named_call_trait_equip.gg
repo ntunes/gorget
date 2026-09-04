@@ -1,0 +1,35 @@
+# Sibling of `closure_arg_user_method_named_call.gg` on the TRAIT-EQUIP axis:
+# `equip Runner with Invoker:` mangles differently from a bare `equip Runner:`,
+# and both spellings were in the class.
+#
+# This cell ALSO pins the DCE root-set narrowing. `lir/optimize.rs` seeds
+# closure call bodies as dead-code-elimination roots because they are reached
+# only through function pointers; that seed used to be
+# `func.name.contains("__call")`, which incidentally rooted every USER method
+# spelled `call*`. Narrowing it to the typed `takes_env` removes user methods
+# from the root set, so a vtable-dispatched `call` must stay live through the
+# `FuncAddr` references in its trait-object global. If it does not, this
+# fixture link-fails or crashes.
+#
+# NOTE: there is NO ggdef adjudication for this cell -- `item kind trait is
+# outside the phase-0 subset`. Its oracles are the self-host lane (which
+# compiles and runs it correctly) and its non-trait twin above, which ggdef
+# does adjudicate.
+
+trait Invoker:
+    int call(self, Callable[int(int)] f, int x)
+
+struct Runner:
+    int factor
+
+equip Runner with Invoker:
+    int call(self, Callable[int(int)] f, int x):
+        return f(x) * self.factor
+
+int main():
+    Runner r = Runner(7)
+    Callable[int(int)] g = (int m): m + 1000
+    int extra = 5
+    print(r.call((int n): g(n) + extra, 4))
+    print("done")
+    return 0

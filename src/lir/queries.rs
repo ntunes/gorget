@@ -41,14 +41,9 @@ pub fn is_user_keyable_collection_ctor(extern_name: &str) -> bool {
 /// - `__spawn_method_wrap_<sym>`  (`Type.method` spawns; `lowering/exprs/spawn.rs:131`)
 /// - `__spawn_wrap_<struct>`      (bare-closure / async-fn spawns; same file:375)
 /// - `__shared_token_<sym>`       (shared-token transform; `transforms/shared_async.rs`)
-///
-/// `__spawn_thread_wrap_<sym>` was the old name for the `__spawn_wrap_`
-/// family — kept here for backwards compatibility until the rename has
-/// fully propagated through any external callers.
 pub fn is_spawn_wrapper(func: &LirFunction) -> bool {
     let n = &func.name;
     n.starts_with("__spawn_method_wrap_")
-        || n.starts_with("__spawn_thread_wrap_")
         || n.starts_with("__spawn_wrap_")
         || n.starts_with("__shared_token_")
 }

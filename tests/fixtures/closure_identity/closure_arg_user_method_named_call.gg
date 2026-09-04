@@ -1,0 +1,53 @@
+# A user method named `call` takes a closure argument.
+#
+# The mangled GIR name of `equip Runner: int call(self, ...)` is `Runner__call`.
+# The LIR call lowering used to decide "is this callee a lifted closure's own
+# call body, whose arguments are already packed?" with `!func.contains("__call")`
+# -- a SUBSTRING test against that mangled USER method name. `Runner__call`
+# matched, so the closure argument was never packed into a GorgetClosure and the
+# callee read a function pointer past the end of the raw env struct.
+#
+# Closure identity is now typed metadata: `ir::Function::takes_env`, written
+# where closure lowering pushes `__env` as parameter 0 and carried to
+# `ClosureCallSig::takes_env`. A name cannot answer the question any more.
+#
+# The ENV-SHAPE axis, all three cells, because they fail DIFFERENTLY:
+#   - capture-less  -> 1-byte env, stack-buffer-overflow READ (was exit 139)
+#   - int captures   -> real env, wrong pointer read (was exit 139)
+#   - Callable-first capture -> the mis-shaped env's first 8 bytes are a VALID
+#     code pointer, so nothing faults and the program PRINTS A WRONG NUMBER
+#     (was 7028 instead of 7063, exit 0, with ASan and UBSan silent). That cell
+#     is why this fixture asserts STDOUT and not an exit code.
+# The stored-variable cell is included as a documented NON-DISCRIMINATING
+# control: it was green before the fix too, because the GorgetClosure slot is
+# materialised at the `let`. It is not evidence.
+
+struct Runner:
+    int factor
+
+equip Runner:
+    int call(self, Callable[int(int)] f, int x):
+        return f(x) * self.factor
+
+int main():
+    Runner r = Runner(7)
+
+    # capture-less closure literal
+    print(r.call((int n): n + 4, 4))
+
+    # int-only captures
+    int cap = 100
+    int cap2 = 20
+    print(r.call((int n): n + cap + cap2, 4))
+
+    # first capture is itself a Callable -- the silent-wrong-output cell
+    Callable[int(int)] g = (int m): m + 1000
+    int extra = 5
+    print(r.call((int n): g(n) + extra, 4))
+
+    # stored closure variable (non-discriminating control)
+    Callable[int(int)] h = (int n): g(n) + extra
+    print(r.call(h, 4))
+
+    print("done")
+    return 0

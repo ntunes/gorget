@@ -170,6 +170,31 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
+    /// CARRIER #1 at the LIR-lowering layer: the closure call-body name for an
+    /// operand that holds a closure environment, or `None` when it does not.
+    ///
+    /// The ONE place this question is asked (Core #4 — the three HOF signature
+    /// look-ups and both `ClosurePack` paths route through it). Reads
+    /// `TypeMetadata.closure_call_fn` off the operand's GIR type; nothing here
+    /// re-derives `{ty}__call` from a name or tests a `__Closure_` prefix.
+    pub(super) fn operand_closure_call_fn(&self, operand: &Operand) -> Option<&str> {
+        match operand {
+            Operand::Copy(place) | Operand::Move(place) => {
+                let idx = place.local.0 as usize;
+                let gir_ty = self.gir_func.locals.get(idx)?.type_id;
+                self.gir_types.closure_call_fn(gir_ty)
+            }
+            _ => None,
+        }
+    }
+
+    /// CARRIER #1: the closure call-body name for a GIR local's type id, or
+    /// `None` when that type is not a closure environment.
+    pub(super) fn local_closure_call_fn(&self, local: crate::ir::types::LocalId) -> Option<&str> {
+        let gir_ty = self.gir_func.locals.get(local.0 as usize)?.type_id;
+        self.gir_types.closure_call_fn(gir_ty)
+    }
+
     /// The callee's DECLARED per-parameter ownership sigils for an operand
     /// that holds a callable (`Callable[T]` local, escaped closure, any
     /// `FnPtr`-typed local), read from `GirType::FnPtr::param_ownerships`.
@@ -1406,24 +1431,19 @@ impl<'a> FuncLowering<'a> {
             }
         }
 
-        // Case 2: __Closure_N local → heap-alloc env + ClosurePack.
-        let src_closure_name = match value {
+        // Case 2: closure-env local → heap-alloc env + ClosurePack.
+        // CARRIER #1: the env type carries its own call-body name.
+        let call_fn_name = match value {
             Operand::Copy(place) | Operand::Move(place) => {
                 if !place.projections.is_empty() { return false; }
-                let src_idx = place.local.0 as usize;
-                if src_idx >= self.gir_func.locals.len() { return false; }
-                let gir_ty = self.gir_func.locals[src_idx].type_id;
-                match self.gir_types.get(gir_ty) {
-                    Some(ir::types::GirType::Named(name)) if name.starts_with("__Closure_") =>
-                        name.clone(),
-                    _ => return false,
+                match self.local_closure_call_fn(place.local) {
+                    Some(n) => n.to_string(),
+                    None => return false,
                 }
             }
             _ => return false,
         };
 
-        // Look up the __Closure_N__call function.
-        let call_fn_name = format!("{src_closure_name}__call");
         let call_func = match self.func_index.get(&call_fn_name) {
             Some(&fid) => fid,
             None => return false,
@@ -1700,23 +1720,19 @@ impl<'a> FuncLowering<'a> {
             }
         }
 
-        // Case 2: __Closure_N local → heap-alloc env + ClosurePack.
-        let closure_name = match gir_arg {
+        // Case 2: closure-env local → heap-alloc env + ClosurePack.
+        // CARRIER #1: the env type carries its own call-body name.
+        let call_fn_name = match gir_arg {
             Operand::Copy(place) | Operand::Move(place) => {
                 if !place.projections.is_empty() { return; }
-                let src_idx = place.local.0 as usize;
-                if src_idx >= self.gir_func.locals.len() { return; }
-                let gir_ty = self.gir_func.locals[src_idx].type_id;
-                match self.gir_types.get(gir_ty) {
-                    Some(ir::types::GirType::Named(name)) if name.starts_with("__Closure_") =>
-                        name.clone(),
-                    _ => return,
+                match self.local_closure_call_fn(place.local) {
+                    Some(n) => n.to_string(),
+                    None => return,
                 }
             }
             _ => return,
         };
 
-        let call_fn_name = format!("{closure_name}__call");
         let call_func = match self.func_index.get(&call_fn_name) {
             Some(&fid) => fid,
             None => return,

@@ -137,6 +137,20 @@ impl ClosureLowering {
             })
             .collect();
 
+        // Only ByValue captures are recorded: ByMutRef captures cannot be
+        // copied across thread boundaries, so they are excluded from the spawn
+        // wrapper's rebuilt env. `enumerate` runs BEFORE the filter, so the
+        // recorded index is the capture's struct FIELD index.
+        let by_value_captures: Vec<(String, TypeId, u32)> = captures.iter()
+            .enumerate()
+            .filter(|(_, c)| c.mode == CaptureMode::ByValue)
+            .map(|(i, c)| {
+                // Resolve Ptr(T) → T for CoW aliases (matches struct field type)
+                let ty = ctx.pointee_type(c.type_id).unwrap_or(c.type_id);
+                (c.name.clone(), ty, i as u32)
+            })
+            .collect();
+
         let type_def = TypeDef {
             name: struct_name.clone(),
             kind: TypeDefKind::Struct(StructDef { fields }),
@@ -148,6 +162,16 @@ impl ClosureLowering {
                 // the bitwise-copy alias pattern doesn't fire OwnedLiveSourceConsumed.
                 // See validate.rs `validate_consume` and docs/devbook/12-gir-lowering.md (closure lowering and capture).
                 is_closure_env: true,
+                // CARRIER #1, SINGLE WRITER (Core #2 / Layering rule 3). Closure
+                // identity is a property of the TYPE, so it is recorded on the
+                // type's metadata at the one mint and read back through
+                // `TypeRegistry::closure_call_fn` / `closure_captures`. This
+                // replaces the `closure_info: FxHashMap<String, ...>` sidecar,
+                // which was keyed by the struct NAME and forced every consumer
+                // to round-trip a TypeId through a name to ask a question about
+                // a type.
+                closure_call_fn: Some(call_fn_name.clone()),
+                closure_captures: by_value_captures,
                 ..TypeMetadata::default()
             },
         };
@@ -250,24 +274,8 @@ impl ClosureLowering {
         all_abis.extend(param_abis);
         ctx.fn_param_abis.insert(call_fn_name.clone(), all_abis);
 
-        // Register this closure's info for call dispatch.
-        // Only store ByValue captures — ByMutRef captures cannot be copied across
-        // thread boundaries, so they are excluded from the spawn wrapper signature.
-        let spawn_captures: Vec<(String, TypeId, u32)> = captures.iter()
-            .enumerate()
-            .filter(|(_, c)| c.mode == CaptureMode::ByValue)
-            .map(|(i, c)| {
-                // Resolve Ptr(T) → T for CoW aliases (matches struct field type)
-                let ty = ctx.pointee_type(c.type_id).unwrap_or(c.type_id);
-                (c.name.clone(), ty, i as u32)
-            })
-            .collect();
-        ctx.register_closure_info(
-            struct_name.clone(),
-            call_fn_name.clone(),
-            struct_type_id,
-            spawn_captures,
-        );
+        // (Closure identity and captures are recorded on the env struct's own
+        // `TypeMetadata` at the mint above — CARRIER #1.)
 
         // Store the lifted closure for later function emission
         self.lifted.push(LiftedClosure {
@@ -383,6 +391,11 @@ pub fn emit_closure_call_function(
         closure.return_type,
         &params,
     );
+    // CARRIER #3, SINGLE WRITER (Core #2 / Layering rule 3). `params[0]` above
+    // is the `__env` closure-environment pointer; record that as typed
+    // metadata so downstream layers never have to re-derive it from the
+    // function's NAME. See `ir::Function::takes_env`.
+    builder.mark_takes_env();
 
     // The closure body is a bare `Spanned<Expr>` (`LiftedClosure::body`), so it
     // reaches the prescans as `FnBodyAst::Expr` — an `Expr::Block` body unwraps

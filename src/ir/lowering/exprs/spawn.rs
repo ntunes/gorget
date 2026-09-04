@@ -368,9 +368,11 @@ pub(super) fn lower_closure_spawn(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     closure_local: LocalId,
-    _closure_type_id: TypeId,
     struct_name: &str,
     call_fn_name: &str,
+    // The closure ENVIRONMENT struct's own `TypeId` — the key CARRIER #1 is
+    // read under, so it is also the local's type. Was passed twice (once
+    // unused) before the sidecar was retired.
     struct_type_id: TypeId,
     captures: &[(String, TypeId, u32)],
     call_args: &[Spanned<crate::parser::ast::CallArg>],

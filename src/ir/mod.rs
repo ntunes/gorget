@@ -443,6 +443,23 @@ pub struct Function {
     /// Used by the `shared_async` transform to rewrite inner spawns to pass
     /// the `Shared[Mutex[T]]` wrapper instead of the facade value.
     pub inner_shared_spawns: Vec<InnerSharedSpawn>,
+    /// CARRIER #3 (closure identity, Core #2). True iff parameter 0 of this
+    /// function is the closure-environment pointer synthesised by closure
+    /// lowering — i.e. this function is a lifted closure's call body.
+    ///
+    /// SINGLE WRITER: `lowering::closures::emit_closure_call_function`, the
+    /// same expression that pushes `__env` as param 0, so the flag and the
+    /// parameter it describes cannot drift apart. Every other production
+    /// construction goes through `FunctionBuilder::build`, which defaults it
+    /// to `false`.
+    ///
+    /// Replaces the `name.contains("__call")` / `starts_with("__Closure_") &&
+    /// ends_with("__call")` predicates, which were SUBSTRING tests against a
+    /// MANGLED USER METHOD NAME (`{Type}__{method}`): a user method spelled
+    /// `call`, `callback`, `_call`, … collided with them and had its closure
+    /// arguments left unpacked — memory-unsafe on a capture-less closure and
+    /// SILENTLY WRONG OUTPUT on a capturing one.
+    pub takes_env: bool,
 }
 
 /// Metadata for an inner spawn call inside a function that may need rewriting
@@ -895,6 +912,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            takes_env: false,
         });
         assert_eq!(module.functions.len(), 1);
         let f = module.find_function("main").unwrap();

@@ -5,7 +5,7 @@
 #
 # MECHANISM (read, not guessed). The combinator adapter picks `result_type`
 # from `infer_closure_return_type`, which resolves a closure-STRUCT local
-# through `lookup_closure_info` and a `FuncRef` through `fn_sigs` — and for a
+# through `closure_call_fn_for_type` and a `FuncRef` through `fn_sigs` — and for a
 # `Callable[T]` PARAMETER, whose GIR local type is ERASED to unit, matches
 # neither and falls through to a hardcoded `I64_TYPE`. So `.map()` on an
 # `Option[String]` allocates `result_local` as `Option__int64_t` (16 bytes)

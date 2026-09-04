@@ -1,0 +1,29 @@
+# KNOWN GAP (todo/t1052) -- `Vector[UserStruct](capacity)` does not compile on
+# either backend, from ordinary safe syntax that `gg check` accepts.
+#
+#     C:    rc 101 ICE, "Ptr ABI received scalar value '__v0' (type Some(I64)).
+#           Scalars should use Scalar, not Ptr."  (src/backend/c_lir/emit_types.rs)
+#     LLVM: build fails at llc,
+#           "'%v1' defined with type 'i64' but expected 'ptr'"
+#
+# `Vector[int](4)` compiles and runs, so the discriminator is the ELEMENT type
+# being a user struct -- not the capacity argument.
+#
+# MECHANISM: the constructor callee reaches the backend as `gorget_array_tally`
+# -- `Vector__Tally` name-stripped and re-prefixed -- and the element size for
+# that callee is derived from the runtime NAME rather than from a typed element
+# descriptor, so a user-struct element takes the fall-through arm. The
+# derivation is `src/backend/llvm/mod.rs`'s `elem_size` chain, which todo/t1054
+# owns as the layering item.
+#
+# INTENDED (asserted by the #[ignore]d test): compiles on C and on
+# --backend=llvm, and prints 0 (a capacity hint reserves, it does not fill).
+#
+# RED-verified 2026-09-04 on both backends.
+
+struct Tally:
+    int n
+
+void main():
+    Vector[Tally] v = Vector[Tally](4)
+    print(v.len())

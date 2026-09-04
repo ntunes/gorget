@@ -3,26 +3,27 @@
 
 use super::*;
 
-/// Find the __call function name for a closure struct type.
-pub(super) fn find_closure_call_fn(module: &LirModule, struct_c_name: &str, sn: &HashMap<u32, String>) -> String {
-    // Map c_name back to struct def to get the original name (e.g., "__Closure_0").
+/// The `__call` function name for a closure struct type, read from CARRIER #2
+/// (`StructDef.closure_call_fn`) — the value GIR's closure mint wrote, not a
+/// name re-derivation.
+///
+/// Returns `None` when the named struct is not a closure environment. The
+/// previous shape guessed `format!("{}__call", name)` and, when the guess
+/// missed, returned `"/* UNKNOWN_CLOSURE_CALL for X */"` — a silent codegen
+/// failure that was emitted INTO the generated C as a comment (Core #14).
+/// Callers now see the failure as `None` and can refuse to emit.
+pub(super) fn find_closure_call_fn(module: &LirModule, struct_c_name: &str, sn: &HashMap<u32, String>) -> Option<String> {
+    // Map c_name back to struct def (e.g. "__gg___Closure_0" → "__Closure_0").
     for (i, def) in module.structs.iter().enumerate() {
         let c_name = sn.get(&(i as u32)).map(|s| s.as_str()).unwrap_or(&def.name);
         if c_name == struct_c_name {
-            // Look for a function named `<original_name>__call`
-            let call_name = format!("{}__call", def.name);
-            if module.functions.iter().any(|f| f.name == call_name) {
-                return call_name;
-            }
+            return def.closure_call_fn.clone();
         }
     }
-    // Fallback: try interpreting struct_c_name as the original name directly.
-    let call_name = format!("{struct_c_name}__call");
-    if module.functions.iter().any(|f| f.name == call_name) {
-        return call_name;
-    }
-    // Last resort: return a placeholder
-    format!("/* UNKNOWN_CLOSURE_CALL for {struct_c_name} */")
+    // The caller may already hold the LIR name rather than the C spelling.
+    module.structs.iter()
+        .find(|d| d.name == struct_c_name)
+        .and_then(|d| d.closure_call_fn.clone())
 }
 
 /// Look up the return type of a closure's `__call` function in LIR.
@@ -126,7 +127,14 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
                             .map(|t| c_type_named(t, sn))
                             .unwrap_or_else(|| "void*".into());
                         let closure_struct_name = closure_c_type.clone();
-                        let call_fn = find_closure_call_fn(module, &closure_struct_name, sn);
+                        // No typed call-body name means this extern's second
+                        // param is not a closure environment; emit no helper
+                        // rather than a `/* UNKNOWN_CLOSURE_CALL */` comment in
+                        // the call position (Core #14 / lower-or-reject).
+                        let call_fn = match find_closure_call_fn(module, &closure_struct_name, sn) {
+                            Some(f) => f,
+                            None => continue,
+                        };
 
                         let (ok_field, err_field) = enum_payload_fields(type_prefix, module);
 

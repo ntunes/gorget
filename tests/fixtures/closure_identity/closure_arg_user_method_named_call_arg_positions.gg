@@ -1,0 +1,31 @@
+# Sibling of `closure_arg_user_method_named_call.gg` on the ARGUMENT-POSITION
+# axis: a fix that packed only argument 0 would pass every cell of that fixture
+# and still miscompile these.
+#
+#   - `call`      -- the closure is the LAST argument, not the first
+#   - `call_both` -- TWO closure arguments in one call
+#
+# Both mangle to names containing `__call` (`Runner__call`, `Runner__call_both`),
+# which is what used to collide with the `contains("__call")` closure-identity
+# test. Both printed a plausible WRONG NUMBER or crashed before the typed
+# `takes_env` carrier replaced that test.
+
+struct Runner:
+    int factor
+
+equip Runner:
+    int call(self, int x, Callable[int(int)] f):
+        return f(x) * self.factor
+
+    int call_both(self, Callable[int(int)] f, Callable[int(int)] h, int x):
+        return (f(x) + h(x)) * self.factor
+
+int main():
+    Runner r = Runner(7)
+    Callable[int(int)] g = (int m): m + 1000
+    int extra = 5
+
+    print(r.call(4, (int n): g(n) + extra))
+    print(r.call_both((int n): g(n) + extra, (int n): n + 2, 4))
+    print("done")
+    return 0

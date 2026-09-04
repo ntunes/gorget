@@ -1,0 +1,25 @@
+# Sibling of `closure_arg_user_method_named_call.gg` on the RETURN-TYPE and
+# DROPPABLE-CAPTURE axes: the closure captures a `String` and returns a
+# `String`, so the mis-shaped env was read as a heap handle rather than an
+# integer. This cell crashed outright before closure identity became typed
+# metadata.
+#
+# Keeping a droppable capture in the net matters because the fix moves where
+# the closure environment is materialised; a leak or double-free here would
+# show up under the sanitizer sweep, which the capture-less cells cannot
+# expose.
+
+struct Runner:
+    int factor
+
+equip Runner:
+    String call(self, Callable[String(int)] f, int x):
+        return f(x) + "!"
+
+int main():
+    Runner r = Runner(7)
+    String pre = "v="
+    String suffix = "-end"
+    print(r.call((int n): pre + "4" + suffix, 4))
+    print("done")
+    return 0

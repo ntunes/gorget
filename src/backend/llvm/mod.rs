@@ -343,7 +343,8 @@ fn resolve_closure_call_fn(
     };
     if let Some(sid) = sid {
         let sdef = &module.structs[sid.0 as usize];
-        let call_name = format!("{}__call", sdef.name);
+        // CARRIER #2: the struct carries its own call-body name.
+        let call_name = sdef.closure_call_fn.clone()?;
         if let Some(func) = module.functions.iter().find(|f| f.name == call_name) {
             let params_are_ptr = func.params.iter().skip(1)
                 .map(|t| matches!(t, LirType::PtrTo(_) | LirType::Ptr))

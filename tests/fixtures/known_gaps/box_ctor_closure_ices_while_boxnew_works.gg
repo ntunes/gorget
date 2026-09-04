@@ -1,35 +1,43 @@
-# KNOWN GAP — the `Box[T](x)` CONSTRUCTOR ICEs on a closure while `Box.new(x)`
-# compiles and runs. Two spellings of one operation, one of which panics.
+# REGRESSION FIXTURE (was `todo/t0681`, closed R49 Track A1-IDENTITY).
+#
+# The `Box[T](x)` CONSTRUCTOR used to ICE on a closure while `Box.new(x)`
+# compiled and ran -- two spellings of one operation, one of which panicked:
 #
 #     Box[Callable[int(int)]] f = Box[Callable[int(int)]]((int n): n * 2)
 #     print(f(21))
-#         -> rc 101, panicked at src/ir/lowering/mod.rs:1724
+#         -> rc 101, "GIR module failed validation: call to undefined function @f"
 #
 #     Box[Callable[int(int)]] f = Box.new((int n): n * 2)
 #     print(f(21))
-#         -> rc 0, prints 42          <- CORRECT
+#         -> rc 0, prints 42          <- CORRECT, and the spelling
+#                                        docs/book/16-smart-pointers.md teaches
 #
-# ⚠ `Box.new` is the spelling docs/book/16-smart-pointers.md:40,44 teaches, and
-# it is the chapter's ONLY `Box.new` usage -- so the working path is the
-# documented one and the ICE is on the ctor sibling.
+# CAUSE: sibling-site drift (Core #4). The `Box.new` path in
+# `src/ir/lowering/exprs/methods.rs` carried a closure carve-out -- return the
+# closure environment struct directly and dispatch through the closure's own
+# call body at the call site -- and the `Box[T](...)` constructor arm in
+# `src/ir/lowering/exprs/calls.rs` did not, so it boxed the environment and then
+# emitted a direct call to a function named after the variable.
 #
-# ⚠ MECHANISM: `src/ir/lowering/exprs/methods.rs:230-236` carries a closure
-# carve-out that `calls.rs` lacks. That carve-out is itself a
-# `starts_with("__Closure_")` NAME-MATCH -- deciding semantics from an
-# identifier's spelling, which Layering rule 2 forbids. The reference-grade fix
-# puts the flag on the typed decl, not the name.
+# The carve-out itself was a `starts_with("__Closure_")` NAME-MATCH, deciding
+# semantics from an identifier's spelling, which Layering rule 2 forbids. Both
+# arms now ask `TypeMetadata::closure_call_fn` -- CARRIER #1 -- so the typed
+# question is asked once and answered the same way in both places.
 #
-# ⚠ This blocks "just mirror the self-host's single normalised Box path": the
-# two Rust entry points are NOT equivalent today, and any unification must carry
-# the carve-out or it regresses this to an ICE.
+# WHY IT STAYS IN `known_gaps/`: placement only. The self-host lane cannot
+# compile the emitted C for this shape yet (`unknown type name
+# '__gg_Callable__GorgetClosure'` at `cc`), so it must stay out of the
+# auto-scanned `runtime_parity_corpus`. The LIVE test
+# `box_ctor_closure_matches_box_new` asserts the output below.
 #
-# ⊕ SEPARATE, FOUND ALONGSIDE: `(*f)` on a `Box[Callable[...]]` is rejected with
-# `E_DerefNonBox: cannot dereference `*` a value of type `Box[Callable[int(int)]]`
-# — `*` requires a `Box[T]``. The value IS a `Box[T]`; the diagnostic contradicts
-# itself. Both spellings hit it, so it is independent of the ICE above.
-#
-# INTENDED (asserted below): prints 42, exactly as the `Box.new` spelling does.
-# Found 2026-08-27 by R45 Track A brief-review passes 1-2; orchestrator-verified.
+# STILL OPEN, and NOT fixed by this: `(*f)` on a `Box[Callable[...]]` is
+# rejected with a self-contradicting diagnostic -- `E_DerefNonBox: cannot
+# dereference `*` a value of type `Box[Callable[int(int)]]` -- `*` requires a
+# `Box[T]`` -- when the value IS a `Box[T]`. Both spellings hit it, so it is
+# independent of the ICE. Also still open: the sibling
+# `box_callable_call_through_box_undefined_function.gg`, where the payload is a
+# `Callable`-typed STRUCT FIELD rather than a closure literal and there is no
+# closure environment behind it at all.
 
 void main():
     Box[Callable[int(int)]] f = Box[Callable[int(int)]]((int n): n * 2)

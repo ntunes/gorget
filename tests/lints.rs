@@ -13426,7 +13426,7 @@ fn unify_closure_ret_axis_class_enumeration() {
 /// A `Callable[T]` PARAMETER's type is erased — to `unit` in the GIR, and to a
 /// `ResolvedType::CallableTrait` wrapper (not a bare `Function`) in the
 /// typechecker. Every site that wants "what does this callable return" and
-/// answers it from `fn_sigs` / `lookup_closure_info` / a bare `Function` match
+/// answers it from `fn_sigs` / `closure_call_fn_for_type` / a bare `Function` match
 /// gets it WRONG for that one shape and silently defaults. R48 Track A found
 /// SEVEN such readers, one at a time, each in a new costume: an adapter's
 /// result-type helper, the adapter's own call emitter, a check-time accessor,
@@ -13515,7 +13515,7 @@ fn erased_callable_param_reader_axis_census() {
          A `Callable[T]` PARAMETER is erased to `unit` (GIR) and to a \
          `CallableTrait` wrapper (typechecker). Any site that answers \
          \"what does this callable return\" from `fn_sigs`, \
-         `lookup_closure_info`, or a bare `ResolvedType::Function` match is \
+         `closure_call_fn_for_type`, or a bare `ResolvedType::Function` match is \
          WRONG for that shape and defaults silently — historically to \
          `I64_TYPE`, which mis-sizes a result slot.\n\n\
          If you ADDED a reader: route it through `ctx.callable_return_type` \
@@ -24408,9 +24408,8 @@ fn staging_move_burndown_shrink_only() {
 #[test]
 fn known_gaps_repros_are_wired_to_a_test() {
     /// Baseline regenerated 2026-08-27 by running this test. SHRINK-ONLY.
-    const ALLOWED_UNWIRED: [&str; 30] = [
+    const ALLOWED_UNWIRED: [&str; 29] = [
         "box_callable_call_through_box_undefined_function",
-        "box_ctor_closure_ices_while_boxnew_works",
         "box_enum_payload_c_wont_compile_llvm_double_frees",
         "box_from_field_owning_boxes_double_free",
         "box_get_bound_to_local_double_free",
@@ -28410,4 +28409,185 @@ mod ggdef_corpus_membership_lint {
 // `scripts/sanitize_sweep.sh` — do not re-list directories here.
 mod sanitize_corpus_manifest_lint {
     include!("lints_support/sanitize_corpus_manifest_lint.rs");
+}
+
+// ─── R49 Track A1-IDENTITY: the closure-identity name-match ratchet ──────────
+//
+// ⚠⚠ READ THIS BEFORE TRUSTING A GREEN RUN. This ratchet is BOOKKEEPING THAT
+// BACKSTOPS THE CARRIERS. It is NOT the guard that retires the closure-identity
+// name-match class, and it was PROVEN unable to be one:
+//
+//   | state                                            | fixture net  | this ratchet |
+//   |--------------------------------------------------|--------------|--------------|
+//   | before the typed carriers                        | RED (7028)   | at budget    |
+//   | with the typed carriers                          | GREEN (7063) | at budget    |
+//   | carriers + a one-line `const CALL_MARK` hoist    | RED (7028)   | at budget    |
+//
+// The third row is the point: a name-match respelled through a `const` (e.g.
+// `const CALL_MARK: &str = concat!("__", "call");`) is invisible to every
+// textual census, so this counter is IDENTICAL in the correct state and in the
+// broken one. Only a BEHAVIOURAL guard discriminates them, and that guard is
+// the `closure_arg_user_method_named_call*` fixture family, which asserts
+// STDOUT — a fix validated on exit codes greens the loud cells and leaves the
+// silent-wrong-output one live.
+//
+// What this ratchet IS for: making a NEW textual name-match on a closure- or
+// spawn-identity literal visible the day it is added, and locking in the ones
+// A1-IDENTITY retired so they cannot creep back.
+//
+// ⚠ KNOWN BLIND SPOTS, stated so nobody reads a green run as more than it is:
+//   1. The literal set below is a HAND LIST. That is exactly the blind spot
+//      that let the spawn family, `__adapt_`, and a bare
+//      `contains("Callable") || contains("FnPtr")` type-name test into the
+//      tree unseen. Deriving the alphabet mechanically from the `format!`
+//      mints was measured and yields 100 tokens — the whole
+//      `{Type}__{method}` mangling family, far outside this ratchet's class;
+//      that wider family is `todo/t1054`.
+//   2. Identity by SENTINEL is invisible to any string census:
+//      `calls.rs`'s `if local_type_id == UNIT_TYPE { format!("__callable_{}", …) }`
+//      decides closure identity with no string to match at all. Layering
+//      rule 2 forbids "name prefixes, SENTINEL VALUES, or runtime-symbol
+//      conventions" in one breath, so it is in the class by the repo's own
+//      wording. It belongs to the `__callable_` convention (A2's split).
+//   3. Comment lines are excluded, so a doc-comment quoting a retired
+//      predicate does not move the count.
+const CLOSURE_IDENTITY_LITERALS: &[&str] = &[
+    // Convention 1 — the lifted-closure env and its call body. A1-IDENTITY
+    // retired every one of these in `src/`; the budget below locks that in.
+    "__Closure_",
+    "__call",
+    // Convention 2 — erased-callable dispatch (A2's scope).
+    "__callable_",
+    "__gorget_closure_call_",
+    // The self-host's closure-arg adapter shim.
+    "__adapt_",
+    // Convention 4 — the spawn / async wrapper family. `__spawn_wrap_<struct>`
+    // is minted FROM THE CLOSURE ENV STRUCT NAME, so it is closure identity.
+    "__spawn_wrap_",
+    "__spawn_method_wrap_",
+    "__spawn_drop_",
+    "__shared_token_",
+    "__SpawnCtx_",
+    "__gorget_spawn_",
+    "__gorget_thread_spawn_",
+    "__gorget_await_",
+];
+
+/// Count closure-identity name-match PREDICATES in one tree.
+///
+/// Covers all five string predicates plus `==` / `!=` against a literal that
+/// contains one of [`CLOSURE_IDENTITY_LITERALS`]. Comment lines are skipped so
+/// prose about a retired site does not count as a site.
+fn count_closure_identity_name_matches(root: &str, ext: &str) -> usize {
+    let alternation = CLOSURE_IDENTITY_LITERALS
+        .iter()
+        .map(|l| regex::escape(l))
+        .collect::<Vec<_>>()
+        .join("|");
+    let pred = regex::Regex::new(&format!(
+        r#"(?:starts_with|ends_with|contains|strip_prefix|strip_suffix)\(\s*"[^"]*(?:{alternation})[^"]*"\s*\)"#
+    ))
+    .unwrap();
+    let eq = regex::Regex::new(&format!(
+        r#"[!=]=\s*"[^"]*(?:{alternation})[^"]*""#
+    ))
+    .unwrap();
+    let mut count = 0;
+    visit(root, &mut |path| {
+        if path.extension().map_or(true, |e| e != ext) {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for line in content.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with('#') || t.starts_with('*') {
+                continue;
+            }
+            count += pred.find_iter(line).count();
+            count += eq.find_iter(line).count();
+        }
+    });
+    count
+}
+
+/// Rust-lane budget. Seeded by R49 Track A1-IDENTITY, which retired every
+/// convention-1 (`__Closure_` / `__call`) predicate in `src/` in favour of the
+/// three typed carriers (`TypeMetadata::closure_call_fn`,
+/// `StructDef::closure_call_fn`, `ir::Function::takes_env`). What remains is
+/// the erased-callable convention (A2's), the spawn/async wrapper family, and
+/// the C-emit-boundary spawn spellings.
+#[test]
+fn no_growth_in_closure_identity_name_matching() {
+    /// EXACT count — see [`assert_exact_ratchet`] for why equality, and the
+    /// block comment above for why a green run here proves less than it looks.
+    const CLOSURE_IDENTITY_BUDGET: usize = 30;
+
+    let count = count_closure_identity_name_matches("src", "rs");
+    assert_exact_ratchet(
+        "Closure-identity name-match predicates in src/ (R49 A1-IDENTITY)",
+        count,
+        CLOSURE_IDENTITY_BUDGET,
+        "Closure identity is TYPED METADATA, not a name. Read it through one of:\n  \
+         • `TypeRegistry::closure_call_fn(type_id)` / `closure_captures(type_id)` \
+           — \"is this type a closure environment, and what is its call body?\"\n  \
+         • `StructDef::closure_call_fn` — the same fact at the LIR/backend layer, \
+           where the GIR registry is unreachable.\n  \
+         • `ir::Function::takes_env` / `LirFunction::takes_env` / \
+           `ClosureCallSig::takes_env` — \"is parameter 0 a closure env pointer?\"\n\n\
+         A substring test against a MANGLED name is what this ratchet exists to \
+         make visible: `{Type}__{method}` means a user method spelled `call`, \
+         `callback` or `_call` collides with `contains(\"__call\")`, which was a \
+         stack-buffer-overflow on a capture-less closure and SILENT WRONG OUTPUT \
+         on a capturing one.\n\n\
+         To list the sites:\n  \
+         grep -rnE '(starts_with|ends_with|contains|strip_prefix|strip_suffix)\\(\"[^\"]*(__Closure_|__call|__callable_|__gorget_closure_call_|__adapt_|__spawn|__shared_token_|__SpawnCtx_|__gorget_await_)' src/",
+    );
+}
+
+/// Self-host-lane sibling. Separate budget on purpose: one number over both
+/// trees lets a regression in one lane be masked by a migration in the other.
+///
+/// ⚠ LIVE LANE DEBT. `lir_codegen.gg`'s `name.contains("__call")` is a VERBATIM
+/// mirror of the Rust `optimize.rs` DCE root-set seed that A1-IDENTITY retired,
+/// and `lir_codegen.gg` / `lir_lower.gg` still carry `starts_with("__Closure_")`
+/// probes. The self-host does NOT reproduce the Rust miscompile — it compiles
+/// and runs every `closure_arg_user_method_named_call*` fixture correctly — so
+/// this is layering debt, not a defect.
+#[test]
+fn no_growth_in_self_host_closure_identity_name_matching() {
+    /// EXACT count — see [`assert_exact_ratchet`].
+    const SELF_HOST_CLOSURE_IDENTITY_BUDGET: usize = 12;
+
+    let mut count = 0;
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = fs::read_dir("tests/fixtures") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            if name.starts_with("self_host_") {
+                dirs.push(path);
+            }
+        }
+    }
+    dirs.sort();
+    for path in &dirs {
+        count += count_closure_identity_name_matches(&path.to_string_lossy(), "gg");
+    }
+    assert_exact_ratchet(
+        "Closure-identity name-match predicates in tests/fixtures/self_host_* (R49 A1-IDENTITY)",
+        count,
+        SELF_HOST_CLOSURE_IDENTITY_BUDGET,
+        "The self-host mirrors of the closure-identity name-matches Rust retired \
+         in R49. Port the typed carriers (a `takes_env` flag on the GIR function \
+         record, a `closure_call_fn` field on the type/struct record) rather than \
+         adding another spelling of the name test.\n\n\
+         To list the sites:\n  \
+         grep -rnE --include='*.gg' '(starts_with|contains)\\(\"(__Closure_|__call|__callable_|__gorget_closure_call_|__adapt_)' tests/fixtures/self_host_*",
+    );
 }

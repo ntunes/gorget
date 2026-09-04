@@ -251,6 +251,27 @@ pub struct TypeMetadata {
     /// typed-metadata form of the "closure alias" ownership pattern —
     /// contrast with user struct inits where the struct independently owns its fields.
     pub is_closure_env: bool,
+    /// CARRIER #1 (closure identity, Core #2). For a `__Closure_N` env struct,
+    /// the name of its lifted call body (`__Closure_N__call`); `None` for
+    /// every other type. Set at the ONE mint (`lowering::closures::lower_closure`)
+    /// beside `is_closure_env`, and read through
+    /// `TypeRegistry::closure_call_fn` / `LoweringContext::closure_call_fn_for_type`.
+    ///
+    /// Answers both questions downstream used to answer from a name: "is this
+    /// type a closure environment?" (`is_some`) and "what is its call body
+    /// called?" — replacing `starts_with("__Closure_")` probes and the
+    /// `format!("{ty_name}__call")` re-derivations that followed them.
+    pub closure_call_fn: Option<String>,
+    /// By-value captures of a `__Closure_N` env struct, as
+    /// `(name, type_id, struct_field_index)`. Empty for every other type.
+    /// Read by the spawn lowering to rebuild the env inside the wrapper.
+    ///
+    /// Lives here rather than in a parallel `struct_name -> info` sidecar map
+    /// (Layering rule 3: one source of truth per axis, no parallel sidecar
+    /// maps). The env struct's own `TypeId` is the key, so the sidecar's third
+    /// component — the struct type id — needs no storage: it IS the id whose
+    /// metadata this is.
+    pub closure_captures: Vec<(String, TypeId, u32)>,
     /// Set for `Box__T` types registered via `register_collection_alias`.
     /// Distinguishes a heap-allocated single-element wrapper (Box) from
     /// other 1-field newtype-shaped structs. Replaces downstream
@@ -295,6 +316,8 @@ impl Default for TypeMetadata {
             enum_category: None,
             c_runtime_alias: None,
             is_closure_env: false,
+            closure_call_fn: None,
+            closure_captures: Vec::new(),
             is_box: false,
         }
     }
@@ -633,6 +656,33 @@ impl TypeRegistry {
         self.name_to_def.insert(def.name.clone(), idx);
         self.type_defs.push(def);
         idx
+    }
+
+    /// CARRIER #1 accessor: the closure call-body name for a closure-env type,
+    /// or `None` if `type_id` is not a closure environment. The single typed
+    /// route for "is this a closure, and what is its `__call`?" — no caller
+    /// re-derives either answer from a name (Core #2).
+    pub fn closure_call_fn(&self, type_id: TypeId) -> Option<&str> {
+        if let Some(GirType::Named(name)) = self.get(type_id) {
+            if let Some(def) = self.get_type_def(name) {
+                return def.metadata.closure_call_fn.as_deref();
+            }
+        }
+        None
+    }
+
+    /// CARRIER #1 accessor: the by-value captures of a closure-env type.
+    /// `None` when `type_id` is not a closure environment (distinct from a
+    /// closure that captures nothing, which yields `Some(&[])`).
+    pub fn closure_captures(&self, type_id: TypeId) -> Option<&[(String, TypeId, u32)]> {
+        if let Some(GirType::Named(name)) = self.get(type_id) {
+            if let Some(def) = self.get_type_def(name) {
+                if def.metadata.closure_call_fn.is_some() {
+                    return Some(def.metadata.closure_captures.as_slice());
+                }
+            }
+        }
+        None
     }
 
     /// Look up a type definition by name.

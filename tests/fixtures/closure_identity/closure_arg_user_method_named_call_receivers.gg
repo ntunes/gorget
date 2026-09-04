@@ -1,0 +1,34 @@
+# Sibling of `closure_arg_user_method_named_call.gg` on the RECEIVER-SPELLING
+# and METHOD-NAME axes. The rule is about the callee's mangled name, so both
+# spellings below must behave identically to a plain outside call:
+#
+#   - `self.call(...)` from inside another method of the same type
+#   - a method named `_call` (`Runner___call` also contains `__call`)
+#
+# Both printed 7028 instead of 7063 -- exit 0, `gg check` clean, ASan and UBSan
+# silent -- before closure identity became typed metadata.
+
+struct Runner:
+    int factor
+
+equip Runner:
+    int call(self, Callable[int(int)] f, int x):
+        return f(x) * self.factor
+
+    int _call(self, Callable[int(int)] f, int x):
+        return f(x) * self.factor
+
+    int outer(self, int x):
+        Callable[int(int)] g = (int m): m + 1000
+        int extra = 5
+        return self.call((int n): g(n) + extra, x)
+
+int main():
+    Runner r = Runner(7)
+    Callable[int(int)] g = (int m): m + 1000
+    int extra = 5
+
+    print(r.outer(4))
+    print(r._call((int n): g(n) + extra, 4))
+    print("done")
+    return 0

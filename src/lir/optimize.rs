@@ -215,7 +215,15 @@ fn find_live_functions(module: &LirModule) -> rustc_hash::FxHashSet<FuncId> {
             // sees `FuncAddr`/`Struct`, not `Extern{name}`). Seed as a root or
             // DCE prunes them and the prologue call link-fails.
             || func.name.starts_with("__gg_static_init_")
-            || func.name.contains("__call")
+            // Closure call bodies are reached only through function pointers
+            // (`ClosurePack` / `FuncAddr` into a `GorgetClosure` slot), which the
+            // LIR call graph does not walk, so they are seeded as DCE roots.
+            // CARRIER #3, not `name.contains("__call")` — that substring test
+            // also rooted every USER method spelled `call*` (`Runner__call`),
+            // which is not the same fact. Vtable-dispatched user methods stay
+            // live through the `FuncAddr` refs in their trait-object globals;
+            // `closure_arg_user_method_named_call_trait_equip.gg` pins that.
+            || func.takes_env
             || spawned_names.contains(func.name.as_str())
             || hot_reload_roots.contains(func.name.as_str())
         {

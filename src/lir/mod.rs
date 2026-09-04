@@ -1455,6 +1455,11 @@ pub struct LirFunction {
     /// `cstr_vals`, `extern_cstr_return_vals`, `func_addr_targets`,
     /// `spawn_source_fn`.
     pub value_origins: Vec<Option<ValueOrigin>>,
+    /// CARRIER #3 at the LIR layer — written through from
+    /// [`crate::ir::Function::takes_env`] at `FuncLowering::new`, never
+    /// re-derived. True iff parameter 0 is a closure-environment pointer,
+    /// i.e. this function is a lifted closure's call body.
+    pub takes_env: bool,
 }
 
 impl LirFunction {
@@ -1474,6 +1479,7 @@ impl LirFunction {
             value_types: Vec::new(),
             pointee_types: Vec::new(),
             value_origins: Vec::new(),
+            takes_env: false,
         }
     }
 
@@ -1619,16 +1625,29 @@ pub struct StructDef {
     /// `type_drop_fns` entry — silent leak). See
     /// `docs/devbook/25-structural-guards.md` §1a.
     pub expects_drop_fn: bool,
+    /// CARRIER #2 (closure identity, Core #2). For a closure-environment
+    /// struct, the name of its lifted call body (`__Closure_N__call`); `None`
+    /// for every other struct. Written through from GIR's
+    /// `TypeMetadata.closure_call_fn` at LIR lowering, exactly like
+    /// `c_runtime_alias` (Layering rule 4).
+    ///
+    /// The backends cannot reach the GIR `TypeRegistry` — `generate_c` /
+    /// `generate_llvm_ir` take only a `&LirModule` — so this is how the fact
+    /// gets to them. It replaces the `format!("{}__call", def.name)`
+    /// re-derivations in `c_lir/emit_types.rs` and `llvm/mod.rs`, one of which
+    /// emitted `/* UNKNOWN_CLOSURE_CALL for X */` INTO THE GENERATED C when
+    /// the guess missed.
+    pub closure_call_fn: Option<String>,
 }
 
 impl StructDef {
     /// Create a regular (non-enum) struct definition.
     pub fn new(name: String, fields: Vec<(String, LirType)>) -> Self {
-        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false }
+        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None }
     }
     /// Create an enum struct definition with the given kind.
     pub fn new_enum(name: String, fields: Vec<(String, LirType)>, kind: EnumKind) -> Self {
-        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false }
+        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None }
     }
     /// True when the type originated from any enum definition.
     pub fn is_enum(&self) -> bool {
@@ -2151,7 +2170,7 @@ mod tests {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
                       });
 
         let mut func = LirFunction::new("get_x".into(), vec![LirType::Ptr], LirType::F64);

@@ -327,6 +327,8 @@ pub fn lower_module(
                 enum_category: None,
                 c_runtime_alias: None,
                 is_closure_env: false,
+                closure_call_fn: None,
+                closure_captures: Vec::new(),
                 is_box: false,
             },
         });
@@ -353,6 +355,8 @@ pub fn lower_module(
                 enum_category: None,
                 c_runtime_alias: None,
                 is_closure_env: false,
+                closure_call_fn: None,
+                closure_captures: Vec::new(),
                 is_box: false,
             },
         });
@@ -379,6 +383,8 @@ pub fn lower_module(
                 enum_category: None,
                 c_runtime_alias: None,
                 is_closure_env: false,
+                closure_call_fn: None,
+                closure_captures: Vec::new(),
                 is_box: false,
             },
         });
@@ -455,6 +461,8 @@ pub fn lower_module(
                         enum_category: None,
                         c_runtime_alias: protocol.c_runtime_alias.map(String::from),
                         is_closure_env: false,
+                        closure_call_fn: None,
+                        closure_captures: Vec::new(),
                 is_box: false,
                     },
                 });
@@ -498,6 +506,8 @@ pub fn lower_module(
                             enum_category: None,
                             c_runtime_alias: vector_protocol.c_runtime_alias.map(String::from),
                             is_closure_env: false,
+                            closure_call_fn: None,
+                            closure_captures: Vec::new(),
                 is_box: false,
                         },
                     });

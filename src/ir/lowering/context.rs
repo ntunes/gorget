@@ -458,9 +458,6 @@ pub struct LoweringContext<'a> {
     pub enum_variants: FxHashMap<String, (String, String)>,
     /// Struct field info: (type_name, field_name) → (field_index, field_type_id).
     pub struct_fields: FxHashMap<(String, String), (u32, TypeId)>,
-    /// Closure info: struct_name → (call_fn_name, struct_type_id, by-value captures with field indices).
-    /// Each capture entry is (name, type_id, struct_field_index).
-    pub closure_info: FxHashMap<String, (String, TypeId, Vec<(String, TypeId, u32)>)>,
     /// Generic monomorphization state.
     pub generics: GenericState,
     /// Spawn/concurrency tracking.
@@ -673,7 +670,6 @@ impl<'a> LoweringContext<'a> {
             fn_sigs: FxHashMap::default(),
             enum_variants: FxHashMap::default(),
             struct_fields: FxHashMap::default(),
-            closure_info: FxHashMap::default(),
             generics: GenericState::default(),
             spawn: SpawnState::default(),
             shared: SharedVarState::default(),
@@ -4809,20 +4805,19 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    /// Register closure info for call dispatch.
-    pub fn register_closure_info(
-        &mut self,
-        struct_name: String,
-        call_fn_name: String,
-        struct_type_id: TypeId,
-        captures: Vec<(String, TypeId, u32)>,
-    ) {
-        self.closure_info.insert(struct_name, (call_fn_name, struct_type_id, captures));
+    /// CARRIER #1 accessor (Core #2 / Layering rule 3): the closure call-body
+    /// name for `type_id`, or `None` when `type_id` is not a closure
+    /// environment. Replaces `lookup_closure_info(&type_name)` — the question
+    /// is about a TYPE, so it is asked with a `TypeId`, never routed through
+    /// the type's spelling.
+    pub fn closure_call_fn_for_type(&self, type_id: TypeId) -> Option<&str> {
+        self.type_registry.closure_call_fn(type_id)
     }
 
-    /// Look up closure info by struct name.
-    pub fn lookup_closure_info(&self, struct_name: &str) -> Option<(&str, TypeId, &[(String, TypeId, u32)])> {
-        self.closure_info.get(struct_name).map(|(name, tid, caps)| (name.as_str(), *tid, caps.as_slice()))
+    /// CARRIER #1 accessor: the by-value captures (name, type, field index) of
+    /// a closure-env type. `None` when `type_id` is not a closure environment.
+    pub fn closure_captures_for_type(&self, type_id: TypeId) -> Option<&[(String, TypeId, u32)]> {
+        self.type_registry.closure_captures(type_id)
     }
 
     // ---- Loop stack for break/continue ----
@@ -5059,6 +5054,8 @@ impl<'a> LoweringContext<'a> {
                         enum_category: None,
                         c_runtime_alias: protocol.c_runtime_alias.map(String::from),
                         is_closure_env: false,
+                        closure_call_fn: None,
+                        closure_captures: Vec::new(),
                         is_box: false,
                     },
                 });

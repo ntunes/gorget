@@ -435,11 +435,38 @@ lowering land in the closure's scope, not the outer function's.
 ### ABI and the runtime boundary
 
 A closure value at the C ABI is a `GorgetClosure` `{fn_ptr, env}` pair.
-The lifted struct param ABI is registered with the env passed `ByPtr`
-(`closures.rs:233`), and `register_closure_info` (`closures.rs:249`)
-records the struct/call-fn/captures for call dispatch and for the
-spawn-wrapper path (only `ByValue` captures are spawnable across thread
-boundaries — `ByMutRef` pointers can't cross — `closures.rs:238-248`).
+The lifted struct param ABI is registered with the env passed `ByPtr`.
+
+**Closure identity is typed metadata, and it is minted once.** The env
+struct's `TypeMetadata` carries `closure_call_fn` — the name of its lifted
+call body — and `closure_captures`, the `ByValue` captures with their
+struct field indices (only `ByValue` captures are spawnable across thread
+boundaries; `ByMutRef` pointers can't cross). Both are written at the one
+mint, beside `is_closure_env`, and read back through
+`TypeRegistry::closure_call_fn(type_id)` / `closure_captures(type_id)`.
+Call dispatch and the spawn-wrapper path both ask the TYPE; neither
+reconstructs `{name}__call` from a spelling, and there is no parallel
+`struct_name → info` map to fall out of step (layering rule 3).
+
+The same fact travels two more hops as typed fields, because the layers
+below cannot reach the GIR registry: `StructDef::closure_call_fn` carries
+it to the backends, and `Function::takes_env` — set by the very expression
+that pushes `__env` as parameter 0 — answers the *other* question, "is
+this function a closure's call body?", for the LIR call lowering, the
+dead-code root set and BIR's signature snapshots.
+
+Neither question may be answered from a name, and the reason is that the
+namespace is shared. A user method mangles to `{Type}__{method}`, so
+`equip Runner: int call(self, …)` is `Runner__call` — indistinguishable
+from a closure call body to any substring test for `__call`. A callee
+mistaken for a closure body has its closure arguments left unpacked, and
+the environment it then reads is the wrong shape: a capture-less closure
+faults on a one-byte object, while a closure whose first capture is itself
+a `Callable` finds a valid code pointer where an integer belongs and
+returns a plausible wrong number with a clean exit code. The typed
+carriers exist so that question has one answer and no spelling can supply
+a second.
+
 The mapping of the lifted `__Closure_N` struct and the
 `Callable__GorgetClosure` mangled form onto the runtime `GorgetClosure`
 struct happens at the C backend boundary (`src/backend/c_lir/`), which

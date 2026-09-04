@@ -17,6 +17,10 @@ pub struct FunctionBuilder {
     pub with_refresh_pairs: Vec<(LocalId, LocalId)>,
     /// Inner shared spawn metadata for nested spawn propagation.
     pub inner_shared_spawns: Vec<super::InnerSharedSpawn>,
+    /// CARRIER #3 — see [`super::Function::takes_env`]. Defaults to `false`;
+    /// set only by `mark_takes_env`, whose sole caller is the closure
+    /// call-body emitter.
+    pub takes_env: bool,
 }
 
 impl FunctionBuilder {
@@ -67,6 +71,7 @@ impl FunctionBuilder {
             current_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            takes_env: false,
         }
     }
 
@@ -140,7 +145,15 @@ impl FunctionBuilder {
             def_span: None,
             with_refresh_pairs: self.with_refresh_pairs,
             inner_shared_spawns: self.inner_shared_spawns,
+            takes_env: self.takes_env,
         }
+    }
+
+    /// Declare that parameter 0 of the function under construction is a
+    /// closure-environment pointer (CARRIER #3). Called at the one site that
+    /// pushes `__env` as param 0.
+    pub fn mark_takes_env(&mut self) {
+        self.takes_env = true;
     }
 
     /// Set the source span for all subsequent emitted instructions.

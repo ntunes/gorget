@@ -50,7 +50,7 @@ pub(super) fn try_emit_option_result_combinator(
                             .filter(|t| matches!(t, LirType::Struct(_)))
                             .map(|t| c_type_named(t, sn))
                     });
-                closure_struct.map(|n| find_closure_call_fn(module, &n, sn))
+                closure_struct.and_then(|n| find_closure_call_fn(module, &n, sn))
                     .unwrap_or_default()
             } else {
                 String::new()

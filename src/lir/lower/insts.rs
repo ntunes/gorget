@@ -548,7 +548,28 @@ impl<'a> FuncLowering<'a> {
                     // Closure→callable wrapping: detect __Closure_N args and FuncRef
                     // args and pack them into GorgetClosure slots so backends don't
                     // need to detect and wrap at code-gen time.
-                    if !func.contains("__call") {
+                    //
+                    // A lifted closure's own call body already receives its
+                    // arguments packed, so it is the one callee that must NOT be
+                    // wrapped again. CARRIER #3 answers that from typed metadata
+                    // (`ir::Function::takes_env`, written where `__env` is pushed
+                    // as param 0) rather than from the callee's spelling.
+                    //
+                    // ⚠ This was `!func.contains("__call")` — a SUBSTRING test
+                    // against a MANGLED USER METHOD NAME (`{Type}__{method}`), so
+                    // `equip Runner: int call(self, Callable[int(int)] f, ...)`
+                    // mangled to `Runner__call`, matched, and had its closure
+                    // argument left unpacked: a stack-buffer-overflow read on a
+                    // capture-less closure and SILENTLY WRONG OUTPUT on a
+                    // capturing one. Pinned behaviourally by the
+                    // `closure_arg_user_method_named_call*` fixtures.
+                    // ⚠ `closure_call_sigs` is keyed by every GIR function name,
+                    // so `contains_key` is NOT the discriminator — the flag is.
+                    let callee_takes_env = self
+                        .closure_call_sigs
+                        .get(func)
+                        .map_or(false, |sig| sig.takes_env);
+                    if !callee_takes_env {
                         self.wrap_closure_call_args(args, &mut lir_args, bb);
                     }
                     let result = dst.map(|_| self.lir_func.next_value());
@@ -2598,9 +2619,10 @@ impl<'a> FuncLowering<'a> {
         let closure_call_sig = args.get(closure_idx).and_then(|op| {
             let key = match op {
                 Operand::Constant(Constant::FuncRef(n)) => n.clone(),
+                // CARRIER #1 — the env type's own recorded call-body name,
+                // not `format!("{ty_name}__call")`.
                 Operand::Copy(_) | Operand::Move(_) => {
-                    let ty_name = self.operand_gir_type_name(op)?;
-                    format!("{ty_name}__call")
+                    self.operand_closure_call_fn(op)?.to_string()
                 }
                 _ => return None,
             };
@@ -2792,9 +2814,10 @@ impl<'a> FuncLowering<'a> {
         let closure_call_sig = args.get(closure_idx).and_then(|op| {
             let key = match op {
                 Operand::Constant(Constant::FuncRef(n)) => n.clone(),
+                // CARRIER #1 — the env type's own recorded call-body name,
+                // not `format!("{ty_name}__call")`.
                 Operand::Copy(_) | Operand::Move(_) => {
-                    let ty_name = self.operand_gir_type_name(op)?;
-                    format!("{ty_name}__call")
+                    self.operand_closure_call_fn(op)?.to_string()
                 }
                 _ => return None,
             };
@@ -3300,9 +3323,10 @@ impl<'a> FuncLowering<'a> {
         let closure_gir = args.get(closure_idx)?;
         let wrappable = match closure_gir {
             Operand::Constant(Constant::FuncRef(_)) => true,
-            Operand::Copy(_) | Operand::Move(_) => self
-                .operand_gir_type_name(closure_gir)
-                .map_or(false, |n| n.starts_with("__Closure_")),
+            // CARRIER #1: "is this operand a closure environment?" is
+            // `closure_call_fn.is_some()`, not a `__Closure_` name prefix.
+            Operand::Copy(_) | Operand::Move(_) =>
+                self.operand_closure_call_fn(closure_gir).is_some(),
             _ => false,
         };
         if !wrappable {
@@ -3325,9 +3349,10 @@ impl<'a> FuncLowering<'a> {
         let closure_call_sig = args.get(closure_idx).and_then(|op| {
             let key = match op {
                 Operand::Constant(Constant::FuncRef(n)) => n.clone(),
+                // CARRIER #1 — the env type's own recorded call-body name,
+                // not `format!("{ty_name}__call")`.
                 Operand::Copy(_) | Operand::Move(_) => {
-                    let ty_name = self.operand_gir_type_name(op)?;
-                    format!("{ty_name}__call")
+                    self.operand_closure_call_fn(op)?.to_string()
                 }
                 _ => return None,
             };

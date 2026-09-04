@@ -1,0 +1,28 @@
+# KNOWN GAP (todo/t0681) -- dereferencing a `Box[Callable[...]]` is rejected
+# with a diagnostic that denies its own premise:
+#
+#     error[E_DerefNonBox]: cannot dereference `*` a value of type
+#     `Box[Callable[int(int)]]` -- `*` requires a `Box[T]`
+#
+# The value IS a `Box[T]`. Both construction spellings (`Box.new(...)` and
+# `Box[Callable[int(int)]](...)`) hit it identically, so it is independent of
+# the constructor-vs-method split that R49 Track A1-IDENTITY closed.
+#
+# DECIDE -- the message is wrong under both readings:
+#   (a) the shape is meaningful, `*f` yields the boxed Callable, and this
+#       program prints 42; or
+#   (b) a `Box[Callable[...]]` genuinely may not be dereferenced -- then the
+#       diagnostic must say WHY, because "requires a `Box[T]`" is not a reason
+#       a reader can act on when the value is one.
+#
+# DISCRIMINATED FROM `box_callable_call_through_box_undefined_function.gg`:
+# there the boxed payload is a `Callable`-typed STRUCT FIELD, there is no
+# closure environment behind it, and it ICEs at GIR VALIDATION. This one is
+# rejected cleanly at CHECK time. Different phase, different mechanism.
+#
+# INTENDED (asserted below): prints 42.
+# RED-verified 2026-09-04: rejected at check time with the message above.
+
+void main():
+    Box[Callable[int(int)]] f = Box.new((int n): n * 2)
+    print((*f)(21))

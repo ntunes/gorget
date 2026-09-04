@@ -1,0 +1,21 @@
+# SCOPE CONTROL for the `closure_arg_user_method_named_call*` family: a FREE
+# function named `call` was always correct and must stay correct.
+#
+# A free function keeps its bare Gorget name (`call`), so `"call".contains("__call")`
+# is false -- only MANGLED METHOD names (`{Type}__{method}`) ever collided.
+# Without this cell the family's NAME over-claims its scope: a reader would
+# take "a function named call" to be the trigger, when the trigger is the
+# METHOD mangling.
+#
+# This fixture is GREEN both before and after the fix. It discriminates the
+# MECHANISM, not the defect.
+
+int call(Callable[int(int)] f, int x):
+    return f(x) * 7
+
+int main():
+    Callable[int(int)] g = (int m): m + 1000
+    int extra = 5
+    print(call((int n): g(n) + extra, 4))
+    print("done")
+    return 0

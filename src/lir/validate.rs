@@ -1143,7 +1143,7 @@ mod tests {
             fields: vec![("x".into(), LirType::F64), ("y".into(), LirType::F64)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
                       });
 
         let mut func = LirFunction::new("main".into(), vec![], LirType::I32);
@@ -1271,7 +1271,7 @@ mod tests {
             fields: vec![("x".into(), LirType::I32)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
                       });
 
         let mut func = LirFunction::new("bad".into(), vec![], LirType::Void);
@@ -1609,7 +1609,7 @@ mod tests {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
             c_runtime_alias: None,
             box_inner_type: inner.map(String::from),
-            is_trait_box: false, expects_drop_fn: false,
+            is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         }
     }
 
@@ -1623,7 +1623,7 @@ mod tests {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
             c_runtime_alias: None,
             box_inner_type: None, // trait box: legitimately None
-            is_trait_box: true, expects_drop_fn: false,
+            is_trait_box: true, expects_drop_fn: false, closure_call_fn: None,
         }
     }
 
@@ -1686,7 +1686,7 @@ mod tests {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
             c_runtime_alias: None,
             box_inner_type: None,
-            is_trait_box: false, expects_drop_fn: false,
+            is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         let errors = validate_box_inner_type(&module);
         assert!(errors.is_empty(), "non-Box struct should be ignored: {errors:?}");
@@ -1714,7 +1714,7 @@ mod tests {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
             c_runtime_alias: None,
             box_inner_type: None,
-            is_trait_box: false, expects_drop_fn: false,
+            is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         let errors = validate_box_inner_type(&module);
         assert_eq!(errors.len(), 1);
@@ -1754,7 +1754,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         module
     }
@@ -1773,7 +1773,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         module.type_drop_fns.insert("User".into(), TypeDropInfo {
             drop_fn_name: "User__drop".into(),
@@ -1799,7 +1799,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         // Drop info present but missing the `name` field — the violation.
         module.type_drop_fns.insert("Leaky".into(), TypeDropInfo {
@@ -1830,7 +1830,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         module.type_drop_fns.insert("Option__GorgetString".into(), TypeDropInfo {
             drop_fn_name: "Option__GorgetString__drop".into(),
@@ -1859,7 +1859,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         module.type_drop_fns.insert("Option__GorgetString".into(), TypeDropInfo {
             drop_fn_name: "Option__GorgetString__drop".into(),
@@ -1889,7 +1889,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         module.type_drop_fns.insert("Trivial".into(), TypeDropInfo {
             drop_fn_name: "Trivial__drop".into(),
@@ -1916,7 +1916,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: Some("Inner".into()), is_trait_box: false, expects_drop_fn: false,
+            box_inner_type: Some("Inner".into()), is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         let errors = validate_box_inner_type_consistency(&module);
         assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
@@ -1933,7 +1933,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         let errors = validate_box_inner_type_consistency(&module);
         assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
@@ -1950,7 +1950,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: Some("Inner".into()), is_trait_box: false, expects_drop_fn: false,
+            box_inner_type: Some("Inner".into()), is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         let errors = validate_box_inner_type_consistency(&module);
         assert_eq!(errors.len(), 1);
@@ -1972,7 +1972,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false, expects_drop_fn: true,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: true, closure_call_fn: None,
         });
         module.type_drop_fns.insert("RecursiveStruct".into(), TypeDropInfo {
             drop_fn_name: "RecursiveStruct__drop".into(),
@@ -2001,7 +2001,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false, expects_drop_fn: true,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: true, closure_call_fn: None,
         });
         // Intentionally do NOT add a type_drop_fns entry.
         let errors = validate_drop_fn_presence(&module);
@@ -2026,7 +2026,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
         });
         let errors = validate_drop_fn_presence(&module);
         assert!(errors.is_empty(), "expected no errors, got: {errors:?}");

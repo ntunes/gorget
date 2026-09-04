@@ -270,10 +270,16 @@ pub(super) fn lower_method_call(
                 let inner_c = ctx.c_type_name_for_id(inner_type);
 
                 // For Box.new(closure): return the closure struct directly in the GIR path.
-                // Box[Callable[...]] variables use needs_reinfer to pick up the __Closure_N type,
-                // and dispatch via lookup_closure_info at call sites. This avoids the complexity
-                // of tracking heap-allocated callable boxes through the GIR type system.
-                if inner_c.starts_with("__Closure_") {
+                // `Box[Callable[...]]` variables use needs_reinfer to pick up the closure-env
+                // type and dispatch through CARRIER #1 at call sites. This avoids the
+                // complexity of tracking heap-allocated callable boxes through the GIR type
+                // system.
+                //
+                // CARRIER #1 (Core #2): closure-ness is a typed property of `inner_type`, not
+                // a `__Closure_` prefix on its C name. The `Box[T](x)` CONSTRUCTOR arm at
+                // `calls.rs` carries the identical carve-out — the two spellings of one
+                // operation must agree (Core #4; `todo/t0681` was the ICE when they did not).
+                if ctx.closure_call_fn_for_type(inner_type).is_some() {
                     return val;
                 }
 
@@ -3830,50 +3836,48 @@ fn call_closure_in_adapter(
         } else {
             UNIT_TYPE
         };
-        if let Some(type_name) = ctx.type_name_for_id(local_type_id) {
-            let type_name = type_name.to_string();
-            if let Some((call_fn, _, _)) = ctx.lookup_closure_info(&type_name) {
-                let call_fn = call_fn.to_string();
-                // Closure call: __Closure_N__call(&closure, args...)
-                let ptr_type = ctx.type_registry.insert(GirType::Ptr(local_type_id));
-                let ptr_local = builder.add_local(ptr_type, None);
-                builder.emit_borrow(ptr_local, place.clone());
-                let mut final_args = vec![FunctionBuilder::copy(ptr_local)];
-                // Wrap pre-lowered args in Ptr borrows where the closure expects Ptr ABI
-                for (i, arg) in call_args.into_iter().enumerate() {
-                    let abi = ctx.fn_param_abis.get(call_fn.as_str())
-                        .and_then(|abis| abis.get(i + 1)) // +1 for env ptr
-                        .copied();
-                    if matches!(abi, Some(ParamABI::ByPtr) | Some(ParamABI::ByMutPtr)) {
-                        if let Operand::Copy(ref place) | Operand::Move(ref place) = arg {
-                            if place.projections.is_empty() {
-                                let local_type = builder.local_type(place.local);
-                                if !matches!(ctx.type_registry.get(local_type),
-                                    Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)))
-                                {
-                                    let ptr_type = ctx.register_ptr_type(local_type);
-                                    let dst = builder.add_local(ptr_type, None);
-                                    builder.emit_borrow(dst, place.clone());
-                                    final_args.push(FunctionBuilder::copy(dst));
-                                    continue;
-                                }
+        // CARRIER #1: ask the TYPE, not its spelling.
+        if let Some(call_fn) = ctx.closure_call_fn_for_type(local_type_id) {
+            let call_fn = call_fn.to_string();
+            // Closure call: __Closure_N__call(&closure, args...)
+            let ptr_type = ctx.type_registry.insert(GirType::Ptr(local_type_id));
+            let ptr_local = builder.add_local(ptr_type, None);
+            builder.emit_borrow(ptr_local, place.clone());
+            let mut final_args = vec![FunctionBuilder::copy(ptr_local)];
+            // Wrap pre-lowered args in Ptr borrows where the closure expects Ptr ABI
+            for (i, arg) in call_args.into_iter().enumerate() {
+                let abi = ctx.fn_param_abis.get(call_fn.as_str())
+                    .and_then(|abis| abis.get(i + 1)) // +1 for env ptr
+                    .copied();
+                if matches!(abi, Some(ParamABI::ByPtr) | Some(ParamABI::ByMutPtr)) {
+                    if let Operand::Copy(ref place) | Operand::Move(ref place) = arg {
+                        if place.projections.is_empty() {
+                            let local_type = builder.local_type(place.local);
+                            if !matches!(ctx.type_registry.get(local_type),
+                                Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)))
+                            {
+                                let ptr_type = ctx.register_ptr_type(local_type);
+                                let dst = builder.add_local(ptr_type, None);
+                                builder.emit_borrow(dst, place.clone());
+                                final_args.push(FunctionBuilder::copy(dst));
+                                continue;
                             }
                         }
                     }
-                    final_args.push(arg);
                 }
-
-                let ret_type = ctx.fn_sigs.get(call_fn.as_str())
-                    .map(|(_, ret)| *ret)
-                    .unwrap_or(fallback_ret_type);
-
-                if ret_type == UNIT_TYPE {
-                    builder.call_void(&call_fn, final_args);
-                    return Operand::Constant(Constant::Unit);
-                }
-                let dst = ctx.call_indirect_tracked(builder, &call_fn, final_args, ret_type);
-                return FunctionBuilder::copy(dst);
+                final_args.push(arg);
             }
+
+            let ret_type = ctx.fn_sigs.get(call_fn.as_str())
+                .map(|(_, ret)| *ret)
+                .unwrap_or(fallback_ret_type);
+
+            if ret_type == UNIT_TYPE {
+                builder.call_void(&call_fn, final_args);
+                return Operand::Constant(Constant::Unit);
+            }
+            let dst = ctx.call_indirect_tracked(builder, &call_fn, final_args, ret_type);
+            return FunctionBuilder::copy(dst);
         }
         // Fallback: __callable_N for callable parameters
         let callable_name = format!("__callable_{}", place.local.0);
@@ -4563,7 +4567,7 @@ fn try_lower_option_result_combinator(
 /// when the operand is not one.
 ///
 /// A `Callable[T]` parameter's GIR local type is ERASED to unit — it resolves
-/// through neither `lookup_closure_info` (no closure struct) nor `fn_sigs` (no
+/// through neither `closure_call_fn_for_type` (no closure env struct) nor `fn_sigs` (no
 /// `FuncRef`). The declared signature survives in the `callable_return_types`
 /// sidecar, written at the six registration sites
 /// (`functions.rs:1597/1958/2314/2730`, `context.rs:3362`, `stmts/mod.rs:559`)
@@ -4620,12 +4624,10 @@ fn infer_closure_return_type(
         let local_idx = place.local.0 as usize;
         if local_idx < builder.locals.len() {
             let local_type_id = builder.locals[local_idx].type_id;
-            if let Some(type_name) = ctx.type_name_for_id(local_type_id) {
-                let type_name = type_name.to_string();
-                if let Some((call_fn, _, _)) = ctx.lookup_closure_info(&type_name) {
-                    if let Some((_, ret)) = ctx.fn_sigs.get(call_fn) {
-                        return *ret;
-                    }
+            // CARRIER #1: ask the TYPE, not its spelling.
+            if let Some(call_fn) = ctx.closure_call_fn_for_type(local_type_id) {
+                if let Some((_, ret)) = ctx.fn_sigs.get(call_fn) {
+                    return *ret;
                 }
             }
         }
@@ -5179,11 +5181,11 @@ fn hof_cross_type_result(
         Operand::Copy(p) | Operand::Move(p) => {
             let local_ty = builder.local_type(p.local);
             let base_ty = ctx.pointee_type(local_ty).unwrap_or(local_ty);
-            let ty_name = ctx.type_name_for_id(base_ty)?.to_string();
-            if !ty_name.starts_with("__Closure_") {
-                return None;
-            }
-            ctx.fn_sigs.get(format!("{ty_name}__call").as_str()).map(|(_, r)| *r)?
+            // CARRIER #1: closure-ness AND the call-body's name both come from
+            // the type's metadata — no `__Closure_` prefix test, no
+            // `format!("{ty}__call")` re-derivation.
+            let call_fn = ctx.closure_call_fn_for_type(base_ty)?;
+            ctx.fn_sigs.get(call_fn).map(|(_, r)| *r)?
         }
         _ => return None,
     };

@@ -1,7 +1,7 @@
 # The Option/Result combinator adapter must read a `Callable[T]` PARAMETER's
 # DECLARED return type. Every helper below calls a combinator whose closure
 # operand is a `Callable` PARAM — the one closure shape whose GIR local type is
-# ERASED to unit, so it resolves through neither `lookup_closure_info` nor
+# ERASED to unit, so it resolves through neither `closure_call_fn_for_type` nor
 # `fn_sigs`. Six readers of that erased fact used to fall through to a
 # hardcoded `I64_TYPE`, sizing the result slot for an `int` payload whatever
 # the callable actually returns.

@@ -1403,22 +1403,24 @@ fn lower_expr_inner(
                 // ── Case A: spawn c(args) where c is a local closure variable ──
                 if let Expr::Identifier(fn_name) = &callee.node {
                     if let Some((local_id, local_type_id)) = ctx.lookup_local(fn_name) {
-                        if let Some(type_name) = ctx.type_name_for_id(local_type_id).map(|s| s.to_string()) {
-                            if ctx.lookup_closure_info(&type_name).is_some() {
-                                let (call_fn_name, struct_type_id, captures) =
-                                    ctx.lookup_closure_info(&type_name)
-                                        .map(|(cfn, stid, caps)| {
-                                            (cfn.to_string(), stid, caps.to_vec())
-                                        })
-                                        .unwrap();
-                                let call_args_cloned: Vec<_> = call_args.iter().cloned().collect();
-                                return lower_closure_spawn(
-                                    ctx, builder,
-                                    local_id, local_type_id,
-                                    &type_name, &call_fn_name, struct_type_id,
-                                    &captures, &call_args_cloned,
-                                );
-                            }
+                        // CARRIER #1: the env struct's own TypeId is the key, so
+                        // the sidecar's stored `struct_type_id` is redundant —
+                        // `type_mapper.register_named` interns one id per name, so
+                        // `local_type_id` IS that id.
+                        let call_fn_name = ctx.closure_call_fn_for_type(local_type_id)
+                            .map(|cfn| cfn.to_string());
+                        if let Some(call_fn_name) = call_fn_name {
+                            let captures = ctx.closure_captures_for_type(local_type_id)
+                                .unwrap_or(&[]).to_vec();
+                            let type_name = ctx.type_name_for_id(local_type_id)
+                                .unwrap_or_default().to_string();
+                            let call_args_cloned: Vec<_> = call_args.iter().cloned().collect();
+                            return lower_closure_spawn(
+                                ctx, builder,
+                                local_id,
+                                &type_name, &call_fn_name, local_type_id,
+                                &captures, &call_args_cloned,
+                            );
                         }
                     }
                 }
@@ -1438,21 +1440,20 @@ fn lower_expr_inner(
                         if place.projections.is_empty() {
                             let closure_local = place.local;
                             let closure_type_id = builder.local_type(closure_local);
-                            if let Some(type_name) = ctx.type_name_for_id(closure_type_id).map(|s| s.to_string()) {
-                                if ctx.lookup_closure_info(&type_name).is_some() {
-                                    let (call_fn_name, struct_type_id, captures) =
-                                        ctx.lookup_closure_info(&type_name)
-                                            .map(|(cfn, stid, caps)| {
-                                                (cfn.to_string(), stid, caps.to_vec())
-                                            })
-                                            .unwrap();
-                                    return lower_closure_spawn(
-                                        ctx, builder,
-                                        closure_local, closure_type_id,
-                                        &type_name, &call_fn_name, struct_type_id,
-                                        &captures, &call_args_cloned,
-                                    );
-                                }
+                            // CARRIER #1 — see the sibling arm above.
+                            let call_fn_name = ctx.closure_call_fn_for_type(closure_type_id)
+                                .map(|cfn| cfn.to_string());
+                            if let Some(call_fn_name) = call_fn_name {
+                                let captures = ctx.closure_captures_for_type(closure_type_id)
+                                    .unwrap_or(&[]).to_vec();
+                                let type_name = ctx.type_name_for_id(closure_type_id)
+                                    .unwrap_or_default().to_string();
+                                return lower_closure_spawn(
+                                    ctx, builder,
+                                    closure_local,
+                                    &type_name, &call_fn_name, closure_type_id,
+                                    &captures, &call_args_cloned,
+                                );
                             }
                         }
                     }
