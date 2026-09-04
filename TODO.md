@@ -505,6 +505,58 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **✅ A1-I · PASS 4 SIGNED OFF — EXECUTOR LAUNCHED.** Folded as ADDENDUM 4 (7 fold items, all scope/errata
+  inside a sound design; streak NOT reset).
+  ✅ **THE THREE-STATE DEMONSTRATION HOLDS, REBUILT FROM A TYPED SOURCE** (not a name re-derivation):
+  pristine **`7028`** / carrier **`7063`** / const-hoist evasion **`7028`** — with the textual ratchet
+  reading **19 in BOTH the correct and broken states** and `--test lints` **220/0/1 in all three.**
+  ⇒ **ONLY THE STDOUT FIXTURE DISCRIMINATES. READINESS 4 CLOSED.**
+  ⚠ **AND AN ACCIDENT NOT TO LEAN ON:** with a *minimal* carrier the evasion **failed to build** on
+  `-D dead-code` — **that backstop EVAPORATES the moment the field has a second reader, and the real change
+  will have several.**
+  ⛔ **THE WORK-LIST WAS 5 ROWS SHORT — `|changed| = 29`, not 24.** A total `__call`-derivation sweep returns
+  **11**; the brief named **5**. ⚡ **`lir/lower/mod.rs:373` and `llvm/mod.rs:346` are GENUINELY ORPHANED — an
+  executor working row-by-row would MISS them.** ⚠ **Two rows are TRAPS:** `ir/lowering/mod.rs:5196` asserts
+  the **MINT's OUTPUT**, not a decision — **it stays**; and **`optimize.rs:218` is a DCE ROOT-SET SEED** —
+  narrowing it **removes user `call*` methods from the root set**, with **vtable-dispatched
+  `equip X with Trait:` the exposed shape**, pinned by the `traitequip` cell.
+  ⭐⭐ **THE SELF-HOST IS THE CORRECT COMPILER HERE AND RUST gg IS THE BROKEN ONE.** All **TEN** shapes
+  compile + run + **MATCH** on the SH lane **today**, including the **six Rust gets wrong** ⇒ **owner
+  2026-08-10 satisfied BY MEASUREMENT, and NO PORT is owed for the miscompile.** **This is the
+  succession-plan case: file "reference lags the self-host", fix Rust as ORACLE HYGIENE.**
+  ⛔ **AND THE CORPUS MECHANICS ARE A TRAP:** `runtime_parity_corpus` **auto-scans top-level fixtures and
+  ORACLES AGAINST RUST**, so **the five silently-wrong cells score `WrongOutput` the moment they land —
+  own non-MATCH inflow, which Core #9 ⊕ FORBIDS.** ⇒ **FIXTURE AND FIX IN ONE COMMIT.** ⊕ **`runtime_diff`
+  can NEVER be the guard — it blesses whatever Rust prints.**
+  ⭐ **AN EIGHTH BLIND SPOT, AND IT IS A2's:** the census's MAPKEY regex covers **19 of 243** string-keyed
+  accessors — **`lookup` alone is 125 and entirely invisible**, hiding **5 production closure-identity
+  decisions** (all literal `GorgetClosure` ⇒ C3 ⇒ **A2's bucket**). **A1-I's work-list is unaffected; the
+  totality caveat must NAME it beside C7.**
+  ⊕ **`traitequip` has NO ggdef axis** (trait items are out of the phase-0 subset) — its oracle is the SH
+  lane plus the non-trait twin. ⊕ **`varonly` re-confirmed ACCIDENTALLY CORRECT** — a labelled scope
+  control, never evidence.
+
+- **⚡ A1-M · SECOND FOLD LANDED (`c8461014b`) — SCOPED CONFIRMING REVIEW LAUNCHED (records only; NO `src/`
+  change in this fold).**
+  ⭐⭐ **THE MECHANICAL CAUSE OF THE FALSIFIED CONTROL, FOUND BY THE EXECUTOR: its `String` control used a
+  24-CHARACTER LITERAL, which never leaves the small-string buffer and ALLOCATES NOTHING.**
+  ⚡ **"A CONTROL THAT CANNOT ALLOCATE CANNOT ACQUIT ANYTHING"** — the same lesson `t0948`'s own repro carries
+  about closures needing to **capture**. **The transferable rule is now stated where the next person reads
+  it: a `String` control for a leak claim must be HEAP-FORCED, exactly as a closure control must CAPTURE.**
+  ⭐ **BOTH falsified controls now stand, labelled `CORRECTION 1` and `CORRECTION 2`, each with its measured
+  rows beneath** — *"hiding either version would have deleted the one thing that makes the third version
+  trustworthy."*
+  ⊕ **`t0972` re-scoped as GENERAL and its fixture RENAMED** `..._callable_binding_...` → `..._payload_...`
+  **and widened to carry BOTH payload types, so it cannot drift back** (Core #12 — the name was making the
+  wrong claim). ⊕ **`t0971`'s mechanism SURVIVES and its discriminator was verified off the emitted C**
+  (`Option__Option__GorgetString__drop` = **3**: declared, defined, **called**; the `Callable` spelling =
+  **0**), with its repro moved to the **NO-MATCH** form.
+  ⊕ **`DONE.md` now says "five behaviourally pinned, the sixth by the arm-count lint"** — ⭐ **and records
+  that THE PEEL in that helper IS LOAD-BEARING** (remove it and `Some(Some(<lit>))` is rc 139 again),
+  **which is what stops a future reader deleting a call that looks dead.**
+  ⚠ **The executor's third flag about the handover's `t0938`/`t0873(a)` claims is ITSELF STALE** — corrected
+  at `522a89bd9`; its branch predates that commit.
+
 - **⛔ A1-M · CONFIRMING OUTPUT-REVIEW: THE CODE IS SIGNED OFF; 2 BLOCKING, BOTH IN THE RECORDS.** All three
   mandatory gates PASS. Returned to the executor; **not integrated, and the LEAK ASK DOES NOT GO TO THE
   OWNER YET.**
