@@ -683,6 +683,19 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐ **THIRD INDEPENDENT COUNT OF L's CORPUS DELTA (orchestrator, raw `git diff --name-status`) — THE
+CONCLUSION HOLDS, AN INTERMEDIATE STEP DID NOT.** Measured from L's tip against its merge base:
+**top-level ADDED 11 · top-level DELETED 0 · `known_gaps/` deleted 4** (the graduations). And
+`runtime_parity_corpus` is a **non-recursive `read_dir` filtered to `is_file()` + `.gg`**, so **`known_gaps/`
+was NEVER enrolled** — those 4 deletions remove nothing from the corpus.
+⇒ **Net corpus effect is +11 enrolled rows, not +8** — the relayed claim's *"and deletes 3"* is **wrong**.
+⇒ ⭐ **The +3 non-MATCH conclusion SURVIVES, by different arithmetic:** `non_excluded` +11, `matched` +8 (if
+8 of the 11 MATCH), so `non_match` = 11 − 8 = **+3**.
+⚡⚡ **AND THAT IS WORTH FLAGGING RATHER THAN QUIETLY AGREEING: A CONCLUSION THAT SURVIVES A WRONG INTERMEDIATE
+IS FRAGILE — the next person to re-derive it FROM THE STATED STEPS gets a different answer.** ⇒ **the 8/3
+MATCH split is now the only load-bearing input, and a raw file count cannot supply it.** Handed to L's live
+reviewer with the correction, and asked to report plainly if its own count differs from 11/0/4.
+
 ⭐⭐⭐ **S-a2 EXECUTOR COMPLETE (`55323d628`) — AND FOUR OF MY FIVE "FILE IT" DIRECTIVES WERE ALREADY FILED.**
 `t0873(a)` (durable repro, sequenced behind `t0406`) · **`t0771` — CRITICAL, filed 2026-08-29, whose repro is
 my cell's mechanism VERBATIM** · `t0939` · `t0401` (HIGH). ⚡⚡ **THREE REVIEW PASSES AND I EACH SAID "FILE IT"
