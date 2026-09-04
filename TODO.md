@@ -209,7 +209,20 @@ It governs `vector_hof_result_element_sizing` and carries the measured discrimin
 accumulator correctly; a closure LITERAL does not) plus why its sibling `vector_hof_result_element_drop`
 correctly has NO row. **No sweep recovers it — a sweep reports that a fixture leaks, not that an ask was
 formulated.** Locate: `git show "0d9f9cebe:tests/sanitize/LEAK_ALLOWLIST.txt" | grep -n '^# ⚖ ADMITTED ('`.
-⚖⚠ **PROVENANCE — CORRECTED 2026-09-04, AND I HAD BEEN OVERSTATING IT.** I have been writing *"OWNER RULING,
+⛔⛔ **THIS IS NOW A REAL OWNER ASK AND THE ROUND HOLDS §2 FOR IT.** `tests/sanitize/LEAK_ALLOWLIST.txt`'s
+**own OWNER-ATTRIBUTED header** says: *"A row whose leak is genuinely NEW INFLOW remains an OWNER ASK, and a
+row with no `⚖ ADMITTED` block remains outside both rulings."* **A decide-by-analogy CONTRADICTS a rule the
+file records as owner-sourced** — and N2 reasoned to exactly that conclusion and DECLINED to assert otherwise.
+⭐ **THREE WAYS TO RESOLVE, and only the owner can pick:** (a) a one-line owner ruling admitting the row;
+(b) amend the header to permit extension-by-analogy under standing autonomy; (c) argue the GRADUATION clause
+covers it — **which N2 measured and explicitly declined**, so it is the weakest.
+⊕ **Everything else in INT-B is executable meanwhile; only §2's block TEXT is held.**
+⊕ **When the ruling lands, the exemplar exists** — a block headed `⚖⚖ OWNER RULING (date), recorded verbatim:`
+(`grep -n 'recorded verbatim' tests/sanitize/LEAK_ALLOWLIST.txt`). ⚠ **I claimed no block quotes the owner
+verbatim; that was FALSE, and it was itself A SELECTION PRESENTED AS AN ENUMERATION inside the paragraph
+correcting that very defect** — two blocks examined, ten concluded about.
+
+⚖⚠ **Superseded provenance note — CORRECTED 2026-09-04, AND I HAD BEEN OVERSTATING IT.** I have been writing *"OWNER RULING,
 APPLY IT"* for this row. **THE OWNER NEVER RULED ON IT.** The owner ruled on **L's** rows (*"land L and admit
 the rows… I would like the row admission to be temporary"*, and later *"the ruling still holds at 5-of-8"*).
 **For THIS row the orchestrator decided, under the standing autonomy directive, BY ANALOGY to that ruling** —
