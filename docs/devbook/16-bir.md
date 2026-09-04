@@ -285,6 +285,20 @@ call-site count and the sink every borrowed-element-pointer read reaches. A new
 expander that pushes the borrow into a plain `gorget_array_push` changes the
 pinned multiset and fails there.
 
+That ratchet is a stopgap with a known reach, and it is worth knowing which,
+because the same file's next expander is where the class recurs. It reads one
+file as text and sees a borrow only where the source spells a field access —
+through any receiver name, which is the load-bearing part, since anchoring on
+one name meant a sibling that bound the scaffold differently walked straight
+through. A struct pattern rebinds the field under a bare name that no field
+access exists for, so the context structs' brace-form is pinned separately. What
+neither clause reaches is a pointer threaded out of a helper's return or carried
+in a tuple; nothing structural stops that, because the BIR has no typed borrow
+tag — `Inst::CallExtern` and `Inst::CallClosure` both take a bare `Vec<ValueId>`,
+and the instruction stream cannot tell a borrow from any other pointer. A
+validator carrying that provenance is the reference-grade shape, and adding the
+tag is the work it waits on.
+
 ### Appending synthesized functions
 
 After all functions are expanded, `lower_lir_to_bir` splices the synthesis pool's

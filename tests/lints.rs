@@ -3140,20 +3140,45 @@ fn consuming_position_name_match_is_gir_gated() {
 /// would clone twice. The roles are three, not two, and the sink is what tells
 /// them apart — which is exactly what this ratchet reads.
 ///
-/// The pinned multiset is the whole guard: a NEW expander pushing a borrowed
-/// element into `gorget_array_push`, or a second raw `Inst::Store` of one,
-/// changes the multiset and fails here even though every existing site is
+/// The pinned multiset is the core of the guard: a NEW expander pushing a
+/// borrowed element into `gorget_array_push`, or a second raw `Inst::Store` of
+/// one, changes the multiset and fails here even though every existing site is
 /// untouched.
+///
+/// **WHAT IT REACHES, AND WHAT IT DOES NOT.** Stated precisely, because the
+/// decision this guard informs is whether the reference-grade instrument
+/// (`todo/t1090`) is still owed — and an overstated claim here is what would
+/// retire that item early.
+///
+/// It sees a borrowed-element pointer read as a FIELD ACCESS, through any
+/// receiver name, anywhere in the file, and it fails CLOSED: a read whose sink
+/// it cannot identify is a violation, not an exemption. It separately pins the
+/// context structs' brace-form, so a struct pattern that would rebind the field
+/// under a bare name has to be argued for.
+///
+/// It does NOT see a value that reaches a consuming position without either
+/// spelling — threaded out of a helper's return, carried in a tuple, or passed
+/// through a `Vec<ValueId>` built somewhere else. It is one file, read as text.
+/// Nothing structural stops those, which is the whole content of `todo/t1090`:
+/// the BIR carries no typed borrow tag, so `Inst::CallExtern` and
+/// `Inst::CallClosure` both take a bare `Vec<ValueId>` and the instruction
+/// stream cannot tell a borrow from any other pointer.
+///
+/// It also reads SINKS, not behaviour. A mutation that keeps the sink spelling
+/// and corrupts the arguments passes here by design — the fixtures are the
+/// layer that catches that, and they do (measured).
 ///
 /// **If this fails:**
 ///   - NON-CLONING sink → route the push through `gorget_array_push_cloned` /
 ///     `gorget_map_put_cloned`, or clone at the destination with
 ///     `gorget_array_clone_elem_inplace`.
 ///   - no identifiable sink → the instruction literal was reshaped (a hoisted
-///     `format!` name, a helper call). Give the sink a literal spelling this can
-///     see, or the guard silently stops covering that site.
+///     `format!` name, `name:` written below `args:`, a helper call). Give the
+///     sink a literal spelling above the read, or the guard stops covering it.
 ///   - multiset changed → a site was added or removed. Confirm the new one
 ///     clones, then re-pin with a justification.
+///   - context-struct brace sites changed → most likely a destructure; read the
+///     field through the binding instead.
 ///   - `gorget_array_adopt_hooks` count changed → see the assertion's own note:
 ///     it is sound ONLY where the result element type equals the source's.
 ///
@@ -3196,11 +3221,22 @@ fn hof_borrowed_elem_ptr_sinks_are_cloning() {
         .map(|l| l.split("//").next().unwrap_or(""))
         .collect();
 
-    // A READ is `ctx.<field>` (optionally through the Dict branch's
-    // `legacy`/`dense`). The struct declarations and the constructor binds
-    // spell the field as `<field>:` with no `ctx.` prefix, so they do not match.
+    // A READ is a FIELD ACCESS of one of those names — `<anything>.<field>`,
+    // optionally through the Dict branch's `legacy`/`dense`. The struct
+    // declarations and the constructor binds spell the field as `<field>:` or
+    // as shorthand `<field>,` with no leading `.`, so they do not match.
+    //
+    // ⚠ THE RECEIVER IS DELIBERATELY NOT PART OF THE PATTERN. It used to be
+    // anchored on `ctx.`, which every existing expander happens to bind — so a
+    // new sibling expander binding the same scaffold as `scaffold` or
+    // `loop_ctx` handed the borrow to `gorget_array_push` with this guard
+    // GREEN. Measured, compiling, and exactly the class this exists for.
+    // Dropping the receiver is free: both spellings census 33 lines at the
+    // fixed state, so it buys the whole family of binding names for no false
+    // positives (regenerate with
+    // `grep -cE '\.(legacy\.|dense\.)?(elem_ptr|key_ptr|val_ptr|elem_arg|key_arg|val_arg)\b' src/bir/lower.rs`).
     let read_re = regex::Regex::new(&format!(
-        r"ctx\.(?:legacy\.|dense\.)?({})\b",
+        r"\.(?:legacy\.|dense\.)?({})\b",
         BORROW_FIELDS.join("|")
     ))
     .unwrap();
@@ -3320,6 +3356,35 @@ fn hof_borrowed_elem_ptr_sinks_are_cloning() {
              `expand_map` / `expand_flat_map` the result element type differs \
              and adopting the source's drop/clone/materialize hooks is a \
              miscompile."
+        ));
+    }
+
+    // A FIELD ACCESS is the only spelling the scan above can see. A struct
+    // PATTERN rebinds the same pointer under a bare name —
+    // `let HofLoopCtx { elem_ptr, .. } = &ctx;` — and from there it reaches a
+    // consuming position with no `.elem_ptr` anywhere in the file. That was
+    // measured GREEN against the first version of this guard, on a compiling
+    // mutant that is exactly the class.
+    //
+    // There is no text pattern for "this bare identifier is a borrow", so the
+    // guard closes the hole from the other side: it pins every occurrence of
+    // the three context structs' brace-form. The nine at the fixed state are
+    // three declarations, one return type and five constructions — all benign.
+    // A tenth is either a new construction or a destructure, and both deserve
+    // the audit this failure forces.
+    const CTX_STRUCT_BRACE_SITES: usize = 9;
+    let ctx_struct_re =
+        regex::Regex::new(r"\b(?:HofLoopCtx|DictHofLoopBranch|SetHofLoopBranch)\s*\{").unwrap();
+    let ctx_struct_sites = lines.iter().filter(|l| ctx_struct_re.is_match(l)).count();
+    if ctx_struct_sites != CTX_STRUCT_BRACE_SITES {
+        problems.push(format!(
+            "context-struct brace sites: {ctx_struct_sites} vs pinned \
+             {CTX_STRUCT_BRACE_SITES}. If this is a DESTRUCTURE \
+             (`let HofLoopCtx {{ elem_ptr, .. }} = …`), do not add it: it \
+             rebinds a pointer into the source collection's buffer under a bare \
+             name, which the field-access scan above cannot see. Read the field \
+             through the binding instead. If it is a new construction or \
+             declaration, re-pin with a justification."
         ));
     }
 

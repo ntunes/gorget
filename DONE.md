@@ -28,13 +28,30 @@
   than re-implementing it inside a Rust string literal in the emitter.
   **THE GUARD (Core #6).** `tests/lints.rs::hof_borrowed_elem_ptr_sinks_are_cloning` pins the SINK of
   every read of a borrowed collection-element pointer in `bir/lower.rs` — 33 read lines across six
-  fields and three structs, as a keyed multiset, plus the `adopt_hooks` call-site count. Measured RED on
-  eight mutants that all COMPILE, including a new sibling expander pushing the borrow into
-  `gorget_array_push` (it catches its own class), a `format!`-hoisted sink name, and `adopt_hooks`
-  misused at `expand_map`. A role-separated newtype was built and rejected: it hides the field
-  (`E0616`) and the defect walks straight through the free accessor, and a `clone_into_owned()`-only
-  route would DOUBLE-CLONE at four of the seven consuming sites, because `gorget_map_put_cloned` calls
-  `gorget_map_put` and then deep-clones in place.
+  fields and three structs, as a keyed multiset — plus the `adopt_hooks` call-site count and the
+  context-struct brace-form count. It fails CLOSED: a read whose sink it cannot identify is a
+  violation, not an exemption. RED on **eleven mutants that all COMPILE**: both reverts, a new sibling
+  expander pushing `ctx.elem_ptr` and one pushing `ctx.elem_arg`, a `format!`-hoisted sink name, a
+  `name:` written below `args:`, a raw `Inst::Store`, a backward-scan mis-attribution, `adopt_hooks`
+  misused at `expand_map`, a sibling that binds the scaffold as `scaffold`, and one that DESTRUCTURES
+  it. A role-separated newtype was built and rejected: it hides the field (`E0616`) and the defect
+  walks straight through the free accessor, and a `clone_into_owned()`-only route would DOUBLE-CLONE at
+  four of the seven consuming sites, because `gorget_map_put_cloned` calls `gorget_map_put` and then
+  deep-clones in place.
+  ⛔ **AND THE GUARD IS NOT SUFFICIENT — the first version of this entry said it was, on a mutant set
+  built in the guard's own image.** A fresh output-review invented two probes the executor had not
+  shown it and **both were GREEN on compiling code that was exactly the class**: the read pattern was
+  anchored on the receiver name `ctx.`, which every existing expander happens to bind, so a sibling
+  binding it as `scaffold` — or destructuring it — walked straight through. Dropping the receiver from
+  the pattern censuses the identical 33 lines and buys the whole family of binding names for no false
+  positives; the destructure is closed from the other side, by pinning the context structs' brace-form.
+  Both are now RED. What remains open is real and is `t1090`'s content: it reads ONE FILE as TEXT and
+  sees a borrow only where the source spells a field access. ⚡ **A guard measured only against probes
+  its own author designed has been measured for consistency, not for coverage.**
+  **AND IT READS SINKS, NOT BEHAVIOUR — the fixtures are the other half.** A twelfth mutant keeps the
+  sink spelling and corrupts the arguments (`vec![pay_ptr, pay_ptr]`): guard GREEN, **8 of 18 fixture
+  cells RED** at rc 134/139 with stack-buffer-overflow and SEGV. The layered defence is measured, not
+  assumed.
   **TOTALITY, while in the file.** `bir/lower.rs`'s `HofOp` dispatch traded its `_ =>` for the three
   variants it was hiding. Measured both directions: explicit arms + a new variant → `E0004`; the
   wildcard + the same variant → rc 0 with zero warnings, because `HofOp` is `pub`.

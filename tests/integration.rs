@@ -4966,9 +4966,16 @@ fn closure_forelse_freevar_outer_local() {
 // OMITTED CELLS, each with its blocker — a selection cannot show you what it
 // leaves out, so they are named rather than left to inference:
 //   - `match v.find(…): case Some(s):`. Correct output, but the unnamed temp in
-//     scrutinee position leaks its payload (`todo/t0705`, measured identical on
-//     a no-higher-order control). Pinning it would wire a still-invalid program
-//     as good. The `if … is Some(x)` and bound-local spellings ARE pinned.
+//     scrutinee position leaks its payload (`todo/t0705`). Pinning it would wire
+//     a still-invalid program as good. The `if … is Some(x)` and bound-local
+//     spellings ARE pinned. The evidence that it is `t0705` and not this
+//     track's clone is the BIND-FIRST control at the SAME allocation site:
+//     `Option[String] r = v.find(…)` then `match r:` allocates its payload
+//     through the same `gorget_array_clone_elem_inplace` and leaks NOTHING
+//     beyond the closure baseline, while the temp spelling leaks 5 bytes from
+//     that helper. Only the scrutinee spelling differs. (A no-higher-order
+//     control leaks the same 5 bytes from `gorget_str_cat` — a matching byte
+//     count at a DIFFERENT allocation site, which is a symptom, not evidence.)
 //   - `Vector[Callable[…]]` on any higher-order method — a different defect
 //     (element WIDTH, `todo/t1086`), and its deep channel is blocked by
 //     `E_NotAFunction` on calling the found value.
@@ -4981,11 +4988,17 @@ fn closure_forelse_freevar_outer_local() {
 //     do not enter the runtime-parity corpus before it runs these shapes.
 //   - ggdef: `v.find(…) is Some(s)` is outside the phase-0 subset, so the
 //     definition returns no verdict on any of these cells.
+//   - `find_index` on `Vector[String]` — an omitted cell, NOT an acquittal. It
+//     does not compile, at this track's base or after it, in either spelling:
+//     `incompatible types when assigning to type '__gg_Option__int64_t' from
+//     type 'int64_t'`, the protocol-vs-equip return disagreement filed as
+//     `todo/t0068`. So it was never measured through to a run. Its payload
+//     SHOULD be a scalar with no clone hook, which would put it outside this
+//     class — but that is a reading of the code, not a measurement, and the two
+//     are not interchangeable. Unchanged by this track.
 //
-// `find_index`, `any` and `all` are NOT omissions — they are structurally
-// outside the class and were measured so. `find_index` yields `Option[int]`,
-// whose payload is a scalar with no clone hook; `any`/`all` yield `bool` and let
-// no element escape at all.
+// `any` and `all` are NOT omissions — they were measured through to a run and
+// are genuinely outside the class: both yield `bool` and let no element escape.
 
 #[test]
 fn vector_string_find_double_free() {
