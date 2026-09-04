@@ -572,6 +572,47 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   `t0988` (⭐ **corrected THREE times this round by F and its axis is FINALLY right — unusually
   well-prepared, cheap leverage**).
 
+- **✅ A1-I · INTEGRATED — `935863366`, the SEVENTH landing.** Files `t1052`/`t1054`/`t1055`; re-scopes
+  `t0681`; enriches `t0774` instead of filing a duplicate. Gates bare: build 0 · `--lib` 1185/0 ·
+  `--test lints` **224/0**. ⭐ **It deletes ONE OF THE FIVE name-keyed sidecars** — the only one this round
+  could reach; `fn_sigs` (238 refs) · `fn_param_abis` (52) · `fn_param_ownerships` (44) ·
+  `callable_alias_sigs` (7) **survive and are A2's root.**
+  ⛔ **AND ITS REVIEW CAUGHT CONFLICT MARKERS I HAD COMMITTED** into `TODO.md`'s generated index at
+  `ef171a34a` (Track F's integration). **`t1066` filed for the class:** planting `<<<<<<< HEAD` leaves
+  `--test lints` **GREEN**, and **no lint, script or CI step looks for markers in ANY file type.** ⚠ **In
+  `.rs` a marker fails the build loudly; in `.md`/`.tsv`/`.txt`/`.db` it is SILENT** — and `MANIFEST.tsv`,
+  `LEAK_ALLOWLIST.txt`, `CORPUS_MANIFEST.txt` and `figures.db` were **all conflict-prone this round and are
+  all parsed leniently.**
+  ⚡ **SECOND LIVE INSTANCE OF THE SAME SIGNAL, same session:** the index generator printed
+  **`OK — 844 item(s), 841 pointer(s)`** — a 3-row mismatch **next to the word OK** — and a second pass gave
+  844/844. **That is `t1066`'s second half: make the generator FAIL rather than skip.**
+
+- **⭐ N · SCOUT RETURNED — THE WRITE SITE IS FOUND AND `find` IS NOT ALONE. Brief written; pass 1 launched.**
+  **`bir/lower.rs:1946` `Memcpy`s a BORROWED element pointer into an OWNED, DROPPABLE `Option[T]` payload**
+  — Core #3, the ownership tag mis-typed **at the value's birth**; ASan names the alloc/free/free triple.
+  ⭐⭐ **THE REFERENCE-GRADE SHAPE ALREADY EXISTS TWO METHODS OVER:** `v.get(0)` yields
+  **`Option[Ref[T]]`** — bare `void*` payload, **NO drop emitted**, consumer clones at the read. **The tree
+  already distinguishes owned from view; `expand_find` DECLARES ONE AND FILLS IT LIKE THE OTHER.**
+  ⛔ **SIBLING CLASS, witnessed by a REPO-INTERNAL CONTRAST:** Dict/Set expanders use `_new_like` +
+  `put_cloned` and are clean; the Vector ones use `gorget_array_new` + a bare push. ⭐ **There is NO
+  `gorget_array_new_like` while `MapNewLike` and `SetNewLike` BOTH EXIST — that asymmetry IS the class**
+  (the result array is minted with `elem_drop`/`elem_clone`/`elem_materialize` **all NULL**, Layering
+  rule 1). ⛔ **`expand_filter`'s local cleanliness is ACCIDENTAL — the ESCAPE shape is a measured
+  heap-use-after-free on BOTH backends**, and **the self-host gets it right.**
+  ⛔ **`t0988` IS STILL WRONG IN EIGHT WAYS.** The worst: **on LLVM, five cells C REJECTS build — and one
+  PRINTS A RAW POINTER at rc 0 with `gg check` clean.** That is **severity #2, ABOVE the leak the item
+  trades against, recorded as a benign build failure.** ⊕ **The typechecker is RIGHT — the disagreement is
+  introduced AFTER typecheck, in lowering** (Layering rule 4). ⊕ **The `int` cell is ACCIDENTALLY CORRECT
+  TWICE — the FOURTH instance of the failure mode behind this item's three earlier wrong discriminators.**
+  ✅ **AND ITS "no green control exists" IS REFUTED:** `v.get(0)` is green **for the right reason**,
+  closure-free so `t0953` cannot touch it. **The true, narrower claim is that no CLOSURE-TAKING cell can be
+  ASan-gated while `t0953` is live** — a scheduling constraint on the assertion, not an absence of controls.
+  ⛔ **ggdef CANNOT ADJUDICATE** (`.find()`/`.filter()` outside phase-0) ⇒ **a subset gap is owed**, and
+  Core #13's *"ask ggdef first"* returns NO-VERDICT.
+  ⚡ **GUARD: make the misuse FAIL TO COMPILE** — newtype `BorrowedElemPtr` with a private field, so
+  `src_ptr: ctx.elem_ptr` **stops compiling** at exactly **5 consumer sites**. **A textual ratchet is the
+  wrong instrument here; one was evaded by a `const` hoist this round.**
+
 - **📋 R49 ROUND-CLOSE CHECKLIST — STAGED NOW so it runs MECHANICALLY, not from memory.** ⛔ **Every leg
   AFTER A1-I integrates**, on the integration branch, **every rc read off the BARE command.**
   1. `scripts/convergence.sh` — **FIRST, before the sweeps** (owner 2026-08-06: a fail means fix or ask
