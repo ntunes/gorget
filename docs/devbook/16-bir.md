@@ -239,6 +239,52 @@ caller-supplied `closure_arg_abis` and `closure_ret_ty` carried on the
 `HofExpand`. The body never inspects closure env layout — this is the
 opaque-closure invariant (below).
 
+#### The element pointer is a borrow, and the destination owns
+
+`HofLoopCtx` hands each expander `elem_ptr` — a raw pointer **into the source
+collection's buffer**. Every loop-family expander reads it, and the reads fall
+into three roles that look identical at the instruction level and are not:
+
+- **The closure argument.** `Inst::CallClosure` passes the pointer to user code
+  that only reads through it. Nothing is transferred and nothing is cloned.
+- **A consuming position that clones for you.** `Dict.filter` and `Set.filter`
+  hand the borrow to `gorget_map_put_cloned`, which inserts and *then* deep-clones
+  in place. Cloning before the call would clone twice.
+- **A consuming position that does not.** `filter`'s array push and `find`'s
+  `Option` payload write take ownership of what they are given. Handing them the
+  raw borrow makes the result alias the source's buffer, and both free it.
+
+The third role is the whole reason this section exists, and it is a producer-side
+obligation (Core #3, "register ownership at the value's birth"): the expander
+that materializes the destination is the layer that knows the value is a borrow,
+so it is the layer that clones. Two runtime helpers carry that out, and both work
+through hooks **already resolved when the source collection was built** — a
+resolved abstraction written through, not re-derived:
+
+- `filter` builds its result with `gorget_array_new(elem_size)` and then
+  `gorget_array_adopt_hooks(result, source)`, copying the source's
+  `elem_drop`/`elem_clone`/`elem_materialize` triple onto it. That call is emitted
+  into the *current* block, before the loop — the pushes inside the loop need the
+  hooks already in place. Each matching element then goes in through
+  `gorget_array_push_cloned`, which clones through `elem_clone` rather than
+  materializing through `elem_materialize`: materialize is a no-op on an
+  already-owned element and would leave the copy aliasing the source, while
+  running both would allocate twice and leak the materialized copy.
+- `find` memcpys the element into the `Option`'s payload slot and immediately
+  calls `gorget_array_clone_elem_inplace(source, payload)`, the same clone through
+  the same hook for a destination that is not an array. Its scalar sibling — a
+  plain `Inst::Store` — is correct without a clone, but only because a scalar
+  carries no hook at all.
+
+Adopting the source's hooks is sound **only where the result element type equals
+the source's**. `filter` keeps elements unchanged, so it is; `map` and `flat_map`
+produce a different element type, and giving their result the source's wiring
+would be a miscompile. That is a property of the call site, not of the helper, so
+`tests/lints.rs::hof_borrowed_elem_ptr_sinks_are_cloning` pins both the adopt
+call-site count and the sink every borrowed-element-pointer read reaches. A new
+expander that pushes the borrow into a plain `gorget_array_push` changes the
+pinned multiset and fails there.
+
 ### Appending synthesized functions
 
 After all functions are expanded, `lower_lir_to_bir` splices the synthesis pool's

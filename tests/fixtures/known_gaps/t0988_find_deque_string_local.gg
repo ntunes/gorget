@@ -1,0 +1,22 @@
+# `Deque[String].find` with the result bound to a local `Option[String]` and
+# then pattern-matched — the collection-kind sibling of
+# `t0988_find_vector_string_local.gg`.
+#
+# The RESULT-BINDING shape is load-bearing and is spelled out rather than
+# named: the inline `if v.find(…) is Some(x):` spelling of this same program
+# does not reach the runtime at all on a Deque, so writing it that way would
+# pin a build failure instead of the ownership behaviour.
+from std.iter import Iterable
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Deque[String] v = Deque[String]()
+    v.push(mk("aa", "bc"))
+    v.push(mk("dd", "efg"))
+    Option[String] r = v.find((s): s.len() == 4)
+    if r is Some(x):
+        print(x)
+    else:
+        print("none")

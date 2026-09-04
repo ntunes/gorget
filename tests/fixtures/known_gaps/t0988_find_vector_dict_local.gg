@@ -1,0 +1,17 @@
+# `Vector[Dict[String, int]].find` — the `find` half of the collection-valued
+# element axis covered for `filter` by `t0988_filter_vector_dict_escape.gg`.
+# Its no-HOF control is `t0988_vector_dict_no_hof_control.gg`.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[Dict[String, int]] v = Vector[Dict[String, int]]()
+    Dict[String, int] d1 = Dict[String, int]()
+    d1.put(mk("aa", "bc"), 1)
+    v.push(d1)
+    Option[Dict[String, int]] r = v.find((d): d.len() == 1)
+    if r is Some(x):
+        for k in x.keys():
+            print(k)
+    else:
+        print("none")

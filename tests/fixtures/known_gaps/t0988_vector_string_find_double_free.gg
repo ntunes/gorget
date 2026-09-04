@@ -1,17 +1,15 @@
-# KNOWN GAP todo/t0988 — `Vector[String].find(<pred>)` DOUBLE-FREES.
+# `Vector[String].find(<pred>)` with the result matched inline.
+#
+# The `Option` the search returns owns and drops its payload, so `find` must put
+# an independent copy of the matched element in it — not a pointer into the
+# array's buffer, which the array frees too.
 #
 # Elements are heap-forced through `mk` on purpose: with string literals the
-# defect can hide behind static storage. `from std.iter import Iterable` is
+# behaviour can hide behind static storage. `from std.iter import Iterable` is
 # stated explicitly because the import is a live axis on this grid — without it
-# the program dies at LINK time instead, on an unrelated defect (todo/t0987),
-# and the crash is masked rather than absent.
-#
-# Intended: prints `abc`, rc 0, ASan-clean, on both backends.
-# At HEAD: rc 134, `free(): double free detected in tcache 2`.
-#
-# ⚠ The `match v.find(…): case Some(s):` spelling of this same program builds
-# and prints `abc` at rc 0 — but leaks 8 bytes at `__gorget_closure_env_alloc`
-# (todo/t0953), so it is NOT a green control and is deliberately not wired.
+# this spelling is rejected at BIR VALIDATION, before any C is emitted and
+# before any link, on an unrelated defect (todo/t0987) that masks what the cell
+# is for.
 from std.iter import Iterable
 
 String mk(String a, String b):

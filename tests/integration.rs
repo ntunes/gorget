@@ -4916,25 +4916,233 @@ fn closure_forelse_freevar_outer_local() {
     run_gg("known_gaps/closure_forelse_freevar_outer_local.gg", "99");
 }
 
-// KNOWN GAP todo/t0988 (filed R49 Track F) — `Vector[String].find(<pred>)`
-// double-frees. `gg check` is clean, the program builds, and it dies at rc 134
-// with `free(): double free detected in tcache 2` on BOTH backends.
+// ── `find` / `filter` put an OWNED element in an OWNING destination ────────
 //
-// Heap-forced elements and an explicit `from std.iter import Iterable` are both
-// load-bearing: the import is a live axis on this defect's grid, and without it
-// the program dies at LINK time on an unrelated defect (todo/t0987) that MASKS
-// the crash. Three earlier versions of the filing each named a wrong
-// discriminator for exactly this reason.
+// The HOF expanders that build a result from source elements — `find`, which
+// fills an `Option[T]` payload, and `filter`, which fills a fresh array — hand
+// their destination a value the destination will drop. That value must be the
+// destination's OWN, cloned through the source's per-element hook. A pointer
+// into the source collection's buffer instead makes both sides free the same
+// memory: `find` dies at rc 134 `free(): double free detected in tcache 2`, and
+// `filter` reads a freed `Str` header and writes its bytes to stdout — rc 0,
+// `gg check` clean, no diagnostic, a heap pointer's low bytes on the terminal.
 //
-// ⚠ There is no green control to pair with this. The one shape that survives to
-// rc 0 — `match v.find(…): case Some(s):` — prints `abc` but leaks 8 bytes at
-// `__gorget_closure_env_alloc` (todo/t0953), so wiring it would pin an invalid
-// program as good.
+// ⚠ These tests are LIVE (not `#[ignore]`d) but their fixtures live in
+// `known_gaps/` for PLACEMENT reasons only: `runtime_parity_corpus` auto-scans
+// top-level `tests/fixtures/*.gg`, so a top-level row would be own-round
+// non-MATCH inflow against `RUNTIME_DIFF_NONMATCH_CEILING` — forbidden by
+// Core #9 ⊕. Same precedent as `cow_loop_bare_param_tuple_assign` and the
+// `meta_const_array_size_*` group. Promote when the self-host lane runs these
+// shapes.
+//
+// AXES COVERED, and why each cell is here:
+//   ELEMENT TYPE — the clone hook differs per value, so one value is an
+//     anecdote: scalar (no hook) · String (a runtime primitive) · user struct
+//     (a synthesized `T__clone_inplace`) · `Option[String]` (an enum payload) ·
+//     `Vector[String]` (a deep recursive clone) · `Dict[String, int]` (a
+//     runtime collection clone).
+//   COLLECTION KIND — Vector and Deque share one expander.
+//   SOURCE LIVENESS — result escaping its producer vs. source still alive.
+//   ELEMENT PROVENANCE — heap-forced vs. static literal.
+//   RESULT CONSUMPTION — read through the payload vs. bound and never read.
+//
+// ⚠ OBSERVE THROUGH THE PAYLOAD. `.len()` on the result is correct but blind:
+// it never touches an element, so a cell read that way is green for a reason
+// unrelated to what it tests. `Deque[T].get` is worse than blind — it loses the
+// element type on aggregate elements (filed separately), so it destroys the
+// value before anything can inspect it. `.each` and `v[0]` are the known-good
+// Deque channels.
+//
+// ⚠ Heap-forcing through `mk` is load-bearing everywhere except the two
+// deliberate static-literal cells, and `from std.iter import Iterable` is a
+// live axis on this grid: without it some spellings are rejected at BIR
+// VALIDATION — before any C is emitted, and before any link — on the unrelated
+// `todo/t0987`, which MASKS the behaviour under test.
+//
+// Every closure-bearing cell here leaks exactly 8 bytes per closure literal at
+// `__gorget_closure_env_alloc` (`todo/t0953`). That is the baseline these cells
+// sit on, not a finding of theirs.
+//
+// OMITTED CELLS, each with its blocker — a selection cannot show you what it
+// leaves out, so they are named rather than left to inference:
+//   - `match v.find(…): case Some(s):`. Correct output, but the unnamed temp in
+//     scrutinee position leaks its payload (`todo/t0705`, measured identical on
+//     a no-higher-order control). Pinning it would wire a still-invalid program
+//     as good. The `if … is Some(x)` and bound-local spellings ARE pinned.
+//   - `Vector[Callable[…]]` on any higher-order method — a different defect
+//     (element WIDTH, `todo/t1086`), and its deep channel is blocked by
+//     `E_NotAFunction` on calling the found value.
+//   - `Vector[Vector[String]].filter` read through the inner elements — the
+//     nested closure literal that spelling needs ICEs the compiler.
+//   - `Vector[Option[T]]` and `Vector[Set[T]]` read back through `.get` —
+//     higher-order-independent (`todo/t1089`, `todo/t1088`). The `filter` cells
+//     on those element types are pinned; the plain reads are not.
+//   - The self-host lane. These fixtures sit in `known_gaps/` precisely so they
+//     do not enter the runtime-parity corpus before it runs these shapes.
+//   - ggdef: `v.find(…) is Some(s)` is outside the phase-0 subset, so the
+//     definition returns no verdict on any of these cells.
+//
+// `find_index`, `any` and `all` are NOT omissions — they are structurally
+// outside the class and were measured so. `find_index` yields `Option[int]`,
+// whose payload is a scalar with no clone hook; `any`/`all` yield `bool` and let
+// no element escape at all.
+
 #[test]
-#[ignore = "KNOWN GAP: Vector[String].find(pred) double-frees — rc 134 on C and \
-LLVM with gg check clean; todo/t0988."]
 fn vector_string_find_double_free() {
     run_gg("known_gaps/t0988_vector_string_find_double_free.gg", "abc");
+}
+
+#[test]
+fn hof_filter_vector_string_escape() {
+    run_gg("known_gaps/t0988_filter_vector_string_escape.gg", "aabc");
+}
+
+#[test]
+fn hof_filter_vector_string_local() {
+    run_gg("known_gaps/t0988_filter_vector_string_local.gg", "aabc");
+}
+
+#[test]
+fn hof_filter_vector_struct_escape() {
+    run_gg("known_gaps/t0988_filter_vector_struct_escape.gg", "aabc");
+}
+
+#[test]
+fn hof_filter_deque_string_escape() {
+    run_gg("known_gaps/t0988_filter_deque_string_escape.gg", "aabc");
+}
+
+#[test]
+fn hof_filter_vector_option_string_escape() {
+    run_gg(
+        "known_gaps/t0988_filter_vector_option_string_escape.gg",
+        "aabc\nddefg",
+    );
+}
+
+#[test]
+fn hof_filter_vector_dict_escape() {
+    run_gg("known_gaps/t0988_filter_vector_dict_escape.gg", "aabc");
+}
+
+/// The no-HOF control for the two `Vector[Dict[String, int]]` cells: one axis
+/// varied, so their failures cannot be blamed on the element type itself.
+#[test]
+fn hof_vector_dict_no_hof_control() {
+    run_gg("known_gaps/t0988_vector_dict_no_hof_control.gg", "aabc");
+}
+
+#[test]
+fn hof_find_vector_string_local() {
+    run_gg("known_gaps/t0988_find_vector_string_local.gg", "aabc");
+}
+
+#[test]
+fn hof_find_deque_string_local() {
+    run_gg("known_gaps/t0988_find_deque_string_local.gg", "aabc");
+}
+
+#[test]
+fn hof_find_vector_struct_local() {
+    run_gg("known_gaps/t0988_find_vector_struct_local.gg", "aabc");
+}
+
+#[test]
+fn hof_find_vector_nested_local() {
+    run_gg("known_gaps/t0988_find_vector_nested_local.gg", "aabc");
+}
+
+#[test]
+fn hof_find_vector_dict_local() {
+    run_gg("known_gaps/t0988_find_vector_dict_local.gg", "aabc");
+}
+
+#[test]
+fn hof_find_vector_string_result_ignored() {
+    run_gg("known_gaps/t0988_find_vector_string_result_ignored.gg", "done");
+}
+
+#[test]
+fn hof_filter_vector_int_escape() {
+    run_gg("known_gaps/t0988_filter_vector_int_escape.gg", "7\n9");
+}
+
+#[test]
+fn hof_filter_vector_static_literal_escape() {
+    run_gg(
+        "known_gaps/t0988_filter_vector_static_literal_escape.gg",
+        "aabc",
+    );
+}
+
+#[test]
+fn hof_find_vector_static_literal_local() {
+    run_gg("known_gaps/t0988_find_vector_static_literal_local.gg", "aabc");
+}
+
+/// The CROSS-TYPE control. `map`'s result element type is NOT the source's, so
+/// it must not inherit the source's per-element hooks the way `filter` does.
+/// This cell is correct as written and fails loudly if that ever spreads.
+#[test]
+fn hof_map_vector_string_to_int_control() {
+    run_gg("known_gaps/t0988_map_vector_string_to_int_control.gg", "4\n5");
+}
+
+// ── Element defects the ownership fix above does NOT reach ────────────────
+//
+// Four cells found while pinning `find`/`filter`, each isolated with ONE axis
+// varied against a green, ASan-clean control, and each a different class from
+// the borrow-into-an-owning-destination defect those tests cover. They are
+// filed with their own items rather than folded in, and each asserts the
+// INTENDED output so graduating one is un-ignoring it.
+
+/// KNOWN GAP todo/t1086 — element WIDTH, not ownership: the collection ctor
+/// says 16 bytes and the HOF loop scaffold strides by 8, because the expander's
+/// `element_ty` falls back to `LirType::Ptr` for a `Callable` mono. Control:
+/// the identical program reading through `v.get(0)` is rc 0 `found` and clean.
+#[test]
+#[ignore = "KNOWN GAP: Vector[Callable].find strides the buffer by 8 against a \
+16-byte element — rc 139 on C and LLVM; todo/t1086."]
+fn vector_callable_hof_element_stride() {
+    run_gg(
+        "known_gaps/t1086_vector_callable_hof_element_stride.gg",
+        "found",
+    );
+}
+
+/// KNOWN GAP todo/t1087 — `Deque[T].get(i)` binds an aggregate payload as
+/// `int`. rc 0 with `gg check` clean, so it is the SILENT tier. Controls, one
+/// axis varied each: `Vector[String].get(0)` → `aabc`, `Deque[int].get(0)` →
+/// `7`, `Deque[String]` index read `v[0]` → `aabc`, all clean.
+#[test]
+#[ignore = "KNOWN GAP: Deque[T].get loses the element type on aggregate \
+elements — prints an integer, rc 0, gg check clean; todo/t1087."]
+fn deque_string_get_loses_element_type() {
+    run_gg("known_gaps/t1087_deque_string_get_loses_element_type.gg", "aabc");
+}
+
+/// KNOWN GAP todo/t1088 — a `Set[String]` held as a Vector element is freed
+/// twice. No higher-order call appears in the program; ASan attributes the
+/// second free to a block allocated by `gorget_set_clone`.
+#[test]
+#[ignore = "KNOWN GAP: a Set element inside a Vector double-frees — rc 134 on \
+C and LLVM, no HOF involved; todo/t1088."]
+fn vector_set_element_double_free() {
+    run_gg("known_gaps/t1088_vector_set_element_double_free.gg", "aabc");
+}
+
+/// KNOWN GAP todo/t1089 — reading a `Vector[Option[String]]` element back
+/// through `.get` double-frees the payload String. Higher-order-independent:
+/// the `find` spelling fails identically before and after the `find`/`filter`
+/// ownership fix, which is what puts it on the element-READ path.
+#[test]
+#[ignore = "KNOWN GAP: Vector[Option[String]].get double-frees the payload \
+String — rc 134 on C and LLVM; todo/t1089."]
+fn vector_option_string_get_double_free() {
+    run_gg(
+        "known_gaps/t1089_vector_option_string_get_double_free.gg",
+        "aabc",
+    );
 }
 
 /// Division by zero: the integer/float asymmetry, ratified 2026-08-26.

@@ -1,0 +1,21 @@
+# `Vector[<user struct with a String field>].filter`, result escaping.
+#
+# The element-type axis cell whose clone hook is a SYNTHESIZED
+# `Holder__clone_inplace` rather than a runtime primitive: the filtered array
+# must copy the source's per-element hooks and clone through them.
+String mk(String a, String b):
+    return a + b
+
+struct Holder:
+    String name
+    int n
+
+Vector[Holder] pick():
+    Vector[Holder] v = Vector[Holder]()
+    v.push(Holder(mk("aa", "bc"), 1))
+    v.push(Holder(mk("dd", "efg"), 2))
+    return v.filter((h): h.n == 1)
+
+void main():
+    Vector[Holder] r = pick()
+    r.each((t): print(t.name))

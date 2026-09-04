@@ -168,6 +168,23 @@ of this contract (all take a `const T*` or `void*` pointer to the in-slot value)
   value into a slot — this is lazy CoW: a borrowed view crossing into owning
   storage gets upgraded on the fly.
 
+Three array helpers exist to *use* that triple from a derived collection rather
+than re-derive it, and they sit beside `gorget_array_push` in
+`src/backend/c/runtime/runtime_array.c` so the growth policy has one definition:
+
+- `gorget_array_adopt_hooks(dst, src)` copies the triple from one array onto
+  another. Sound only where the two element types are identical.
+- `gorget_array_push_cloned(arr, elem)` pushes a **borrowed** element into an
+  array that will own it, cloning through `elem_clone` — not through
+  `elem_materialize`, which no-ops on an already-owned element and would leave
+  the pushed copy aliasing the source.
+- `gorget_array_clone_elem_inplace(src, slot)` runs the same clone for a
+  destination that is not an array, such as an `Option` payload.
+
+All three are `void(ptr, ptr)`, which keeps them out of the aggregate-return path
+both backends treat specially. The BIR higher-order expanders are their only
+callers; see [BIR](16-bir.md#the-element-pointer-is-a-borrow-and-the-destination-owns).
+
 The element-level hooks live at fixed struct offsets that the *LIR lowering*
 emits as `Store` insts (via `emit_collection_fn_ptr_stores`) when constructing a
 collection of resource-typed elements — not a write done by the C backend. The

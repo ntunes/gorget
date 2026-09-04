@@ -3116,6 +3116,220 @@ fn consuming_position_name_match_is_gir_gated() {
     );
 }
 
+/// Ratchet (Core #3 "register ownership at the value's birth" / Core #6
+/// "convert a recurring bug class into an executable guard"): inside the HOF
+/// expanders (`src/bir/lower.rs`), every READ of a borrowed collection-element
+/// pointer must land in a sink that CLONES — or the borrow is written into a
+/// destination that will own and drop it.
+///
+/// The `emit_hof_loop_scaffold` context structs hand each expander a raw
+/// pointer INTO the source collection's buffer. Handing that pointer to the
+/// user's closure is fine — the closure only reads through it. Handing it to a
+/// destination that takes ownership is the `find`/`filter` use-after-free and
+/// double-free class: the source frees the element, and so does the `Option`
+/// payload or the filtered array that aliases it.
+///
+/// **Why a source-text ratchet and not a type.** A newtype over the pointer
+/// field was measured and rejected: the field IS hidden (`E0616`) but the
+/// defect walks straight through whatever accessor the benign role needs, and
+/// the benign role is the majority — 26 of the 33 reads pass the pointer to the
+/// user closure. Nor can a single `clone_into_owned()` be the only route to a
+/// consuming position: four of the seven consuming sites hand the pointer to
+/// `gorget_map_put_cloned`, which calls `gorget_map_put` and THEN deep-clones in
+/// place (`runtime/runtime_map.c`), so forcing them through a clone accessor
+/// would clone twice. The roles are three, not two, and the sink is what tells
+/// them apart — which is exactly what this ratchet reads.
+///
+/// The pinned multiset is the whole guard: a NEW expander pushing a borrowed
+/// element into `gorget_array_push`, or a second raw `Inst::Store` of one,
+/// changes the multiset and fails here even though every existing site is
+/// untouched.
+///
+/// **If this fails:**
+///   - NON-CLONING sink → route the push through `gorget_array_push_cloned` /
+///     `gorget_map_put_cloned`, or clone at the destination with
+///     `gorget_array_clone_elem_inplace`.
+///   - no identifiable sink → the instruction literal was reshaped (a hoisted
+///     `format!` name, a helper call). Give the sink a literal spelling this can
+///     see, or the guard silently stops covering that site.
+///   - multiset changed → a site was added or removed. Confirm the new one
+///     clones, then re-pin with a justification.
+///   - `gorget_array_adopt_hooks` count changed → see the assertion's own note:
+///     it is sound ONLY where the result element type equals the source's.
+///
+/// Precedent: `collection_elem_drop_routes_through_type_drop_fns` above.
+#[test]
+fn hof_borrowed_elem_ptr_sinks_are_cloning() {
+    // The six fields that carry a pointer INTO the source collection's buffer.
+    // The `*_arg` names are NOT decoration: under the pointer ABI
+    // (`bir/lower.rs`'s `let elem_arg = if pass_by_ptr { elemp } else { … }`)
+    // `elem_arg` IS `elem_ptr` — the same `ValueId` stored in a second field.
+    // Omitting them lets a new expander push `ctx.elem_arg` into a
+    // non-cloning sink with this guard staying green; that was measured.
+    const BORROW_FIELDS: [&str; 6] =
+        ["elem_ptr", "key_ptr", "val_ptr", "elem_arg", "key_arg", "val_arg"];
+
+    // The sink multiset pinned at the fixed state. Sums to 33 read LINES
+    // (43 field references — several lines read two fields).
+    const EXPECTED: [(&str, usize); 5] = [
+        // `expand_find`'s aggregate payload copy, immediately followed by the
+        // source-hook clone asserted below.
+        ("Inst::Memcpy", 1),
+        // `expand_filter`.
+        ("gorget_array_push_cloned", 1),
+        // dict_filter legacy+dense, set_filter legacy+dense.
+        ("gorget_map_put_cloned", 4),
+        // BENIGN role: the borrow is handed to the user's closure, which only
+        // reads through it.
+        ("Inst::CallClosure", 26),
+        // CONSUMING and not routed through a clone: `expand_find`'s SCALAR
+        // payload `Store`. It is correct only because a scalar element needs no
+        // clone — which in turn depends on the expander's `element_ty` being
+        // accurate. Pinned at 1 so a second one cannot appear silently.
+        ("Inst::Store", 1),
+    ];
+
+    let src = fs::read_to_string("src/bir/lower.rs").expect("read src/bir/lower.rs");
+    // Executable code only: the field docs legitimately name these fields.
+    let lines: Vec<&str> = src
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect();
+
+    // A READ is `ctx.<field>` (optionally through the Dict branch's
+    // `legacy`/`dense`). The struct declarations and the constructor binds
+    // spell the field as `<field>:` with no `ctx.` prefix, so they do not match.
+    let read_re = regex::Regex::new(&format!(
+        r"ctx\.(?:legacy\.|dense\.)?({})\b",
+        BORROW_FIELDS.join("|")
+    ))
+    .unwrap();
+    let name_re = regex::Regex::new(r#"name:\s*"([A-Za-z0-9_]+)""#).unwrap();
+    // An instruction literal that has already CLOSED. Without this bound the
+    // backward scan attributes a read to whatever call happens to sit above it.
+    let closed_re = regex::Regex::new(r"^\s*\}\);\s*$").unwrap();
+
+    let read_idxs: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| read_re.is_match(l))
+        .map(|(i, _)| i)
+        .collect();
+
+    let mut problems: Vec<String> = Vec::new();
+    let mut found: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+
+    for &i in &read_idxs {
+        let mut sink: Option<String> = None;
+        let lo = i.saturating_sub(7);
+        for j in (lo..=i).rev() {
+            if j != i && closed_re.is_match(lines[j]) {
+                break;
+            }
+            if let Some(c) = name_re.captures(lines[j]) {
+                sink = Some(c[1].to_string());
+                break;
+            }
+            for marker in ["Inst::Memcpy", "Inst::CallClosure", "Inst::Store"] {
+                if lines[j].contains(marker) {
+                    sink = Some(marker.to_string());
+                    break;
+                }
+            }
+            if sink.is_some() {
+                break;
+            }
+        }
+        match sink {
+            None => problems.push(format!(
+                "line {}: borrowed collection-element pointer read with NO \
+                 identifiable sink: `{}`. The guard cannot tell whether this \
+                 borrow reaches an owning destination, so it fails CLOSED. Spell \
+                 the sink literally at the instruction.",
+                i + 1,
+                lines[i].trim()
+            )),
+            Some(s) => {
+                *found.entry(s.clone()).or_insert(0) += 1;
+                if !EXPECTED.iter().any(|(k, _)| *k == s) {
+                    problems.push(format!(
+                        "line {}: borrowed collection-element pointer flows into \
+                         NON-CLONING sink `{s}`. A borrow written into a \
+                         destination that will own and drop it is the \
+                         use-after-free / double-free class this guard exists \
+                         for. Route it through a cloning sink \
+                         (`gorget_array_push_cloned` / `gorget_map_put_cloned`) \
+                         or clone at the destination \
+                         (`gorget_array_clone_elem_inplace`).",
+                        i + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    // The multiset mismatch is a PROBLEM, not its own assertion: a reverted
+    // sink changes the counts AND flows into a non-cloning sink, and firing the
+    // count first would hide the message that names the actual class.
+    let expected: std::collections::BTreeMap<String, usize> =
+        EXPECTED.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+    if found != expected {
+        problems.push(format!(
+            "sink multiset changed: {found:?} vs pinned {expected:?}. Every read \
+             of a pointer INTO a source collection's buffer must reach a sink \
+             that clones (or the closure, which only reads). Confirm the new \
+             site clones, then re-pin `EXPECTED` with a justification."
+        ));
+    }
+
+    // The one raw `Inst::Memcpy` of a borrow into an owned Option payload must
+    // be IMMEDIATELY followed by the source-hook clone, or the payload aliases
+    // the collection's buffer and both free it.
+    for &i in &read_idxs {
+        let above = lines[i.saturating_sub(3)..=i].join("\n");
+        if above.contains("Inst::Memcpy") {
+            let window = lines[i..(i + 14).min(lines.len())].join("\n");
+            if !window.contains("gorget_array_clone_elem_inplace") {
+                problems.push(format!(
+                    "line {}: `Inst::Memcpy` copies a borrowed element into an \
+                     owned destination but no `gorget_array_clone_elem_inplace` \
+                     follows within 14 lines — the payload aliases the source \
+                     collection's buffer and both will free it.",
+                    i + 1
+                ));
+            }
+        }
+    }
+
+    // `gorget_array_adopt_hooks(dst, src)` copies the SOURCE's per-element
+    // drop/clone/materialize hooks onto a derived array. That is sound ONLY
+    // where the derived array's element type is IDENTICAL to the source's —
+    // `expand_filter`. At `expand_map` / `expand_flat_map` the result element
+    // type differs and adopting the source's wiring is a miscompile, so the
+    // call-site count is pinned rather than the function forbidden.
+    const EXPECTED_ADOPT_SITES: usize = 1;
+    let adopt = lines
+        .iter()
+        .filter(|l| l.contains(r#"name: "gorget_array_adopt_hooks""#))
+        .count();
+    if adopt != EXPECTED_ADOPT_SITES {
+        problems.push(format!(
+            "`gorget_array_adopt_hooks` call sites: {adopt} vs pinned \
+             {EXPECTED_ADOPT_SITES}. It is sound ONLY where the result element \
+             type is IDENTICAL to the source's (`expand_filter`). At \
+             `expand_map` / `expand_flat_map` the result element type differs \
+             and adopting the source's drop/clone/materialize hooks is a \
+             miscompile."
+        ));
+    }
+
+    assert!(
+        problems.is_empty(),
+        "borrowed collection-element pointer audit failed:\n  - {}",
+        problems.join("\n  - "),
+    );
+}
+
 /// Ratchet (Core #4 "one fix, all siblings" / devbook-24 rule 3 "one source of
 /// truth"): every resource-typed field-load in `lower_field_access`
 /// (`src/ir/lowering/exprs/mod.rs`) must route its borrow tag through the

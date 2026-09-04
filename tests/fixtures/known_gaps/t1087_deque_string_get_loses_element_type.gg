@@ -1,0 +1,22 @@
+# KNOWN GAP todo/t1087 — `Deque[T].get(i)` loses the element type when `T` is
+# an aggregate, and binds the payload as `int`.
+#
+# `gg check` is clean and the program runs to rc 0, printing a small integer
+# instead of the string. Adding `.len()` to the bound value fails at link with
+# `undefined reference to 'int64_t__len'`, which is what names the binding.
+#
+# One axis varied, three ways: `Vector[String].get(0)` is correct, and
+# `Deque[int].get(0)` is correct — only the aggregate element on a Deque is
+# wrong. No higher-order call appears anywhere in the program.
+#
+# Intended: prints `aabc`, rc 0, on both backends.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Deque[String] v = Deque[String]()
+    v.push(mk("aa", "bc"))
+    if v.get(0) is Some(x):
+        print(x)
+    else:
+        print("none")

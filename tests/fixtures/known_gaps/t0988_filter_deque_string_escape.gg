@@ -1,0 +1,21 @@
+# `Deque[String].filter`, result escaping — the collection-kind sibling of
+# `t0988_filter_vector_string_escape`. Deque and Vector share one HOF expander,
+# so both spellings must be pinned or the axis is sampled at one value.
+#
+# The result is read through `.each`. `Deque[T].get` loses the element type on
+# aggregate elements (filed separately), so a `.get`-based observation destroys
+# the value before it can be inspected and the cell could not fail.
+from std.iter import Iterable
+
+String mk(String a, String b):
+    return a + b
+
+Deque[String] pick():
+    Deque[String] v = Deque[String]()
+    v.push(mk("aa", "bc"))
+    v.push(mk("dd", "efg"))
+    return v.filter((s): s.len() == 4)
+
+void main():
+    Deque[String] r = pick()
+    r.each((t): print(t))

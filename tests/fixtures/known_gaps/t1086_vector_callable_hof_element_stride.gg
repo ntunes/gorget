@@ -1,0 +1,22 @@
+# KNOWN GAP todo/t1086 — a `Vector[Callable[…]]` element is 16 bytes to the
+# collection constructor and 8 to the HOF loop scaffold.
+#
+# `Vector[Callable[bool(int)]]` allocates with `elem_size` 16 (closure pointer +
+# environment), but the higher-order loop strides the buffer by 8 because the
+# expander's `element_ty` is `LirType::Ptr`. The search then reads and frees
+# through a misaligned function pointer: rc 139 SIGSEGV on BOTH backends.
+#
+# The `v.get(0)` control on the identical program is rc 0 and fully clean, which
+# is what isolates the higher-order path — the element type itself is fine.
+#
+# Intended: prints `found`, rc 0, ASan-clean, on both backends.
+void main():
+    int k = 3
+    Vector[Callable[bool(int)]] v = Vector[Callable[bool(int)]]()
+    v.push((int n): n > k)
+    v.push((int n): n > k)
+    Option[Callable[bool(int)]] r = v.find((f): true)
+    if r is Some(x):
+        print("found")
+    else:
+        print("none")

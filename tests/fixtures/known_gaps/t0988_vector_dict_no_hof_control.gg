@@ -1,0 +1,20 @@
+# The no-HOF control for `t0988_filter_vector_dict_escape.gg` and
+# `t0988_find_vector_dict_local.gg`: the identical program with the higher-order
+# call removed. It isolates the HOF expander as the single varied axis, so a
+# failure in the sibling cells cannot be attributed to
+# `Vector[Dict[String, int]]` itself.
+String mk(String a, String b):
+    return a + b
+
+Vector[Dict[String, int]] pick():
+    Vector[Dict[String, int]] v = Vector[Dict[String, int]]()
+    Dict[String, int] d1 = Dict[String, int]()
+    d1.put(mk("aa", "bc"), 1)
+    v.push(d1)
+    return v
+
+void main():
+    Vector[Dict[String, int]] r = pick()
+    Dict[String, int] d0 = r[0]
+    for k in d0.keys():
+        print(k)

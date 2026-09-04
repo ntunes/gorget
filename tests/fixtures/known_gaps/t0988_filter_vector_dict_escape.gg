@@ -1,0 +1,26 @@
+# `Vector[Dict[String, int]].filter`, result escaping — a COLLECTION-VALUED
+# element, the axis value whose clone hook is a RUNTIME function
+# (`gorget_map_clone`) rather than a string primitive or a synthesized
+# `*__clone_inplace`. Its no-HOF control is
+# `t0988_vector_dict_no_hof_control.gg`.
+#
+# The result is read through the inner Dict's keys, so the observation reaches
+# the element's own heap and not just the outer array's length.
+String mk(String a, String b):
+    return a + b
+
+Vector[Dict[String, int]] pick():
+    Vector[Dict[String, int]] v = Vector[Dict[String, int]]()
+    Dict[String, int] d1 = Dict[String, int]()
+    d1.put(mk("aa", "bc"), 1)
+    Dict[String, int] d2 = Dict[String, int]()
+    d2.put(mk("dd", "efg"), 2)
+    v.push(d1)
+    v.push(d2)
+    return v.filter((d): d.len() == 1)
+
+void main():
+    Vector[Dict[String, int]] r = pick()
+    Dict[String, int] d0 = r[0]
+    for k in d0.keys():
+        print(k)

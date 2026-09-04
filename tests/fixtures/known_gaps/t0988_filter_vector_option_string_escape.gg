@@ -1,0 +1,18 @@
+# `Vector[Option[String]].filter`, result escaping — an ENUM-PAYLOAD element.
+#
+# The element's clone hook walks a tagged union and reaches the String inside
+# the `Some` payload. The result is read through the payload (`unwrap_or`)
+# rather than through `.len()`: a length-only observation never touches the
+# payload and cannot see an ownership defect in it.
+String mk(String a, String b):
+    return a + b
+
+Vector[Option[String]] pick():
+    Vector[Option[String]] v = Vector[Option[String]]()
+    v.push(Some(mk("aa", "bc")))
+    v.push(Some(mk("dd", "efg")))
+    return v.filter((o): o.is_some())
+
+void main():
+    Vector[Option[String]] r = pick()
+    r.each((o): print(o.unwrap_or("MISSING")))

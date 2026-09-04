@@ -1,0 +1,16 @@
+# `Vector[String].filter` over STATIC LITERAL elements — the view value of the
+# element-provenance axis.
+#
+# A literal element is a view into read-only storage with no heap buffer of its
+# own. Cloning it into the result must yield a value the result can safely own
+# and drop, and must not turn every literal into a heap allocation on a path
+# that never needed one.
+Vector[String] pick():
+    Vector[String] v = Vector[String]()
+    v.push("aabc")
+    v.push("ddefg")
+    return v.filter((s): s.len() == 4)
+
+void main():
+    Vector[String] r = pick()
+    r.each((t): print(t))

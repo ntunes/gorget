@@ -1,0 +1,12 @@
+# `Vector[String].find` over STATIC LITERAL elements — the `find` half of the
+# element-provenance axis covered for `filter` by
+# `t0988_filter_vector_static_literal_escape.gg`.
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("aabc")
+    v.push("ddefg")
+    Option[String] r = v.find((s): s.len() == 4)
+    if r is Some(x):
+        print(x)
+    else:
+        print("none")
