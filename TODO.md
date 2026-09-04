@@ -353,6 +353,22 @@ owes a note + a filed subset gap.
   its **falsified discriminator quoted verbatim** in `todo/t0953.md`, plus six other dangling cites —
   including a control fixture that now claims a just-closed item is *"still open"*. ⇒ **`git rm todo/tNNNN.md`
   owes a `grep -rn tNNNN` sweep across `todo/`, `tests/` and fixture headers in the SAME commit.**
+- ⛔⛔ **"PROVABLY UNREACHABLE" CAN BE CONDITIONAL ON A LIST ENTRY NOBODY CONNECTED TO IT — AND FOUR PASSES
+  ACCEPTED THE PROOF.** M1 deleted a 54-line arm on a chain four reviews verified: the parser constructs zero
+  `Expr::StructLiteral`, the sole producer early-returns for names in `COLLECTION_TYPES`, and that list
+  contains `"Box"`. ⭐ **Its executor then measured what happens if `"Box"` LEAVES the list:
+  `from std.collections import Box` + `Box[float](1.5)` FAILS TO BUILD — the import makes `Box` resolve, so
+  the deleted arm WOULD have been reachable.**
+  ⇒ ⚡ **THE UNREACHABILITY WAS REAL BUT NOT INTRINSIC: it rested on a data-table entry with no stated
+  connection to the code it protects.** ⭐ **So the guard the executor shipped for it is LOAD-BEARING, not
+  decoration — and the general rule is: when a delete rests on "X is in list L", THE GUARD IS ON L, and the
+  proof must say so.**
+- ⭐ **A REFUSAL THAT REDS A PREVIOUSLY-GREEN REPRO CAN STILL BE THE RIGHT DIRECTION — CHECK WHETHER THE
+  ACCEPTED PROGRAM WAS ALREADY BROKEN.** M1's guard also refuses `t0682`'s own repro (rc 0 → rc 101), which
+  reads as breaking a working program. **Measured: add one read to that same program and the PRE-FIX compiler
+  is rc 139 SIGSEGV — it was green only because it never read the box it built.** ⇒ **the refusal converts a
+  SEGV into a cited compile-time error, which is the direction the item asks for.** ⚡ **Before calling a new
+  reject a regression, ADD A READ — a program that never observes the value it builds proves nothing.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
