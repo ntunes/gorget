@@ -876,6 +876,16 @@ if [ -s "$OUT/retire_fatal" ]; then
   rc=1
 fi
 [ -n "$fixed_corrupt" ] && { echo; echo "✅ no longer corrupting — DELETE these rows from $CORRUPT_LIST:"; echo "$fixed_corrupt" | sed 's/^/    /'; }
-[ -s "$OUT/fixed_leak" ] && { echo; echo "✅ no longer leaking — DELETE these rows from $LEAK_LIST:"; sed 's/^/    /' "$OUT/fixed_leak"; }
-[ -s "$OUT/shrunk_class" ] && { echo; echo "✅ leaking LESS than its row admits — TIGHTEN these rows in $LEAK_LIST:"; sed 's/^/    /' "$OUT/shrunk_class"; }
+# ⚠ THE TWO LEAK ADVISORIES BELOW SAY WHAT WAS MEASURED — "this class no longer
+# appears" — and NOT "the defect is fixed", because this instrument cannot tell
+# those apart. A class key is a stack FRAME NAME, so extracting a `static inline`
+# helper makes the old key vanish while the leak is untouched: `b5356f361` hoisted
+# the array growth policy into `__gorget_array_reserve_one` and every row keyed on
+# `gorget_array_push` reported as fixed, with the leaks live at the same site.
+# A rename normally ALSO trips `❌ NEW LEAK CLASS` under the new name, which is why
+# both lines send the reader to look for a paired `❌` on the same fixture first —
+# and if the renamed class happens to be tolerated already at exactly the resulting
+# count, no `❌` fires and one of these advisories is the ONLY thing printed.
+[ -s "$OUT/fixed_leak" ] && { echo; echo "✅ no longer leaking — NO leak record of ANY class was reported for these rows. If the defect is really gone, DELETE them from $LEAK_LIST:"; sed 's/^/    /' "$OUT/fixed_leak"; echo "    ⚠ That is what was MEASURED, not that the defect is fixed. A class key is a"; echo "      stack FRAME NAME: a renamed frame vanishes here exactly like a fixed leak."; echo "      CHECK FOR A PAIRED ❌ ABOVE on the same fixture BEFORE deleting a row."; }
+[ -s "$OUT/shrunk_class" ] && { echo; echo "✅ leaking LESS than its row admits — these classes no longer appear, or appear fewer times. TIGHTEN these rows in $LEAK_LIST:"; sed 's/^/    /' "$OUT/shrunk_class"; echo "    ⚠ Same caveat: a class reported \`gone\` may have been RENAMED, not fixed."; echo "      Look for a paired ❌ NEW LEAK CLASS on the same fixture first."; }
 exit $rc
