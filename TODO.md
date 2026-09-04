@@ -2596,6 +2596,17 @@ every round close by mandate, so anything recorded only here is deleted by the n
 this pointer exists instead of the list.
 
 ### ⚠⚠ A ROUND-CLOSE GATE IS **ALREADY RED AT HEAD** AND IT IS NOBODY'S INFLOW — VERIFY BEFORE BLAMING
+⛔⛔ **THREE GATES, NOT ONE — TRACK L's EXECUTOR FOUND TWO MORE, ALSO PRE-EXISTING (2026-09-04).**
+**`GG_BACKEND=llvm cargo test --test security sec_64` AND `sec_70` BOTH FAIL AT PRISTINE HEAD.** Mechanism:
+**`t0729` NO LONGER REPRODUCES**, and `security_safe_except_on` asserts the trip **still happens** — so the
+gate reds *because the defect was fixed*. Verified ASan-clean with a compiler built from `8bd978079`;
+recorded on `t0729` with the measurements. ⇒ **the round-close battery WILL hit all three; none is this
+round's inflow.**
+⚡ **AND THE SHAPE IS WORSE THAN "a stale gate": a `security_safe_except_on`-style assertion that a defect
+STILL TRIPS is a guard that goes RED WHEN THE BUG IS FIXED.** That is the inverse of a ratchet and it
+converts good news into a red battery. **Adjudicate `t0729` (close it and retire or invert the two
+assertions) rather than treating the red as noise.**
+
 ⭐ **ORCHESTRATOR-VERIFIED 2026-09-04, bare rc, at pristine HEAD: `census_bare_rc=1`, roster 215 · PASS 7 ·
 FAIL 208 · allowlist 113 rows. THE SOLE UN-ALLOWLISTED PASSER IS `llvm_nested_option_match_no_memcpy_overlap`**
 (found by M2's pass 4, independently confirmed here). **The other six PASSes are allowlisted and fine.**
@@ -2624,6 +2635,20 @@ bash scripts/clone_meter_check.sh --anchor-age                # must exit 0
 scripts/convergence.sh <prev_kg> <prev_todo> <filed>          # MEASURES, does not gate
 ```
 ⚠ **Run these on a QUIET tree** — no agents building. R48 paid for this twice with false REDs.
+
+### ⚖ TWO OWNER ASKS FROM TRACK L's EXECUTOR — BOTH ARE CEILING/INFLOW RULINGS, BOTH DUE NOW
+1. ⚖ **SANITIZE-SWEEP INFLOW.** Track L's 5 new top-level fixtures leak: **3 are covered by the graduation
+   ruling (owner 2026-09-02); 2 are GENUINELY NEW INFLOW** —
+   `closure_escape_capture_axis_{param_named,local_literal}`, **4 B / 12 B, mechanism `t0953`** (the
+   pre-existing heap-env leak, not this track's). **`LEAK_CEILING` is an EXACT PIN at 294 and the executor
+   did NOT touch it** — correctly, since raising a ceiling for your own inflow is forbidden without a ruling.
+   ⇒ **ASK: admit the two rows against `t0953`, or hold the two fixtures back?** ⊕ The fixtures are the
+   completed escape 2×2 — **holding them back leaves the axis sampled at 2 of 4 cells (Core #12).**
+2. ⚖ **PARITY INFLOW / SH LANE.** **3 of L's 11 fixtures cannot compile on the self-host — all ONE defect,
+   `t0877` arms (b)/(c)/(d)** — and **none can be respelled around it, because the body shape IS the cell.**
+   The executor **raised it rather than absorbing it**, citing the ceiling's own comment that a fixture the
+   SH cannot run *"is the step-5 OWNER ASK"*. ⇒ **ASK: admit 3 non-MATCH rows citing `t0877`, or fix arms
+   (b)/(c)/(d) this round (which ports all three)?**
 
 ### ⚖ OWNER RULINGS 2026-09-04 — **ALL THREE ASKS ANSWERED. "go with your recommendations."**
 ⛔ **THE LEDGER EDIT IS NOT AUTHORIZED BY THIS.** The owner's previous grant was a SEPARATE, item-scoped
