@@ -442,15 +442,11 @@ pub enum HofOp {
 // ── Closure dispatch kind ──────────────────────────────────────────────────
 
 /// How a closure value is laid out in memory for `CallClosure`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClosureDispatchKind {
-    /// Callable parameter: `void*[2]` layout (fn_ptr at `[0]`, env at `[1]`).
-    /// Originally `__callable_N`.
-    CallableParam,
-    /// Escaped closure: `GorgetClosure` struct (fn_ptr field 0, env field 1).
-    /// Originally `__gorget_closure_call_N`.
-    EscapedClosure,
-}
+///
+/// Defined in [`crate::ir::abi`] and re-exported here: the fact is written by
+/// the GIR lowering onto `Instruction::CallIndirect` and read back at LIR
+/// lowering, so it is shared vocabulary, not an LIR invention.
+pub use crate::ir::abi::ClosureDispatchKind;
 
 // ── Collection constructor metadata ─────────────────────────────────────────
 

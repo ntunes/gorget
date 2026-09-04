@@ -1,0 +1,15 @@
+# The sibling prefix WITH the user's own direct call. Contrast with
+# `collide_direct_call_result_dropped.gg`: there the direct call printed `0`,
+# here it printed 42 correctly while the CLOSURE call was garbage — because
+# this arm injected the real return type rather than `unit`. Two prefixes, two
+# different manifestations, one cause.
+int __gorget_closure_call_1(int a, int b):
+    return a + b
+
+int(int) make_doubler(int n):
+    return (int y): y * n
+
+void main():
+    auto d = make_doubler(2)
+    print(d(21))
+    print(__gorget_closure_call_1(40, 2))

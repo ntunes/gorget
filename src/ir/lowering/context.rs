@@ -36,6 +36,34 @@ pub enum ParamABI {
     ByMutPtr,
 }
 
+/// The callee of an indirect (runtime-resolved) dispatch, as
+/// [`LoweringContext::call_indirect_tracked`] receives it.
+///
+/// This type REPLACES the `func: impl Into<String>` parameter that chokepoint
+/// used to take, and the replacement is the whole point: with a name in the
+/// signature, an arm whose callee is a runtime value must still *manufacture*
+/// one to call the function at all, and the manufactured name goes on to share
+/// the module's flat, string-keyed function namespace with user code. There is
+/// no name to manufacture here.
+pub enum IndirectCallee {
+    /// Dispatch through a genuine emitted symbol — a closure environment's
+    /// `__Closure_N__call` thunk, a trait-object vtable slot, a
+    /// `Constant::FuncRef`. At the C-emit boundary the symbol IS the contract
+    /// (devbook/24's stated exception), so the name is the honest spelling.
+    Named(String),
+    /// Dispatch through a runtime VALUE — a `Callable[T]` slot or an escaped
+    /// closure. The callee's identity, layout and declared per-argument ABI
+    /// ride on `Instruction::CallIndirect`; nothing downstream reconstructs
+    /// them from a spelling.
+    Value {
+        callee: Operand,
+        kind: crate::ir::abi::ClosureDispatchKind,
+        /// The callee's declared per-argument ABI. Empty means the signature
+        /// never reached the call site — UNKNOWN, not "no borrows".
+        arg_abis: Vec<ParamABI>,
+    },
+}
+
 /// What producing an owned value out of a `Ptr(T)` / `MutPtr(T)` requires.
 /// Read only through [`LoweringContext::ptr_materialization_kind`] — see that
 /// method for why this is one accessor and not three call-site policies.
@@ -1593,9 +1621,8 @@ impl<'a> LoweringContext<'a> {
     /// whose *callee is selected at run time*, plus the sibling arms of the
     /// helpers that emit them:
     ///
-    /// * a closure environment's call thunk — `__Closure_N__call`,
-    ///   `__gorget_closure_call_N`;
-    /// * a `Callable[T]` parameter slot — `__callable_N`;
+    /// * a closure environment's call thunk — `__Closure_N__call`;
+    /// * a `Callable[T]` parameter slot, and an escaped closure value;
     /// * a trait-object vtable slot — `Box__Trait__method`;
     /// * the `FuncRef` arm of [`call_closure_in_adapter`], which shares the
     ///   two above inside one helper (helper-scoped, not dispatch-scoped: the
@@ -1610,6 +1637,16 @@ impl<'a> LoweringContext<'a> {
     /// instead, so nothing ever registered the result and it leaked — once per
     /// call, i.e. **unbounded inside a loop**.
     ///
+    /// **THE CALLEE IS A [`IndirectCallee`], NOT A NAME.** Some members of the
+    /// class do dispatch through a genuine emitted symbol — a closure thunk, a
+    /// vtable slot, a `FuncRef` — and for those the name IS the contract, so
+    /// they pass [`IndirectCallee::Named`]. The members whose callee is a
+    /// runtime VALUE pass [`IndirectCallee::Value`], which carries the callee's
+    /// layout and declared per-argument ABI ON the instruction. They used to
+    /// manufacture a name for it and share the module's flat, string-keyed
+    /// function namespace with USER functions; see `Instruction::CallIndirect`
+    /// for what that cost.
+    ///
     /// ENFORCING GUARD (Core #6/#14 — this comment is not on its own):
     /// `indirect_dispatch_results_registered_at_birth` in `tests/lints.rs`
     /// pins the per-file census of ALL FOUR raw dst-producing spellings
@@ -1620,11 +1657,20 @@ impl<'a> LoweringContext<'a> {
     pub fn call_indirect_tracked(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
-        func: impl Into<String>,
+        callee: IndirectCallee,
         args: Vec<Operand>,
         return_type: crate::ir::types::TypeId,
     ) -> crate::ir::types::LocalId {
-        self.call_tracked_impl(builder, func, args, return_type, None)
+        match callee {
+            IndirectCallee::Named(func) => {
+                self.call_tracked_impl(builder, func, args, return_type, None)
+            }
+            IndirectCallee::Value { callee, kind, arg_abis } => {
+                let local = builder.call_indirect(callee, args, return_type, kind, arg_abis);
+                self.register_call_result(builder, local, return_type, None);
+                local
+            }
+        }
     }
 
     /// G3: `call_tracked` for a CLONE call — identical drop-registration +
@@ -1663,6 +1709,26 @@ impl<'a> LoweringContext<'a> {
             Some(r) => builder.call_clone(&func_name, args, return_type, r),
             None => builder.call(&func_name, args, return_type),
         };
+        self.register_call_result(builder, local, return_type, Some(func_name.as_str()));
+        local
+    }
+
+    /// Shared TAIL of every tracked call emitter: register the freshly
+    /// materialized result for drop at its birth (Core #3), mark it owned, and
+    /// decide whether an owned `String` result is *fresh* (unaliased).
+    ///
+    /// `func_name` is `Some` for a statically-named callee and `None` for an
+    /// indirect one. An indirect callee has no name to look up, and no name is
+    /// invented to stand in for one: the result is registered and owned exactly
+    /// as a direct call's, and is conservatively NOT marked fresh, because a
+    /// runtime-resolved callee's body is not in scope to prove it allocates.
+    fn register_call_result(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        local: crate::ir::types::LocalId,
+        return_type: crate::ir::types::TypeId,
+        func_name: Option<&str>,
+    ) {
         if self.type_registry.needs_drop(return_type) {
             self.drops.register_local(local, return_type, &self.type_registry);
         }
@@ -1674,14 +1740,14 @@ impl<'a> LoweringContext<'a> {
         // upper, lower, repeat, pad, join, etc.).
         // Phase D4: typed-only signal — sidecar writer retired.
         if return_type == self.type_mapper.owned_string_type {
-            let is_user_fn = !self.fn_sigs.contains_key(func_name.as_str());
-            let is_fresh_builtin = self.runtime_callees.get(func_name.as_str())
+            let Some(func_name) = func_name else { return };
+            let is_user_fn = !self.fn_sigs.contains_key(func_name);
+            let is_fresh_builtin = self.runtime_callees.get(func_name)
                 .map_or(false, |info| runtime_returns_fresh(&info.name));
             if is_user_fn || is_fresh_builtin {
                 self.set_owned_fresh(builder, local);
             }
         }
-        local
     }
 
     /// Call an extern function and auto-register the result for drop.

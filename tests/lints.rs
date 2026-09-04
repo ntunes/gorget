@@ -22227,10 +22227,16 @@ fn fmt_no_new_over_budget_lines() {
 #[test]
 fn indirect_call_abi_decision_sites() {
     // (1) dispatch kinds
-    let lir = fs::read_to_string("src/lir/mod.rs").expect("read src/lir/mod.rs");
+    //
+    // ⚠ R49 A2-alpha MOVED THE DEFINITION from `src/lir/mod.rs` to
+    // `src/ir/abi.rs` (the LIR module re-exports it). The kind is now written
+    // by the GIR lowering onto `Instruction::CallIndirect` and read at LIR
+    // lowering, so it is shared GIR/LIR vocabulary rather than an LIR
+    // invention — and the enum has to live where both layers can name it.
+    let lir = fs::read_to_string("src/ir/abi.rs").expect("read src/ir/abi.rs");
     let enum_start = lir
         .find("pub enum ClosureDispatchKind {")
-        .expect("ClosureDispatchKind enum not found in src/lir/mod.rs — re-derive this lint");
+        .expect("ClosureDispatchKind enum not found in src/ir/abi.rs — re-derive this lint");
     let enum_body_end = lir[enum_start..]
         .find("\n}")
         .expect("unterminated ClosureDispatchKind enum");
@@ -22257,15 +22263,35 @@ fn indirect_call_abi_decision_sites() {
     );
 
     // (2) the single write path
+    //
+    // ⚠ R49 A2-alpha MOVED THIS TOO, and the move made the invariant STRONGER.
+    // The ABI decision used to be inline in `insts.rs`'s name-decode branch;
+    // it is now the helper `closure_arg_abis` in `operands.rs`, which is the
+    // sole caller of `declared_closure_param_by_ptr` AND itself has exactly one
+    // caller — the `Instruction::CallIndirect` arm. Both counts are pinned,
+    // because "one reader of the accessor" alone would not stop a second
+    // indirect-call construction from calling the helper with its own guess.
+    let ops = fs::read_to_string("src/lir/lower/operands.rs").expect("read operands.rs");
     let insts = fs::read_to_string("src/lir/lower/insts.rs").expect("read insts.rs");
-    let write_sites = insts.matches("self.declared_closure_param_by_ptr(").count();
+    let accessor_readers = ops.matches("self.declared_closure_param_by_ptr(").count()
+        + insts.matches("self.declared_closure_param_by_ptr(").count();
     assert_eq!(
-        write_sites, 1,
-        "the callee's declared param ownership is now read at {write_sites} sites in \
-         `src/lir/lower/insts.rs`, not 1.\n\n\
+        accessor_readers, 1,
+        "the callee's declared param ownership is now read at {accessor_readers} sites \
+         across `src/lir/lower/{{operands,insts}}.rs`, not 1.\n\n\
          The indirect-call argument ABI has ONE write site by design (devbook/24 rule 3, \
          one source of truth per axis). If a second indirect-call construction genuinely \
-         appeared, centralise the ABI write instead of copying the call."
+         appeared, route it through `closure_arg_abis` instead of copying the call."
+    );
+    let abi_builders = insts.matches("self.closure_arg_abis(").count();
+    assert_eq!(
+        abi_builders, 1,
+        "`closure_arg_abis` is called from {abi_builders} sites in \
+         `src/lir/lower/insts.rs`, not 1.\n\n\
+         Exactly one LIR construction builds an indirect call, and it is the \
+         `Instruction::CallIndirect` arm. A second one means an indirect dispatch is \
+         being assembled somewhere else — which is how the name-decode branch this \
+         ratchet replaced came to exist."
     );
 
     // (3) the two backend readers — kept, but not multiplied
@@ -25045,8 +25071,16 @@ fn no_growth_in_name_list_membership_routing() {
 // spelling would green-light it, which is the "worse than none" case this
 // guard exists to avoid. The registering siblings are `call_tracked`,
 // `call_tracked_clone` and `call_extern_tracked`; `call_indirect_tracked` is
-// the arm this track added. (`builder.call_indirect` has zero callers and is
-// filed as `t0774`; add it here the moment it acquires one.)
+// the arm this track added.
+//
+// ⭐ `builder.call_indirect` ACQUIRED ITS CALLER IN R49 (A2-alpha, `t0774`),
+// and this comment's own standing instruction — "add it here the moment it
+// acquires one" — is discharged below. Its single legitimate site is INSIDE
+// `call_indirect_tracked` itself, where the result is registered on the very
+// next line; a second `builder.call_indirect` anywhere under
+// `src/ir/lowering/` is an arm bypassing the chokepoint and reds this census.
+// (`builder.call_indirect_void` is deliberately NOT counted, for the same
+// reason `builder.call_void` is not: no dst, so nothing to register.)
 //
 // HOW TO UPDATE: add or remove a site, run this test, and move the count. If
 // the new site dispatches through a runtime value, or otherwise mints an owned
@@ -25080,6 +25114,7 @@ const RAW_PRODUCER_CENSUS: &[(&str, &str, usize)] = &[
     ("builder.call_extern(", "src/ir/lowering/stmts/for_loops.rs", 9),
     ("builder.call_extern(", "src/ir/lowering/stmts/mod.rs", 9),
     ("builder.call_extern_into(", "src/ir/lowering/exprs/collections.rs", 1),
+    ("builder.call_indirect(", "src/ir/lowering/context.rs", 1),
 ];
 
 
@@ -25128,7 +25163,7 @@ fn indirect_dispatch_results_registered_at_birth() {
     // rather than only today's instances.
     let mut found: Vec<(String, String, usize)> = Vec::new();
     for needle in ["builder.call(", "builder.call_clone(", "builder.call_extern(",
-                   "builder.call_extern_into("] {
+                   "builder.call_extern_into(", "builder.call_indirect("] {
         for (file, n) in count_occurrences(needle) {
             found.push((needle.to_string(), file, n));
         }
@@ -25159,7 +25194,16 @@ fn indirect_dispatch_results_registered_at_birth() {
     // Arm b — the routing pin. Deleting a routing (turning an arm back into a
     // raw producer) trips arm a; deleting it by rewriting the arm away trips
     // this one.
-    let routed = count_occurrences("call_indirect_tracked(builder");
+    // ⚠ THE NEEDLE IS `ctx.call_indirect_tracked(`, NOT
+    // `call_indirect_tracked(builder`. The old spelling counted the ARGUMENT
+    // LIST's first token, so wrapping a call across lines — which R49
+    // A2-alpha's multi-field `IndirectCallee::Value` argument forces — silently
+    // dropped that arm from the census: 5/4 read as 2/3 with all nine arms
+    // still routed. A ratchet a rustfmt-shaped line break can shrink is not
+    // measuring what it claims to. The receiver spelling is stable (every one
+    // of the nine is a method call on `ctx`) and still excludes the definition
+    // in `context.rs`, which has no receiver.
+    let routed = count_occurrences("ctx.call_indirect_tracked(");
     let expected_routed: Vec<(String, usize)> = INDIRECT_TRACKED_ARMS
         .iter()
         .map(|(f, n)| (f.to_string(), *n))
@@ -28443,12 +28487,17 @@ mod sanitize_corpus_manifest_lint {
 //      mints was measured and yields 100 tokens — the whole
 //      `{Type}__{method}` mangling family, far outside this ratchet's class;
 //      that wider family is `todo/t1054`.
-//   2. Identity by SENTINEL is invisible to any string census:
-//      `calls.rs`'s `if local_type_id == UNIT_TYPE { format!("__callable_{}", …) }`
-//      decides closure identity with no string to match at all. Layering
-//      rule 2 forbids "name prefixes, SENTINEL VALUES, or runtime-symbol
-//      conventions" in one breath, so it is in the class by the repo's own
-//      wording. It belongs to the `__callable_` convention (A2's split).
+//   2. Identity by SENTINEL is invisible to any string census, and it is
+//      STILL LIVE after A2-alpha. `calls.rs` decides "is this local a
+//      `Callable` parameter" with `if local_type_id == UNIT_TYPE` — a bare
+//      sentinel, no string to match at all. Layering rule 2 forbids "name
+//      prefixes, SENTINEL VALUES, or runtime-symbol conventions" in one
+//      breath, so it is in the class by the repo's own wording.
+//      ⚠ A2-alpha retired the `format!("__callable_{}", …)` that used to sit
+//      inside that arm — the callee's identity is a typed field on
+//      `Instruction::CallIndirect` now — but it did NOT un-erase the parameter
+//      TYPE, which is what makes the sentinel necessary in the first place.
+//      That is A2-beta's scope, and this row stays open until it lands.
 //   3. Comment lines are excluded, so a doc-comment quoting a retired
 //      predicate does not move the count.
 const CLOSURE_IDENTITY_LITERALS: &[&str] = &[
@@ -28516,14 +28565,26 @@ fn count_closure_identity_name_matches(root: &str, ext: &str) -> usize {
 /// Rust-lane budget. Seeded by R49 Track A1-IDENTITY, which retired every
 /// convention-1 (`__Closure_` / `__call`) predicate in `src/` in favour of the
 /// three typed carriers (`TypeMetadata::closure_call_fn`,
-/// `StructDef::closure_call_fn`, `ir::Function::takes_env`). What remains is
-/// the erased-callable convention (A2's), the spawn/async wrapper family, and
-/// the C-emit-boundary spawn spellings.
+/// `StructDef::closure_call_fn`, `ir::Function::takes_env`), then lowered from
+/// 30 to 19 by R49 Track A2-alpha, which retired convention 2 — the
+/// `__callable_` / `__gorget_closure_call_` erased-callable dispatch — by
+/// carrying the callee's identity on `Instruction::CallIndirect`. What remains
+/// is the spawn/async wrapper family and the C-emit-boundary spawn spellings.
+///
+/// ⚠ THE 11 RETIRED OCCURRENCES ARE STILL BOOKKEEPING, NOT THE CLASS
+/// RETIREMENT. This counter is textual: A1-IDENTITY measured that a one-line
+/// `const CALL_MARK: &str = concat!("__", "call");` hoist restores a
+/// miscompile with this lint fully green. What retires convention 2 is that
+/// after A2-alpha there is NO NAME TO MINT — a runtime-resolved callee's
+/// identity is a typed field on the instruction — and the behavioural guard
+/// for it is the `collide_*` / `sibling*` fixture family in
+/// `tests/fixtures/closure_identity/`, plus the mint ratchet
+/// `no_manufactured_indirect_callee_names` below.
 #[test]
 fn no_growth_in_closure_identity_name_matching() {
     /// EXACT count — see [`assert_exact_ratchet`] for why equality, and the
     /// block comment above for why a green run here proves less than it looks.
-    const CLOSURE_IDENTITY_BUDGET: usize = 30;
+    const CLOSURE_IDENTITY_BUDGET: usize = 19;
 
     let count = count_closure_identity_name_matches("src", "rs");
     assert_exact_ratchet(
@@ -28547,15 +28608,128 @@ fn no_growth_in_closure_identity_name_matching() {
     );
 }
 
+/// ⭐ R49 A2-alpha CLASS-RETIREMENT PIN (Core #6) — the lowering may not
+/// MANUFACTURE a callee name for a runtime-resolved dispatch.
+///
+/// THE CLASS. Four lowering arms used to spell their callee as
+/// `format!("__callable_{}", local)` / `format!("__gorget_closure_call_{}", …)`,
+/// emit a plain `Instruction::Call` with it, and inject the callable's
+/// signature into the module-global `fn_sigs` / `fn_param_ownerships` /
+/// `fn_param_abis` tables under it. That namespace is the one USER FUNCTIONS
+/// LIVE IN. An ordinary program declaring `int __callable_1(int, int)`
+/// alongside any closure call therefore had:
+///   • its closure call dispatched to the user's function — C: exit 0 with a
+///     nondeterministic heap-derived number, `gg check` clean; LLVM: `llc`
+///     type failure. Backends DISAGREED (Core #8);
+///   • its own direct call re-typed by the injected `unit` return type, so the
+///     result was DISCARDED and a constant `0` printed (Core #10);
+///   • with an arity disagreement, a build failure leaking the C compiler's
+///     own message and NO Gorget diagnostic at all;
+///   • through `extern "C" … = "__callable_probe"`, exit 139.
+///
+/// ⚠ WHY THE MINT AND NOT THE DECODE. `no_growth_in_closure_identity_name_matching`
+/// counts the READ sites, and A1-IDENTITY measured that a one-line
+/// `const CALL_MARK: &str = concat!("__", "call");` hoist evades an identical
+/// textual counter while the defect is live. The MINT is different: an arm that
+/// dispatches by name must PRODUCE the name, and the prefix has to appear
+/// somewhere for the emitted symbol to match the decode.
+///
+/// ⚠⚠ AND THAT IS STILL NOT AN ABSOLUTE — do not read this guard as one.
+/// `tests/lints.rs`'s own R47 Track B record shows a manufacture-route census
+/// is structurally blind to an arm that mints NO name (a `Constant::FuncRef`
+/// callee), and the self-host mints these very prefixes by STRING
+/// CONCATENATION (`"__callable_" + int_to_str(arity)`), which no `format!`
+/// census can see. What this pin does is make the four Rust-lane mints
+/// unrecoverable without a deliberate, visible edit; the class-retiring fact is
+/// that `Instruction::CallIndirect` carries the callee's identity, so a
+/// runtime-resolved callee has no name to mint in the first place. The
+/// behavioural guard is `tests/fixtures/closure_identity/collide_*`.
+///
+/// ⚠ THIS PIN CAN CATCH ITS OWN CLASS (Core #15e Q2): restoring any one of the
+/// four mints — the edit that reintroduces the defect — moves the count off 0.
+#[test]
+fn no_manufactured_indirect_callee_names() {
+    // Both prefixes, both mint spellings. `format!` is how all four were
+    // written; a bare literal in an assignment position is how a fifth would
+    // most naturally be, so it counts too.
+    let mint = regex::Regex::new(
+        r#"(?:format!\(\s*)?"(?:__callable_|__gorget_closure_call_)"#,
+    )
+    .unwrap();
+    let mut sites: Vec<String> = Vec::new();
+    visit("src", &mut |path| {
+        if path.extension().map_or(true, |e| e != "rs") {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for (i, line) in content.lines().enumerate() {
+            let t = line.trim_start();
+            // Prose ABOUT the retired convention is the point of the comments
+            // this track left behind; it must not read as a mint.
+            if t.starts_with("//") || t.starts_with('*') {
+                continue;
+            }
+            if mint.is_match(line) {
+                sites.push(format!(
+                    "{}:{} {}",
+                    path.to_string_lossy(),
+                    i + 1,
+                    line.trim()
+                ));
+            }
+        }
+    });
+    assert_eq!(
+        sites.len(),
+        0,
+        "A runtime-resolved callee's name is being MANUFACTURED again \
+         ({} site(s)).\n\n\
+         An indirect dispatch has no callee name. Its identity — the callee \
+         VALUE, its `ClosureDispatchKind` and its declared per-argument ABI — \
+         belongs on `Instruction::CallIndirect`, written by the arm that lowers \
+         the call and read at LIR lowering. Route the new arm through \
+         `LoweringContext::call_indirect_tracked` with \
+         `IndirectCallee::Value {{ .. }}`.\n\n\
+         ⚠ A manufactured name shares ONE FLAT, MODULE-GLOBAL, STRING-KEYED \
+         namespace with user function names, and `__callable_1` is a legal \
+         Gorget identifier and a legal `extern \"C\"` symbol. The four mints \
+         this pin replaced produced silent wrong output on the C backend, a \
+         hard `llc` failure on LLVM, a dropped call result, a build failure \
+         with no Gorget diagnostic, and a SIGSEGV — on programs that never \
+         mentioned a closure convention.\n\n\
+         Sites:\n  {}",
+        sites.len(),
+        sites.join("\n  "),
+    );
+}
+
 /// Self-host-lane sibling. Separate budget on purpose: one number over both
 /// trees lets a regression in one lane be masked by a migration in the other.
 ///
 /// ⚠ LIVE LANE DEBT. `lir_codegen.gg`'s `name.contains("__call")` is a VERBATIM
 /// mirror of the Rust `optimize.rs` DCE root-set seed that A1-IDENTITY retired,
 /// and `lir_codegen.gg` / `lir_lower.gg` still carry `starts_with("__Closure_")`
-/// probes. The self-host does NOT reproduce the Rust miscompile — it compiles
-/// and runs every `closure_arg_user_method_named_call*` fixture correctly — so
-/// this is layering debt, not a defect.
+/// probes. The self-host compiles and runs every
+/// `closure_arg_user_method_named_call*` fixture correctly — that clause was
+/// measured and holds, and it is scoped to the A1-IDENTITY family.
+///
+/// ⛔ THE CLAUSE THAT USED TO FOLLOW IT — *"so this is layering debt, not a
+/// defect"* — OVER-GENERALISED AND IS FALSE. It was written about convention 1
+/// and read as if it covered the whole lane. Convention 2 disproves it, and
+/// disproves it WIDER than the Rust twin ever was: `lir_lower.gg`'s
+/// `needs_ptr_arg` arg-ABI table address-takes argument 0 of ANY call whose
+/// callee NAME carries `__callable_` / `__gorget_closure_call_`, with no
+/// `func_index` precedence check — so a five-line program with NO CLOSURE
+/// ANYWHERE, just a user function named `__callable_1` and a direct call to
+/// it, is miscompiled on this lane while Rust gg is correct. The Rust decode
+/// was CONDITIONAL (a name lookup ran first); this one is UNCONDITIONAL.
+///
+/// Filed with a durable repro: `tests/fixtures/known_gaps/`
+/// `sh_indirect_callee_name_decode*.gg` + `todo/t1055`. The disposition is
+/// PER-CELL, never a blanket verdict for the lane.
 #[test]
 fn no_growth_in_self_host_closure_identity_name_matching() {
     /// EXACT count — see [`assert_exact_ratchet`].

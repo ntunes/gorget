@@ -6,7 +6,8 @@ use crate::ir::types::*;
 use crate::parser::ast::{self, Expr, Ownership};
 use crate::span::Spanned;
 
-use super::super::context::{LoweringContext, CollectionId, ParamABI};
+use super::super::context::{IndirectCallee, LoweringContext, CollectionId, ParamABI};
+use super::calls::CalleeAbi;
 use super::{lower_expr, lower_call_arg, maybe_auto_propagate, infer_operand_type_full, register_tuple_type,
             is_resource_type_local, is_single_owner_handle_local, get_or_register_type,
             ensure_box_type_def, ensure_guard_type_def, ensure_shared_type_def, ensure_weak_type_def,
@@ -847,7 +848,7 @@ pub(super) fn lower_method_call(
             // back to the trait forwarder `Hasher_for_H__write_int` for
             // user-defined Hashers that only provide the `equip H with
             // Hasher:` block (no inherent equip).
-            let h = lower_call_arg(ctx, builder, &args[0], None, "FxHasher__write_int", 0);
+            let h = lower_call_arg(ctx, builder, &args[0], None, CalleeAbi::Named("FxHasher__write_int"), 0);
             let hasher_type_name = infer_type_name_from_operand_full(ctx, &h, builder)
                 .unwrap_or_else(|| "FxHasher".to_string());
             let resolve_fn = |op: &str| -> String {
@@ -1961,7 +1962,7 @@ pub(super) fn lower_method_call(
                                     builder.call_void(mangled, call_args);
                                     return Operand::Constant(Constant::Unit);
                                 } else {
-                                    let dst = ctx.call_indirect_tracked(builder, mangled, call_args, ret_type);
+                                    let dst = ctx.call_indirect_tracked(builder, IndirectCallee::Named(mangled), call_args, ret_type);
                                     return FunctionBuilder::copy(dst);
                                 }
                             }
@@ -2810,7 +2811,7 @@ pub(super) fn lower_method_call(
                 }
                 // Method args: i is 0-based for non-self args, but fn_param_ownerships
                 // includes self at index 0, so offset by 1.
-                let op = lower_call_arg(ctx, builder, arg, callee_pt, &effective_name, i + 1);
+                let op = lower_call_arg(ctx, builder, arg, callee_pt, CalleeAbi::Named(&effective_name), i + 1);
                 if i == 0 {
                     // ⛔ TRAP: `infer_operand_type` (`type_reg.rs:285`) is the
                     // 2-argument sibling of this call. It scans only
@@ -3876,13 +3877,17 @@ fn call_closure_in_adapter(
                 builder.call_void(&call_fn, final_args);
                 return Operand::Constant(Constant::Unit);
             }
-            let dst = ctx.call_indirect_tracked(builder, &call_fn, final_args, ret_type);
+            let dst = ctx.call_indirect_tracked(builder, IndirectCallee::Named(call_fn.clone()), final_args, ret_type);
             return FunctionBuilder::copy(dst);
         }
-        // Fallback: __callable_N for callable parameters
-        let callable_name = format!("__callable_{}", place.local.0);
-        let mut final_args = vec![closure_op.clone()];
-        final_args.extend(call_args);
+        // Fallback: the receiver is a `Callable[T]` PARAMETER slot — a runtime
+        // value. It travels as one, with its layout on the instruction. The
+        // closure operand used to be pushed as argument 0 and recovered by
+        // position downstream; it is the `callee` field now, so the argument
+        // list is exactly the user's arguments. This arm never had a declared
+        // signature in scope, so `arg_abis` is empty — UNKNOWN, not "no
+        // borrows" — exactly as before.
+        let final_args = call_args;
         // READER 2 of the erased-Callable class (`t0770`). `fallback_ret_type`
         // is RECEIVER-derived (`some_ok_type` for `map`, `none_err_type` for
         // `map_err`) — correct only when the callable's return type happens to
@@ -3890,14 +3895,23 @@ fn call_closure_in_adapter(
         // the same accessor reader 1 uses, so the slot's TYPE and the indirect
         // call's CAST are always the same fact.
         let ret_type = callable_param_return_type(ctx, closure_op).unwrap_or(fallback_ret_type);
-        let dst = ctx.call_indirect_tracked(builder, callable_name, final_args, ret_type);
+        let dst = ctx.call_indirect_tracked(
+            builder,
+            IndirectCallee::Value {
+                callee: closure_op.clone(),
+                kind: crate::ir::abi::ClosureDispatchKind::CallableParam,
+                arg_abis: Vec::new(),
+            },
+            final_args,
+            ret_type,
+        );
         return FunctionBuilder::copy(dst);
     }
     if let Operand::Constant(Constant::FuncRef(name)) = closure_op {
         let ret_type = ctx.fn_sigs.get(name.as_str())
             .map(|(_, ret)| *ret)
             .unwrap_or(fallback_ret_type);
-        let dst = ctx.call_indirect_tracked(builder, name.clone(), call_args, ret_type);
+        let dst = ctx.call_indirect_tracked(builder, IndirectCallee::Named(name.clone()), call_args, ret_type);
         return FunctionBuilder::copy(dst);
     }
     Operand::Constant(Constant::Unit)

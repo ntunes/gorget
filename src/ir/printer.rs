@@ -512,11 +512,14 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
             }
             write!(out, ")").unwrap();
         }
-        Instruction::CallIndirect { dst, callee, args } => {
+        Instruction::CallIndirect { dst, callee, args, kind, arg_abis } => {
             if let Some(d) = dst {
                 write!(out, "_{} = ", d.0).unwrap();
             }
-            write!(out, "call_indirect {}(", format_operand(callee, reg)).unwrap();
+            // The callee's identity is ON the instruction, so it is what the
+            // dump shows — a `call_indirect` line that printed only the operand
+            // would hide the two facts that decide how it lowers.
+            write!(out, "call_indirect[{kind:?}] {}(", format_operand(callee, reg)).unwrap();
             for (i, a) in args.iter().enumerate() {
                 if i > 0 {
                     write!(out, ", ").unwrap();
@@ -524,6 +527,9 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
                 write!(out, "{}", format_operand(a, reg)).unwrap();
             }
             write!(out, ")").unwrap();
+            if !arg_abis.is_empty() {
+                write!(out, " abis={arg_abis:?}").unwrap();
+            }
         }
         Instruction::CallExtern { dst, func, args } => {
             if let Some(d) = dst {

@@ -415,9 +415,29 @@ fn check_instruction_calls(
     ctx: &str,
     errors: &mut Vec<ValidationError>,
 ) {
+    // ⚠ BOTH ARMS CARRIED `&& !func.starts_with("__callable_")
+    // && !func.starts_with("__gorget_closure_call_")`, carving the lowering's
+    // manufactured indirect-callee names out of the undefined-function check.
+    // With the callee's identity on `Instruction::CallIndirect` there are no
+    // such names to carve out, and a name-matched predicate that decides
+    // *meaning* is what devbook/24 rule 2 forbids — so it is deleted rather
+    // than documented.
+    //
+    // ⚠ IT WAS ALREADY DEAD, AND CLOSING IT DOES NOT MAKE THIS CHECK TOTAL.
+    // Measured two-stage: removing both predicates alone changes nothing (an
+    // ordinary `Callable` program still validates, byte-identical output);
+    // adding an early return in `auto_register_externs` (`lowering/mod.rs`,
+    // called before validation) is what makes the check fire. That sweeper
+    // registers EVERY unknown callee as a variadic extern with no name test
+    // anywhere in it, so `callables` contains every callee BY CONSTRUCTION,
+    // whatever it is called. Do not re-derive "undefined-function detection is
+    // now total": it is not, before or after. The sweeper is filed as
+    // `todo/t1116` with the blast radius measured (26 of 31 sampled fixtures
+    // fail with it off, on ordinary runtime spellings) — it cannot be fixed in
+    // passing.
     match inst {
         Instruction::Call { func, .. } => {
-            if !callables.contains(func.as_str()) && !func.starts_with("__callable_") && !func.starts_with("__gorget_closure_call_") {
+            if !callables.contains(func.as_str()) {
                 errors.push(ValidationError {
                     kind: ValidationErrorKind::UndefinedFunction(func.clone()),
                     context: ctx.into(),
@@ -425,7 +445,7 @@ fn check_instruction_calls(
             }
         }
         Instruction::CallExtern { func, .. } => {
-            if !callables.contains(func.as_str()) && !func.starts_with("__callable_") && !func.starts_with("__gorget_closure_call_") {
+            if !callables.contains(func.as_str()) {
                 errors.push(ValidationError {
                     kind: ValidationErrorKind::UndefinedFunction(func.clone()),
                     context: ctx.into(),

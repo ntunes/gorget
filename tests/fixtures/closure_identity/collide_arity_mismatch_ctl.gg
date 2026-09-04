@@ -1,0 +1,12 @@
+# Control for `collide_arity_mismatch.gg`: the same arity difference between a
+# one-argument free function and a one-argument closure, ordinary name. Built
+# and ran clean before the fix — so the RED was the collision, not the arity.
+int helper_1(int a):
+    return a
+
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    print(apply((int y): y * 2, 21))
+    print(helper_1(101))

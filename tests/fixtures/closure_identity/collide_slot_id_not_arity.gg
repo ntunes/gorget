@@ -1,0 +1,16 @@
+# The digits in the manufactured name were a LOCAL SLOT id, never an arity —
+# so `__callable_9` carrying a two-argument signature is not "the 9-arity one",
+# it is simply a name that may or may not collide with whatever slot the
+# closure call happened to occupy. Green on both Rust lanes before the fix
+# (nothing minted slot 9 here), so this is a DISCRIMINATION cell: it pins that
+# the fix does not regress the accidentally-correct path, and that a green
+# result here never meant the name was safe.
+int __callable_9(int a, int b):
+    return a + b
+
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    print(apply((int y): y * 2, 21))
+    print(__callable_9(40, 2))

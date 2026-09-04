@@ -1,0 +1,14 @@
+# SELF-HOST LANE GAP (`todo/t1055`), the WIDER cell: a real closure call and
+# the user's own direct call in one program. Rust gg got BOTH wrong before R49
+# Track A2-alpha and gets both right after; the self-host gets the closure call
+# right and the DIRECT call wrong, which is the mirror image and shows the two
+# lanes fail for different reasons.
+int __callable_1(int a, int b):
+    return a + b
+
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    print(apply((int y): y * 2, 21))
+    print(__callable_1(40, 2))

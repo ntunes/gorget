@@ -2203,7 +2203,7 @@ fn mark_instruction_locals(inst: &Instruction, referenced: &mut [bool]) {
             if let Some(d) = dst { mark_local(d.0, referenced); }
             for a in args { mark_operand(a, referenced); }
         }
-        Instruction::CallIndirect { dst, callee, args } => {
+        Instruction::CallIndirect { dst, callee, args, .. } => {
             if let Some(d) = dst { mark_local(d.0, referenced); }
             mark_operand(callee, referenced);
             for a in args { mark_operand(a, referenced); }
@@ -2355,7 +2355,7 @@ fn remap_instruction_locals(inst: &mut Instruction, remap: &[u32]) {
             if let Some(d) = dst { remap_local(d, remap); }
             for a in args { remap_operand(a, remap); }
         }
-        Instruction::CallIndirect { dst, callee, args } => {
+        Instruction::CallIndirect { dst, callee, args, .. } => {
             if let Some(d) = dst { remap_local(d, remap); }
             remap_operand(callee, remap);
             for a in args { remap_operand(a, remap); }

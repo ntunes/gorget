@@ -1,42 +1,72 @@
-# KNOWN GAP — ICE: calling a `Callable[...]`-typed LOCAL VARIABLE with a
-# CONSUMING argument panics the Rust lowerer.
+# ⚠ THIS FILE HOSTS TWO TESTS AND ONLY ONE OF THEM IS A GAP. Read both before
+# concluding anything about it.
 #
-#   thread 'gg-main' panicked at src/ir/lowering/mod.rs:2114:
+# ── THE RUST LANE: FIXED (R49 Track A2-α, `t0389` closed) ──
+# Calling a `Callable[...]`-typed LOCAL VARIABLE with a consuming argument used
+# to panic the Rust lowerer on a program `gg check` accepted:
+#
+#   thread 'gg-main' panicked at src/ir/lowering/mod.rs:2154:
 #   Tier 2a consume-site violation: 1 violation(s) in module '<unknown>'.
 #   First: fn @main bb0 i5 — CollectionMutator(__gorget_closure_call_3,
 #   arg #0) — untracked source consumed (ownership not decided).
 #
-# `gg check` passes cleanly; the panic is at IR lowering, so this is a
-# crash-on-valid-program, not a rejected program.
+# ⭐ THE ICE WAS A FALSE POSITIVE MANUFACTURED BY THE CALLEE'S OWN NAME.
+# `is_consume_extern` asks `module.consume_externs`, a set derived at module
+# finalization from `fn_param_ownerships` by taking every function with an
+# `Ownership::Move` parameter. The closure-call arm had INJECTED the callable's
+# ownerships into `fn_param_ownerships` under its manufactured
+# `__gorget_closure_call_<slot>` key — purely so `lower_call_arg` could read
+# them back — so finalization duly derived the SYNTHETIC name into
+# `consume_externs`, and the validator demanded a decided ownership for an
+# argument no arm had registered. A compiler-invented callee was classified as
+# a collection mutator because a table keyed by a made-up name said so. With
+# the callee's identity on `Instruction::CallIndirect` there is no key, no
+# derived entry and no violation.
 #
+# Asserted LIVE by `callable_local_var_consuming_arg` on both Rust backends;
+# ASan-clean under `detect_leaks=1`.
+#
+# ── THE SELF-HOST LANE: STILL A GAP (`todo/t1118`) ──
+# The self-host emits C that compiles clean and then exits 139.
+#
+# ⚠ `t0389` RECORDED THE OPPOSITE — "PANICS Rust gg while the SELF-HOST prints
+# correctly", a *reference lags the self-host* cell. That half has DECAYED.
+# Re-measured 2026-09-04 with a driver built from PRISTINE committed source, so
+# it is PRE-EXISTING: A2-α neither caused it nor fixed it. Asserted by the
+# `#[ignore]`d `sh_callable_local_var_consuming_arg`, which is why this file
+# stays under `known_gaps/` even though its Rust test is live — a live test is
+# invisible to `scripts/known_gaps_census.sh`, so without that row nothing
+# would ever notice the self-host half being fixed.
+#
+# ⚠ AND IT IS NOT `t1055`. That item is the self-host's indirect-callee NAME
+# decode firing on a USER function's spelling. Here the callee genuinely IS a
+# closure, so the prefix decode is doing its job. Different mechanism.
+#
+# ── WHY IT STAYS IN `known_gaps/` RATHER THAN MOVING TOP-LEVEL ──
+# `tests/fixtures/*.gg` is auto-scanned into `runtime_parity_corpus`, which
+# gates the self-host lane. Moving this file would enrol a self-host SEGV there
+# — raising the runtime-diff non-match count for a track's own inflow, which is
+# exactly what a track may not do. It moves the round `t1118` closes.
+#
+# ── SHAPE NOTES (still current) ──
 # GLYPH-INDEPENDENT: the retired-glyph twin (`String !s` in the signature,
-# `Callable[void(int &, String !)]` in the type, `f(&a, !greeting)` at the
-# call) panics with the BYTE-IDENTICAL message. So this is NOT a D27
-# accept-both issue — it is an ownership-tracking hole for the
-# closure-call path.
+# `Callable[void(int &, String !)]` in the type, `f(&a, !greeting)` at the call)
+# panicked with the BYTE-IDENTICAL message, so this was never a D27 issue.
 #
 # DISCRIMINATOR vs the working case: the same program with an INDEXED callee
-# compiles and runs fine —
+# always compiled and ran on the Rust lane —
 #   Vector[Callable[void(int &, String ^)]] arr = []
 #   arr.push(mix)
 #   arr[0](&a, ^greeting)
-# — which is exactly `callable_bang_arr_indexed_callee.gg`, the one in-corpus
-# cell of that shape. So the hole is specific to calling a Callable-typed
-# LOCAL BINDING, not to Callable calls in general: the indexed form registers
-# the consume site, the bare-variable form does not.
+# — which is `callable_bang_arr_indexed_callee.gg`, the one in-corpus cell of
+# that shape. That is what identified the hole as specific to calling a
+# Callable-typed LOCAL BINDING. (`d27_sh_caret_fntype_param_suffix.gg` is NOT a
+# caret twin of the indexed shape: it passes its callable as a PARAMETER and
+# shares only the fn-type param-suffix parse position. The indexed shape also
+# runs on the Rust lane ONLY — it times out on the self-host runtime lane,
+# filed separately.)
 #
-# ⚠ `d27_sh_caret_fntype_param_suffix.gg` is NOT a caret twin of the indexed
-# shape — it passes its callable as a PARAMETER, and shares only the fn-type
-# param-suffix parse position. No caret indexed-callee cell exists. (The
-# indexed shape also runs on the Rust lane ONLY: it times out on the self-host
-# runtime lane, filed separately.)
-#
-# INTENDED behaviour: this compiles and runs, printing the two lines below.
-# Per Core #3 the fix belongs at the PRODUCER — the closure-call lowering
-# must register the argument's ownership at the consume site, the same way
-# the indexed-callee path already does — not at the validator's read site.
-#
-# Expected stdout: hi\n101
+# Expected stdout on BOTH lanes: hi\n101
 
 void mix(int &n, String ^s):
     n = n + 100

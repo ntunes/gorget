@@ -1,0 +1,16 @@
+# The OTHER namespace. `extern "C"` lets the user pick the emitted C symbol
+# outright, and the decode tested the emitted symbol — so binding an extern to
+# `__callable_probe` had an ordinary `int` argument dereferenced as a
+# `void*[2]` closure: SIGSEGV on the C lane with no diagnostic at all, and an
+# `llc` type failure on LLVM.
+#
+# ⚠ BUILD-ONLY BY CONSTRUCTION: nothing in this program defines
+# `__callable_probe`, so the correct outcome is a LINK failure naming the
+# missing symbol — the same outcome any extern to an undefined symbol gets.
+# There is no stdout to assert; the assertion is that the build fails HONESTLY
+# instead of producing a binary that segfaults.
+extern "C":
+    extern int probe_add(int a, int b) = "__callable_probe"
+
+void main():
+    print(probe_add(40, 2))

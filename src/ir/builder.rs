@@ -412,17 +412,42 @@ impl FunctionBuilder {
         })
     }
 
+    /// Emit an indirect (runtime-resolved) call producing a value.
+    ///
+    /// Prefer `LoweringContext::call_indirect_tracked`, which also registers
+    /// the freshly materialized result for drop at its birth (Core #3).
     pub fn call_indirect(
         &mut self,
         callee: Operand,
         args: Vec<Operand>,
         return_type: TypeId,
+        kind: crate::ir::abi::ClosureDispatchKind,
+        arg_abis: Vec<crate::ir::lowering::context::ParamABI>,
     ) -> LocalId {
         self.emit_with_temp(return_type, |dst| Instruction::CallIndirect {
             dst: Some(dst),
             callee,
             args,
+            kind,
+            arg_abis,
         })
+    }
+
+    /// Emit an indirect call whose result is discarded (a `void` callee).
+    pub fn call_indirect_void(
+        &mut self,
+        callee: Operand,
+        args: Vec<Operand>,
+        kind: crate::ir::abi::ClosureDispatchKind,
+        arg_abis: Vec<crate::ir::lowering::context::ParamABI>,
+    ) {
+        self.emit(Instruction::CallIndirect {
+            dst: None,
+            callee,
+            args,
+            kind,
+            arg_abis,
+        });
     }
 
     pub fn call_extern(

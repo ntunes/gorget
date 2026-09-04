@@ -1,0 +1,17 @@
+# The severity leader. A user function named `__callable_1` plus ANY closure
+# call in the same module: the closure call's manufactured callee name found
+# the user's function already occupying that slot in the module's flat,
+# string-keyed function table, and dispatched to it — handing the closure's
+# `void*[2]` block to a function expecting an `int`.
+#
+# Before the fix: C printed a nondeterministic heap-pointer-derived number with
+# exit 0 (SILENT WRONG OUTPUT); LLVM refused with `'%v2' defined with type
+# 'i64' but expected 'ptr'`. ggdef adjudicates 42.
+int __callable_1(int a, int b):
+    return a + b
+
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    print(apply((int y): y * 2, 21))

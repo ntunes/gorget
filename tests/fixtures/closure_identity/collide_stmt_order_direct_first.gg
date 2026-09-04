@@ -1,0 +1,18 @@
+# The cell that ISOLATES the variable: `collide_decl_order_main_first.gg`
+# changed BOTH declaration order and statement order at once. This one keeps
+# `apply` declared first (as in `collide_direct_call_result_dropped.gg`) and
+# reverses only the STATEMENT order.
+#
+# Before the fix it printed `0` then garbage — the same failure as the
+# declaration-order twin, in the opposite print. Same statement order as
+# `collide_decl_order_main_first.gg`, opposite result ⇒ the discriminator was
+# DECLARATION (lowering) order, not statement order.
+int __callable_1(int a, int b):
+    return a + b
+
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    print(__callable_1(40, 2))
+    print(apply((int y): y * 2, 21))

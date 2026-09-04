@@ -1,0 +1,10 @@
+# Control for `collide_closure_call.gg`: the same closure call, ordinary name.
+# Green before AND after — the fixture's RED came from the NAME, not the shape.
+int helper_1(int a, int b):
+    return a + b
+
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    print(apply((int y): y * 2, 21))

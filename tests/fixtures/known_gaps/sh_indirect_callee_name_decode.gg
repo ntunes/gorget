@@ -1,0 +1,20 @@
+# SELF-HOST LANE GAP (`todo/t1055`). The MINIMAL cell: no closure anywhere in
+# the program, just a user function whose name matches the prefix the compiler
+# used to manufacture for indirect dispatch, and a direct call to it.
+#
+# Rust gg is CORRECT here and always was — its decode ran a `func_index` lookup
+# first, so the user's function won. The self-host has no such precedence
+# check: `needs_ptr_arg` in `tests/fixtures/self_host_lowerer/lir_lower.gg`
+# address-takes argument 0 of ANY call whose callee NAME starts with
+# `__callable_` / `__gorget_closure_call_`, so this direct call is emitted as
+# `__callable_1(&stack_slot, 2)` and prints a stack address plus two.
+#
+# ⚠ THE SELF-HOST DEFECT IS STRICTLY WIDER THAN THE RUST ONE WAS: it needs no
+# closure, no signature injection, and no collision with a compiler-minted slot
+# id — only the spelling. Fixing it means porting a typed carrier, not copying
+# the Rust arm.
+int __callable_1(int a, int b):
+    return a + b
+
+void main():
+    print(__callable_1(40, 2))

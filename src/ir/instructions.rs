@@ -325,12 +325,39 @@ pub enum Instruction {
         /// sees it.
         reason: Option<crate::ir::ImplicitCloneReason>,
     },
-    /// Reserved for future dynamic dispatch (function pointers, closures).
-    /// Currently not emitted by the lowering layer.
+    /// A call whose callee is selected at RUN TIME — a `Callable[T]` slot or
+    /// an escaped closure value.
+    ///
+    /// **The callee's identity travels HERE, on the instruction.** Before this
+    /// existed, every indirect-dispatch arm manufactured a mangled name
+    /// (`__callable_<local>`, `__gorget_closure_call_<local>`) and emitted a
+    /// plain [`Instruction::Call`], leaving three layers below to recognise the
+    /// SPELLING. That is a runtime-resolved callee crossing a layer boundary as
+    /// a name — devbook/24 rule 2 — and it was not merely a smell: the
+    /// synthetic name shares one flat, module-global, string-keyed namespace
+    /// with USER function names, so an ordinary Gorget program declaring
+    /// `int __callable_1(int, int)` had its closure calls dispatched to the
+    /// user's function and its own direct calls re-typed by the closure arm's
+    /// signature injection — silent wrong output on the C backend, a hard
+    /// `llc` failure on LLVM.
+    ///
+    /// A runtime-resolved callee has no name, so with the identity carried
+    /// here there is nothing to collide, nothing to inject, and nothing
+    /// downstream to reconstruct.
     CallIndirect {
         dst: Option<LocalId>,
+        /// The closure/callable VALUE being called.
         callee: Operand,
+        /// The user arguments — NOT including the closure itself.
         args: Vec<Operand>,
+        /// The callee value's memory layout, written by the arm that lowered
+        /// the call (the only place that knows) and read at LIR lowering.
+        kind: crate::ir::abi::ClosureDispatchKind,
+        /// The callee's DECLARED per-argument ABI, from its spelled signature.
+        /// Empty means the signature never reached this site — UNKNOWN, not
+        /// "no borrows"; the LIR write site reports those under
+        /// `GG_REPORT_CLOSURE_ABI_GUESS`.
+        arg_abis: Vec<crate::ir::lowering::context::ParamABI>,
     },
     CallExtern {
         dst: Option<LocalId>,

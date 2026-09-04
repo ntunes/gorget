@@ -839,11 +839,28 @@ impl<'a> FuncLowering<'a> {
                 }
             }
 
-            Instruction::CallIndirect { dst, callee, args } => {
-                let callee_val = self.lower_operand(callee, bb);
-                let lir_args: Vec<ValueId> =
+            // An indirect call arrives with its callee's IDENTITY on it: the
+            // dispatch layout and the declared per-argument ABI were written by
+            // the GIR arm that lowered the call. Nothing here re-derives either
+            // from a name — a runtime-resolved callee has none.
+            //
+            // This is the ONLY producer of `Inst::CallClosure` in this file.
+            // What used to reach it was a name-decode inside `emit_extern_call`,
+            // and that decode sat on the MISS branch of a `func_index` lookup —
+            // so a user function occupying the manufactured name won the lookup
+            // and the closure call went to it instead. There is no lookup on
+            // this path, because there is no name to look up.
+            //
+            // A closure environment's `__Closure_N__call` thunk is unaffected:
+            // it is a genuine emitted function, reaches `Instruction::Call`
+            // through `IndirectCallee::Named`, and resolves to a direct
+            // `Inst::Call` exactly as any other defined callee does.
+            Instruction::CallIndirect { dst, callee, args, kind, arg_abis } => {
+                let closure_val = self.lower_operand(callee, bb);
+                let user_args: Vec<ValueId> =
                     args.iter().map(|a| self.lower_operand(a, bb)).collect();
-                let result = dst.map(|_| self.lir_func.next_value());
+                let arg_types: Vec<LirType> =
+                    args.iter().map(|a| self.operand_lir_type(a)).collect();
                 let ret_ty = match dst {
                     Some(d) => {
                         let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
@@ -851,16 +868,29 @@ impl<'a> FuncLowering<'a> {
                     }
                     None => LirType::Void,
                 };
-                self.push_inst(bb, Inst::CallPtr {
+                let user_abis = self.closure_arg_abis(
+                    Some(callee),
+                    arg_abis,
+                    &arg_types,
+                    user_args.len(),
+                );
+                let is_void_ret = matches!(ret_ty, LirType::Void);
+                let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
+                self.push_inst(bb, Inst::CallClosure {
                     dst: result,
-                    callee: callee_val,
-                    args: lir_args,
+                    kind: *kind,
+                    closure: closure_val,
+                    args: user_args,
+                    arg_abis: user_abis,
                     ret_ty,
                 });
                 if let (Some(d), Some(r)) = (*dst, result) {
                     self.store_to_local(d, r, bb);
                 }
                 // Post-call zeroing for Move operands (Rust-style ownership).
+                // The callee operand is scanned too: a `Move`d closure value is
+                // as consumed as a `Move`d argument.
+                self.emit_post_call_zeros(std::slice::from_ref(callee), bb);
                 self.emit_post_call_zeros(args, bb);
             }
 
@@ -3913,116 +3943,22 @@ impl<'a> FuncLowering<'a> {
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
             self.map_type(&gir_ty)
         }).unwrap_or(LirType::Void);
-        // Closure dispatch: promote to CallClosure instead of CallExtern.
-        if (emit_name.starts_with("__callable_") || emit_name.starts_with("__gorget_closure_call_"))
-            && !lir_args.is_empty()
-        {
-            let kind = if emit_name.starts_with("__callable_") {
-                ClosureDispatchKind::CallableParam
-            } else {
-                ClosureDispatchKind::EscapedClosure
-            };
-            let closure_val = lir_args[0];
-            let user_args = lir_args[1..].to_vec();
-            // Look up ABI tags from the canonical pipeline (ensure_extern populates them).
-            let unique_name = format!("{}__{}", emit_name, self.lir_func.name.replace("::", "__"));
-            self.ensure_extern(&unique_name, &arg_types, &ret_ty);
-            let call_arg_abis = self.lookup_arg_abis(&unique_name);
-            // Skip the closure arg's ABI — only user args need annotation.
-            let mut user_abis = if call_arg_abis.len() > 1 {
-                call_arg_abis[1..].to_vec()
-            } else {
-                vec![]
-            };
-            while user_abis.len() < user_args.len() {
-                user_abis.push(crate::ir::abi::AbiKind::Auto);
-            }
-            // Step 6 of the BIR lift plan: annotate small-aggregate-by-value args
-            // with `AbiKind::ByValue`. The LLVM backend formerly decided this by
-            // scanning for `SlotAddr` producers of each arg (the heuristic in
-            // commit 3a858bcb). Declared LIR signatures are authoritative here —
-            // `operand_lir_type` returns the closure's declared param type, and
-            // `is_small_aggregate` gives the same threshold the backend uses.
-            let user_arg_types = if arg_types.len() > 1 { &arg_types[1..] } else { &arg_types[..0] };
-            for (i, ty) in user_arg_types.iter().enumerate().take(user_abis.len()) {
-                if user_abis[i] == crate::ir::abi::AbiKind::Auto {
-                    if let LirType::Struct(sid) = ty {
-                        let sdef = &self.module_structs[sid.0 as usize];
-                        if !sdef.is_union_layout
-                            && super::types::is_small_aggregate(ty, self.module_structs)
-                        {
-                            user_abis[i] = crate::ir::abi::AbiKind::ByValue;
-                        }
-                    }
-                }
-            }
-            // ── The indirect-call argument ABI is a WRITE, not a guess ──────
-            // The invariant, spelled once: **an argument's ABI at an indirect
-            // call is the CALLEE's DECLARED parameter ABI** — the same fact the
-            // `__adapt_*` shim emitter derives from `LirFunction.params`
-            // (`src/backend/c_lir/mod.rs`, adapter emission). A `&`
-            // (`MutableBorrow`) param is a POINTER in that declared signature,
-            // so the call site forwards the pointer.
-            //
-            // Leaving it `Auto` here made BOTH backends reconstruct the
-            // decision from the ARGUMENT's pointee SHAPE
-            // (`is_aggregate() && !contains_resource`) — two independent
-            // guesses at one missing fact. The guess coincides with the truth
-            // for scalars and for resource aggregates, and DIVERGES for a
-            // non-resource aggregate behind a `&`: the call site then passed
-            // the struct by value where the callee (and its adapter) declared
-            // `void*` — SIGSEGV, or a silently lost write-through where the
-            // platform ABI hands large aggregates over in a hidden-pointer slot.
-            //
-            // Params whose ownership is not known HERE keep whatever the
-            // by-value promotion above decided: `declared_closure_param_by_ptr`
-            // returns empty when the signature reached NEITHER of its two
-            // channels (a container element's `FnPtr` carries no params, and an
-            // `auto`-bound callable publishes nothing), and empty means
-            // UNKNOWN, not "no borrows". Those sites are exactly what the
-            // `GG_REPORT_CLOSURE_ABI_GUESS` guard below reports.
-            let by_ptr = self.declared_closure_param_by_ptr(args.first(), emit_name);
-            for (i, is_ptr) in by_ptr.iter().enumerate().take(user_abis.len()) {
-                if *is_ptr {
-                    user_abis[i] = crate::ir::abi::AbiKind::Ptr;
-                }
-            }
-            // GUARD G1 (Core #6) — "the declared ABI never reached this write
-            // site". An indirect call with user args whose callee signature is
-            // in NEITHER channel is precisely the state in which the backends
-            // must guess from the argument's shape, which is the defect class
-            // this write site retires. Reported, not fatal: a legitimately
-            // by-value large aggregate also leaves `Auto` here, so the terminal
-            // state is a shrinking allowlist, not an assert. Census:
-            //   GG_REPORT_CLOSURE_ABI_GUESS=1 gg build <fixture>
-            // Ratchet: `closure_abi_declared_signature_census` in tests/integration.rs.
-            if by_ptr.is_empty()
-                && !user_args.is_empty()
-                && std::env::var_os("GG_REPORT_CLOSURE_ABI_GUESS").is_some()
-            {
-                eprintln!(
-                    "[closure-abi-unknown] fn={} callee={} args={}",
-                    self.lir_func.name,
-                    emit_name,
-                    user_args.len()
-                );
-            }
-            let is_void_ret = matches!(ret_ty, LirType::Void);
-            let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
-            self.push_inst(bb, Inst::CallClosure {
-                dst: result,
-                kind,
-                closure: closure_val,
-                args: user_args,
-                arg_abis: user_abis,
-                ret_ty: ret_ty.clone(),
-            });
-            if let (Some(d), Some(r)) = (*dst, result) {
-                self.store_to_local(d, r, bb);
-            }
-            self.emit_post_call_zeros(args, bb);
-            return bb;
-        }
+        // ⚠ THE CLOSURE-DISPATCH PROMOTION USED TO SIT HERE, and it was a
+        // NAME test: `emit_name.starts_with("__callable_" | "__gorget_closure_call_")`
+        // promoted the call to `Inst::CallClosure` and picked the dispatch
+        // layout from WHICH prefix matched. It existed only to recognise the
+        // names the GIR lowering had manufactured one layer up, so with the
+        // callee's identity carried on `Instruction::CallIndirect` it has no
+        // legitimate input left — and every input it COULD still have is a
+        // genuine user symbol it must not hijack. A user function named
+        // `__callable_1`, or an `extern "C"` binding to that C symbol, reached
+        // this arm and had an ordinary integer argument dereferenced as a
+        // `void*[2]` closure: silent wrong output on C, a hard `llc` type
+        // failure on LLVM, SIGSEGV for the extern spelling.
+        //
+        // Deleted, not narrowed: there is no narrowing that distinguishes
+        // "a name the compiler minted" from "a name the user wrote" once both
+        // are strings in one flat namespace. See `Instruction::CallIndirect`.
 
         // ── Tier 1: Return-value wrapping lifts ──────────────────────────
         if let Some(d) = *dst {

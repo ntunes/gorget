@@ -8,25 +8,12 @@ use crate::parser::ast::{self, Expr, Ownership};
 use crate::parser::Parser;
 use crate::span::Spanned;
 
-use super::super::context::{LoweringContext, ParamABI};
+use super::super::context::{IndirectCallee, LoweringContext, ParamABI};
 use super::{lower_expr, infer_operand_type_full,
             ensure_box_type_def, ensure_mutex_type_def, ensure_shared_type_def,
             ensure_task_group_type_def, get_or_register_type,
             resolve_option_result_variant, lower_string_interpolation};
 
-/// Publish an indirect callee's DECLARED param ABIs into
-/// `fn_param_abis`, keyed by [`crate::ir::abi::indirect_callee_key`].
-///
-/// GIR→LIR erases a `Callable[..]` PARAMETER's type to `unit`, so by the time
-/// `Inst::CallClosure` is built the callee's `&`-ness is unrecoverable from the
-/// operand and the backends guess it from the ARGUMENT's shape instead — the
-/// R43 Track C defect. This is the last point in the pipeline where the
-/// declared signature is still in scope, so the fact is written here and read
-/// there (devbook/24 rule 4, resolve once + write through) rather than
-/// reconstructed downstream.
-///
-/// The key is per-call-site: the synthetic name embeds a per-function local id
-/// and would otherwise collide across functions.
 /// GUARD G2 (Core #6/#10) — "the callable's declared SIGNATURE was erased
 /// before the argument loop". Both indirect-call arms fall back to a legacy
 /// path when the `callable_param_types` / `callable_param_ownerships` sidecars
@@ -41,29 +28,93 @@ use super::{lower_expr, infer_operand_type_full,
 ///
 /// Census: `GG_REPORT_CALLABLE_SIG_ERASED=1 gg build <fixture>`;
 /// ratchet: `closure_abi_declared_signature_census` in tests/integration.rs.
-fn report_callable_sig_erased(callable_name: &str, arm: &str, args: usize) {
+fn report_callable_sig_erased(
+    kind: crate::ir::abi::ClosureDispatchKind,
+    arm: &str,
+    args: usize,
+) {
     if std::env::var_os("GG_REPORT_CALLABLE_SIG_ERASED").is_some() {
-        eprintln!("[callable-sig-erased] callee={callable_name} arm={arm} args={args}");
+        eprintln!("[callable-sig-erased] callee=<indirect:{kind:?}> arm={arm} args={args}");
     }
 }
 
-fn publish_indirect_callee_abis(
+/// Resolve an indirect callee's DECLARED per-argument ABI from its spelled
+/// signature, for the `arg_abis` field of `Instruction::CallIndirect`.
+///
+/// This used to be `publish_indirect_callee_abis`, which wrote the same vector
+/// into the module-global `fn_param_abis` map under a synthesised key
+/// (`__callable_<local>@<enclosing fn>`) so that LIR lowering could look it up
+/// again by re-synthesising the identical key. Both ends now hold the fact
+/// directly — the producer computes it, the instruction carries it, the
+/// consumer reads it — so the key, the map entry and the lookup are all gone.
+fn declared_indirect_abis(
     ctx: &mut LoweringContext,
-    builder: &FunctionBuilder,
-    callable_name: &str,
     sig_params: &[TypeId],
     sig_owns: &[Ownership],
-) {
-    let abis: Vec<ParamABI> = sig_params
+) -> Vec<ParamABI> {
+    sig_params
         .iter()
         .zip(sig_owns.iter())
         .map(|(&pt, own)| ctx.compute_param_abi(pt, own.clone()))
-        .collect();
-    if abis.is_empty() {
-        return;
+        .collect()
+}
+
+/// Where `lower_call_arg` reads the callee's declared per-argument ABI from.
+///
+/// A DIRECT call names its callee, and at a direct call the name genuinely IS
+/// the callee — the module's `fn_param_abis` / `fn_param_ownerships` tables are
+/// keyed by it and answer correctly.
+///
+/// An INDIRECT call has no callee name. It used to manufacture one
+/// (`__callable_<local>`) and *inject* the callable's signature into those same
+/// module-global tables under it, purely so this function could read it back
+/// out one line later. The injection landed in the namespace user functions
+/// live in, so a program declaring `int __callable_1(int, int)` had its own
+/// direct calls silently re-typed by a closure's signature. The declared
+/// signature is already in hand at the indirect call site — [`Self::Declared`]
+/// hands it over directly, and nothing is written to a shared table at all.
+#[derive(Clone, Copy)]
+pub(super) enum CalleeAbi<'a> {
+    /// A statically named callee — read the module tables.
+    Named(&'a str),
+    /// An indirect callee — its declared signature, passed by the call site.
+    /// Empty slices mean the signature was never spelled (UNKNOWN).
+    Declared {
+        abis: &'a [ParamABI],
+        ownerships: &'a [Ownership],
+    },
+}
+
+/// The callee's declared `ParamABI` for one argument position.
+fn callee_param_abi(
+    ctx: &LoweringContext,
+    callee: CalleeAbi<'_>,
+    arg_idx: usize,
+) -> Option<ParamABI> {
+    match callee {
+        CalleeAbi::Named(name) => ctx
+            .fn_param_abis
+            .get(name)
+            .and_then(|abis| abis.get(arg_idx))
+            .copied(),
+        CalleeAbi::Declared { abis, .. } => abis.get(arg_idx).copied(),
     }
-    let key = crate::ir::abi::indirect_callee_key(callable_name, &builder.name);
-    ctx.fn_param_abis.insert(key, abis);
+}
+
+/// The callee's declared `Ownership` sigil for one argument position.
+fn callee_param_ownership(
+    ctx: &LoweringContext,
+    callee: CalleeAbi<'_>,
+    arg_idx: usize,
+) -> Option<Ownership> {
+    match callee {
+        CalleeAbi::Named(name) => ctx
+            .fn_param_ownerships
+            .get(name)
+            .and_then(|ownerships| ownerships.get(arg_idx))
+            .copied(),
+        CalleeAbi::Declared { ownerships, .. } => ownerships.get(arg_idx).copied(),
+    }
 }
 
 pub(super) fn lower_call_arg(
@@ -71,13 +122,11 @@ pub(super) fn lower_call_arg(
     builder: &mut FunctionBuilder,
     arg: &Spanned<ast::CallArg>,
     callee_param_type: Option<TypeId>,
-    callee_name: &str,
+    callee: CalleeAbi<'_>,
     arg_idx: usize,
 ) -> Operand {
     // Look up the unified ParamABI (single source of truth when available).
-    let abi = ctx.fn_param_abis.get(callee_name)
-        .and_then(|abis| abis.get(arg_idx))
-        .copied();
+    let abi = callee_param_abi(ctx, callee, arg_idx);
 
     // Whether the callee's parameter is a Move type (passed by pointer).
     // Use ParamABI when available, fall back to type-based derivation for extern/runtime fns.
@@ -90,9 +139,7 @@ pub(super) fn lower_call_arg(
     let callee_passes_by_ptr = match abi {
         Some(abi) => abi != ParamABI::ByValue,
         None => {
-            let callee_param_ownership = ctx.fn_param_ownerships.get(callee_name)
-                .and_then(|ownerships| ownerships.get(arg_idx))
-                .copied();
+            let callee_param_ownership = callee_param_ownership(ctx, callee, arg_idx);
             let callee_param_is_mut_borrow = callee_param_ownership
                 .map(|o| matches!(o, Ownership::MutableBorrow))
                 .unwrap_or(false);
@@ -573,9 +620,7 @@ pub(super) fn lower_call_arg(
             // Bare call-site: emit const Ptr by default.
             // Exception: when the callee's param ownership is Move (e.g., generic functions
             // that return a Move-type parameter directly), use MutPtr to transfer ownership.
-            let callee_param_ownership = ctx.fn_param_ownerships.get(callee_name)
-                .and_then(|ownerships| ownerships.get(arg_idx))
-                .copied();
+            let callee_param_ownership = callee_param_ownership(ctx, callee, arg_idx);
             let use_mut_ptr = matches!(callee_param_ownership, Some(Ownership::Move));
             // GlobalRef → GlobalRefPtr: emit &global_name directly.
             if let Operand::Constant(Constant::GlobalRef(name)) = &val {
@@ -1973,7 +2018,7 @@ pub(super) fn lower_call(
                 let sig_params = ctx.fn_sigs.get(call_fn.as_str()).map(|(p, _)| p.clone());
                 for (i, arg) in args.iter().enumerate() {
                     let param_type = sig_params.as_ref().and_then(|p| p.get(i + 1).copied());
-                    call_args.push(lower_call_arg(ctx, builder, arg, param_type, &call_fn, i + 1));
+                    call_args.push(lower_call_arg(ctx, builder, arg, param_type, CalleeAbi::Named(&call_fn), i + 1));
                 }
                 let ret_type = if let Some((_, ret)) = ctx.fn_sigs.get(call_fn.as_str()) {
                     *ret
@@ -1984,15 +2029,17 @@ pub(super) fn lower_call(
                     builder.call_void(call_fn, call_args);
                     return Operand::Constant(Constant::Unit);
                 } else {
-                    let dst = ctx.call_indirect_tracked(builder, call_fn, call_args, ret_type);
+                    let dst = ctx.call_indirect_tracked(builder, IndirectCallee::Named(call_fn), call_args, ret_type);
                     return FunctionBuilder::copy(dst);
                 }
             }
-            // Callable parameter call: local exists with void* type (UNIT_TYPE)
-            // Emit as __callable_N where N is the local ID, which the C backend
-            // will recognize and emit as an indirect function pointer call.
+            // Callable parameter call: local exists with void* type (UNIT_TYPE).
+            // The callee is a runtime VALUE, so it travels as one — on
+            // `Instruction::CallIndirect`, carrying its layout and its declared
+            // per-argument ABI. Nothing downstream re-derives either from a
+            // spelling, because there is no spelling.
             if local_type_id == UNIT_TYPE {
-                let callable_name = format!("__callable_{}", local_id.0);
+                let dispatch_kind = crate::ir::abi::ClosureDispatchKind::CallableParam;
                 // TRACK B1 SIGSEGV FIX (write-site).
                 //
                 // Track B1 root: this arm used to decide pointer-vs-value from the
@@ -2008,9 +2055,8 @@ pub(super) fn lower_call(
                 // var-decl site — every place that already sets
                 // `callable_return_types`). We rewire the arg emit to
                 // `lower_call_arg` — the sigil+callee-aware path every other
-                // call uses — by transplanting the sidecars into the
-                // conventional `fn_sigs` / `fn_param_ownerships` axes under the
-                // synthetic `callable_name` key. `lower_call_arg` then picks the
+                // call uses — by handing it the declared signature DIRECTLY
+                // (`CalleeAbi::Declared`). `lower_call_arg` then picks the
                 // pointer-vs-value forwarding exactly as if this were a direct
                 // call to a function of that signature. When the sidecars are
                 // missing (untyped closure whose signature was never
@@ -2018,24 +2064,24 @@ pub(super) fn lower_call(
                 // pre-existing behaviour so the change is strictly additive.
                 let sig_params: Option<Vec<TypeId>> = ctx.callable_param_types(local_id).map(|s| s.to_vec());
                 let sig_owns: Option<Vec<Ownership>> = ctx.callable_param_ownerships(local_id).map(|s| s.to_vec());
-                let mut call_args = vec![FunctionBuilder::copy(local_id)];
+                let callee_op = FunctionBuilder::copy(local_id);
+                let mut call_args: Vec<Operand> = Vec::new();
+                let mut arg_abis: Vec<ParamABI> = Vec::new();
                 if let (Some(sig_params), Some(sig_owns)) = (sig_params, sig_owns) {
-                    // Transplant into the axes lower_call_arg reads. Idempotent
-                    // — the synthetic name embeds `local_id` so two writes for
-                    // the same callable local match.
-                    ctx.fn_sigs.insert(callable_name.clone(), (sig_params.clone(), UNIT_TYPE));
-                    ctx.fn_param_ownerships.insert(callable_name.clone(), sig_owns.clone());
-                    // R43 Track C: PUBLISH the declared param ABI for this
-                    // indirect callee. A `Callable[..]` PARAMETER's GIR local
-                    // type is `unit` — the signature is erased before GIR→LIR —
-                    // so `Inst::CallClosure` lowering cannot recover the
-                    // callee's `&`-ness from the operand's type and both
-                    // backends fall back to guessing from the ARGUMENT's shape.
-                    // This is the one place the declared signature is still in
-                    // scope, so it writes the fact into the module's declared
-                    // single source of truth for param passing, keyed per call
-                    // site (`abi::indirect_callee_key`).
-                    publish_indirect_callee_abis(ctx, builder, &callable_name, &sig_params, &sig_owns);
+                    // R43 Track C: the declared param ABI for this indirect
+                    // callee. A `Callable[..]` PARAMETER's GIR local type is
+                    // `unit` — the signature is erased before GIR→LIR — so
+                    // `Inst::CallClosure` lowering cannot recover the callee's
+                    // `&`-ness from the operand's type and both backends fall
+                    // back to guessing from the ARGUMENT's shape. This is the
+                    // one place the declared signature is still in scope, so it
+                    // is written straight onto the instruction that needs it,
+                    // instead of into a module-global table under a made-up key.
+                    arg_abis = declared_indirect_abis(ctx, &sig_params, &sig_owns);
+                    let callee_abi = CalleeAbi::Declared {
+                        abis: &arg_abis,
+                        ownerships: &sig_owns,
+                    };
                     for (i, arg) in args.iter().enumerate() {
                         // Track B1 A-2 Option (b), 2026-07-27: the pre-fix
                         // "already-a-pointer bare-arg forwarding" shortcut (a
@@ -2048,10 +2094,10 @@ pub(super) fn lower_call(
                         // ONE gate and `cow_before_mutation` becomes a hard
                         // invariant, not a bypass-conditional call.
                         let param_type = sig_params.get(i).copied();
-                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, &callable_name, i));
+                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, callee_abi, i));
                     }
                 } else {
-                    report_callable_sig_erased(&callable_name, "unit-param", args.len());
+                    report_callable_sig_erased(dispatch_kind, "unit-param", args.len());
                     for arg in args {
                         // Legacy fallback: for borrow params passed to callable,
                         // preserve the pointer (don't auto-deref). The adapter
@@ -2078,16 +2124,22 @@ pub(super) fn lower_call(
                 // Look up tracked callable return type, fall back to I64_TYPE
                 let ret_type = ctx.callable_return_type(local_id).unwrap_or(I64_TYPE);
                 if ret_type == UNIT_TYPE {
-                    builder.call_void(callable_name, call_args);
+                    builder.call_indirect_void(callee_op, call_args, dispatch_kind, arg_abis);
                     return Operand::Constant(Constant::Unit);
                 }
-                let dst = ctx.call_indirect_tracked(builder, callable_name, call_args, ret_type);
+                let dst = ctx.call_indirect_tracked(
+                    builder,
+                    IndirectCallee::Value { callee: callee_op, kind: dispatch_kind, arg_abis },
+                    call_args,
+                    ret_type,
+                );
                 return FunctionBuilder::copy(dst);
             }
-            // FnPtr-typed local: escaped closure returned from a function, stored as GorgetClosure.
-            // Emit __gorget_closure_call_N; the C backend expands it to fn_ptr+env dispatch.
+            // FnPtr-typed local: escaped closure returned from a function, stored as
+            // GorgetClosure. Same runtime-value callee, different layout — the
+            // `ClosureDispatchKind` on the instruction is what says which.
             if let Some(GirType::FnPtr { return_type: fn_ret, .. }) = ctx.type_registry.get(local_type_id).cloned() {
-                let callable_name = format!("__gorget_closure_call_{}", local_id.0);
+                let dispatch_kind = crate::ir::abi::ClosureDispatchKind::EscapedClosure;
                 // TRACK B1 SIGSEGV FIX (write-site, LOCAL cell). Same class as
                 // the UNIT_TYPE arm above; same fix. This arm used to lower
                 // every argument through `lower_expr(&arg.node.value)`, which
@@ -2098,34 +2150,44 @@ pub(super) fn lower_call(
                 // segfaulted on it.
                 let sig_params: Option<Vec<TypeId>> = ctx.callable_param_types(local_id).map(|s| s.to_vec());
                 let sig_owns: Option<Vec<Ownership>> = ctx.callable_param_ownerships(local_id).map(|s| s.to_vec());
-                let mut call_args = vec![FunctionBuilder::copy(local_id)];
+                let callee_op = FunctionBuilder::copy(local_id);
+                let mut call_args: Vec<Operand> = Vec::new();
+                let mut arg_abis: Vec<ParamABI> = Vec::new();
                 if let (Some(sig_params), Some(sig_owns)) = (sig_params, sig_owns) {
-                    ctx.fn_sigs.insert(callable_name.clone(), (sig_params.clone(), fn_ret));
-                    ctx.fn_param_ownerships.insert(callable_name.clone(), sig_owns.clone());
-                    // R43 Track C: same publication as the `UNIT_TYPE` arm — an
-                    // escaped-closure local keeps its `FnPtr` type, so LIR can
-                    // usually read the ownerships off the operand, but the two
-                    // arms must not disagree about where the fact comes from.
-                    publish_indirect_callee_abis(ctx, builder, &callable_name, &sig_params, &sig_owns);
+                    // R43 Track C: same declared-ABI write as the `UNIT_TYPE`
+                    // arm — an escaped-closure local keeps its `FnPtr` type, so
+                    // LIR can usually read the ownerships off the operand, but
+                    // the two arms must not disagree about where the fact comes
+                    // from.
+                    arg_abis = declared_indirect_abis(ctx, &sig_params, &sig_owns);
+                    let callee_abi = CalleeAbi::Declared {
+                        abis: &arg_abis,
+                        ownerships: &sig_owns,
+                    };
                     for (i, arg) in args.iter().enumerate() {
                         // Track B1 A-2 Option (b), 2026-07-27: same retirement as
                         // the UNIT_TYPE arm above. The bare-arg-`is_param_borrow_unique`
                         // fast-path lives inside `lower_call_arg` now, on the
                         // sanctioned path with `cow_before_mutation`.
                         let param_type = sig_params.get(i).copied();
-                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, &callable_name, i));
+                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, callee_abi, i));
                     }
                 } else {
-                    report_callable_sig_erased(&callable_name, "fnptr-local", args.len());
+                    report_callable_sig_erased(dispatch_kind, "fnptr-local", args.len());
                     for arg in args {
                         call_args.push(lower_expr(ctx, builder, &arg.node.value));
                     }
                 }
                 if fn_ret == UNIT_TYPE {
-                    builder.call_void(callable_name, call_args);
+                    builder.call_indirect_void(callee_op, call_args, dispatch_kind, arg_abis);
                     return Operand::Constant(Constant::Unit);
                 } else {
-                    let dst = ctx.call_indirect_tracked(builder, callable_name, call_args, fn_ret);
+                    let dst = ctx.call_indirect_tracked(
+                        builder,
+                        IndirectCallee::Value { callee: callee_op, kind: dispatch_kind, arg_abis },
+                        call_args,
+                        fn_ret,
+                    );
                     return FunctionBuilder::copy(dst);
                 }
             }
@@ -2165,7 +2227,7 @@ pub(super) fn lower_call(
                 if let Some(pt) = callee_pt {
                     ctx.func_state.expected_type = Some(pt);
                 }
-                let op = lower_call_arg(ctx, builder, arg, callee_pt, &effective_name, i);
+                let op = lower_call_arg(ctx, builder, arg, callee_pt, CalleeAbi::Named(&effective_name), i);
                 // Snag #35: a throws-call result at this arg site is a
                 // Result[T, E] operand. The typecheck pass already
                 // certified that this is either a capture (param type is
@@ -2373,7 +2435,7 @@ pub(super) fn lower_call(
                     let sig_params = ctx.fn_sigs.get(call_fn.as_str()).map(|(p, _)| p.clone());
                     for (i, arg) in args.iter().enumerate() {
                         let param_type = sig_params.as_ref().and_then(|p| p.get(i + 1).copied());
-                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, &call_fn, i + 1));
+                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, CalleeAbi::Named(&call_fn), i + 1));
                     }
                     let ret_type = if let Some((_, ret)) = ctx.fn_sigs.get(call_fn.as_str()) {
                         *ret
@@ -2384,7 +2446,7 @@ pub(super) fn lower_call(
                         builder.call_void(&call_fn, call_args);
                         return Operand::Constant(Constant::Unit);
                     } else {
-                        let dst = ctx.call_indirect_tracked(builder, &call_fn, call_args, ret_type);
+                        let dst = ctx.call_indirect_tracked(builder, IndirectCallee::Named(call_fn.clone()), call_args, ret_type);
                         return FunctionBuilder::copy(dst);
                     }
                 }
@@ -2433,18 +2495,23 @@ pub(super) fn lower_call(
             _ => (None, None, I64_TYPE),
         };
 
-        let callable_name = format!("__gorget_closure_call_{}", callee_local.0);
-        let mut call_args = vec![FunctionBuilder::copy(callee_local)];
+        let dispatch_kind = crate::ir::abi::ClosureDispatchKind::EscapedClosure;
+        let callee_val = FunctionBuilder::copy(callee_local);
+        let mut call_args: Vec<Operand> = Vec::new();
+        let mut arg_abis: Vec<ParamABI> = Vec::new();
         if let (Some(sig_params), Some(sig_owns)) = (sig_params, sig_owns) {
-            // Transplant the sig onto the synthetic callable_name key so
-            // `lower_call_arg` picks pointer-vs-value forwarding the same
-            // way as a direct call. Mirrors the B1 identifier-callee fix
-            // in the two `Callable`-local arms above.
-            ctx.fn_sigs.insert(callable_name.clone(), (sig_params.clone(), ret_type));
-            ctx.fn_param_ownerships.insert(callable_name.clone(), sig_owns.clone());
+            // Hand the sig straight to `lower_call_arg` so it picks
+            // pointer-vs-value forwarding the same way as a direct call.
+            // Mirrors the B1 identifier-callee fix in the two `Callable`-local
+            // arms above.
+            arg_abis = declared_indirect_abis(ctx, &sig_params, &sig_owns);
+            let callee_abi = CalleeAbi::Declared {
+                abis: &arg_abis,
+                ownerships: &sig_owns,
+            };
             for (i, arg) in args.iter().enumerate() {
                 let param_type = sig_params.get(i).copied();
-                call_args.push(lower_call_arg(ctx, builder, arg, param_type, &callable_name, i));
+                call_args.push(lower_call_arg(ctx, builder, arg, param_type, callee_abi, i));
             }
         } else {
             for arg in args {
@@ -2452,10 +2519,15 @@ pub(super) fn lower_call(
             }
         }
         if ret_type == UNIT_TYPE {
-            builder.call_void(callable_name, call_args);
+            builder.call_indirect_void(callee_val, call_args, dispatch_kind, arg_abis);
             Operand::Constant(Constant::Unit)
         } else {
-            let dst = ctx.call_indirect_tracked(builder, callable_name, call_args, ret_type);
+            let dst = ctx.call_indirect_tracked(
+                builder,
+                IndirectCallee::Value { callee: callee_val, kind: dispatch_kind, arg_abis },
+                call_args,
+                ret_type,
+            );
             FunctionBuilder::copy(dst)
         }
     }
