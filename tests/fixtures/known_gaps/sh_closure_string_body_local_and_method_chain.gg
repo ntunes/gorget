@@ -8,13 +8,17 @@
 # THE TWO NEW ARMS (`tests/fixtures/self_host_lowerer/lower_closures.gg`):
 #
 #   (c) a bare LOCAL identifier body — `(): s`, where `s` is an outer LOCAL
-#       rather than a closure parameter. `guess_return_type` has **no
-#       `EIdentifier` arm at all**; only `ECall(EIdentifier(fname), …)` is
-#       matched, so a bare identifier falls off the end of the `match` to the
-#       `I64_TYPE` default. Arm (b) of this item names the closure-PARAMETER
-#       spelling and diagnoses it as "the EIdentifier arm consults `fn_sigs`
-#       only" — the arm it describes does not exist, and the local spelling
-#       fails identically, so the subject is wider than (b) states.
+#       rather than a closure parameter. `guess_return_type` DOES have an
+#       `EIdentifier` arm, and it consults `gmod.fn_sigs` and nothing else, so
+#       it is INERT for a bare local or a closure parameter: the lookup fails,
+#       control falls off the arm, and the function reaches its `I64_TYPE`
+#       default. Arm (b) of the item names the closure-PARAMETER spelling and
+#       diagnoses it correctly; this local spelling fails through the SAME
+#       inert arm, so the subject is any bare identifier `fn_sigs` misses.
+#       ⚠ An inert arm and an absent arm emit identical C — read the source
+#       (`grep -n 'case EIdentifier(name):' \
+#       tests/fixtures/self_host_lowerer/lower_closures.gg`) before claiming
+#       either.
 #
 #   (d) a METHOD-CHAIN body whose result is a `String` — `(): v.get(0).unwrap()`
 #       over a `Vector[String]`. The `EMethodCall` arm does not carry the

@@ -438,11 +438,21 @@ still aliases the buffer. The Tier 1c coherence validator sees closure envs
 like any other struct and flags that mismatch.
 
 One narrow carve-out remains, in the consume-site validator's `StructInit`
-arm: a capture whose type `lacks_materialization_path` (`types.rs:777`).
+arm: a capture whose type `lacks_materialization_path` (`src/ir/types.rs`,
+found by name — the definition moves and its own doc comment is the
+authority on what the predicate admits).
 That predicate is derived, never listed — `needs_drop && !is_resource_type
 && !is_refcount_clone_type` — and it selects the single-owner-by-design
 handles: `Callable[T]`, which lowers to `GirType::FnPtr`, together with
 `Mutex[T]` and `RWLock[T]`, which are `Trivial`-copy with `clone_fn = None`.
+Those last two reach that metadata by different routes, and the difference
+matters to anyone reasoning about the set: `Mutex[T]` is a pure builtin, so
+`ensure_mutex_type_def` stamps its `TypeDef` directly, while `RWLock[T]` is
+declared as a `struct RWLock[T]` template in `lib/std/sync.gg`, so its ctor
+reaches the template-monomorph path first and that arm stamps the same
+`Trivial` + `{mangled}__drop` pair by hand. The predicate is what unifies
+them; the registrations are not interchangeable, and a claim proven about
+one of them is not thereby proven about the other.
 None of the three has a deep clone or an incref, so every materializing pass
 already skips those operands — there is nothing they know how to copy — and
 ownership at such a capture genuinely is undecided. It is carved out rather than flagged because none of the three

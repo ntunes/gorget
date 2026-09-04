@@ -6104,10 +6104,12 @@ fn sh_closure_clone_escape_env_field_leak() {
 /// `closure_capture_param_bare_identifier_body`) cannot run on the self-host
 /// lane — their body shape is the thing under test.
 #[test]
-#[ignore = "KNOWN GAP t0877 (c)+(d): self-host guess_return_type has no \
-EIdentifier arm at all and no element-type propagation through a method chain, \
-so a String-returning closure with a bare-local or method-chain body is emitted \
-int64_t-returning and the C build fails. Rust gg runs both. TODO.md."]
+#[ignore = "KNOWN GAP t0877 (c)+(d): the self-host's guess_return_type has an \
+EIdentifier arm that consults fn_sigs ONLY (inert for a bare local or param) and \
+no element-type propagation through a method chain, so a String-returning \
+closure with a bare-local or method-chain body falls through to the I64_TYPE \
+default, is emitted int64_t-returning, and the C build fails. Rust gg runs \
+both. TODO.md."]
 #[serial(self_host_lowerer_driver)]
 fn sh_closure_string_body_local_and_method_chain() {
     sh_known_gap_expect(
@@ -19199,8 +19201,17 @@ fn known_gap_closure_capture_callable_block_scope_uaf() {
 /// !is_refcount_clone_type`), and what it admits is WIDER than the `Callable`
 /// cell: `Mutex[T]` and `RWLock[T]` are `Trivial`-copy with `clone_fn = None`,
 /// so they satisfy every clause too. Naming only `Callable` would present a
-/// selection as a total enumeration (SIX Q#3). `RWLock[T]` is the third member
-/// and shares this shape exactly.
+/// selection as a total enumeration (SIX Q#3).
+///
+/// ⚠ `RWLock[T]` IS THE THIRD MEMBER, NAMED BUT NOT COVERED BY THIS CELL — it
+/// shares the shape and the mechanism but not the value of the axis the
+/// carve-out reads. `Mutex` gets its TypeDef from the builtin
+/// `ensure_mutex_type_def` (`src/ir/lowering/exprs/type_reg.rs`); `RWLock[T]`
+/// is a template in `lib/std/sync.gg` and gets its own from the
+/// template-monomorph arm (`src/ir/lowering/generics/mod.rs`), whose comment
+/// records this exact metadata once being wrong there and the handle LEAKING
+/// on scope exit. A named omission with a measured reason (Core #12), not a
+/// covered cell; it earns its own fixture when D7 lands.
 ///
 /// ⚠ PRE-EXISTING AND UNCHANGED — measured at the base commit and after the
 /// capture-ownership fix: the same garbage value and the same

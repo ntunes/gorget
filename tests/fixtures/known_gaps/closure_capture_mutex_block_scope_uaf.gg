@@ -11,8 +11,19 @@
 # and `RWLock[T]` are `copy_semantics: Trivial` with `clone_fn = None`
 # (single-owner by design, no incref and no deep clone), so they satisfy every
 # clause too. An item that named only `Callable` would be presenting a SELECTION
-# as a total enumeration; this fixture is the second member, and `RWLock[T]` is
-# the third, sharing this one's shape and mechanism exactly.
+# as a total enumeration; this fixture is the second member.
+#
+# ⚠ `RWLock[T]` IS THE THIRD MEMBER, NAMED BUT NOT COVERED BY THIS CELL. It
+# shares the shape and the mechanism, but not the value of the axis the
+# carve-out reads: `Mutex`'s TypeDef is stamped by a builtin path
+# (`ensure_mutex_type_def` in `src/ir/lowering/exprs/type_reg.rs`) while
+# `RWLock[T]` is a `struct RWLock[T]` template in `lib/std/sync.gg`, so its
+# ctor reaches the template-monomorph arm in
+# `src/ir/lowering/generics/mod.rs` instead. That arm's own comment records
+# this exact metadata once being wrong there and the single-owner handle
+# LEAKING on scope exit. A `Mutex` cell cannot see an `RWLock` regression on
+# that axis — this is a named omission with a measured reason (Core #12),
+# and it earns its own fixture when D7 lands.
 #
 # ⚠ PRE-EXISTING AND UNCHANGED. Measured at the base commit and after the
 # capture-ownership fix: identical garbage value, identical

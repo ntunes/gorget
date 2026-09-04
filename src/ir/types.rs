@@ -773,12 +773,24 @@ impl TypeRegistry {
     /// Does this type need dropping while the lowering has NO way to produce
     /// an independent copy of it?
     ///
-    /// This is the single-owner-by-design set as the LOWERING sees it —
-    /// `Callable[T]` above all, which lowers to `GirType::FnPtr` and carries a
-    /// heap-allocated env. Every consuming-position pass that materialises a
-    /// value asks `is_resource_type` (deep clone) or `is_refcount_clone_type`
-    /// (by-value incref) first; both answer `false` here, so all of them skip
-    /// the operand — there is nothing they know how to materialise.
+    /// This is the single-owner-by-design set as the LOWERING sees it. Every
+    /// consuming-position pass that materialises a value asks
+    /// `is_resource_type` (deep clone) or `is_refcount_clone_type` (by-value
+    /// incref) first; both answer `false` here, so all of them skip the
+    /// operand — there is nothing they know how to materialise.
+    ///
+    /// ⚠ THE SET IS WIDER THAN `Callable[T]`, AND NAMING ONLY IT IS THE
+    /// SELECTION-AS-ENUMERATION MISTAKE. `Callable[T]` is the loudest member —
+    /// it lowers to `GirType::FnPtr` and carries a heap-allocated env — but
+    /// `Mutex[T]` and `RWLock[T]` satisfy every clause too: `Trivial` copy
+    /// semantics, a real drop, and `clone_fn = None` (single-owner, neither an
+    /// incref nor a deep clone). They differ in how that metadata is stamped —
+    /// `Mutex` from the builtin `ensure_mutex_type_def`, `RWLock` from the
+    /// template-monomorph arm, because it is a `struct RWLock[T]` template in
+    /// `lib/std/sync.gg` — so a fact established about one is not thereby
+    /// established about the other. Re-derive the membership rather than
+    /// trusting this paragraph: it is a snapshot of a predicate, and the
+    /// predicate is the authority.
     ///
     /// A consuming position therefore cannot decide ownership for these types
     /// at all. Only the user can, by writing `^source` or `source.clone()`.
