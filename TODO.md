@@ -280,15 +280,29 @@ the ONE predicted assert with the predicted shape, every other gate green.
 Composing L and N2 introduces NO memory-unsafety on the coupled surface.** That was the round's largest
 unmeasured risk and it is now measured.
 
-🚨 **THE FRAME RE-KEY IS PARTLY WRONG, AND THIS INVERTS AN INT-B OBLIGATION.** `__gorget_array_reserve_one`
-was observed **ZERO times across all 28 probed fixtures**. On five re-keyed rows the old class is **GONE with
-NO replacement arriving** — **N2's Vector-HOF fix removed those records outright in THIS tree, which is not
-the tree the re-seed measured.** ⛔ **For those five the right action is DELETE/TIGHTEN, NOT re-key. The other
-23 of the 27 are UNMEASURED.** ⊕ Independent corroboration from a lane that never read N2's census: the probe
-reports **10 rows `leaking LESS than their row admits`, all inside N2's 13 tightened rows.**
-⭐ **AND THE END STATE IS NOW MEASURED, NOT INFERRED:** adopting N2's `vector_hof_cross_type_map` row **ALONE**
-takes the uncited count to the pinned value — **it closes the +2 with NO constant change.** Every other row
-INT-B touches moves it further and must be re-measured.
+⛔⛔ **RETRACTED 2026-09-04 — I PROPAGATED A WINDOW-SCOPED OBSERVATION AS A GENERAL TRUTH, AND IT IS
+INVERTED. `__gorget_array_reserve_one` IS LIVE AND THE RE-KEY IS CORRECT AND MANDATORY.** A fresh reviewer ran
+three `FIXLIST` probes at `REPS=2 COVERAGE_FLOOR=0` on the SAME merged tree: **8 of 8 rows sampled from the
+"23 unmeasured" match the re-seed's re-keyed counts EXACTLY** (`tensor_extra *53`, `tensor_basic *4`,
+`self_whole_move_ok *1`, `coroutine_vector_ops *1`, `shared_vector_elem *1`, `snag49a_throws_for_iter *1`,
+plus `csv_delimiters` and `dataframe_groupby` byte-identical), and the re-seed's per-record proof reproduces
+verbatim in the logs — the helper one frame above `gorget_array_push` at the same allocation site.
+⭐ **WHY INT-A's ZERO WAS STILL TRUE, and this is the whole lesson:** its 28-fixture window was the
+`__gorget_closure_env_alloc` union filtered to `.map(`/`.flat_map(` sources — **precisely the fixtures whose
+push records N2's fix REMOVED.** Zero in that window is correct and expected. **Generalising it is A SELECTION
+PRESENTED AS AN ENUMERATION — and `tests/lints.rs` records N2 committing the IDENTICAL defect one round
+earlier, in a comment this very tree still carries.** Six Questions #3, twice, in the same file.
+⛔ **AND WITHOUT THE RE-KEY THE FULL SWEEP IS HARD RED:** `❌ NEW LEAK CLASS … class not tolerated` on ~23
+rows, plus **`retire_fatal` on `self_whole_move_ok`** whose `gorget_array_push=t0951` citation goes GONE.
+**The only correct resolution is the re-key** — which is exactly why `t0951` carries BOTH spellings.
+⚠ **`todo/t1305.md` CARRIES THIS ERROR and must be corrected before INT-B works from it.**
+⛔ **ALSO RETRACTED: "closes the +2 with NO constant change" IS FALSE — TWO CONSTANTS MUST MOVE.** Measured on
+the end-state candidate: `LEAK_CLASS_PAIRS` and `LEAK_RECORDS` both drop, and **the lint reds EARLIER, at
+`LEAK_CLASS_PAIRS`, never reaching `uncited` at all.** Only `UNCITED_LEAK_CLASS_PAIRS` holds — it lands **AT**
+its pin (⚠ `t1305` says two BELOW the pin; that is two below the current VALUE — same error, opposite sign).
+⊕ And restoring the owner-ask row moves `LEAK_CEILING` too. **Three constants, not zero.**
+⚠ **THIS ONE IS DANGEROUS BECAUSE OF THE PREDICT-THEN-CONFIRM RULE:** an executor predicting "no change" and
+measuring the real values is told by its own brief to treat its CORRECT edit as a defect.
 
 ⛔ **THREE OF MY OWN BRIEF FIGURES DID NOT REGENERATE, and the executor caught all three:**
 - **`todo/t0729.md` is ONE discarded edit, NOT two** — `git diff 832a3039d 0d9f9cebe -- todo/t0729.md` is
