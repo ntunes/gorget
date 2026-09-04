@@ -683,6 +683,29 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+✅ **TRACK N2 IS COMPLETE AND READY (`0d9f9cebe`)** — `--test lints` rc 0, `todo_index --check` rc 0, `src/`
+byte-identical to its fix commit.
+⭐ **It RE-DERIVED the correction before accepting it rather than relaying my message:**
+`tokenize("hello 42 + world")` → **7 outer trips, exactly 1 reaching `Token.Punct(ch)`, 7 − 1 = 6**, matching
+6 leaked 2-byte objects — *single characters, not payloads; a `Word("hello")` payload would be 6 bytes.*
+⚡ **And it stated the consequence plainly against its own work: "my mechanism line was FALSIFIED, not merely
+redundant."** `t1287` `git rm`'d, index regenerated, nothing in the tree still points at it.
+⊕ **It prepared the three `t1290` folds WITHOUT touching Track L's file** — the `t0218` discrimination
+verbatim, a replacement `mechanism` line, and the missing `repro` path — **for the orchestrator to apply at
+integration.** *Correct: a track does not edit another track's filed item.*
+
+⚠ **INTEGRATION ORDER IS FIXED: L FIRST, THEN N2.** L's allowlist row makes N2's four constants stale, and
+**whoever lands second RE-DERIVES THE CENSUS from the regen command — never applies a delta.** ⊕ Both tracks
+independently flagged that `todo_index.py --write` will report **`t1055` pointed at twice** (both bases
+predate its re-grade to High) — **drop the stale MEDIUM row.**
+
+⚖ **STILL OUTSTANDING FOR THE OWNER — ONE ROW.** `vector_hof_result_element_sizing` carries an `⚖ ADMITTED`
+block **naming itself an owner ask** under the allowlist's own new-inflow rule, because the ruling covering
+three sibling rows covers them **by name** and does not reach it. **Its leak is measured irreducible** — a
+named callee with the same container-literal body sizes correctly pre-fix, **so the closure literal IS the
+defect's entry condition** — and **the sibling fixture needed no row at all because its leak was FIXED
+instead.**
+
 ⛔⛔⛔ **THE FIGURES LINT CAUGHT ME A THIRD TIME, AND MY STATED RULE WAS TOO NARROW — HERE IS THE REAL
 MECHANISM.** `figures_db_values_have_one_spelling` went RED on `TODO.md`, on a line from the commit literally
 titled *"never paste a gate summary line into the handover"*. ⚡⚡ **AND THIS ONE WAS NOT A PASTED SUMMARY
