@@ -110,9 +110,33 @@ L's side otherwise DELETES and which is the only prose explaining the rename INT
 ⊕ **L has THIRTEEN cited rows, not twelve** (an earlier brief said 12 and told the executor to enumerate 12),
 and **two ⚖ ADMITTED blocks — one recording the owner's 5-of-8 ruling over 8 rows.** Losing one converts an
 owner-ruled temporary admission into an unmarked row.
-⚠ **KNOWN OPEN QUESTION FOR INT-A's REVIEW:** INT-A discards N2's and the re-seed's allowlist row edits
-entirely (L's blob wins), and **those edits encode MEASUREMENTS** — if INT-B needs them as input, INT-A must
-preserve them somewhere and the brief does not say where.
+🚨 **THAT OPEN QUESTION WAS ANSWERED AND THE ANSWER IS AN OWNER ASK BEING DESTROYED.** INT-A's pass 1
+MERGED the branches for real. **N2's allowlist carries a THIRD R49 `⚖ ADMITTED` block whose own text says it
+is *put to the owner rather than assumed*, and "take L's blob verbatim" DELETES EXACTLY THAT ONE.** Block
+inventory: HEAD/sa2/re-seed/T1 = 8 · L = 10 · N2 = 9 · **correct R49 union = 11**; L-verbatim yields 10.
+It governs `vector_hof_result_element_sizing` and carries the measured discriminator (a NAMED callee sizes the
+accumulator correctly; a closure LITERAL does not) plus why its sibling `vector_hof_result_element_drop`
+correctly has NO row. **No sweep recovers it — a sweep reports that a fixture leaks, not that an ask was
+formulated.** Locate: `git show "0d9f9cebe:tests/sanitize/LEAK_ALLOWLIST.txt" | grep -n '^# ⚖ ADMITTED ('`.
+⚖ **STATUS: the orchestrator DECIDED this autonomously earlier** (admit temporarily, cite `t0953`) on the
+owner's own prior ruling for the identical shape — *"land L and admit the rows, admission temporary"*. **It is
+NOT blocking the round.** But the BLOCK must survive as the record of the ask.
+⚠ **AND A MEMORY-SAFETY COMPOSITION RISK NOBODY MEASURED:** `closure_fstring_capture` is the ONE row edited by
+BOTH L and N2, **in OPPOSITE directions** — L widens it, N2 tightens it. L makes closure captures materialise
+owned values; N2 makes HOF result arrays carry element drop hooks; both decide who owns a materialised value.
+**If they compose into a DOUBLE-FREE rather than a count delta, INT-B meets it at minute 20 of a 25-minute
+sweep and cannot tell it from bookkeeping.** INT-A v2 authorises one sanitized build to settle it.
+⊕ **Other pass-1 measurements now in v2:** the conflict set is **seven paths** (v1 named a selection, and
+**six of v1's ten "resolutions" never conflict at all** — they are verifications, and hand-editing a
+cleanly-merged file is how a regression enters); a naive `DONE.md` union **silently drops whole round entries
+and NO GATE SEES IT** (v1 called it "not load-bearing"); "take L's side" is **unenforceable through conflict
+markers** because git auto-merges some of N2's tightenings; and v1's gate carve-out was **INVERTED** —
+`figures_db_mirrors_agree` needs no sweep and MUST be green, while `sanitize_allowlists_shrink_only` must red
+on **exactly one assert by exactly +2 for exactly one reason**, which turns acceptance from judgement into
+arithmetic.
+⊕ **FILE AT INT-A (id on request):** `CORPUS_MANIFEST.txt`'s `known_gaps` row states a count its own recount
+command contradicts — stale AT HEAD, not introduced by the merge, and **nothing enforces it**. A declared
+corpus count with no ratchet.
 ⊕ **Pass-3 errata worth keeping:** `t0310` is NOT L-only (it exists on every rev); only `t1290` is; and the
 `t1287`-orphan filing is a NON-FINDING — N2's tip commit IS the withdrawal.
 
