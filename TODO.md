@@ -683,6 +683,37 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **N2 EXECUTOR COMPLETE (`572e93a04`) — output-review launched. AND IT FOUND THAT EVERY CELL IN THIS
+ROUND WAS ACCIDENTALLY BENIGN.**
+⛔⛔ **THE UNDERSIZED ACCUMULATOR IS A HEAP-BUFFER-OVERFLOW *WRITE OF SIZE 32*, NOT A LEAK — because
+`gorget_array_extend` RESERVES A MINIMUM OF EIGHT SLOTS, and every cell this round was sampled at TWO
+elements, sitting under the threshold.** At eight it runs off the end, **at rc 0 with correct stdout.**
+⇒ ⚡⚡ **THE ELEMENT *COUNT* WAS AN UNSCORED AXIS. SIX Q#6 at the scale of a whole track's evidence: six
+review passes measured a leak because every probe was too small to overflow.**
+⭐ **AND THE INSTRUMENT WAS BLIND TOO: "a literal grep reads NOTHING — the emitted form is
+`__vNN = (int64_t)32LL`", which is why every review artifact's `sizes=[]` column came back empty.** ⇒ *a
+column of blanks was read as "no sizes to see" rather than "the probe cannot see sizes".*
+⭐ **THE ROOT CAUSE IS A `Some(wrong)` INDISTINGUISHABLE FROM `Some(right)`:** the deleted `flat_map` arm read
+the element off the **DESTINATION LOCAL**, whose GIR type is the **SOURCE RECEIVER'S**. **A wrong answer in
+the right shape** — which is why six passes over the same code never saw it.
+⭐ **REFERENCE LAGS THE SELF-HOST AGAIN:** the SH's nested loop **moves** and runs the `Drop` body **twice**;
+Rust's extend-then-free runs it **FOUR** times. Cited as the reason the drop fixture carries no `flat_map`
+cell — ⚠ **the output-review must adjudicate whether omitting it is right or whether Core #12 requires it
+NAMED with the divergence.**
+⊕ **N6 resolved BY MEASUREMENT, not assumption:** the `c_lir/helpers.rs` half-pair writer emits in **0 of 99**
+programs, and the runtime check's hook clauses were made **ASYMMETRIC** (fire when the DESTINATION lacks a
+hook the source carries — the aliasing direction; silent when it is richer) so it is **immune by
+construction**. ⚠ **Consequence: my Addendum 5's claim that `ext_map_then` goes RED at HEAD is FALSE under
+that clause — measured.**
+⊕ **`known_gaps_census.sh --check` rc 1 is NOT N2's, and the diagnosis is precise:** Track R's **compiler
+fix** reached N2's base via a handover commit while R's **bookkeeping** commit did not. ⚡ *A fix and its
+gate-bookkeeping travelling separately is its own hazard — verify before accepting a red gate on assertion.*
+⊕ Bootstrap green **with the new validator live across all three stages** (`GG_STAGE1_TIMEOUT_SECS=1800`,
+993 s, 0 false positives); guard false-positive sweep over 73 fixtures: **0 fires**.
+⚠ **N1/N2 MERGE NOTE FROM THE EXECUTOR:** N1's `bir/lower.rs` hunk at `:803` sits between N2's field-adds at
+`:777`/`:817`, and N1's explicit `HofOp::Windows | Chunks | DictMap` arm **reconstructs `Inst::HofExpand`**,
+which now needs `result_elem_fns`. **No conflict found, but that arm is where to look first.**
+
 ⭐⭐ **N1 CONFIRMING REVIEW = SIGN OFF — AND THE "INVENT A THIRTEENTH MUTANT" BRIEF FOUND *THREE* GREEN ONES.**
 Each `cargo build` bare rc 0, guard run bare, applied to pristine `src/bir/lower.rs`:
 **(A)** a **7th borrowed field** whose NAME is outside the hardcoded six → **GREEN**;
@@ -1434,7 +1465,7 @@ repro and an `#[ignore]`d test) — **do NOT file; contribute the exact faulting
 
 ⊕ **M1's BLOCK EXTENDED 2026-09-04: `t1197`–`t1199`** (its original `t1076`–`t1080` was fully spent; the
 output-review's reservation owes one more filing).
-⚡ **FIRST UNISSUED ID IS NOW `t1215`** ⊕ **L EXTENDED `t1210`–`t1214`; T1 gets `t1177`+** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
+⚡ **FIRST UNISSUED ID IS NOW `t1270`** ⊕ N2 spent `t1215`–`t1218`; Q holds `t1255`–`t1264`; S-a2 `t1225`–`t1234`; S-a3 `t1245`–`t1254`; F-G `t1265`–`t1269`; N1 `t1240`–`t1244` ⊕ **L EXTENDED `t1210`–`t1214`; T1 gets `t1177`+** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
