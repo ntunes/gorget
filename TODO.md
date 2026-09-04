@@ -675,6 +675,36 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⚖⚖ **NEW OWNER ASK (S-a2, pass 3) — GATES THAT EXECUTOR.** *Correctly enforcing the ratified single-owner
+rule forces a PER-REQUEST closure-env clone on the httpserver dispatch hot path, because the zero-cost
+spelling `d[k](v)` is `E_NotAFunction` at HEAD and `^` is unavailable (D10(a)). **Accept the clone in the
+stdlib, or close the call-through-a-place gap so a callee position stops demanding ownership?*** One branch
+is a charter breach (the implicit remedy is strictly worse than hand-written code, which would borrow); the
+other is a new language capability.
+⭐ **S-a2 PASS 3 = DESIGN SOUND, no fourth re-cut, 2 BLOCKING CLAIMS folded.**
+⛔ **`t0682` is ADVANCED, NEVER CLOSED — SIX Q#4.** `is_constructor` matches `Variant | Newtype`; **`Box[T](…)`
+is neither, so the gate NEVER RUNS for it.** Controlled proof: same source, same type — **user struct ctor
+REJECTS, `Box[T]` ctor ACCEPTS.** ⇒ **no widening of the source arm reaches those cells.** ⛔⛔ **And
+`t0682`'s durable repro IS that cell verbatim — a brief saying "closes `t0682`" makes an executor `git rm` a
+HIGH memory-safety item whose own wired repro still reproduces.**
+⛔ **AND MY OWN FOLD STEERED THE EXECUTOR INTO THE `._N` TRAP.** D7 said *mirror `d53_unique_lock`'s naming*;
+that suite is **uniformly bare-int, zero `._N`.** At HEAD **both** `t.1` and `t._1` double-free; the prototype
+fixes only `t.1`. ⇒ **an executor following my own advice writes `t.0`, the guard greens, and the live `t._1`
+double-free ships.** Resolved in favour of carrying BOTH spellings; 23 fixture files use `._N` and the
+reference calls the forms co-equal.
+⭐ **ONE TRACK, NOT TWO — a split here is a RED TREE:** the reject stops `httpserver.gg` compiling, so half A
+alone on pristine HEAD reds the stdlib. **8 sites, not 7** (my count decayed), splitting **3 transfer / 5
+call-only** — and **SIX Q#6: the 5 are ACCIDENTALLY clean because each binds EXACTLY ONCE** (one read + call
+is ASan-clean; two reads double-free, one line apart). **Not working code being broken — unsound code that
+has not been read twice.**
+⛔ **N2, A LIVE EXECUTOR HAZARD WORTH ITS OWN LINE: a dict LITERAL containing a closure is memory-unsafe at
+HEAD** — SEGV on `0xbebe…` poison with `gg check` rc 0, while the identical program built with `.put()` is
+CLEAN. **Container-literal construction, not the read.** ⚠ **Any fixture using a dict literal of closures dies
+on an earlier SEGV before reaching the drop it is meant to test** — it poisoned three of pass 3's own cells.
+**BRIEF EVERY EXECUTOR: build `Callable` containers with `put`, never a literal.**
+⊕ **N1: the new arm ships a FACTUALLY FALSE diagnostic** — it calls a `Dict` a single-owner type and
+prescribes `d.clone()`, which clones the **entire dictionary**. In-track defect, not `t0453`.
+
 ⛔⛔⛔ **S-a3 PASS 1: I GAVE THE OWNER A COST FIGURE THAT IS FALSE, AND THE CORRECTION IS OWED BACK.**
 I told the owner the env-header shape costs *"8–16 bytes per CAPTURING closure env (non-capturing have a NULL
 env and allocate nothing)"*. **MEASURED FALSE.** Fire count **2**; ASan **16 B / 2 allocs, 8 B each**; the env
