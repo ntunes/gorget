@@ -683,6 +683,36 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **M2's FOLD CAME BACK BIGGER THAN BRIEFED, AND FOUND A NONDETERMINISTIC COMPILER ON THE WAY.**
+⭐ **The blocking fix was ONE AXIS SPLIT ACROSS TWO MATCHES.** `pack_dest_ty` (type) and
+`value_arg_idx_for_method` (index) are now **one match returning `Option<(usize, TypeId)>`** — and deriving
+them together fixed **FOUR** cells, not the two briefed, **because the `args.len() >= 2` guard hid EVERY
+one-argument member of the family**: `Set.insert`, `HashSet.insert`, **and `Guard.set` / `WriteGuard.set`,
+all four rc 135 SIGBUS on BOTH backends.** ⚡ *I briefed the two I had measured; the axis had three
+single-param members and the guard hid all of them.*
+⊕ **Independent witness for totality:** 9 rows matching the consuming-method names in `builtins.rs`, **exactly
+3 with a single param — all three now pinned.**
+⭐⭐ **`gg build --emit-c` WAS NONDETERMINISTIC — two runs of the SAME binary on the SAME source emitted
+different C.** Two hash-ordered containers (`adapter_fids`, `type_drop_fns`). Pure reordering, nothing
+miscompiled — **but it broke reproducible builds and made emitted-C diffing useless, which is how it
+surfaced: it cost the executor's CoW charter check three false positives.**
+⚡ **AND THE SECOND SITE WAS FOUND ONLY BECAUSE FIXING THE FIRST DIDN'T MAKE THE DIFF CLEAN** — so it fixed
+that one **at the PRODUCER** (`src/lir/mod.rs` → `BTreeMap`) so no future emission site can reintroduce it,
+**and corrected its own site-1 comment claiming that was the last one.** ⚠ *That edit touches a core LIR type
+in service of a DIAGNOSTIC problem — the executor flagged it for the full sweep itself.*
+⭐ **Core #14 answered with a THIRD option nobody offered it:** in `assigns.rs` it chose **neither
+`debug_assert!` nor silence, because the assertion is FALSE OF THE BRANCH** — the predicate does not exclude
+builtin set-kinded protocols, so the assert would fire on a legitimate program. **Replaced with what the code
+does.** ⚡ *"Guard it or delete it" has a third answer when the invariant itself is wrong.*
+⊕ **CoW charter MEASURED, not argued:** 382 programs emitted pre/post, **exactly 2 files differ — both its own
+new fixtures** — clone token count identical 155 → 155.
+⊕ **Filed `t1270` (HIGH):** `with m.lock() as g:` **ICEs rc 101 on both backends for EVERY guarded type
+including `int`**, while `Guard[int] g = m.lock()` on the identical program is rc 0. Discriminated from
+`t0707`/`t0001` in the item.
+⊕ **`Set[Box[Trait]]` correctly left untouched** and recorded as open — **and it is already ruled** by the
+D46 rider (`decisions.md:2977`), so it is a consequence to implement, not a question. Its fixture uses **one
+element per set deliberately**, so it asserts nothing about ordering.
+
 ✅ **TRACK Q INTEGRATED** (`a44f063da`) — **FOURTEEN TRACKS LANDED.** `build_rc=0 · lib_rc=0 · lints_rc=0 ·
 todo_rc=0`, **and the guard VERIFIED LIVE ON THE INTEGRATED TREE**: planted `<<<<<<< HEAD` in a tracked
 `.txt` → **rc 101**; restored → **rc 0**; `git status` clean.
