@@ -556,7 +556,12 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   **The CRITICAL set is TEN** (`grep -l 'severity = "CRITICAL"' todo/*.md`, not a selection): `t0011` ·
   `t0036` · `t0045` · `t0680` · `t0697` · `t0703` · `t0704` · `t0709` · `t0771` · `t0988`.
   ⭐ **SEVEN OF THE TEN FALL INTO TWO CLASSES, which is the Core #4 leverage:**
-  **CLOSURE-CAPTURE (3):** `t0703` · `t0704` · `t0771` — a captured/aliased handle is a BORROW, so a source
+  **CLOSURE-CAPTURE — ⚠ CORRECTED 2026-09-04 BY THE L SCOUT: it is TWO, not three, and one of my three
+  WAS ALREADY FIXED.** `t0704` · `t0771` are **ONE class, ONE write site, TWO arms** (ablation-proven).
+  ⛔ **`t0703` IS FIXED** — both repros are LIVE, non-`#[ignore]`d tests passing at HEAD on C and LLVM,
+  closed by `e7967d570` (2026-08-29) which **moved them out of `known_gaps/` and edited the item WITHOUT
+  CLOSING IT**; its own cited fix site `resolve_collection_identity` **exists only because that commit
+  created it**, and **neither repro contains a closure.** ⇒ **the CRITICAL set is NINE, not ten** — a captured/aliased handle is a BORROW, so a source
   realloc or a scope exit frees it under the closure. ⊕ **This round already sharpened `t0704`'s scope**
   (the class is wider than "collection" — a captured plain `String` corrupts the same way).
   **BOX / TRAIT-OBJECT (4):** `t0011` (`Box[T](struct.field)` shallow copy) · `t0680` (live miscompile,
