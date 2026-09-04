@@ -2725,6 +2725,16 @@ new guards caught the orchestrator hours later.
 every round close by mandate, so anything recorded only here is deleted by the next one — which is why
 this pointer exists instead of the list.
 
+### 📊 R49 IS RUNNING ~8 ACTIVE TRACKS AND 13 AGENTS — DELIBERATE, AND HERE IS THE SHAPE
+The heartbeat's *"keep ~4 tracks in flight"* is **superseded by the owner's standing directive to batch more
+tracks per round** (default 4-6, and this round carries more because two were owner-ordered mid-round).
+**What matters is that each track still runs its OWN sequential loop** — AGENTS.md: *"parallelism is ACROSS
+tracks, not ACROSS roles for the same track"* — and it does: one reviewer or one executor per track at a time.
+⚠ **The cost that IS real and worth watching: an agent that goes dark is invisible until you look.** A
+brief-review pass at **~3h against a 20-40 min peer median** is an outlier worth ONE check-in — not a poll
+loop, and not a kill. ⇒ **`ListAgents` once when a track has been silent through two heartbeats; send CONTEXT
+with the check-in so the message earns its interruption.**
+
 ### ⚠⚠ A ROUND-CLOSE GATE IS **ALREADY RED AT HEAD** AND IT IS NOBODY'S INFLOW — VERIFY BEFORE BLAMING
 ⛔⛔ **THREE GATES, NOT ONE — ALL PRE-EXISTING (2026-09-04), AND THEY ARE *ONE* ADJUDICATION, NOT THREE.**
 `GG_BACKEND=llvm cargo test --test security sec_64` and `sec_70` are **rc 101 at pristine HEAD**, and both —
