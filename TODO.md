@@ -683,8 +683,17 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔ **I RE-SPELLED A COVERED FIGURE AGAIN — IN THE VERY ENTRY THAT RECORDED THE RULE, ONE COMMIT LATER.**
+`figures_db_values_have_one_spelling` fired on `sanitize.coverage_floor` because I quoted a sweep summary
+line verbatim into the handover. ⚡⚡ **THE FIRST FIX WAS A ONE-OFF EDIT; WHAT WAS MISSING WAS A HABIT.**
+⇒ ⭐ **STANDING RULE, and it is mechanical rather than a resolution: NEVER PASTE A GATE'S SUMMARY LINE INTO
+THIS HANDOVER VERBATIM. Summary lines are DENSE WITH COVERED FIGURES — quote the SHAPE ("above the coverage
+floor", "an exact match, not headroom") and let the constants be read from `tests/lints.rs` and
+`scripts/figures.db`.** ⊕ **And RUN `cargo test --test lints figures_db_values_have_one_spelling` AFTER
+EVERY handover edit that touches numbers** — it is ~40 s and it has now caught me twice.
+
 ⭐⭐ **L's FOLD 4: THE SANITIZE SWEEP IS GREEN — `BARE_RC=0`, and it is an EXACT MATCH, NOT HEADROOM.**
-`scanned 2239 · covered 1819 (floor 1743) · leaks 300 (allowlisted 300) · corruption 1 (allowlisted 1) ·
+`scanned 2239 · covered 1819 (above the coverage floor) · leaks 300 (allowlisted 300) · corruption 1 ·
 flaky 0 · class-drift 0`, zero `❌`/`⛔`, **`retire_due` EMPTY — no cited row is stale.** Confirming review
 launched (told to re-run the full sweep itself; a simulation is not a measurement).
 ⭐⭐ **AND IT RETIRED A ROW RATHER THAN ONLY ADDING THEM.** The sweep reported `cow_closure_deferred_mutate`
