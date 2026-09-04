@@ -242,8 +242,25 @@ touches neither. **Six Questions #2, on the replacement guard — the same failu
 one, one level up.** ⭐ **THE CLASS IS "AN `⚖ ADMITTED` BLOCK'S RETIRE CONDITION OVER-STATES ITS BLOCKERS",
 and the guard is a required `# RETIRES: <id>…` line per block with every id asserted to exist** — both
 directions, no allowlist, no sentinel hole, and it fires TODAY on the live instance.
-✅✅ **TRACK INT-B IS COMPLETE — branch `intb-ad3c5ffd` @ `b230a992d`, off INT-A's `54dafc26d`. OUTPUT-REVIEW
-LIVE.** `cargo test --test lints` **rc 0** — **the round's declared red is CLOSED.** Full sweep: `new_class`
+✅✅✅ **TRACK INT-B IS SIGNED OFF — NO BLOCKING. Branch `intb-ad3c5ffd`, off INT-A's `54dafc26d`; two
+one-line folds with its executor now.** The output-review reproduced EVERY load-bearing claim independently at
+**`REPS=3`** — one rep stricter than the executor — and **verified the RED-first evidence is REAL, not
+reconstructed**: it found the kept pre-fix full-corpus sweep and re-ran the acceptance script against it,
+getting 6a-fails-37 / 6b=35 / 6d=1 exactly as claimed, from an instrument the executor did not author.
+⭐ **It also built a compiler at base ITSELF** and confirmed all 16 residue rows are **byte-identical**
+base-vs-merged ⇒ **zero merge damage**, and that the 16 match `t0572`'s named list by set equality both ways.
+⭐ **The new guard was RED-VERIFIED IN BOTH DIRECTIONS, anchored BY LINE** — a deleted `# RETIRES:` line and a
+dangled id each red with an actionable message.
+⚠ **R1 — THE GUARD CATCHES ITS OWN CLASS WITH ONE ID TO SPARE.** Two measured green-passing evasions: an id at
+the VERY START of the prose tail has no preceding space and slips the substring probe; and `t0953 and t0955`
+splits to ONE token, so the second id is never seen. **The historical defect this guard retires was spelled
+with an "and" before the last id** — it still reds, but only via the comma-separated middle id. **Hardening
+folded: scan the whole tail for `t`+4 digits and assert the count matches, plus EVASION probes in the shape
+`sanitize_allowlists_shrink_only` already uses.**
+⊕ R2: a duplicate comment line the rewrite orphaned — one-line delete. ⊕ **R5 is MINE:** `TODO.md` carries a
+landed breadcrumb for `t1305`, against pending-only — clear it at close.
+
+⊖ **Superseded: TRACK INT-B IS COMPLETE — output-review LIVE.** `cargo test --test lints` **rc 0** — **the round's declared red is CLOSED.** Full sweep: `new_class`
 0, `retire_fatal` 0, `fixed_leak` 0. Constants **300/497/2262/8/480**, predicted from the executor's own
 census BEFORE `figures.py check`. Column 3 forced 21 → 19, re-derived independently and matching. No `.gg`
 touched, so parity correctly not re-measured.
