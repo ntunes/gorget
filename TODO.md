@@ -254,7 +254,39 @@ executor should be told to REPORT.**
 - ⛔ **§9 could not brief INT-B** — a reviewer tried and listed seven unanswerable questions, now required
   report contents. ⊕ **The report goes to `/tmp`**: it must quote a figures-DB-covered spelling, which no
   COMMITTED file may contain, and `/tmp` is outside the scan roots.
-🚀 **INT-A's EXECUTOR IS LAUNCHED on `/tmp/brief_INTA_v5.md` after FOUR sequential brief-reviews.** Passes 3
+✅✅ **INT-A IS COMPLETE — ALL FIVE BRANCHES ARE IN ONE TREE. Branch `worktree-agent-a1a7ca4acbc53bfa5`, tip
+`8f7391db4`, base `85cd4529e`. Output-review live.** Merge order T1 `c089fe6ac` → L → N2 → S-a2 → re-seed;
+per-branch merge bases in the executor's report. **All three acceptance lines rc 0**, `--test lints` red on
+the ONE predicted assert with the predicted shape, every other gate green.
+⭐ **§7's MEMORY-SAFETY PROBE CAME BACK CLEAN — corruption 0, crash 0, ubsan 0, flaky 0, class-drift 0.
+Composing L and N2 introduces NO memory-unsafety on the coupled surface.** That was the round's largest
+unmeasured risk and it is now measured.
+
+🚨 **THE FRAME RE-KEY IS PARTLY WRONG, AND THIS INVERTS AN INT-B OBLIGATION.** `__gorget_array_reserve_one`
+was observed **ZERO times across all 28 probed fixtures**. On five re-keyed rows the old class is **GONE with
+NO replacement arriving** — **N2's Vector-HOF fix removed those records outright in THIS tree, which is not
+the tree the re-seed measured.** ⛔ **For those five the right action is DELETE/TIGHTEN, NOT re-key. The other
+23 of the 27 are UNMEASURED.** ⊕ Independent corroboration from a lane that never read N2's census: the probe
+reports **10 rows `leaking LESS than their row admits`, all inside N2's 13 tightened rows.**
+⭐ **AND THE END STATE IS NOW MEASURED, NOT INFERRED:** adopting N2's `vector_hof_cross_type_map` row **ALONE**
+takes the uncited count to the pinned value — **it closes the +2 with NO constant change.** Every other row
+INT-B touches moves it further and must be re-measured.
+
+⛔ **THREE OF MY OWN BRIEF FIGURES DID NOT REGENERATE, and the executor caught all three:**
+- **`todo/t0729.md` is ONE discarded edit, NOT two** — `git diff 832a3039d 0d9f9cebe -- todo/t0729.md` is
+  EMPTY; N2 never edited it, its md5 differs only because it forked before HEAD's re-scope. **I inferred an
+  edit from an md5 difference — in the very section that opens by naming selection-vs-enumeration.**
+- **`ALLOWED_UNWIRED` is NOT a second expected red** — it is green BIDIRECTIONALLY, because each branch
+  shipped its `#[ignore]`d tests and those auto-merged, so the smaller list is CORRECT, not a silent discard.
+- **`REPS=1` IS NOT AN AVAILABLE SETTING** — the script hard-rejects it (`REPS must be >= 2`) and exits 2
+  without running. I authorised a knob that does not exist; the executor used the instrument's floor.
+⊕ **A SIBLING DEFECT, reported not fixed:** Track L moved the uncited pin's `.value` **without re-stamping the
+sibling `.measured_at` on the same row** — that omission is exactly what let N2's stamp auto-merge onto L's
+value, giving a pairing that exists on no branch.
+⊕ `t1305` is SPENT (INT-A's durable filing — the owner ask + frame staleness + expected-red inventory). **Free
+block is now `t1306`–`t1310`.**
+
+⊖ **Superseded: INT-A's EXECUTOR IS LAUNCHED on `/tmp/brief_INTA_v5.md` after FOUR sequential brief-reviews.** Passes 3
 AND 4 both signed off the DESIGN; pass 4's own verdict was *"after this addition it goes to the executor"*.
 🚨 **PASS 4 BUILT A SECOND WRONG TREE — and it built it by DOING WHAT THE BRIEF SAID.** `git checkout --ours
 tests/lints.rs`, which is what a natural reading of *"take L's side"* produces, scores **IDENTICALLY on all
