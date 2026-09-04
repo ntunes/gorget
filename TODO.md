@@ -683,6 +683,36 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔ **L's CONFIRMING REVIEW: THE CODE IS CORRECT AND SAFE; THE DISCLOSURE IS NOT. THE TABLE IS 8 CELLS, NOT
+5 — AND THREE ARE PRE-EXISTING FIXTURES L NEVER TOUCHED.** Measured base vs merged over 368 top-level
+fixtures, **5/5 reps deterministic each side**, all unambiguous NEW INFLOW:
+**`spawn_unchecked_bypasses_check` CLEAN → 33 B** (no allowlist row at all — the sweep's `new_leak` bucket) ·
+`shared_callable` 16 B → 56 B · `closure_fstring_capture` 61 B → 66 B.
+⇒ **ONE ROOT: the new capture-site materialisation mints owned values INSIDE the env, and `t1210` means env
+fields are never freed — so EVERY newly-materialised capture becomes a leak, including on fixtures the track
+never touched.**
+⛔⛔ **AND IT FALSIFIES A LOAD-BEARING CLAIM IN L's OWN FILING: `t1071`'s "⚠ MEASURED NO LIVE HARM" IS FALSE.
+Its instrument was `--test integration spawn` (36/0) — A STDOUT ASSERTION, WHICH STRUCTURALLY CANNOT SEE A
+LEAK.** ⚡ **SIX Q#2 inside a filed item: the instrument could not see the class it was cited for.** Same
+correction owed on `t1070` — *"the cost is one extra materialisation"* is a **leak record**, not a clone count.
+⚖ **THIS CHANGES THE BASIS OF THE OWNER'S RULING — it is 5 new rows of 8, not 2 of 5, and one is a CLEAN
+fixture starting to leak. TAKEN BACK TO THE OWNER.**
+⭐ **THE CODE HALF IS SOUND AND EARNS ITS LANDING:** **no double-free anywhere** across eight hand-built
+shapes + `closure` 77/0 + `capture` 40/0 + `security` 213/0 + `spec_conformance` 3/0 + `-p ggdef` 187/0 —
+zero ASan errors, zero crashes, **zero stdout changes**. ⊕ **And `__Closure_N__drop` IS CALLED on the
+non-escaping path: a local `String` capture goes 41 B → CLEAN** — it fixes a leak on **the most common
+closure shape in the language.** ⊕ All three graduated cells were genuine `heap-use-after-free` at base ⇒
+**the UAF→LEAK claim holds.**
+⊕ **FIFTH attribution correction on that table:** `closure_capture_then_mutate_source_uaf` **calls
+`__Closure_0__drop`** and its 6 B allocates **inside the closure BODY** — *"the discriminator `t1210` needed
+was whether the env drop RUNS, and it does."*
+⊕ **The merge is NOT records-only** — two SEMANTIC ratchet conflicts: `PHASE_D_PROXY_BUDGET` **89** (both
+sides independently removed one proxy read 91→90; the union is 89), `ALLOWED_UNWIRED` **26**, **plus
+`scripts/figures.db:516` → 89** or `figures_db_mirrors_agree` fails; `todo/t0729.md` takes **HEAD's**.
+**`--test lints` is 228/0 with those three corrections and 101 without them.**
+⊕ **A fixture header measured FALSE:** `closure_capture_shared_handle_refcount.gg` claims the escaping variant
+*"is not reachable"*; `shared_callable` reaches it, builds green, **and is exactly the cell that regressed.**
+
 ⚖✅ **OWNER RULING 2026-09-04 — S-a2's PROPOSAL AGREED: THE CALLEE POSITION IS A BORROW POSITION.**
 A call does not consume its callee: `Callable` borrows, `MutCallable` mutably borrows, `ConsumeCallable`
 consumes. `d[k](v)` parses and lowers to call-through-place; `h = d[k]` used only to call binds a borrow; the
