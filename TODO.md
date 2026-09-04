@@ -607,7 +607,21 @@ you have just discovered you own. Both of my "admit" recommendations were the de
 the fixtures were the load-bearing artifact and I proposed bending the ceiling around them.**
 ⊕ **`t1085` RETURNED TO THE POOL 2026-09-04** — M2 filed `t1081`–`t1084` and left it unused. Free for
 re-issue, like `t1053` and `t1056`–`t1063`.
-⚡ **FIRST UNISSUED ID IS NOW `t1187`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
+⛔⛔⭐ **TRACK U OPENED 2026-09-04 — ID BLOCK `t1187`–`t1196`. THE ROUND'S LARGEST FINDING, AND IT CAME OUT
+OF A HALTED EXECUTOR RUNNING ONE MEASUREMENT.** **33 LIVE OUT-OF-BOUNDS STACK WRITES AT HEAD**, 18 files,
+5 shapes, sizes confirmed against the compiler's own `memset`. **One mechanism: the copy LENGTH comes from
+the SOURCE value's type while the destination FIELD is sized from the DECLARED type, and when they disagree
+the write OVERRUNS.** `t0729` was ONE INSTANCE of that class, and its fix repaired only that instance.
+⛔⛔ **AND ASan SEES NONE OF THEM.** The emitted USER IR is **not** ASan-instrumented — only the runtime C is
+— so a stack OOB write is invisible **unless it trips the memcpy interceptor's OVERLAP check, which requires
+the overrun to land EXACTLY on the source buffer.** ⇒ ⚡ **`t0729` was found BY THAT ACCIDENT, and the round's
+primary memory instrument is blind to the class it belongs to (SIX Q#2).**
+⚡⚡ **AND THE INSTRUMENT THREE PASSES TRUSTED WAS BLIND TOO: `scan_overlap.py` returns 0 on the exact rc-99
+IR that reproduces the defect** — the operands are two DIFFERENT allocas, and the overlap was an OOB write
+that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
+ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
+overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⚡ **FIRST UNISSUED ID IS NOW `t1197`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
