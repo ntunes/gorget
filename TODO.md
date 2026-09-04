@@ -512,6 +512,24 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **✅ A1-M · INTEGRATED — `34ac3acab`, the round's FOURTH landing. Worktree pruned.** Closes `t0937`;
+  files `t0968`–`t0972`; adds a **third repro** to `t0704`. Gates bare at the integrated state: build 0 ·
+  `--lib` 1181/0 · `--test lints` **221/0/1**.
+  ⚠ **THE MERGE NEEDED RECONCILIATION, NOT A SIDE.** Track E **deleted** an allowlist row and A1-M **added**
+  one, so all three leak ratchets were recomputed from both: **`LEAK_CEILING` 294 · `LEAK_CLASS_PAIRS` 501 ·
+  `LEAK_RECORDS` 2302**, mirrored in `figures.db`. ⊕ Then `figures_db_values_have_one_spelling` caught that
+  my rewritten ledger comment **no longer re-spells the value**, making the R48 waiver dead — **retired
+  rather than carried.** **Two guards, two catches, both on my own edits.**
+
+- ⚖ **ROUND SIZING — I AM NOT OPENING AN EIGHTH TRACK, AND THE REASON SHOULD BE ON THE RECORD.** R49 carries
+  **SEVEN** tracks (E · H · C · A1-M landed; K · F · A1-I in their final gate), above the owner's 4-6
+  default. Each queued track (**F-2 · F-G · D · G · B**) costs a full scout → ≥3 passes → executor →
+  output-review cycle, and the box is the constraint — the A1-I scout **measured** a full sweep autoscaling
+  to one thread under load and had to kill it. **Opening an eighth now roughly doubles the remaining tail
+  for no extra throughput.** ⇒ **Drive K, F and A1-I to integration, then the round-close battery.**
+  ⊕ **The queued five carry forward intact**, with G's discharge already named (F's `for_each` RED cell) and
+  B unblocked since E landed.
+
 - **✅ A1-M · CONFIRMING REVIEW: INTEGRATE. THE LEAK BLOCK IS FIT FOR THE OWNER.** Two closing errata sent;
   merge on their return.
   ⭐ **THE REVIEWER RE-MEASURED ALL SIX SHAPES FROM SCRATCH, ON BOTH LANES, WITHOUT USING THE EXECUTOR'S
