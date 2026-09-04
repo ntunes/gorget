@@ -933,7 +933,6 @@ vector_higher_order	__gorget_closure_env_alloc*4
 # callee where the isolation needs one, and an `#[ignore]`d
 # `assert_gg_sanitize_clean` test asserting the clean run.
 # RETIRES: t0953
-# and an `#[ignore]`d `assert_gg_sanitize_clean` test asserting the clean run.
 vector_hof_cross_type_map	__gorget_closure_env_alloc*10	__gorget_closure_env_alloc=t0953
 # ⚖ ADMITTED (R49 Track N2 formulated the ask, 2026-09-04; R49 Track INT-B
 # records the answer). This row's leak is genuinely NEW INFLOW, which this

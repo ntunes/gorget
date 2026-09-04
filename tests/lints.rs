@@ -10531,6 +10531,41 @@ fn sanitize_allowlists_shrink_only() {
 /// file satisfies it today.
 #[test]
 fn sanitize_leak_admitting_blocks_declare_a_live_retire_condition() {
+    /// Parse one `# RETIRES:` payload into the ids the line OBLIGES, and count
+    /// the `t<NNNN>` tokens present anywhere in it.
+    ///
+    /// Ids are read from the segment BEFORE any trailing ` — <prose>`, so a
+    /// block admitting two rows can say which condition belongs to which. The
+    /// TOKEN is `t` + four digits: a `(b)`-style sub-item names a bullet inside
+    /// an item rather than a file, so the suffix stays in the prose. The second
+    /// return value is what stops the split from being an evasion — see the
+    /// `assert_eq!` on it, and the probes at the bottom of this test.
+    fn retire_line_ids(rest: &str) -> (Vec<String>, usize) {
+        let ids_part = rest.split_once(" — ").map_or(rest, |(a, _)| a);
+        let ids: Vec<String> = ids_part
+            .split(',')
+            .filter_map(|tok| {
+                let d = tok.trim().strip_prefix('t')?;
+                let digits: String = d.chars().take(4).collect();
+                (digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()))
+                    .then(|| format!("t{digits}"))
+            })
+            .collect();
+        // Every `t<4 digits>` in the WHOLE payload, wherever it sits. The token
+        // must not continue a word, so `output1234` is not an id.
+        let b: Vec<char> = rest.chars().collect();
+        let mut total = 0usize;
+        for i in 0..b.len() {
+            if b[i] != 't' || (i > 0 && b[i - 1].is_alphanumeric()) {
+                continue;
+            }
+            if i + 4 < b.len() && b[i + 1..i + 5].iter().all(|c| c.is_ascii_digit()) {
+                total += 1;
+            }
+        }
+        (ids, total)
+    }
+
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let path = root.join("tests/sanitize/LEAK_ALLOWLIST.txt");
     let body = std::fs::read_to_string(&path)
@@ -10588,25 +10623,7 @@ fn sanitize_leak_admitting_blocks_declare_a_live_retire_condition() {
         );
         for r in &retires {
             let rest = r.trim_start_matches("# RETIRES: ");
-            // Ids come from the segment BEFORE any trailing `— <prose>`, so a
-            // block admitting two rows can say which condition belongs to which
-            // without the prose smuggling an unchecked id past the check.
-            let (ids_part, tail) = match rest.split_once(" — ") {
-                Some((a, b)) => (a, Some(b)),
-                None => (rest, None),
-            };
-            // The TOKEN is `t<4 digits>`; a `(b)`-style sub-item suffix names a
-            // bullet inside an item, not a file, so it stays in the prose.
-            let ids: Vec<String> = ids_part
-                .split(',')
-                .filter_map(|tok| {
-                    let t = tok.trim();
-                    let d = t.strip_prefix('t')?;
-                    let digits: String = d.chars().take(4).collect();
-                    (digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()))
-                        .then(|| format!("t{digits}"))
-                })
-                .collect();
+            let (ids, total) = retire_line_ids(rest);
             assert!(
                 !ids.is_empty(),
                 "`{r}` (block at {}:{}) names no `todo/` item. The line is the \
@@ -10614,15 +10631,26 @@ fn sanitize_leak_admitting_blocks_declare_a_live_retire_condition() {
                 path.display(),
                 s + 1
             );
-            if let Some(tail) = tail {
-                assert!(
-                    !tail.contains("todo/t") && !tail.contains(" t0") && !tail.contains(" t1"),
-                    "the prose after `— ` on `{r}` names a `todo/` item. Every id \
-                     on a retire condition goes BEFORE the dash, where it is \
-                     checked; the tail is for saying WHICH ROW the condition is \
-                     for."
-                );
-            }
+            // ⚠ EVERY id ON THE LINE MUST BE ONE THIS LOOP WILL CHECK. Parsing
+            // the comma-separated head and then trusting the rest is how an
+            // obligation hides in plain sight: `t0953 and t0955` splits into ONE
+            // token, and `t0953 — t0955 has landed too` puts the second id in
+            // prose. Both would then pass while naming a retired item — the
+            // exact defect this test exists to catch, one level down (SIX
+            // QUESTIONS #2). So the count of `t<NNNN>` tokens ANYWHERE on the
+            // line must equal the count this loop actually resolves.
+            assert_eq!(
+                ids.len(),
+                total,
+                "`{r}` (block at {}:{}) carries {total} `t<NNNN>` token(s) but \
+                 only {} of them are in the CHECKED segment. Ids go before any \
+                 ` — ` and are separated by COMMAS; `and`, a dash, or anything \
+                 else leaves an obligation this test cannot verify. Resolved: \
+                 {ids:?}",
+                path.display(),
+                s + 1,
+                ids.len()
+            );
             for id in &ids {
                 let item = root.join("todo").join(format!("{id}.md"));
                 assert!(
@@ -10648,6 +10676,53 @@ fn sanitize_leak_admitting_blocks_declare_a_live_retire_condition() {
          least one",
         starts.len()
     );
+
+    // ── Core #13: watch the id check fail, on plausible EVASIONS ─────────────
+    //
+    // `sanitize_allowlists_shrink_only` ships these for its citation check for
+    // the reason `todo/t0875` records: four assertions in this tree were each
+    // defeated by respelling what they counted, so the probes are the
+    // respellings a motivated author would actually reach for. They run against
+    // synthetic inputs and touch no tree state.
+    //
+    // ⚠ WHY THIS GUARD NEEDED THEM. It catches the historical defect —
+    // "ALL THREE of `t0953`, `t0954` and `t0955`" — but only through the
+    // COMMA before `t0954`. The `and` before the last id is the natural English
+    // rendering, and on its own it hid a whole obligation. A guard that catches
+    // its own class by one id of margin is not a Core #6 guard yet.
+    {
+        // POSITIVE CONTROLS — the two shapes the file actually uses.
+        let (ids, total) = retire_line_ids("t0953");
+        assert_eq!((ids.as_slice(), total), (["t0953".to_string()].as_slice(), 1));
+        let (ids, total) = retire_line_ids("t0873(b), t0948, t0949 — `a_row_name`");
+        assert_eq!(ids.len(), 3, "the per-row split must still parse: {ids:?}");
+        assert_eq!(total, 3, "and the tail must contribute nothing");
+
+        // EVASION 1 — an id at the very START of the ` — ` tail. It has no
+        // preceding space, so the substring probes this replaced let it pass.
+        let (ids, total) = retire_line_ids("t0953 — t0955 has landed too");
+        assert_ne!(
+            ids.len(),
+            total,
+            "an id hidden at the start of the prose tail was accepted — the \
+             guard has degraded to checking the head and trusting the rest"
+        );
+
+        // EVASION 2 — `and` instead of a comma, which is how the defect this
+        // test retires was actually written.
+        let (ids, total) = retire_line_ids("t0953 and t0955");
+        assert_ne!(
+            ids.len(),
+            total,
+            "`t0953 and t0955` resolved one id and obliged one — the second is \
+             unchecked, and `and` is the spelling the live instance used"
+        );
+
+        // A NEGATIVE for the token rule itself: a `t<4 digits>` that CONTINUES a
+        // word is not an id, or every line mentioning a line count would red.
+        let (_, total) = retire_line_ids("t0953 — see output1234");
+        assert_eq!(total, 1, "`output1234` was counted as a `todo/` id");
+    }
 }
 
 /// Every `qsort` this compiler EMITS is guarded on `len > 1`.
