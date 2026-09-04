@@ -60,7 +60,30 @@ self_host_runtime_diff -- --nocapture` — ⚠ **`--release` is NOT optional: al
 `cfg!(debug_assertions)` (`t0924`).**
 ⊕ **L's two missing commits are parity-NEUTRAL, measured** — one touches a fixture comment only, the other no
 fixture at all.
-🔧 **TWO BLOCKING ERRATA RETURNED TO T1's EXECUTOR (ids `t1303`–`t1310` issued):**
+✅ **T1's ERRATA LANDED AT `0da7f78b6` (output-review live). Chasing the erratum found a defect nobody had:**
+🚨 **THE "WORKING" RUST LANE IS MEMORY-UNSAFE.** The `unwrap_or_else` payload case that "builds, runs, prints,
+rc 0" on Rust gg is an **ASan stack-buffer-overflow, READ of size 32** — a 16-byte `GorgetClosure` copied into
+a 32-byte `Str` slot. **ONE root cause, TWO symptoms:** both lanes take the payload's OWN RETURN TYPE instead
+of the payload type; **Rust overreads SILENTLY, self-host is caught by `cc`.** That is **Core #8 inside a
+single program** — the lanes do not agree, and the lane that "works" is the unsafe one. ⚠ **`--sanitize` is
+the ONLY instrument that sees it; every value lane is structurally blind.** Filed **`t1303`** (HIGH, both
+lanes) with TWO RED-verified pins — a `cc`-rejection pin and an ASan `security/` pin. **Pre-existing, verified
+by MEASUREMENT not inference** (pre-T1 driver emits a *different* wrong type, same CC-FAIL), and the closure
+literal is load-bearing: `o.unwrap_or(h)` with the same payload and types is ASan-CLEAN.
+⊕ **`t1304`** (MED) — the wiring-lint class is **bigger than the review's "~40": 49 unwired top-level fixtures,
+3 legitimately exempt ⇒ 46 orphans, and 15 of them are ONE `sound_move_operand_*` reject/allow axis** — the
+family whose unwired member T1 tripped over. ⊕ `t1305`–`t1310` remain FREE.
+⊕ **The instrument fix went to the CLASS**: `128 + signo` folded into **all three** `Crashed` constructions,
+not the one named; zero `.status.code()` maskers remain, so that filing was not needed.
+⊕ **A robustness-map cell was added** for the SEGV (hand-derived expectation, beginner idiom per the map's
+"not from our own corpus" rule) — and running it surfaced a SECOND drifting cell, `trait_dynamic_dispatch_box`
+`[selfhost] TRAP → CRASH`, recorded on `t1084`.
+⚠ **PARITY WAS DELIBERATELY NOT RE-MEASURED** — the claim is that the corpus scan is NON-RECURSIVE so
+`known_gaps/`, `security/` and `robustness_map/cells/` cannot enter it, and the two modified top-level
+fixtures are comment-only. **With the ceiling at zero slack this is load-bearing; the output-review's FIRST
+JOB is to verify the MECHANISM, not the conclusion.**
+
+🔧 **The two blocking errata, for the record (ids `t1303`–`t1310` issued):**
 - **The new override's safety premise is FALSE at `unwrap_or_else`** — `expected_type` there is the receiver's
   **PAYLOAD**, not the wrapper, so the peel goes one level too deep. It survives only because no payload in
   the corpus is a callable (**Six Questions #6**). Measured: a `Callable` payload BUILDS AND RUNS on Rust gg
