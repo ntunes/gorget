@@ -683,6 +683,43 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+✅ **N1 INTEGRATED** (`9b1433788`) **and M1 INTEGRATED** (`12274b77e`) — twelve tracks landed. Post-integration
+bare rcs both times: `build_rc=0 · lib_rc=0 · lints_rc=0 · todo_rc=0`.
+⭐ **N1's errata pass CAUGHT ITS OWN OVERCLAIM IN THE SAME BREATH:** its reach note said three shapes were
+"each measured GREEN" when only two were — the tuple case was reasoning, not evidence — **and it fixed that
+in the same pass rather than shipping it.** ⊕ It also verified before editing that one shape `t1090` listed
+as OPEN is **CAUGHT** (helper-return, guard rc 101), and removed the claim rather than softening it.
+⭐⭐ **THE DURABLE RULE IT PUT IN `devbook/25`, and it generalises past this guard:** *a clause keyed on a LIST
+ITS AUTHOR TYPED cannot see the member nobody added; a clause keyed on a DECLARATION can. **Prefer the
+declaration; when none exists, that is the signal the honest answer is a typed invariant.*** ⇒ it closed
+mutant A with a **field-count pin on the struct declaration** and left D/E open **on purpose**, saying so.
+⊕ **M1's retraction CONFIRMED by two compilers built from scratch** — and sharpened: *neither cell alone
+refuses*; the llc failure is an **interaction under a collapsed helper name**. ⊕ **The `t1197`/`t1198` split
+proven REAL, not presentational:** the reviewer applied a one-line emitter fix **by line** and only ONE of the
+two flipped. ⊕ `--test lints` 224 vs 226 vs 227 fully accounted — a constant +7 macro offset plus a sibling
+track's lint. ⊕ **`✅` glyph removed from `todo/t0011.md` by the orchestrator** (own hands, one glyph) so the
+completed-status gate reads clean literally.
+
+⛔⛔ **M2 OUTPUT-REVIEW = BLOCKING, AND THE DEFECT IS ONE SITE: THE HINT IS COMPUTED AND THEN THROWN AWAY.**
+`Set.insert` / `HashSet.insert` are **one-arg aliases** for `add` on the same runtime callee; the reused
+`value_arg_idx_for_method` match guards its key-value arm `if args.len() >= 2`, so a one-arg `insert` falls to
+`_ => (None, None)` and gets `pack_hint = None` — ⚡ **while `pack_dest_ty` was computed correctly for it three
+lines above, in a match arm that literally lists `"insert"`.** Both cells remain **stack-buffer-overflow**.
+⊕ **And the diff SILENTLY FIXED three cells it never claims** (`Set.add`, `HashSet.add`,
+`HashMap.get_or_put`) — **a fix with no regression net is next round's regression.**
+⊕ **The record's stated mechanism is wrong in a detail it repeats FIVE times:** the pack was **not** "told
+'no, it is `int`'" by `fn_sigs` — `method_param_types` is empty whenever `!is_gir_method`, so `callee_pt` is
+`None` and the early exit fires. **`fn_sigs` is never consulted at that site**, and `t0992`'s repair note
+rests on the wrong claim.
+⊕ **`t0992` coupling measured CLEAN** — the pack reads `t0992`'s prescribed REPLACEMENT, so deleting the
+doomed function does not touch the fix.
+⚡ **ORCHESTRATOR ERROR: I PRUNED M2's EXECUTOR WORKTREE.** It was classified "old" in the prune sweep and it
+was not — the track is unintegrated. **No work was lost** (a worktree removal never touches the branch;
+`f1f2bb908` and `c73683336` both verified reachable), **but the agent's context is gone and the fold had to
+restart with fresh hands.** ⚡ **THE LESSON: my post-prune verification listed FIVE unintegrated commits and
+checked reachability for those — M2's was not among them. VERIFY THE PRUNE LIST AGAINST THE SET OF
+UNINTEGRATED BRANCHES, NOT AGAINST A JUDGEMENT OF WHICH LOOK OLD.**
+
 ⭐⭐ **N2 EXECUTOR COMPLETE (`572e93a04`) — output-review launched. AND IT FOUND THAT EVERY CELL IN THIS
 ROUND WAS ACCIDENTALLY BENIGN.**
 ⛔⛔ **THE UNDERSIZED ACCUMULATOR IS A HEAP-BUFFER-OVERFLOW *WRITE OF SIZE 32*, NOT A LEAK — because
