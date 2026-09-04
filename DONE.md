@@ -39,15 +39,24 @@
   four of the seven consuming sites, because `gorget_map_put_cloned` calls `gorget_map_put` and then
   deep-clones in place.
   ⛔ **AND THE GUARD IS NOT SUFFICIENT — the first version of this entry said it was, on a mutant set
-  built in the guard's own image.** A fresh output-review invented two probes the executor had not
-  shown it and **both were GREEN on compiling code that was exactly the class**: the read pattern was
-  anchored on the receiver name `ctx.`, which every existing expander happens to bind, so a sibling
-  binding it as `scaffold` — or destructuring it — walked straight through. Dropping the receiver from
-  the pattern censuses the identical 33 lines and buys the whole family of binding names for no false
-  positives; the destructure is closed from the other side, by pinning the context structs' brace-form.
-  Both are now RED. What remains open is real and is `t1090`'s content: it reads ONE FILE as TEXT and
-  sees a borrow only where the source spells a field access. ⚡ **A guard measured only against probes
-  its own author designed has been measured for consistency, not for coverage.**
+  built in the guard's own image.** Two successive fresh reviews invented probes the executor had not
+  shown it, and **five were GREEN on compiling code that was exactly the class.** The first pair: the
+  read pattern was anchored on the receiver name `ctx.`, which every existing expander happens to
+  bind, so a sibling binding it as `scaffold` — or destructuring it — walked straight through.
+  Dropping the receiver censuses the identical 33 lines and buys the whole family of binding names for
+  no false positives; the LITERAL destructure spelling is closed from the other side, by pinning the
+  context structs' brace-form. The second trio: a SEVENTH borrowed field (`BORROW_FIELDS` is a
+  hand-written list, so a name never added to it is invisible) — closed by pinning each struct's
+  DECLARED FIELD COUNT, which is a declaration rather than another list; a destructure through a TYPE
+  ALIAS, which spells no pinned name and produces no tenth brace site; and an EXISTING bare local
+  holding a locally-emitted `ElemPtr`, which spells no field at all — `expand_reduce`'s `first_ptr`,
+  benign today only because it is `Load`-ed rather than pushed. **The last two are STILL OPEN and are
+  recorded on `t1090` rather than papered over**; chasing them would need another hand-written list,
+  which is the defect that produced all five. ⚡ **A guard measured only against probes its own author
+  designed has been measured for consistency, not for coverage — and it took TWO independent
+  adversarial passes to establish that, the second finding three more after the first found two.**
+  ⊕ One shape the first correction listed as open is measurably CAUGHT: a value threaded out of a
+  same-file helper trips the fail-closed rule on the helper's own read.
   **AND IT READS SINKS, NOT BEHAVIOUR — the fixtures are the other half.** A twelfth mutant keeps the
   sink spelling and corrupts the arguments (`vec![pay_ptr, pay_ptr]`): guard GREEN, **8 of 18 fixture
   cells RED** at rc 134/139 with stack-buffer-overflow and SEGV. The layered defence is measured, not

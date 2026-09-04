@@ -3152,17 +3152,27 @@ fn consuming_position_name_match_is_gir_gated() {
 ///
 /// It sees a borrowed-element pointer read as a FIELD ACCESS, through any
 /// receiver name, anywhere in the file, and it fails CLOSED: a read whose sink
-/// it cannot identify is a violation, not an exemption. It separately pins the
-/// context structs' brace-form, so a struct pattern that would rebind the field
-/// under a bare name has to be argued for.
+/// it cannot identify is a violation, not an exemption — which is why a value
+/// threaded out of a same-file helper IS caught, on the helper's own read. It
+/// separately pins the context structs' brace-form, so a struct pattern that
+/// spells one of those three names LITERALLY has to be argued for, and their
+/// declared field counts, so a seventh borrowed field cannot be added without
+/// someone deciding whether it belongs in `BORROW_FIELDS`.
 ///
-/// It does NOT see a value that reaches a consuming position without either
-/// spelling — threaded out of a helper's return, carried in a tuple, or passed
-/// through a `Vec<ValueId>` built somewhere else. It is one file, read as text.
-/// Nothing structural stops those, which is the whole content of `todo/t1090`:
-/// the BIR carries no typed borrow tag, so `Inst::CallExtern` and
-/// `Inst::CallClosure` both take a bare `Vec<ValueId>` and the instruction
-/// stream cannot tell a borrow from any other pointer.
+/// Two shapes reach a consuming position past all of that, both MEASURED GREEN
+/// on compiling code:
+///   - a struct pattern through a TYPE ALIAS or renamed import — it spells no
+///     pinned name, so the brace census never sees it;
+///   - a BARE LOCAL holding a locally-emitted `Inst::ElemPtr`, which never
+///     spells a field at all. This is not hypothetical: `expand_reduce` already
+///     holds one (`first_ptr`), benign today because it is only `Load`-ed.
+/// A pointer carried in a tuple or a `Vec<ValueId>` assembled elsewhere is the
+/// same shape as the second and is expected to pass too, but was not measured —
+/// so it is reasoning, not evidence, and is written down as such.
+/// It is one file, read as text, and nothing structural stops those — which is
+/// the whole content of `todo/t1090`: the BIR carries no typed borrow tag, so
+/// `Inst::CallExtern` and `Inst::CallClosure` both take a bare `Vec<ValueId>`
+/// and the instruction stream cannot tell a borrow from any other pointer.
 ///
 /// It also reads SINKS, not behaviour. A mutation that keeps the sink spelling
 /// and corrupts the arguments passes here by design — the fixtures are the
@@ -3179,6 +3189,9 @@ fn consuming_position_name_match_is_gir_gated() {
 ///     clones, then re-pin with a justification.
 ///   - context-struct brace sites changed → most likely a destructure; read the
 ///     field through the binding instead.
+///   - a context struct's declared field count changed → if the new field is a
+///     pointer into the source collection's buffer, add its name to
+///     `BORROW_FIELDS`; otherwise re-pin saying why it is not a borrow.
 ///   - `gorget_array_adopt_hooks` count changed → see the assertion's own note:
 ///     it is sound ONLY where the result element type equals the source's.
 ///
@@ -3367,11 +3380,18 @@ fn hof_borrowed_elem_ptr_sinks_are_cloning() {
     // mutant that is exactly the class.
     //
     // There is no text pattern for "this bare identifier is a borrow", so the
-    // guard closes the hole from the other side: it pins every occurrence of
-    // the three context structs' brace-form. The nine at the fixed state are
-    // three declarations, one return type and five constructions — all benign.
-    // A tenth is either a new construction or a destructure, and both deserve
-    // the audit this failure forces.
+    // guard closes the LITERAL spelling from the other side: it pins every
+    // occurrence of the three context structs' name adjacent to `{`. The nine
+    // at the fixed state are three declarations, one return type and five
+    // constructions — all benign. A tenth is a new construction or a
+    // destructure spelled with one of those three names, and both deserve the
+    // audit this failure forces.
+    //
+    // ⚠ THE LITERAL SPELLING IS ALL IT REACHES. A pattern written through a
+    // type alias (`type FilterCtx = HofLoopCtx;` then `let FilterCtx { … }`)
+    // or a renamed import produces NO tenth site and passes — measured, on
+    // compiling code. That is a residual, not an oversight: see the reach note
+    // on this test and `todo/t1090`.
     const CTX_STRUCT_BRACE_SITES: usize = 9;
     let ctx_struct_re =
         regex::Regex::new(r"\b(?:HofLoopCtx|DictHofLoopBranch|SetHofLoopBranch)\s*\{").unwrap();
@@ -3386,6 +3406,41 @@ fn hof_borrowed_elem_ptr_sinks_are_cloning() {
              through the binding instead. If it is a new construction or \
              declaration, re-pin with a justification."
         ));
+    }
+
+    // `BORROW_FIELDS` is the enumerator's OWN list, and a list has no way to
+    // know about a name that was never added to it: a SEVENTH borrowed-pointer
+    // field on one of these structs is invisible to every clause above, and
+    // that was measured GREEN on compiling code. The independent witness is the
+    // DECLARATION — pin each struct's field count, so a new field cannot appear
+    // without someone deciding whether it is a borrow.
+    const CTX_STRUCT_FIELD_COUNTS: [(&str, usize); 3] = [
+        ("HofLoopCtx", 10),
+        ("DictHofLoopBranch", 13),
+        ("SetHofLoopBranch", 10),
+    ];
+    let field_re = regex::Regex::new(r"^    [A-Za-z_][A-Za-z0-9_]*:\s").unwrap();
+    for (struct_name, expected_fields) in CTX_STRUCT_FIELD_COUNTS {
+        let decl = format!("struct {struct_name} {{");
+        let start = lines
+            .iter()
+            .position(|l| l.starts_with(&decl))
+            .unwrap_or_else(|| panic!("could not locate `{decl}` in src/bir/lower.rs"));
+        let declared = lines[start + 1..]
+            .iter()
+            .take_while(|l| *l != &"}")
+            .filter(|l| field_re.is_match(l))
+            .count();
+        if declared != expected_fields {
+            problems.push(format!(
+                "`{struct_name}` declares {declared} fields vs pinned \
+                 {expected_fields}. If the new field is a POINTER INTO THE \
+                 SOURCE COLLECTION'S BUFFER, add its name to `BORROW_FIELDS` \
+                 above — the sink scan is keyed on those six names and cannot \
+                 see a seventh. If it is not a borrow, re-pin with a \
+                 justification saying so."
+            ));
+        }
     }
 
     assert!(

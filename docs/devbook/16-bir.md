@@ -291,13 +291,23 @@ file as text and sees a borrow only where the source spells a field access —
 through any receiver name, which is the load-bearing part, since anchoring on
 one name meant a sibling that bound the scaffold differently walked straight
 through. A struct pattern rebinds the field under a bare name that no field
-access exists for, so the context structs' brace-form is pinned separately. What
-neither clause reaches is a pointer threaded out of a helper's return or carried
-in a tuple; nothing structural stops that, because the BIR has no typed borrow
-tag — `Inst::CallExtern` and `Inst::CallClosure` both take a bare `Vec<ValueId>`,
-and the instruction stream cannot tell a borrow from any other pointer. A
-validator carrying that provenance is the reference-grade shape, and adding the
-tag is the work it waits on.
+access exists for, so the context structs' brace-form is pinned separately; and
+because the list of borrowed field names is hand-written, their declared field
+counts are pinned too, so a seventh cannot be added without someone classifying
+it. Failing closed on an unrecognizable sink covers more than it looks: a
+pointer threaded out of a same-file helper trips on the helper's own read.
+
+What no clause reaches is a pattern written through a type alias, and a bare
+local holding a locally-emitted `ElemPtr` — which is not a hypothetical shape.
+`expand_reduce` holds exactly such a pointer today, benign only because it is
+loaded rather than pushed. Nothing structural stops either, because the BIR has
+no typed borrow tag: `Inst::CallExtern` and `Inst::CallClosure` both take a bare
+`Vec<ValueId>`, and the instruction stream cannot tell a borrow from any other
+pointer. A validator carrying that provenance is the reference-grade shape, and
+adding the tag is the work it waits on. The lesson generalises past this one
+guard: every clause above that failed did so because it consulted a list its own
+author wrote, and every clause that holds does so because it consults a
+declaration instead.
 
 ### Appending synthesized functions
 
