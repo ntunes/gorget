@@ -811,6 +811,125 @@
   zero call sites; the owner of four of the five residual leak cells above). `t0877` sharpened with **two**
   more body-shape arms — a bare LOCAL identifier body and a METHOD-CHAIN body; `t0729` recorded as no
   longer reproducing at base, which is a RED gate there and not this round's doing.
+- [2026-09-04] **`t0954` + `t0955` CLOSED (R49 Track N2) — the array `map`/`flat_map` mint for their RESULT
+  carried NO element metadata and, when the result element differed in width from the source's, the WRONG
+  WIDTH. A user's `equip … with Drop` body silently did not run, and an undersized accumulator was a heap
+  overflow. One resolved name now feeds both the slot width and the hooks.**
+  **THE DEFECT.** `map` is `(T) -> U` and `flat_map` is `(T) -> Vector[U]`, so the accumulator's element is
+  `U`. The expanders synthesize that array in BIR — downstream of the LIR pass that installs `elem_drop` /
+  `elem_clone` / `elem_materialize` for every other array in the program — so it got a bare
+  `gorget_array_new(N)` with all three slots NULL, and `flat_map` additionally sized it by the SOURCE
+  element. Neither showed up as a wrong answer.
+  ⭐ **THE FIRE COUNT IS A `Drop` BODY, NOT A LEAK COUNT.** `Vector[Cust] r = v.map((s): Cust(s))` printed
+  `2`; the push-built control holding the same two values in the same scope printed its two `drop-cust`
+  lines. Same values, same scope, only the minting writer differed — `__gorget_dtor_Cust` was DEFINED AND
+  NEVER REFERENCED. That reframes the class from a leak to silent-wrong-output.
+  ⊕ *Erratum for anyone grepping: that closure-literal spelling is how the cell was MEASURED and is no
+  longer how the fixture READS. `vector_hof_result_element_drop.gg` now calls a named `wrap_cust`, because
+  a closure literal carries `todo/t0953`'s environment leak and the fixture is asserted ASan-clean. Grep it
+  for `via_map`.*
+  ⚡ **AND THE UNDERSIZED CASE IS A HEAP OVERFLOW THAT SIX REVIEW PASSES MEASURED AS A LEAK.**
+  `Vector[int] → Vector[String]` mints 8-byte slots for a 32-byte element. `gorget_array_extend` reserves a
+  MINIMUM of eight slots, so with a two-element source every 32-byte write still lands inside the
+  over-provisioned block and ASan reports only leaked bytes. At EIGHT elements it runs off the end:
+  **`heap-buffer-overflow`, WRITE of size 32**, at rc 0 with correct stdout and `gg check` clean. The
+  element COUNT was the axis nobody scored — every cell in the round had sampled it at two.
+  **THE FIX, at the producer (Core #1).** `ClosureCallSig` gains `ret_gir_name`; the LIR HOF emitter
+  resolves the result element ONCE from the closure's GIR return type and derives BOTH the width (via
+  `c_sizeof_lir_type`) AND the hooks (via `infer_fn_ptr_stores_from_types` — the same decider the user's own
+  `Vector[U]()` goes through, so no new writer) from that single value; `HofExpand.result_elem_fns` carries
+  them; `expand_map` / `expand_flat_map` REPLAY them. BIR decides nothing.
+  ⛔ **THE OBVIOUS REMEDY WAS A MISCOMPILE AND SO WAS THE FIRST CORRECTION.** Copying the source's hooks
+  (`_new_like`) installs `gorget_string_free` over 8-byte int slots. Reading the result element off the
+  DESTINATION local is worse than useless: that local's GIR type is the source receiver's, so it returns
+  `Some(wrong)` — indistinguishable from `Some(right)` — and an intermediate design that did so turned a
+  correct `Vector[Pair]` program into `allocation-size-too-big` and printed `0` for `7`.
+  ⭐ **HENCE THE LOAD-BEARING PROPERTY: ONE RESOLVED GIR RETURN TYPE FEEDS SIZE AND HOOKS.** Precisely: for
+  `flat_map` both go through one stripped element NAME, while for `map` the width comes off that return
+  type's `LirType` projection and the hooks off its mangled-name projection — two projections of the same
+  `f.return_type` type id, taken side by side. Two derivations off the same wrong type AGREE WITH EACH OTHER
+  and disagree only with reality, so a validator comparing them finds them self-consistent and passes.
+  Structure, not checking, is what rules that out.
+  **ORDER-COUPLED, ONE WAY.** Freeing `flat_map`'s drained husk is safe only because the accumulator now
+  carries `elem_clone`: `gorget_array_extend` gates its deep copy on the DESTINATION's hook, so without it
+  the extend is an aliasing memcpy and the free is a use-after-free. Hooks-first is safe; the reverse is not.
+  ⭐⭐ **FOUR GUARD PARTS, BECAUSE `HofExpand` IS EXPANDED AWAY BY BIR AND THE COMPILE-TIME CHECK CANNOT SEE
+  THE REPLAY.** `validate_hof_result_array_hooks` (registered in `VALIDATORS`, keyed on `expects_drop_fn`,
+  which is what sees the `Recursive`/`Custom` element kinds `elem_drop_fn` reads back as `None`) proves the
+  DECISION was made; `assert_module_valid` runs post-BIR on a module where no `HofExpand` remains, so it can
+  never prove the expander CARRIED IT OUT. Deleting the replay in `expand_map`, anchored BY LINE against its
+  identically-spelled `expand_flat_map` sibling, left the validator GREEN, the build clean and `map__cust`
+  silently back to `2` — caught only by the fourth part, a BIR replay test in `bir/synth.rs`. The runtime
+  `gorget_array_extend` check (gated on `-DGORGET_HOF_HOOK_ASSERTS=1`, set only by `--sanitize`) is the
+  ONLY instrument that can catch a result array minted from the wrong NAME, because `src` is an independent
+  derivation of the same element type. Its hook clauses are asymmetric on purpose: they fire when the
+  DESTINATION lacks or contradicts a hook the source carries — the direction that aliases — and stay silent
+  when the destination is richer, which is safe and which a half-pair constructor legitimately produces.
+  **RED EVIDENCE, EVERY PART.** LIR-resolution break → validator rc 101 on the four cleanup-element cells,
+  correctly green on trivial ones. BIR-map-replay break → replay test rc 101, validator green. Runtime check
+  at HEAD → 8 cells SIGABRT, zero false positives on `a + b` / `.extend()` / `extend(map(…))`. Fixtures at
+  the pre-fix compiler → sizes `[8,8,32,32,32,32,32,32,32]` vs `[8,32,32,16,8,32,32,32,16]`, no `drop-cust`
+  line under `map`, and `heap-buffer-overflow`.
+  ⭐ **THE DEQUE RECEIVER IS PINNED, AND IT IS THE ONE CELL THE FIX REASONS ABOUT.** The result hooks are
+  resolved with a hardcoded `CollectionCtorKind::Vector` even for a `Deque` receiver, on the argument that
+  the accumulator is a `gorget_array` either way and the resolver serves both kinds from one arm at one set
+  of offsets. The argument is true — and it was the only claim in the track carried by reasoning rather than
+  a fixture, which is exactly where a cell belongs. Measured: 2 → **4** `drop-cust` on C and on LLVM, and 4
+  is right (2 source + 2 result). ⚠ **The self-host CANNOT COMPILE `Deque.map` AT ALL** — emitted C
+  `incompatible types when assigning to type 'GorgetArray' from type 'int'`, reproducing at the simplest
+  possible shape (`Deque[int]`, trivial closure, no `Drop`). Filed as `t1286`; the cell is parked in
+  `tests/fixtures/self_host_gaps/` so this round's own inflow cannot book a non-MATCH against
+  `RUNTIME_DIFF_NONMATCH_CEILING` (Core #9 ⊕), and `CORPUS_MANIFEST.txt` declares it.
+  ⭐ **THE R48 PIN'S SCOPE CLAIM WAS FALSE AND IS CORRECTED (Core #12).** It claimed the discriminator was
+  `auto` vs `Vector[U]` "for named callees and inline closures alike", and cited a
+  `known_gaps/…_destination_axis.gg` that **does not exist**. Measured over the full 2×2: the destination
+  makes no difference and neither does the closure parameter's typing — the discriminator is the closure's
+  BODY. A CALL body resolved correctly; a CONTAINER LITERAL body did not. All four of that fixture's inline
+  closures have call bodies, which is why it was green on every cell it claimed to cover.
+  **BURN-DOWN, MEASURED — AND THE FIRST CENSUS OF IT WAS A SELECTION.** `vector_hof_cross_type_map` sheds
+  two of its three allowlist classes, leaving 80 bytes in 10 allocations, all `todo/t0953`. Reporting that
+  as the whole delta was SIX Q#3: it enumerated the row the work started from. The re-census took all 35
+  allowlisted fixtures calling `.map(` / `.flat_map(` / `.extend(`, each re-measured with the sweep's own
+  `leak_classes` extraction, its `use_stacks=0` / `detect_leaks=1:exitcode=0` options and its REPS=3
+  per-class MAX — **thirteen more had shed classes**, every one stable across all three reps, and
+  `test_higher_order_named_fn` went fully CLEAN and left the file.
+  ⚠ **AND THE FIRST STATEMENT OF THE RESULT WAS A NET FIGURE THAT HID THIS ROUND'S OWN INFLOW — the same
+  defect a second time, one face further on.** Two fixtures this round ADDED are top-level and therefore
+  swept, and both leaked `todo/t0953`'s closure-environment floor with no allowlist row: unallowlisted leak →
+  `new_leak` → the sweep exits 1, fatal. Reporting `294 → 293 rows` as "a burn-down" netted that inflow
+  against the credit and printed only the credit.
+  ⭐ **ONE OF THE TWO WAS FIXED RATHER THAN ADMITTED, WHICH IS WHAT THE FILE ASKS FOR.** The expander defect
+  does not care whether the callee is a closure literal or a named function, so
+  `vector_hof_result_element_drop` was rewritten with named callees: still RED pre-fix (its `map` section
+  prints no `drop-cust`), 22 bytes in 4 allocations → **fully clean**, no row, and now held there by
+  `vector_hof_result_element_drop_is_sanitize_clean`. The other is IRREDUCIBLE and measured so — a named
+  callee with the same container-literal body sizes its accumulator CORRECTLY at 32 pre-fix, so the closure
+  literal IS the defect's entry condition — and takes one cited row whose `⚖ ADMITTED` block names it as an
+  owner ask under this file's own new-inflow rule.
+  Final, regenerated from the awk census the figure row itself carries rather than by applying deltas:
+  `LEAK_CEILING` 294→**294**, `LEAK_CLASS_PAIRS` 501→**487**, `LEAK_RECORDS` 2302→**2252**,
+  `UNCITED_LEAK_CLASS_PAIRS` 494→**481** (every shed pair was uncited; the one admitted pair is cited to
+  `t0953`), mirrored in `scripts/figures.db`.
+  **SELF-HOST: NOTHING TO PORT, AND IT IS AHEAD.** The self-host LIR has no `HofExpand` variant at all —
+  `try_lower_vector_hof` desugars to a comprehension loop whose ordinary array constructor already wires the
+  hooks — so both new fixtures COMPILE and MATCH on that lane, pinned by `assert_self_host_stdout`. ⭐ And on
+  `flat_map` the reference LAGS: the self-host's nested loop MOVES each element and runs the `Drop` body
+  twice, where Rust's extend-then-free runs it four times. Filed as `t1216`, with the self-host as the
+  existence proof that the reference-grade shape is not hypothetical.
+  ⭐ **`t1216` SHIPS A DURABLE REPRO WITH BOTH LANES WIRED.** `known_gaps/t1216_flat_map_appends_by_clone.gg`
+  carries `push` and `map` controls beside the `flat_map` cell, so the four drops cannot be read as "that is
+  just what `Drop` does". The `#[ignore]`d Rust test asserts the INTENDED two (RED, bare rc 101); the
+  self-host test asserting the SAME string is **un-ignored and GREEN** — the reference-grade shape running
+  in the tree, pinned so it cannot regress while Rust catches up.
+  **FILED:** `t1215` (a Vector HOF through an opaque `Callable` PARAMETER — the callable's type is erased to
+  a bare `Ptr`, so there is no `HofExpand` to carry the metadata; LLVM leaks, C does not link, and the
+  dispatcher is the literal `strip_prefix("Vector__")` shape the no-name-matching rule forbids) ·
+  `t1216` (the append-move) · `t1217` (a nested-collection literal in a closure body does not unify).
+  `t1286` (the self-host cannot compile `Deque.map`) · `t1285` (`E_MoveWithoutOperator` still teaches D27's
+  retired `!` sigil — measured, `!` STILL BUILDS, so it is a stale lesson rather than a broken suggestion).
+  `t0977` gained its `flat_map` cell as EVIDENCE: measured before and after, its accumulator size goes 8→32
+  and **stdout is unchanged garbage**, so the two halves are independent and this fix does not close it.
+
 - [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
   STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,
   garbage or empty stdout on BOTH backends. Two producer sites now stamp the View tag; 12 cells RED→GREEN.**

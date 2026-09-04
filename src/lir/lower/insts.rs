@@ -2789,6 +2789,7 @@ impl<'a> FuncLowering<'a> {
             closure_arg_abis,
             dst: result_id,
             init: init_id,
+            result_elem_fns: Vec::new(),
         });
 
         if let (Some(d), Some(r)) = (*dst, result_id) {
@@ -2958,6 +2959,7 @@ impl<'a> FuncLowering<'a> {
             closure_arg_abis,
             dst: result_id,
             init: init_id,
+            result_elem_fns: Vec::new(),
         });
 
         if let (Some(d), Some(r)) = (*dst, result_id) {
@@ -3521,6 +3523,40 @@ impl<'a> FuncLowering<'a> {
             vec![elem_abi]
         };
 
+        // The result element type `U`, resolved ONCE for this HOF: for `map`
+        // the closure's GIR return type name, for `flat_map` that name with
+        // its `Vector__`/`Deque__` prefix stripped, since `flat_map` is
+        // `(T) -> Vector[U]`.
+        //
+        // The accumulator's `elem_size` and its runtime hooks both trace back
+        // to ONE GIR RETURN TYPE, and being precise about that matters. For
+        // `flat_map` both go through `result_elem_name` below, so it is
+        // literally one name. For `map` the width comes off `closure_ret_ty`
+        // (the `LirType` projection) while the hooks come off `ret_gir_name`
+        // (the mangled-name projection) — two projections, but of the SAME
+        // `f.return_type` type id, taken side by side where `ClosureCallSig` is
+        // built. That shared origin is the invariant; "one name" would be the
+        // right claim only for `flat_map`.
+        //
+        // Deriving them from independent lookups is what makes a mis-resolution
+        // invisible: two derivations off the same wrong type agree with EACH
+        // OTHER, so neither the emitted C nor a validator comparing them can
+        // tell the pair apart from a correct one.
+        let result_elem_name: Option<String> = closure_call_sig
+            .as_ref()
+            .and_then(|sig| sig.ret_gir_name.as_deref())
+            .and_then(|n| {
+                if is_flat_map {
+                    n.strip_prefix("Vector__")
+                        .or_else(|| n.strip_prefix("Deque__"))
+                        .map(|s| s.to_string())
+                } else if is_map {
+                    Some(n.to_string())
+                } else {
+                    None
+                }
+            });
+
         // When a result is produced, allocate a fresh ValueId for the HOF
         // output and plumb it into the caller's local slot. The BIR
         // expansion reuses this ValueId as the `done_bb` block parameter.
@@ -3542,27 +3578,51 @@ impl<'a> FuncLowering<'a> {
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
             Some(self.map_type(&gir_ty))
         } else if is_flat_map {
-            // `flat_map` is `(T) -> Vector[U]`, so the accumulator's element is
-            // `U` — not the source element `T`, and not recoverable from the
-            // closure's return type, which is a bare `Struct(GorgetArray)` here.
-            // The GIR already resolved the result as `Vector__<U>`, so read it
-            // back rather than re-deriving: sizing the accumulator by `T` is how
-            // a cross-type `flat_map` over a `Vector[int]` built an 8-byte-slot
-            // array and then `gorget_array_extend`ed 32-byte `Str`s into it.
-            let d = dst.as_ref().expect("flat_map requires dst");
-            let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
-            let res_name = match self.gir_types.get(gir_ty) {
-                Some(crate::ir::types::GirType::Named(n)) => n.clone(),
-                _ => return None,
-            };
-            // Same mangled-name channel `element_ty` above is derived through —
-            // at this boundary the mangled symbol IS the contract.
-            let res_elem = res_name
-                .strip_prefix("Vector__")
-                .or_else(|| res_name.strip_prefix("Deque__"))?;
-            Some(super::component_to_lir_type(res_elem, self.struct_reg, self.gir_types))
+            // `flat_map` is `(T) -> Vector[U]`, so the accumulator's element
+            // is `U`, not the source element `T`. Sizing it by `T` is how a
+            // cross-type `flat_map` over a `Vector[int]` builds an 8-byte-slot
+            // array and then `gorget_array_extend`s 32-byte `Str`s into it —
+            // a heap overflow that stays invisible until the element count
+            // outgrows the array's minimum capacity.
+            //
+            // `U` comes off the CLOSURE's GIR return type, which the lowering
+            // context records as `Vector__U`. It is NOT read off the
+            // destination local: that local's GIR type is the source
+            // receiver's, so it yields `Some(wrong)` rather than `None` and is
+            // structurally indistinguishable from a correct resolution.
+            let res_elem = result_elem_name.clone()?;
+            Some(super::component_to_lir_type(&res_elem, self.struct_reg, self.gir_types))
         } else {
             None
+        };
+
+        // When this HOF mints a fresh result array, resolve the RESULT
+        // element's runtime hooks here — the one place where GIR metadata and
+        // `type_drop_fns` are both live — and write them through on the
+        // instruction for BIR to replay.
+        //
+        // This goes through `infer_fn_ptr_stores_from_types`, the same decider
+        // the user's own `Vector[U]()` uses, rather than reading
+        // `StructDef.elem_drop_fn` directly: that field is populated only for
+        // trivially-droppable element types, so a `Recursive` or `Custom` drop
+        // strategy reads back as `None` and silently installs nothing. Routing
+        // through the existing resolver keeps one source of truth per axis and
+        // adds no second decider (layering rules 3 and 4).
+        //
+        // The ctor kind is `Vector` for a `Deque` receiver too, and that is not
+        // a `Vector`-only assumption sneaking in: the accumulator these
+        // expanders mint is a `gorget_array` whatever the receiver was, and
+        // `infer_fn_ptr_stores_from_types` serves `Vector` and `Deque` from one
+        // arm at one set of offsets. If those two ever diverge, this call needs
+        // the receiver's kind threaded to it.
+        let result_elem_fns = match result_elem_name.as_deref() {
+            Some(n) => self.infer_fn_ptr_stores_from_types(
+                crate::lir::CollectionCtorKind::Vector,
+                n,
+                None,
+                false,
+            ),
+            None => Vec::new(),
         };
 
         self.push_inst(bb, Inst::HofExpand {
@@ -3576,6 +3636,7 @@ impl<'a> FuncLowering<'a> {
             closure_arg_abis,
             dst: result_id,
             init: init_id,
+            result_elem_fns,
         });
 
         if let (Some(d), Some(r)) = (*dst, result_id) {

@@ -963,8 +963,8 @@ sanitize.leak.records.pin.regen_env = none
 sanitize.leak.records.pin.instrument = the awk census over tests/sanitize/LEAK_ALLOWLIST.txt (shares one run with the other three HEAD-side leak rows)
 sanitize.leak.records.pin.measured_at = bc762d0d3
 sanitize.leak.records.pin.home = tests/lints.rs:LEAK_RECORDS
-sanitize.leak.records.pin.scan = standard
-sanitize.leak.records.pin.caveat = the `*N+` signatures are counted at their FLOOR — a `+` means at-least-N and switches that row's count check off, so this total is a lower bound on what the concurrency rows may actually leak; see sanitize.leak.loose_signatures.pin for how many rows are in that state
+sanitize.leak.records.pin.scan = none
+sanitize.leak.records.pin.caveat = scan = none since this became a four-digit figure — four-digit values collide with `file:line` CITATIONS, which churn every round: when the value was 2283 the unrelated spellings were `src/main.rs:2283` quoted in docs/devbook/01 and a self-host line pair 2280/2283 in todo/t0944, neither a mirror of anything. Waiving line numbers means re-waiving them whenever a file moves, and a waiver that must be renewed is a waiver nobody reads. The mirror to LEAK_RECORDS is what actually holds this row, exactly as for sanitize.leak.class_pairs.pin. ⊕ the `*N+` signatures are counted at their FLOOR — a `+` means at-least-N and switches that row's count check off, so this total is a lower bound on what the concurrency rows may actually leak; see sanitize.leak.loose_signatures.pin for how many rows are in that state
 sanitize.leak.records.pin.cost_secs = 30
 sanitize.leak.records.pin.mirror = tests/lints.rs:LEAK_RECORDS
 sanitize.leak.records.pin.input = none
@@ -1056,7 +1056,7 @@ sanitize.leak.uncited_class_pairs.pin.regen_extract = leak-allowlist uncited pai
 sanitize.leak.uncited_class_pairs.pin.regen_fires = leak-allowlist pairs scanned=[1-9][0-9]*
 sanitize.leak.uncited_class_pairs.pin.regen_env = none
 sanitize.leak.uncited_class_pairs.pin.instrument = an awk + grep join over the allowlist and todo/, reproducing tests/lints.rs::sanitize_allowlists_shrink_only's own two-part citation test (the item must EXIST and must NAME the symbol)
-sanitize.leak.uncited_class_pairs.pin.measured_at = dc0b0024b
+sanitize.leak.uncited_class_pairs.pin.measured_at = 572e93a04
 sanitize.leak.uncited_class_pairs.pin.home = tests/lints.rs:UNCITED_LEAK_CLASS_PAIRS
 sanitize.leak.uncited_class_pairs.pin.scan = standard
 sanitize.leak.uncited_class_pairs.pin.caveat = TARGET IS 0, so this number is EVIDENCE OF A GAP, not of health. ⚠ AND THE TOKEN CHECK IS A FLOOR, NOT A LOCK: two frames account for the majority of rows, so one item naming both would satisfy a pair on every one of them. What stops that is the pair granularity plus a reviewer reading the row's ⚖ ADMITTED block — the number says how much is uncited, the block says whether the citation is true

@@ -309,6 +309,48 @@ guard: every clause above that failed did so because it consulted a list its own
 author wrote, and every clause that holds does so because it consults a
 declaration instead.
 
+#### The result element is resolved upstream, never re-derived here
+
+`map` is `(T) -> U` and `flat_map` is `(T) -> Vector[U]`, so the array these
+two mint for their result has element type `U` — which is not the receiver's
+`T`. Two things about that array depend on `U`: its slot width, and the runtime
+hooks (`elem_drop`, `elem_clone`, `elem_materialize`) that free and copy what it
+holds.
+
+BIR resolves neither. Both arrive on the instruction: `value_ty` carries the
+element type and `result_elem_fns` carries the hooks as `(byte_offset,
+fn_name)` pairs, and `expand_map` / `expand_flat_map` replay the stores
+verbatim, instruction-for-instruction with the shape
+`lir::lower::insts::emit_collection_fn_ptr_stores` emits for an ordinary
+`Vector[U]()`. BIR is downstream of LIR, so it must be handed the answer rather
+than reaching back up for it — layering rule 4, and the reason the metadata is
+written through rather than recomputed.
+
+Two properties make that arrangement load-bearing rather than stylistic.
+
+**One resolved type feeds both consumers.** The result element is resolved once,
+at the LIR emitter, off the closure's GIR return type. For `flat_map` the width
+and the hooks both go through the single stripped element NAME; for `map` the
+width comes off that return type's `LirType` projection and the hooks off its
+mangled-name projection — two projections taken side by side, of the same GIR
+type id. The shared origin is what holds, and it is worth stating as a type
+rather than as a name, because only one of the two producers reduces to a name.
+
+Deriving them from independent lookups is what makes a mis-resolution invisible:
+two derivations off the same wrong type agree with each other and disagree only
+with reality, so neither the emitted C nor a validator comparing them against
+each other can tell the pair apart from a correct one. The element is also not
+readable off the destination local — that local's GIR type is the source
+receiver's, so it yields a confidently wrong answer rather than no answer.
+
+**The two edits are ordered, one way.** `flat_map`'s callee returns a fresh
+vector per element; the loop drains it into the accumulator and then frees the
+husk. That free is safe only because the accumulator carries `elem_clone`:
+`gorget_array_extend` gates its deep copy on the *destination's* hook, so while
+that hook is absent the extend is a raw memcpy and the accumulator holds
+aliases into the husk. Installing the hooks makes the free safe; the reverse
+order is a use-after-free. Installing the hooks alone is safe on its own.
+
 ### Appending synthesized functions
 
 After all functions are expanded, `lower_lir_to_bir` splices the synthesis pool's

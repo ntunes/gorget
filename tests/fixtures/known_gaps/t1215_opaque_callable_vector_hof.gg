@@ -1,0 +1,41 @@
+# KNOWN GAP `todo/t1215` — a Vector HOF whose callable arrives as an opaque
+# `Callable[…]` PARAMETER, rather than as a literal or a named callee.
+#
+# The LLVM backend falls back to an inliner dispatched by name-stripping
+# `Vector__`, and that fallback mints the result array without the result
+# element's runtime hooks — so the Strings the adapter produced are abandoned.
+# The C backend does not monomorphize this shape at all and fails at the
+# LINKER, with no `gg` diagnostic.
+#
+# This is NOT the class the `HofExpand` result-element metadata closes: the
+# callable's type is erased to a bare `Ptr` before lowering, so the call is a
+# generic `CallExtern` and there is no `HofExpand` instruction to carry the
+# resolved metadata on. Same symptom, different write site.
+#
+# RED-VERIFIED 2026-09-04: LLVM `gg build --sanitize` → rc 1, 6 bytes in 1
+# object, `str_alloc_copy <- gorget_string_clone_to_owned`. C `gg build` → rc 1,
+# `undefined reference to 'Vector__GorgetString__map'`.
+#
+# Heap-FORCED: `mk` concatenates, so every String is a real allocation.
+#
+# INTENDED (asserted by the test): prints `aabc!`, ASan-clean, on BOTH lanes.
+
+from std.collections import Vector
+
+String mk(String a, String b):
+    return a + b
+
+Vector[String] apply_all(Vector[String] v, Callable[String(String)] f):
+    return v.map(f)
+
+String bang(String s):
+    return mk(s, "!")
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push(mk("aa", "bc"))
+    Vector[String] r = apply_all(v, bang)
+    if r.get(0) is Some(x):
+        print(x)
+    else:
+        print("none")

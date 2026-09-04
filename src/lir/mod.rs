@@ -787,6 +787,19 @@ pub enum Inst {
         dst: Option<ValueId>,
         /// Accumulator seed (for `fold`/`reduce`) — None otherwise.
         init: Option<ValueId>,
+        /// Resolved runtime element hooks for the RESULT accumulator array —
+        /// `(byte_offset, fn_name)`, exactly as `Inst::CollectionCtor`'s path
+        /// carries them. Empty for HOFs that produce no fresh array.
+        ///
+        /// A HOF that transforms elements has a result element type `U` that
+        /// is not the receiver's `T`, so the accumulator cannot inherit the
+        /// source's hooks — reading them off the source installs a drop for
+        /// the wrong type over slots of the wrong width. `U`'s hooks are
+        /// resolved once, at the LIR-lowering emitter, by the same decider the
+        /// user's own `Vector[U]()` goes through, and written through here for
+        /// BIR to replay verbatim: BIR is downstream of LIR and must be handed
+        /// the answer rather than re-deriving it (layering rules 3 and 4).
+        result_elem_fns: Vec<(usize, String)>,
     },
 
     /// Canonical-op: take the address of an SSA value.

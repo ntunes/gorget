@@ -310,6 +310,7 @@ fn expand_func(
                     closure_arg_abis,
                     dst,
                     init,
+                    result_elem_fns,
                 } => {
                     match hof_op {
                         HofOp::SortBy
@@ -543,6 +544,7 @@ fn expand_func(
                                     bb_idx,
                                     &mut next,
                                     structs,
+                                    result_elem_fns,
                                     coll,
                                     element_ty,
                                     closure,
@@ -559,6 +561,7 @@ fn expand_func(
                                     bb_idx,
                                     &mut next,
                                     structs,
+                                    result_elem_fns,
                                     coll,
                                     element_ty.clone(),
                                     closure,
@@ -777,6 +780,7 @@ fn expand_func(
                                                 closure_arg_abis,
                                                 dst,
                                                 init,
+                                                result_elem_fns,
                                             });
                                             continue;
                                         }
@@ -829,6 +833,7 @@ fn expand_func(
                                 closure_arg_abis,
                                 dst,
                                 init,
+                                result_elem_fns,
                             });
                         }
                     }
@@ -2190,11 +2195,60 @@ fn expand_filter(
 /// right thing (aggregates require memcpy, which the backend Store
 /// dispatch handles via `val_types`).
 #[allow(clippy::too_many_arguments)]
+/// Emit the resolved element-hook stores for a HOF's fresh result array.
+///
+/// Mirrors `lir::lower::insts::emit_collection_fn_ptr_stores`
+/// instruction-for-instruction (`NamedFuncAddr` + `IConst` +
+/// `ElemPtr { elem_size: 1 }` + `Store`). Offsets and function names are
+/// resolved UPSTREAM, in LIR lowering, and merely replayed here: BIR is
+/// downstream and makes no decision of its own about element metadata.
+fn emit_result_elem_fn_stores(
+    func: &mut LirFunction,
+    cur: BlockId,
+    next: &mut u32,
+    result_slot: crate::lir::SlotId,
+    stores: &[(usize, String)],
+) {
+    if stores.is_empty() {
+        return;
+    }
+    let base = alloc_value(next);
+    func.block_mut(cur).push_synthetic(Inst::SlotAddr {
+        dst: base,
+        slot: result_slot,
+    });
+    for (offset, fn_name) in stores {
+        let fn_ptr = alloc_value(next);
+        func.block_mut(cur).push_synthetic(Inst::NamedFuncAddr {
+            dst: fn_ptr,
+            name: fn_name.clone(),
+        });
+        let idx_val = alloc_value(next);
+        func.block_mut(cur).push_synthetic(Inst::IConst {
+            dst: idx_val,
+            ty: LirType::I64,
+            value: *offset as i64,
+        });
+        let field_ptr = alloc_value(next);
+        func.block_mut(cur).push_synthetic(Inst::ElemPtr {
+            dst: field_ptr,
+            base,
+            index: idx_val,
+            elem_size: 1,
+        });
+        func.block_mut(cur).push_synthetic(Inst::Store {
+            ptr: field_ptr,
+            value: fn_ptr,
+        });
+    }
+}
+
 fn expand_map(
     func: &mut LirFunction,
     current_bb: usize,
     next: &mut u32,
     structs: &[StructDef],
+    result_elem_fns: Vec<(usize, String)>,
     coll: ValueId,
     element_ty: LirType,
     closure: ValueId,
@@ -2232,6 +2286,7 @@ fn expand_map(
         value: arr_val,
         is_move: true,
     });
+    emit_result_elem_fn_stores(func, cur, next, result_slot, &result_elem_fns);
 
     let elem_abi_hint = closure_arg_abis.first().copied();
     let ctx = emit_hof_loop_scaffold(
@@ -2339,6 +2394,7 @@ fn expand_flat_map(
     current_bb: usize,
     next: &mut u32,
     structs: &[StructDef],
+    result_elem_fns: Vec<(usize, String)>,
     coll: ValueId,
     element_ty: LirType,
     closure: ValueId,
@@ -2383,6 +2439,7 @@ fn expand_flat_map(
         value: arr_val,
         is_move: true,
     });
+    emit_result_elem_fn_stores(func, cur, next, result_slot, &result_elem_fns);
 
     let elem_abi_hint = closure_arg_abis.first().copied();
     let ctx = emit_hof_loop_scaffold(
@@ -2427,6 +2484,22 @@ fn expand_flat_map(
             crate::ir::abi::AbiKind::Ptr,
             crate::ir::abi::AbiKind::Ptr,
         ],
+    });
+    // Free the drained husk. `flat_map` is `(T) -> Vector[U]`: the callee
+    // mints a fresh vector per input element, the loop above drains it into
+    // the accumulator, and nothing then owns the emptied container.
+    //
+    // ORDER-COUPLED with the hook stores above, and the coupling is one-way.
+    // `gorget_array_extend` gates its deep clone on the DESTINATION's
+    // `elem_clone`; while that is NULL the extend is a raw memcpy and the
+    // accumulator ALIASES this husk's buffers, so freeing it here would be a
+    // use-after-free rather than a leak fix. Installing the result element's
+    // hooks first is what makes this free safe.
+    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallExtern {
+        dst: None,
+        name: "gorget_array_free".to_string(),
+        args: vec![sub_ptr],
+        arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
     });
 
     // check_bb: cond ? body_bb : done_bb.

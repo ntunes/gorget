@@ -10122,6 +10122,46 @@ fn sanitize_allowlists_shrink_only() {
     // `gg build --sanitize` and `--backend=llvm --sanitize` each report the same
     // 16 allocations, all `__gorget_closure_env_alloc`, and no corruption.
     // See the `⚠⚠ OWNER ASK` block in the allowlist.
+    // ── SUPERSEDED ADDENDUM (R49 Track N2) — PRECEDENCE: the Track L block
+    //    BELOW wins; this one describes N2's OWN branch census, not the
+    //    constants this file declares. Its "NET, which is what these constants
+    //    hold" line is FALSE of this tree — the allowlist here is Track L's
+    //    blob, so Track L's values are its census. Kept verbatim for its
+    //    selection-vs-enumeration lesson and its burn-down/inflow record,
+    //    which R49 Track INT-B acts on when it reconciles the allowlist.
+    // ⬇ A BURN-DOWN AND AN INFLOW, STATED SEPARATELY — because a NET figure
+    // that reports only the credit side is the same defect as a census that
+    // enumerates only the row you started from, and this number made both
+    // mistakes in one round.
+    //
+    // BURN-DOWN: 14 rows shed classes when the Vector-HOF accumulator started
+    // carrying its result element's hooks and the drained `flat_map` husk began
+    // being freed — the elements it never dropped and the husks it never freed
+    // stop leaking rather than stopping being reachable. One row
+    // (`test_higher_order_named_fn`) went fully clean and left the file.
+    // ⚠ THE FIRST CENSUS OF THAT SAID ONE ROW. It looked only at
+    // `vector_hof_cross_type_map` — the row the work started from — and reported
+    // its 2 shed classes as the whole delta: a SELECTION presented as an
+    // enumeration. The re-census enumerated instead: every allowlisted fixture
+    // calling `.map(` / `.flat_map(` / `.extend(`, each re-measured with the
+    // sweep's own `leak_classes` extraction, its `use_stacks=0` /
+    // `detect_leaks=1:exitcode=0` options and its REPS=3 per-class MAX.
+    // Thirteen more had shed classes, every one stable across all three reps.
+    //
+    // INFLOW: +1 row, +1 pair, +5 records — `vector_hof_result_element_sizing`,
+    // a fixture this round ADDED, whose closure literals are the pinned
+    // defect's entry condition and therefore carry `todo/t0953`'s environment
+    // leak irreducibly. It is cited, and its `⚖ ADMITTED` block names it as an
+    // owner ask. Its sibling `vector_hof_result_element_drop` contributes
+    // NOTHING here because its leak was FIXED rather than admitted — every
+    // callee rewritten as a named function, and the fixture is now asserted
+    // fully clean.
+    //
+    // NET, which is what these constants hold: 294 -> 294 rows, 501 -> 487
+    // pairs, 2302 -> 2252 records. Regenerate with the awk census on
+    // `sanitize.leak.records.pin.regen` in `scripts/figures.db`; never derive
+    // these by applying a delta by hand.
+    //
     // ⚠⚖ Then both rise with R49 Track L's six new rows and two WIDENED ones:
     // +10 (fixture, class) pairs and +8 net records. The net hides two moves in
     // opposite directions, and both are deliberate: `closure_fstring_capture`
@@ -10190,10 +10230,13 @@ fn sanitize_allowlists_shrink_only() {
     // the reviewer reading the `⚖ ADMITTED` block: the number says how much is
     // uncited, the block says whether the citation is true.
     //
-    // SEEDED AT THE LANDING VALUE, not at the pre-edit one. 500 pairs, 6 of them
-    // cited by this round's three admitted rows, leaves 494. Seeding at 500 would
-    // have silently admitted six uncited pairs — the same argument this file
-    // makes against leaving headroom in `LEAK_CEILING`.
+    // SEEDED AT THE LANDING VALUE, not at the pre-edit one: seeding at the
+    // then-current pair count would have silently admitted the six pairs this
+    // file's three `⚖ ADMITTED` rows cite — the same argument this file makes
+    // against leaving headroom in `LEAK_CEILING`.
+    // ⬇ Moves with the burn-down: the thirteen rows that shed classes when the
+    // Vector-HOF accumulator started carrying its result element's hooks were
+    // all UNCITED pairs, so every one of them came off this number too.
     // TARGET: 0. Every pair carrying a filed item is the end state; nothing else
     // in this file creates pressure toward it.
     // ⚠⚖ 494 → 493 (R49 Track L fold): NOT by citing a pair, but by FIXING one.
