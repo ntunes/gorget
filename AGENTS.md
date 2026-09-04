@@ -60,7 +60,7 @@ GG_BACKEND=llvm cargo test --test integration --release dict_user_key_hashable
 
 **Backends should be at parity**; a regression on one and not the other means the change touched a backend-specific path.
 
-**Timeouts** (override on loaded hosts): `GG_BUILD_TIMEOUT_SECS` (outer `gg build`; default 120/180; bump to 600 on multi-agent boxes), `GG_TEST_TIMEOUT_SECS` (per-test binary; default 30; bump for `stress_*` / p2p / arena).
+**Timeouts** (override on loaded hosts): `GG_BUILD_TIMEOUT_SECS` (outer `gg build`; default 120/180; bump to 600 on multi-agent boxes), `GG_TEST_TIMEOUT_SECS` (per-test binary; default 30; bump for `stress_*` / p2p / arena). ⚠ **The BOOTSTRAP stages obey NEITHER — they read `GG_STAGE1_TIMEOUT_SECS` (default 600), and its load auto-adjust samples `/proc/loadavg` ONCE at test start, so it cannot protect a 20-min stage on a box that loads up later. Set it to 1800 on a multi-agent box; a stage timeout is NOT a regression until compared at HEAD.**
 
 ## Documentation
 

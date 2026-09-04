@@ -675,6 +675,52 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **N2 PASS 6 = SIGN OFF (design signed off THREE PASSES RUNNING) — EXECUTOR LAUNCHED.** Folded as
+addendum 6 (E1–E9). ⛔ **ITS HEADLINE IS THE ROUND'S MOST TRANSFERABLE INSTRUMENT LESSON:**
+**A VALIDATOR PLACED AT A PASS BOUNDARY CAN ONLY SEE THAT THE DECISION WAS *MADE*, NEVER THAT A LATER PASS
+*EXECUTED* IT.** The prescribed compile-time validator reads `HofExpand.result_elem_fns` — but **BIR EXPANDS
+`HofExpand` AWAY**, and `assert_module_valid` runs post-BIR on `bir_module.as_lir()` where no `HofExpand`
+remains. Pass 6 built the validator verbatim, broke the BIR replay half **anchored by line**, and measured
+`map__cust` silently printing `2` instead of `2|bye|bye` **with the validator GREEN**. ⇒ *SIX Q#5 — emission
+vs emission ORDER — wearing a validator's clothes.* **THE THIRTEENTH SIX Q#6 THIS ROUND, and the THIRD
+GENERATION of one shape: pass 5 diagnosed pass 4's guard as "a green cell never scored" and then made the
+identical error one generation later.** ⊕ Fixed by a FOURTH part on the existing `#[cfg(test)]` harness in
+`src/bir/synth.rs` — measured RED (rc 101) → GREEN, zero zone cost.
+⭐ **AND THE FIXTURE AXIS WAS WRONG FOR THREE PASSES: the discriminator is the CLOSURE BODY (container
+literal vs call), NOT the callee shape or param typing.** Measured 2×2 at pristine HEAD: call-body → 32 ✅,
+literal-body → **8 ⛔**. ⇒ **`vector_hof_cross_type_map.gg` ALREADY HAS four inline-closure cells and they are
+green because every body is a CALL** — three passes prescribed adding cells that exist. Its header claims an
+axis product it does not sample: **FALSE AS A SCOPE CLAIM (Core #12).**
+⊕ Two things FILED not fixed (`t1215` LLVM opaque expander → cite Track A2's erasure; `t1216` CoW-charter
+append-move). ⊕ `todo/t0058`'s own census grep omits `src/backend/llvm` — **a SELECTION presented as an
+enumeration.**
+
+⛔⛔ **`GG_STAGE1_TIMEOUT_SECS` — A THIRD TIMEOUT KNOB NOBODY HAD WRITTEN DOWN.** The bootstrap stages obey
+**neither** `GG_BUILD_TIMEOUT_SECS` nor `GG_TEST_TIMEOUT_SECS`. Pass 6 set the two documented knobs and got
+**rc 1, "stage2 -> stage3.c timed out after 600s"**; identical source with `GG_STAGE1_TIMEOUT_SECS=1800` →
+**rc 0** in 1312s. The auto-adjust samples `/proc/loadavg` **once at test start**, so it cannot protect a
+22-min stage on a box that hits 16.42/10 later. **An agent following the documented knobs reads a spurious
+RED as a regression.** ⊕ **FIXED IN `AGENTS.md`'s Timeouts line by the orchestrator (one-line correction in
+place, own hands).**
+
+⭐ **M1's FOLD RETURNED — AND THE HANDED-DOWN MECHANISM DID NOT SURVIVE RE-MEASUREMENT.** M1 was told its
+change "turns an LLVM build refusal into a program that prints a wrong value". **False:** the `llc` refusal
+came from the *`Box[int]`* cell's element collapse — the thing M1 CLOSED. Closing it merely stopped **MASKING**
+a pre-existing wrong value. ⇒ ⚡ **"my fix made X worse" and "my fix stopped hiding X" are indistinguishable
+from the symptom alone — and this is the round's FOURTH inherited-premise failure.** Recorded verbatim in the
+item so it is not re-derived a third time.
+⊕ **And splitting the repro is what made it adjudicable:** `Box[float32](x)` (LLVM **build rc 1**) and
+`Box[float32](1.5)` (rc 0, prints `0.000000` on BOTH lanes) are **two different defects**.
+**`t1197`** = the emitter (`box_alloc_inner_c_type` ignores the f32 suffix and trusts the LIR type already
+widened to `double`, while its sibling twenty lines away maps `"float"` correctly — **Layering rule 1: f32-ness
+survives in the NAME and is gone from the TYPE, and the emitter trusts the lossy one**).
+**`t1198`** = wider: `float32 x = 1.5` and `takes(1.5)` are **REJECTED**, yet the same literal is **ACCEPTED**
+at `Box[float32](1.5)`, `S(1.5)` and `v.push(1.5)` — **the consuming-position set on the TYPE axis, the same
+shape as `t0682`'s ownership gap** ⇒ fix at the shared consuming-arg expected-type hint, not three sites. Its
+test asserts the **rejection**, so it fails whichever way the disposition lands rather than pinning one of two
+open answers. `t1199` deliberately UNSPENT (third face was the same class — a duplicate avoided).
+⊕ M1's fold ships **zero `src/` change**; confirming review owed before integrate.
+
 ⛔⛔ **TRACK L'S ERRATUM (b) IS FALSE — AND IT CORRUPTED A FILED ITEM'S `mechanism` FIELD (T's scout, 2026-09-04).**
 L asserted *"read at HEAD: `guess_return_type` has NO `EIdentifier` arm at all"* and **rewrote `todo/t0877`'s
 front-matter `mechanism` to say so.** The arm **EXISTS** at `tests/fixtures/self_host_lowerer/lower_closures.gg:809`
