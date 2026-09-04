@@ -1,0 +1,20 @@
+# CAPTURE COST, cell B: the captured source is LIVE after the capture, so the
+# capture CLONES.
+#
+# Identical to `closure_capture_dead_source_moves.gg` but for the final
+# `print(prefix)`. That one extra read is the whole difference: `prefix` is now
+# live past the capture, the environment may not take its buffer, and the
+# ratified answer is clone-if-the-source-is-live — exactly one materialisation,
+# the same count the best hand-written code would pay.
+#
+# ⚠ THE INSTRUMENT IS `--clones=stats`, NOT stdout — see the twin's header and
+# `closure_capture_capture_cost_axis` in `tests/integration.rs`.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String prefix = mk("pre", "fix")
+    Callable[String()] f = (): mk(prefix, "!")
+    print(f())
+    print(prefix)

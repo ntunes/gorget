@@ -1,0 +1,59 @@
+# Regression: a DEQUE receiver's HOF result array carries the result element's
+# runtime metadata, exactly as a Vector's does.
+#
+# THIS CELL EXISTS BECAUSE IT IS THE ONE PLACE THE FIX REASONS RATHER THAN
+# MEASURES. The result element's hooks are resolved through
+# `infer_fn_ptr_stores_from_types` with a hardcoded `CollectionCtorKind::Vector`
+# even when the receiver is a `Deque` — on the argument that the accumulator the
+# expander mints is a `gorget_array` either way, and that the resolver serves
+# `Vector` and `Deque` from ONE arm at ONE set of offsets. The argument is true
+# today. An argument is not a measurement, so this is the cell that notices if
+# it stops being true.
+#
+# Self-contained on purpose: all four `drop-cust` lines land inside
+# `via_deque_map`, two for the source it builds and two for the result `map`
+# mints, so the expected output does not depend on scope-exit ordering in
+# `main`.
+#
+# RED-VERIFIED against the pre-fix compiler, BOTH backends: TWO `drop-cust`
+# lines, not four — the source Deque dropped its elements and the mapped
+# result did not. C and `--backend=llvm` agree at two before and at four
+# after, so the receiver kind is not a backend-specific path.
+#
+# ⚠ RUST LANE ONLY, and the reason is filed rather than hidden: the self-host
+# cannot compile `Deque.map` at all — its emitted C fails with `incompatible
+# types when assigning to type 'GorgetArray' from type 'int'`. That is
+# `todo/t1286`, with its own durable repro; it is a lane divergence in the
+# self-host's direction, not a property of this fix.
+#
+# ⚠ THAT is why this file sits in `self_host_gaps/` instead of at top level: a
+# top-level fixture is auto-scanned into `runtime_parity_corpus`, and parking it
+# here keeps this round's own inflow out of `RUNTIME_DIFF_NONMATCH_CEILING`
+# (Core #9 ⊕). It moves up to top level when `todo/t1286` lands.
+#
+# NOT ASSERTED ASan-CLEAN: the closure literal leaks an 8-byte environment
+# through `todo/t0953`.
+
+from std.collections import Deque
+
+struct Cust:
+    String s
+
+equip Cust with Drop:
+    void drop(^self):
+        print("drop-cust")
+
+String mk(String a, String b):
+    return a + b
+
+int via_deque_map():
+    Deque[Cust] src = Deque[Cust]()
+    src.push(Cust(mk("aa", "bc")))
+    src.push(Cust(mk("dd", "efg")))
+    Deque[Cust] r = src.map((c): Cust(mk(c.s, "!")))
+    return r.len()
+
+void main():
+    print("deque-map")
+    print(f"{via_deque_map()}")
+    print("end")

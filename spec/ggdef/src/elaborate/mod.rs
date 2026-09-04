@@ -837,6 +837,18 @@ impl Elaborator {
             }
             ast::Expr::FieldAccess { object, field } => match self.infer_ast_ty(&object.node) {
                 Ty::Named(t) => self.field_ty(&t, &field.node),
+                // `t._0` is the ratified ALIAS spelling of `t.0` and the parser
+                // builds `TupleFieldAccess` only for the literal-integer form,
+                // so the alias arrives here as a named field over a tuple.
+                // Resolved through the shared spelling rule the production
+                // typechecker and safety walk read (Layering rule 3, ONE
+                // resolver for the axis) — never a local re-implementation.
+                // Without this arm ggdef types `t._0` as Unknown and the
+                // single-owner sub-place reject below abstains on a spelling it
+                // rejects one character away.
+                Ty::Tuple(ts) => ast::tuple_field_alias_index(&field.node)
+                    .and_then(|i| ts.get(i).cloned())
+                    .unwrap_or(Ty::Unknown),
                 _ => Ty::Unknown,
             },
             ast::Expr::TupleFieldAccess { object, index } => match self.infer_ast_ty(&object.node) {
@@ -972,6 +984,37 @@ impl Elaborator {
     /// cannot decay silently again (Core #14 — an invariant comment with no
     /// enforcing guard).
     fn reject_if_single_owner_callable_init(&self, e: &ast::Expr, span: Span, position: &str, exempt_params: bool) -> ElabResult<()> {
+        // SUB-PLACE reach: a FIELD or TUPLE-ELEMENT place of callable type is
+        // the same implicit copy as the bare identifier below — the ratified
+        // rule ranges over the POSITION, and "the receiver's spelling is not
+        // part of it". Production resolves this structurally
+        // (`require_explicit_move_for_single_owner_init`'s field/tuple arm,
+        // src/semantic/safety/check_expr.rs); the self-host mirrors it in
+        // `reject_single_owner_init` (self_host_typechecker/typecheck.gg).
+        //
+        // Keyed on the OUTERMOST projection, so `v[0].f` (a read THROUGH a
+        // container) is in and a BARE index place (`v[0]`, `d[k]`) is out —
+        // the same omitted cell the other two lanes name, deferred behind the
+        // owner's callee-borrow ruling (2026-09-04) rather than shipping a
+        // per-request clone on a dispatch hot path.
+        //
+        // `exempt_params` does NOT apply: it exists so re-binding a whole
+        // borrowed param copies a pointer, and a sub-place read out of a param
+        // is a fresh owning copy instead.
+        if matches!(e, ast::Expr::FieldAccess { .. } | ast::Expr::TupleFieldAccess { .. })
+            && ast_is_place(e)
+            && matches!(self.infer_ast_ty(e), Ty::Callable { .. })
+        {
+            return Err(ElabError::new(
+                format!(
+                    "error[E_MoveWithoutOperator]: implicit copy of a single-owner callable \
+                     sub-place at {position}; a callable is single-owner (no implicit copy) — \
+                     copy the sub-place with `.clone()` (a bare `!` on a field/index sub-place \
+                     is a partial move and is rejected)"
+                ),
+                span,
+            ));
+        }
         if let ast::Expr::Identifier(n) = e {
             // At a BIND / whole-reassign boundary a bare PARAM callable is
             // accepted (a param is a borrowed view; re-binding copies a pointer,

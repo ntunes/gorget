@@ -95,7 +95,7 @@ pub type ValidatorFn = fn(&LirModule) -> Vec<LirError>;
 /// that accidentally propagates the `box_inner_type` field where it
 /// doesn't belong. The forward `validate_box_inner_type` only walks
 /// `Box__*`-named structs, so a non-Box with stray metadata slips through.
-const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type, validate_box_inner_type_consistency, validate_drop_completeness, validate_drop_fn_presence, validate_resource_arity];
+const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type, validate_box_inner_type_consistency, validate_drop_completeness, validate_drop_fn_presence, validate_resource_arity, validate_hof_result_array_hooks];
 
 /// Assert that `module` satisfies every registered LIR invariant. Panics with
 /// a descriptive message tagged by `after` (the name of the pass that just
@@ -2031,4 +2031,80 @@ mod tests {
         let errors = validate_drop_fn_presence(&module);
         assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
     }
+}
+
+/// A `map`/`flat_map` `HofExpand` that mints a fresh result array must carry
+/// RESOLVED element hooks whenever the result element type is one whose
+/// instances need cleanup.
+///
+/// The predicate is `elem_drop_fn.is_some() || expects_drop_fn ||
+/// type_drop_fns.contains_key(name)`, and the middle term is the load-bearing
+/// one: `elem_drop_fn` is populated only for trivially-droppable types, so a
+/// user struct with a `Recursive` or `Custom` drop strategy reads back `None`
+/// there while `expects_drop_fn` still reports — correctly — that the type
+/// must appear in `LirModule.type_drop_fns`. A check written against
+/// `elem_drop_fn` alone is blind to exactly the two element kinds whose drop
+/// bodies are user-visible.
+///
+/// This proves the DECISION was made. It cannot prove BIR executed it:
+/// `HofExpand` is expanded away by BIR lowering, so by the time
+/// `assert_module_valid` runs on the post-BIR module there is no instruction
+/// left to inspect. The replay itself is covered by
+/// `bir::synth::tests::hof_expand_map_replays_result_elem_fns`.
+pub fn validate_hof_result_array_hooks(module: &LirModule) -> Vec<LirError> {
+    let mut errors = Vec::new();
+    for func in &module.functions {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                let Inst::HofExpand {
+                    hof_op,
+                    closure_ret_ty,
+                    value_ty,
+                    dst,
+                    result_elem_fns,
+                    ..
+                } = inst
+                else {
+                    continue;
+                };
+                if dst.is_none() {
+                    continue;
+                }
+                let elem_ty: Option<&LirType> = match hof_op {
+                    HofOp::Map => Some(closure_ret_ty),
+                    HofOp::FlatMap => value_ty.as_ref(),
+                    _ => None,
+                };
+                let Some(elem_ty) = elem_ty else { continue };
+                // Resolve the element type to a StructDef.
+                let sd: Option<&StructDef> = match elem_ty {
+                    LirType::Struct(id) => module.structs.get(id.0 as usize),
+                    LirType::PtrTo(id) => module.structs.get(id.0 as usize),
+                    LirType::Resource { kind, .. } => {
+                        let n = format!("{kind:?}");
+                        module.structs.iter().find(|s| s.name == n)
+                    }
+                    _ => None,
+                };
+                let Some(sd) = sd else { continue };
+                let needs_hooks = sd.elem_drop_fn.is_some()
+                    || sd.expects_drop_fn
+                    || module.type_drop_fns.contains_key(&sd.name);
+                if needs_hooks && result_elem_fns.is_empty() {
+                    errors.push(LirError {
+                        func: func.name.clone(),
+                        block: Some(block.id),
+                        message: format!(
+                            "HOF result-array hooks: {hof_op:?} mints a fresh result array of element type {:?} which needs cleanup (elem_drop_fn={:?}, expects_drop_fn={}, type_drop_fns={}) but result_elem_fns is EMPTY — the accumulator will be built with no elem_drop/elem_clone/elem_materialize",
+                            sd.name,
+                            sd.elem_drop_fn,
+                            sd.expects_drop_fn,
+                            module.type_drop_fns.contains_key(&sd.name),
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    errors
 }

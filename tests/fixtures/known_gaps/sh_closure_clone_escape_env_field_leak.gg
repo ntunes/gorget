@@ -1,0 +1,40 @@
+# KNOWN GAP (`todo/t1069`) — SELF-HOST lane. The result of `Callable.clone()`
+# never gets its environment field dropped, so an escaping cloned closure leaks
+# the environment AND the collection the environment owns.
+#
+#     Direct leak   72 B  __gorget_closure_env_alloc ← mk_it ← main
+#     Indirect leak 64 B  gorget_array_push          ← mk_it ← main
+#     SUMMARY: AddressSanitizer: 136 byte(s) leaked in 2 allocation(s)
+#
+# MECHANISM. The self-host emits `__Closure_N__drop(closure.env)` before
+# `gorget_closure_free` — the half Rust gg lacks — but it keys
+# `closure_env_type` at closure MAKE-SITES only. `f.clone()` produces a second
+# `GorgetClosure` that is not a make-site, so the clone carries no env type, no
+# field drop is emitted for it, and the environment it owns is never reclaimed.
+#
+# ⚠ THE ESCAPE IS LOAD-BEARING, and the control is the discriminator. The same
+# program WITHOUT the escape — `Callable[int(int)] g = f.clone()` used in the
+# same frame — is rc 0 and **fully ASan-clean**, because the make-site `f` is
+# still in scope and its own field drop reclaims the shared environment. Only
+# when the clone OUTLIVES the make-site does the leak appear.
+#
+# ⚠ IT IS A LEAK, NOT A DOUBLE-FREE. The shallow 16-byte `{fn_ptr, env}` copy
+# means the clone and the original share one environment, so an env-field drop
+# emitted for BOTH would double-free. The rescue owed is ownership at the clone,
+# not a second drop.
+#
+# ⚠ THE INSTRUMENT IS ASan OVER THE SELF-HOST-EMITTED C:
+#   driver <fixture> lib --emit-c --runtime-dir=… > out.c
+#   cc -O0 -g -fsanitize=address -o out out.c -lm -lpthread
+# A plain run is rc 0 printing `2` on both lanes; nothing else can see this.
+#
+# INTENDED, on the SELF-HOST lane: prints `2`, rc 0, ASan-clean.
+
+Callable[int(int)] mk_it():
+    Vector[int] v = [1]
+    Callable[int(int)] f = (int x): x + v.get(0).unwrap()
+    return f.clone()
+
+void main():
+    Callable[int(int)] g = mk_it()
+    print(g(1))

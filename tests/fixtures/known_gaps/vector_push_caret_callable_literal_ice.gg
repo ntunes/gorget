@@ -1,0 +1,40 @@
+# KNOWN GAP (todo/t0401) — THE DURABLE REPRO THAT ITEM NEVER HAD.
+#
+# `v.push(^f)` where `f` is a `Callable` local: `gg check` rc 0, then
+# `gg build` rc 101:
+#
+#   Tier 2a consume-site violation: 1 violation(s) in module '<unknown>'.
+#   First: fn @main bb0 i7
+#          — CollectionMutator(Vector__Callable__GorgetClosure__push, arg #1)
+#          — untracked source consumed (ownership not decided).
+#
+# `^f` is the EXPLICITLY LEGAL spelling at a consuming position, so the
+# compiler crashing on it means the sanctioned remedy does not compile.
+#
+# ⭐ THE DISCRIMINATOR THE ITEM DID NOT HAVE, and it is not what the item says.
+# `t0401` records the crash as "identifier-specific" — closure LITERAL push
+# works, identifier push does not. That is half the rule. Measured at
+# 7bf11017e, what decides it is HOW THE LOCAL WAS BOUND:
+#
+#   Callable[int()] c = (): base + 1     # closure LITERAL   -> build rc 101
+#   Callable[int()] c = mk(40)           # call RESULT       -> build rc 0
+#
+# Same syntax at the push, same type, opposite verdicts. So the source's
+# `LocalOwnership` state is the axis, not the expression's syntactic class —
+# which is why a re-measurement that happened to bind from a helper concluded
+# the item no longer reproduced. This fixture binds from a LITERAL deliberately.
+#
+# ⚠ This is `t1236`'s census question in miniature: the panic SITE is shared
+# with `t0938` and `todo/t1226`, the consume-site CLASS is not
+# (`CollectionMutator` here, `EnumInit` there, `StructInit(<tuple>)` in t1226),
+# and the classification differs too ("untracked" vs "borrowed"). Record the
+# class, never the panic site.
+#
+# INTENDED: builds and runs, printing `8`.
+
+void main():
+    int base = 7
+    Callable[int()] c = (): base + 1
+    Vector[Callable[int()]] v = []
+    v.push(^c)
+    print(v.get(0).unwrap()())

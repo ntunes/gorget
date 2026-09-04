@@ -68,7 +68,8 @@ The LIR validator is registry-driven. `assert_module_valid(module, after)` (`:11
 ```rust
 const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type,
     validate_box_inner_type_consistency, validate_drop_completeness,
-    validate_drop_fn_presence, validate_resource_arity];
+    validate_drop_fn_presence, validate_resource_arity,
+    validate_hof_result_array_hooks];
 ```
 
 `validate_module` (`:39`) itself bundles the structural and SSA/CFG checks:
@@ -82,6 +83,7 @@ The shape-soundness guards in the registry are the LIR-layer half of the Tier 1 
 - `validate_drop_fn_presence` (`:1013`, Tier 1a inverse): the forward validator only walks entries *in* `type_drop_fns` and can't see structs that *should* have one but don't. This walks `module.structs` and asserts every `StructDef` flagged `expects_drop_fn` (set at the populator when GIR strategy is `Recursive`/`Custom`) has a matching entry. Catches the silent-skip class where a Recursive struct's field walk emerged empty.
 - `validate_box_inner_type` (`:788`, Tier 1d) and its inverse `validate_box_inner_type_consistency` (`:855`): every regular `Box__` `StructDef` (single `_0` field, `is_trait_box == false`) must carry `box_inner_type: Some(suffix)` matching its name mangling; and conversely no non-`Box__` struct may carry stray `box_inner_type`. The C backend scans this field to emit the per-type `Box__<inner>__drop` / `__gorget_box_alloc_<inner>` symbols; missing or stray metadata link-fails at runtime (snag #13's family).
 - `validate_resource_arity` (`:1049`): every `LirType::Resource { kind, params }` must have `params.len() == LirType::expected_resource_arity(kind)`, recursing into nested resource params. Catches a constructor that populates a resource shape with the wrong element-type count.
+- `validate_hof_result_array_hooks`: a `map` / `flat_map` `HofExpand` that mints a fresh result array must carry resolved `result_elem_fns` whenever the result element type is one whose instances need cleanup. The predicate is `elem_drop_fn.is_some() || expects_drop_fn || type_drop_fns.contains_key(name)`, and the middle term is what makes it work: `elem_drop_fn` is populated only for trivially-droppable types, so a user struct with a `Recursive` or `Custom` drop strategy reads back `None` there. A check written against `elem_drop_fn` alone is blind to exactly the two element kinds whose drop bodies are user-visible.
 
 `validate_box_inner_type` is the canonical illustration of the *registrar-boundary exception* to the no-name-matching rule: it legitimately matches the `Box__` name prefix because the validator *is* the registrar-side check, and the name is read once at the recognition step, not used to drive a downstream semantic decision (`:768` documents this explicitly).
 
@@ -90,6 +92,50 @@ The shape-soundness guards in the registry are the LIR-layer half of the Tier 1 
 The BIR validator is the simplest instance, and the only one phrased as a graduation check rather than a soundness gate. `assert_primitives_only` (`:36`) walks every instruction and asserts none is a *canonical* (high-level) op — anything that should have been expanded by `bir::lower`. It is run at the end of `BirModule::from_lir` (`src/bir/mod.rs:79`) and its `Err(BirError::UnloweredCanonicalOp { fn_name, block_id, opcode })` propagates via `?`.
 
 Its match has exactly two kinds of arm (`check_inst`, `:47`): an explicit arm per canonical op returning the error (`SizeOf`, `EnumInit`, `EnumCheck`, `EnumExtract`, `StructInit`, `CowClone`, `TraitCall`, `HofExpand`, `AddressOf`, `BoxAlloc`, `CollectionCtor`), and a catch-all `_ => Ok(())` treating everything else as a primitive. This makes the maintenance cost asymmetric by design: adding a new *primitive* requires zero validator changes; adding a new *canonical op* requires exactly one arm; *deleting* an arm (after writing its expansion in `bir::lower`) is how an op graduates from "must lower" to "no longer a valid LIR op." Full context for BIR's role is in [Chapter 16](16-bir.md).
+
+## A validator can only see the layer it runs on
+
+`validate_hof_result_array_hooks` is worth reading twice, because what it
+*cannot* see is as instructive as what it can, and the shape generalises to
+every check in the registry.
+
+The validator inspects `HofExpand.result_elem_fns`. `assert_module_valid` runs
+at `lir-lowering`, `ssa-construction` and `compute-types-pre-bir`, where that
+instruction still exists — and again at `bir-lowering`, `optimize` and
+`compute-types-post-bir`, on the BIR module viewed as LIR. By that second group
+`HofExpand` has been expanded away. So the check proves the *decision* was
+made and can never prove the expander *carried it out*: delete the replay in
+`expand_map` and the validator stays green, every other gate stays green, and a
+user's `Drop` body silently stops running.
+
+That is a question about emission *order* rather than emission, and no
+instruction-level check can answer it. The class needs a package, and the four
+parts cover disjoint halves of it:
+
+| what goes wrong | fixtures | LIR validator | runtime `extend` check | BIR replay test |
+|---|---|---|---|---|
+| hooks never resolved | RED | **RED** | RED (`flat_map` only) | green |
+| resolved, never replayed (`map`) | RED | green | never called | **RED** |
+| resolved, never replayed (`flat_map`) | — | green | **RED** | — |
+| resolved from the *wrong* element type | RED | green — the two derivations agree | **RED** | green |
+| mis-sized over an empty source | green | green | green — the loop never runs | green |
+
+The last row has no runtime witness at all and is pinned by the emitted slot
+width; the fourth is caught only by the runtime check, because there `src` is an
+independent derivation of the same element type and is the sole second opinion
+in the system. A guard that green-lights the class it was written to retire is
+worse than none, so the useful question about any new validator is not "does it
+pass" but "which sub-class can it not see, and what covers that one".
+
+The runtime half lives in `gorget_array_extend` and compiles only under
+`gg build --sanitize`, which passes `-DGORGET_HOF_HOOK_ASSERTS=1`: it reports a
+*compiler* defect, and `extend` is reachable from ordinary user syntax
+(`a + b`, `.extend()`), so it must never abort a release program. Its hook
+clauses are deliberately asymmetric — they fire when the destination lacks or
+contradicts a hook the source carries, the direction that leaves the copy
+aliasing, and stay silent when the destination is the richer of the two, which
+is safe and which a constructor installing `elem_drop` without its `elem_clone`
+pair legitimately produces.
 
 ## The migration framework
 

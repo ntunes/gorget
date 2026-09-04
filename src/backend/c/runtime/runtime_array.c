@@ -451,8 +451,68 @@ static inline void gorget_array_insert(GorgetArray* arr, size_t index, const voi
     arr->len++;
 }
 
+/* Element-metadata agreement check for `gorget_array_extend`.
+ *
+ * `dst` and `src` are INDEPENDENT derivations of the same element type U: a
+ * HOF's accumulator is minted by the expander, while the array the callee
+ * returns is minted by that callee's own collection constructor.  When the two
+ * disagree the append is already wrong: the body below memcpys at
+ * `dst->elem_size`
+ * and deep-clones only when `dst->elem_clone` is set, so an undersized `dst`
+ * writes past its block and a hookless `dst` leaves the copy ALIASING `src`'s
+ * buffers.  That second opinion is the only instrument that sees a result array
+ * minted from the WRONG element type, because size and hooks then agree with
+ * each other and disagree only with reality.
+ *
+ * Compiled only under `gg build --sanitize` (the driver passes
+ * `-DGORGET_HOF_HOOK_ASSERTS=1` alongside `-fsanitize=...`).  It reports a
+ * COMPILER defect, and `gorget_array_extend` is reachable from ordinary user
+ * syntax (`a + b`, `.extend()`), so it must never abort a release program.
+ *
+ * The hook clauses are ASYMMETRIC on purpose.  They fire when `src` carries a
+ * hook that `dst` lacks or contradicts -- the direction that aliases or
+ * misfrees.  A `dst` richer than `src` is safe (the extra `elem_clone` deep-
+ * clones a range `src` still owns) and must NOT trip: a collection constructor
+ * that installs `elem_drop` without its `elem_clone` pair legitimately produces
+ * that shape, and a symmetric comparison would abort a correct program.
+ *
+ * It sits after the `src->len == 0` early return, so an empty source is not
+ * covered here: with nothing to copy there is nothing to corrupt, and a result
+ * array mis-minted over an empty source is pinned by its emitted element size
+ * instead.  A runtime check cannot see a miscompile on a path the data never
+ * takes -- which is why this is one guard of four and not the guard.
+ */
+#ifdef GORGET_HOF_HOOK_ASSERTS
+#define GORGET_ARRAY_EXTEND_CHECK(dst, src)                                      \
+    do {                                                                         \
+        if ((dst)->elem_size != (src)->elem_size) {                              \
+            fprintf(stderr,                                                      \
+                    "gorget: internal: array extend element-size mismatch "      \
+                    "(dst=%zu, src=%zu) -- the destination was minted from a "   \
+                    "different element type than the source\n",                  \
+                    (dst)->elem_size, (src)->elem_size);                         \
+            fflush(stderr);                                                      \
+            abort();                                                             \
+        }                                                                        \
+        if (((src)->elem_drop && (dst)->elem_drop != (src)->elem_drop) ||        \
+            ((src)->elem_clone && (dst)->elem_clone != (src)->elem_clone)) {     \
+            fprintf(stderr,                                                      \
+                    "gorget: internal: array extend element-hook mismatch "      \
+                    "(drop %p vs %p, clone %p vs %p) -- the destination is "     \
+                    "missing or contradicts the source's element metadata\n",    \
+                    (void*)(dst)->elem_drop, (void*)(src)->elem_drop,            \
+                    (void*)(dst)->elem_clone, (void*)(src)->elem_clone);         \
+            fflush(stderr);                                                      \
+            abort();                                                             \
+        }                                                                        \
+    } while (0)
+#else
+#define GORGET_ARRAY_EXTEND_CHECK(dst, src) ((void)0)
+#endif
+
 static inline void gorget_array_extend(GorgetArray* dst, const GorgetArray* src) {
     if (src->len == 0) return;
+    GORGET_ARRAY_EXTEND_CHECK(dst, src);
     size_t old_len = dst->len;
     size_t needed = old_len + src->len;
     if (needed > dst->cap) {

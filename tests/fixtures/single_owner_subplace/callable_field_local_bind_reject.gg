@@ -1,0 +1,28 @@
+# SINGLE-OWNER SUB-PLACE NEG — the by-design carve-out at a FIELD place.
+# `Callable[T]` has no implicit-copy path in the lowering, so a bare `h.f` read
+# binds a SECOND owner of one closure env. Two plain `h.f` reads are an
+# `AddressSanitizer: attempting double-free`; a re-read across a scope is a
+# heap-use-after-free — both at `gg check` rc 0 before the gate was widened.
+#
+# The gate keys on the OUTERMOST PROJECTION (the ratified PLACE/TEMP axis,
+# decisions.md D31 ADDENDUM 2026-07-20). Bare INDEX places (`v[0]`, `d[k]`) are
+# the NAMED OMITTED CELL: equally unsound today (todo/t1225), deferred behind
+# the owner's callee-borrow ruling (2026-09-04 — a call does not consume its
+# callee) rather than shipping a per-request clone on the httpserver hot path.
+# A read THROUGH a container (`v[0].f`) IS in scope — see the sibling cell.
+#
+# CELL: type=Callable · place=field of a LOCAL · position=bind · capture=int.
+# RED at 7bf11017e: `gg check` ACCEPTED (rc 0).
+# ggdef: ABSTAIN — its arm keys on a bare identifier of `Ty::Callable`; the
+# sub-place reach is out of subset (todo/t1227).
+
+struct Holder:
+    Callable[int()] f
+
+Callable[int()] mk(int n):
+    return (): n + 1
+
+void main():
+    Holder h = Holder(mk(40))
+    Callable[int()] g = h.f
+    print(g())

@@ -1,0 +1,23 @@
+# SINGLE-OWNER SUB-PLACE NEG — CAPTURE axis: a DROPPABLE capture (`String`),
+# where the int-capturing cells hold a non-droppable one. The env block's drop
+# strategy differs between the two, so a fix that happened to work only for a
+# POD env would leave this cell live. Named as its own row rather than assumed
+# equivalent (an axis sampled at one value is an anecdote, not a net).
+#
+# Omitted cell: bare INDEX places are deferred behind the callee-borrow ruling
+# (todo/t1225).
+#
+# CELL: type=Callable · place=field of a local · position=bind · capture=STRING.
+# RED at 7bf11017e: `gg check` ACCEPTED (rc 0).
+# ggdef: ABSTAIN (todo/t1227).
+
+struct Holder:
+    Callable[String()] f
+
+Callable[String()] mk(String s):
+    return (): s + "!"
+
+void main():
+    Holder h = Holder(mk("hi"))
+    Callable[String()] g = h.f
+    print(g())

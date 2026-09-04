@@ -43,10 +43,11 @@
 # kept anyway because it makes the freed element a heap String, which is what
 # turns a bare SIGSEGV into a legible ASan `heap-use-after-free` in
 # `gorget_string_clone_to_owned` -- useful, not required.
-# ⚠ MEASURED ON THIS SHAPE ONLY. The same warning appears verbatim on
-# `todo/t0703`/`t0704` and their fixtures, which are DIFFERENT defects (an
-# alias-spelled view; a closure capture); nobody has run the literal-payload
-# variant there, so do not propagate this correction to them unmeasured.
+# ⚠ MEASURED ON THIS SHAPE ONLY. The same warning appears verbatim on the
+# alias-spelled-view and closure-capture families (`t0703` / `t0704`, both since
+# CLOSED) and on their fixtures, which are DIFFERENT defects; nobody has run the
+# literal-payload variant there, so do not propagate this correction to them
+# unmeasured.
 #
 # DISTINCT FROM `t0125`, same root gap, different severity and shape -- state
 # the discriminator before merging them:

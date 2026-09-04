@@ -1,0 +1,23 @@
+# SINGLE-OWNER SUB-PLACE NEG — CAPTURE axis: a NON-capturing closure. The
+# carve-out is a property of the TYPE, not of whether the env is empty: an
+# implicit copy of a `Callable[T]` place has no clone path in the lowering
+# whatever the env holds. Pinning this cell stops a future "empty env is
+# harmless, exempt it" shortcut from carving a hole the type system cannot see.
+#
+# Omitted cell: bare INDEX places are deferred behind the callee-borrow ruling
+# (todo/t1225).
+#
+# CELL: type=Callable · place=field of a local · position=bind · capture=NONE.
+# RED at 7bf11017e: `gg check` ACCEPTED (rc 0).
+# ggdef: ABSTAIN (todo/t1227).
+
+struct Holder:
+    Callable[int()] f
+
+Callable[int()] mk():
+    return (): 41
+
+void main():
+    Holder h = Holder(mk())
+    Callable[int()] g = h.f
+    print(g())

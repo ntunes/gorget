@@ -1,0 +1,38 @@
+# CAPTURE OWNERSHIP — the sibling cell where the realloc is spelled INSIDE the
+# closure body, and there is NO saved view variable at all.
+#
+# WHY THIS CELL EXISTS. `closure_capture_then_mutate_source_uaf.gg` reallocates
+# OUTSIDE the closure and saves a view, which admits a competing reading: "a CoW
+# view the mutation prescan failed to materialise." This one rules it out. The
+# closure captures `v`, pushes 64 times THROUGH the capture, and then does a
+# FRESH `v.get(0).unwrap()`. There is no view variable to materialise, and both
+# the mutation and the read are inside the body.
+#
+# ⇒ ONE RULE, stated positively: a capture is an ownership boundary, so the
+# environment holds an independent value — clone when the source is live, move
+# when it is dead — and it stays valid wherever the source is later mutated.
+# The environment's own `Vector` is what is being pushed to and read here, so
+# the answer is the environment's, not the outer local's.
+#
+# ⚠ THE REALLOC IS LOAD-BEARING: 0 pushes → rc 0, 1 push → rc 0, 64 pushes →
+# rc 139 without the rule. The payload is heap-FORCED through `mk` so ASan
+# reports a legible `heap-use-after-free` rather than a bare SIGSEGV.
+#
+# ⚠ THE DISCRIMINATOR IS THE CAPTURE ROOT. Declare the vector INSIDE the closure
+# and the identical statements were already correct — that is the live fixture
+# `cow_closure_body_view_survives_realloc.gg`.
+#
+# Prints `helloworld`, both backends, ASan-clean.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = [mk("hello", "world")]
+    auto f = ():
+        int i = 0
+        while i < 64:
+            v.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+            i = i + 1
+        print(v.get(0).unwrap())
+    f()

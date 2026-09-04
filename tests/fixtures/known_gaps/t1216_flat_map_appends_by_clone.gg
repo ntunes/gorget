@@ -1,0 +1,80 @@
+# KNOWN GAP `todo/t1216`: `flat_map` runs the result element's `Drop` body
+# TWICE per element on the Rust lane.
+#
+# The expander appends the callee's vector with `gorget_array_extend`, which
+# deep-clones each element into the accumulator, and then frees the drained
+# husk. Every value is dropped exactly once — so this is sound — but two of the
+# four `Cust` values that exist over the program's life were created only to be
+# copied and destroyed. A user who gives `Drop` a side effect sees it fire twice
+# per element with no `.clone()` anywhere in their source.
+#
+# ⭐ THE SELF-HOST ALREADY DOES IT RIGHT, which is what makes this a "reference
+# lags the self-host" pin rather than a wish. The self-host desugars `flat_map`
+# into a NESTED LOOP that publishes the inner loop variable directly, so each
+# element is MOVED and there is no husk to free: it prints TWO `drop-cust`.
+# Rust's extend-then-free prints FOUR. The reference-grade shape is not
+# hypothetical — it is running in this tree.
+#
+# ⚠ THE CONTROLS ARE LOAD-BEARING. `via_push` and `via_map` build the same
+# `Vector[Cust]` holding the same number of values in the same scope and both
+# print TWO. Without them the four could be read as "two elements, two drops
+# each is just what Drop does"; with them it is unambiguously the producer.
+#
+# ⚠ DO NOT "FIX" THIS BY DELETING THE CLONE. `gorget_array_extend` gates its
+# deep copy on the DESTINATION's `elem_clone`, and that copy is exactly what
+# makes freeing the drained husk safe rather than a use-after-free. The fix is a
+# new append-MOVE runtime primitive that transfers the elements and leaves the
+# husk genuinely empty, which owes its own order-coupling analysis.
+#
+# Heap-FORCED: `mk` concatenates, so every String is a real allocation.
+#
+# INTENDED (asserted by the test): `flat_map` prints TWO `drop-cust`, matching
+# `map` and the `push` control — the self-host's current output.
+
+from std.collections import Vector
+
+struct Cust:
+    String s
+
+equip Cust with Drop:
+    void drop(^self):
+        print("drop-cust")
+
+String mk(String a, String b):
+    return a + b
+
+Vector[String] two_strings():
+    Vector[String] v = Vector[String]()
+    v.push(mk("aa", "bc"))
+    v.push(mk("dd", "efg"))
+    return ^v
+
+# CONTROL — hand-built, two drops.
+int via_push():
+    Vector[String] src = two_strings()
+    Vector[Cust] r = Vector[Cust]()
+    if src.get(0) is Some(s0):
+        r.push(Cust(s0))
+    if src.get(1) is Some(s1):
+        r.push(Cust(s1))
+    return r.len()
+
+# CONTROL — the sibling producer, two drops.
+int via_map():
+    Vector[String] src = two_strings()
+    Vector[Cust] r = src.map((s): Cust(s))
+    return r.len()
+
+# THE CELL — two result elements, four drops on Rust, two on the self-host.
+int via_flat_map():
+    Vector[String] src = two_strings()
+    Vector[Cust] r = src.flat_map((s): [Cust(s)])
+    return r.len()
+
+void main():
+    print("push")
+    print(f"{via_push()}")
+    print("map")
+    print(f"{via_map()}")
+    print("flat_map")
+    print(f"{via_flat_map()}")

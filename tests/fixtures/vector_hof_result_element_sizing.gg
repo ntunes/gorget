@@ -1,0 +1,101 @@
+# Regression: a Vector HOF sizes its RESULT accumulator by the RESULT element
+# type. `flat_map` is `(T) -> Vector[U]`, so the slot width is `sizeof(U)`, not
+# `sizeof(T)`.
+#
+# ⚠ EVERY CELL BELOW PRINTS THE SAME THING BEFORE AND AFTER THE FIX. Its stdout
+# is NOT the pin — `hof_result_accumulator_element_sizes` reads the emitted C
+# and asserts the resolved `gorget_array_new(N)` argument of each accumulator,
+# and `vector_hof_result_element_sizing_no_overflow` asserts the sanitize run
+# reports no heap-buffer-overflow. The stdout assertion here guards against a
+# fix that corrects the width and breaks the values.
+#
+# THE DISCRIMINATOR IS THE CLOSURE'S BODY, NOT THE CALLEE SHAPE AND NOT THE
+# PARAMETER'S TYPING. Measured over the full 2×2 at the pre-fix compiler: a
+# closure whose body is a CALL resolved the result element correctly, and a
+# closure whose body is a CONTAINER LITERAL did not, with `(n)` and `(int n)`
+# behaving identically. Cells (d) and (e) are that control — without them (a)
+# is an anecdote about closures rather than a measurement of the body axis.
+#
+# CELL (a) IS WIDE ON PURPOSE. `gorget_array_extend` reserves a MINIMUM of
+# eight slots, so an undersized accumulator fed by a short source keeps every
+# oversized write inside the over-provisioned block and the miscompile is
+# invisible. Eight inputs is what pushes it off the end. RED-VERIFIED against
+# the pre-fix compiler: `AddressSanitizer: heap-buffer-overflow`, WRITE of size
+# 32, inside `gorget_array_extend` — at rc 0 with correct stdout and `gg check`
+# clean when not under the sanitizer. Two inputs report nothing.
+#
+# NOT ASSERTED ASan-CLEAN, and unlike its `..._drop` sibling this one CANNOT be
+# — the closure literals are the defect's entry condition, not a stylistic
+# choice. Measured against the pre-fix compiler: a NAMED callee whose body is
+# the same container literal (`Vector[String] f(int n): return [mk("t","ag")]`)
+# sizes its accumulator CORRECTLY at 32, because the GIR lane refines a named
+# callee's result type and does not refine a closure literal's. Swap the
+# literals for named functions and the cells stop being broken at all.
+# So the `todo/t0953` environment leak comes with the defect: 40 bytes in 5
+# allocations, one per literal, admitted with a citation in
+# `tests/sanitize/LEAK_ALLOWLIST.txt` rather than hidden.
+#
+# AXIS CELLS — direction × closure body × destination:
+#   (a) UNDERSIZED  8 -> 32  literal body, typed dst   — the heap overflow
+#   (b) OVERSIZED  32 -> 16  literal body, typed dst   — struct element
+#   (c) OVERSIZED  32 ->  8  literal body, typed dst   — primitive element
+#   (d) CORRECT AT HEAD      CALL body, typed dst      — the body-axis control
+#   (e) CORRECT AT HEAD      named callee, typed dst   — the callee-shape control
+#   (f) UNDERSIZED/OVERSIZED empty source              — mis-minted with the
+#       loop never entered, so no runtime instrument can see it; the emitted
+#       size is its only witness
+
+from std.collections import Vector
+
+struct Pair:
+    int a
+    int b
+
+String mk(String a, String b):
+    return a + b
+
+Vector[String] one_tag(int n):
+    Vector[String] out = []
+    out.push(mk("t", "ag"))
+    return ^out
+
+void main():
+    Vector[int] nums = [1, 2, 3, 4, 5, 6, 7, 8]
+
+    # (a) Vector[int] -> Vector[String]: 8-byte slots for a 32-byte element.
+    Vector[String] wide = nums.flat_map((n): [mk("t", "ag")])
+    print(f"{wide.len()}")
+    if wide.get(7) is Some(w7):
+        print(w7)
+    else:
+        print("none")
+
+    Vector[String] v = Vector[String]()
+    v.push(mk("aa", "bc"))
+    v.push(mk("dd", "efg"))
+
+    # (b) Vector[String] -> Vector[Pair]: 32-byte slots for a 16-byte element.
+    Vector[Pair] pairs = v.flat_map((s): [Pair(s.len(), 7)])
+    if pairs.get(1) is Some(p1):
+        print(f"{p1.b}")
+    else:
+        print("none")
+
+    # (c) Vector[String] -> Vector[int]: 32-byte slots for an 8-byte element.
+    Vector[int] lens = v.flat_map((s): [s.len()])
+    print(f"{lens.len()}")
+
+    # (d) CONTROL — same destination and same parameter typing as (a); only the
+    # closure BODY differs. Correct before the fix as well as after.
+    Vector[String] called = nums.flat_map((int n): one_tag(n))
+    print(f"{called.len()}")
+
+    # (e) CONTROL — a named callee. Correct before the fix as well as after.
+    Vector[String] named = nums.flat_map(one_tag)
+    print(f"{named.len()}")
+
+    # (f) Empty source: the accumulator is minted and mis-sized, then the loop
+    # never runs.
+    Vector[String] empty = Vector[String]()
+    Vector[Pair] none_pairs = empty.flat_map((s): [Pair(s.len(), 7)])
+    print(f"{none_pairs.len()}")

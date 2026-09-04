@@ -1705,6 +1705,85 @@ mod tests {
     ///      closure parameter is never the base of a `FieldPtr`. The body
     ///      must only use the closure through `CallClosure`.
     ///    - BirModule::from_lir returns Ok (validator passes).
+    /// The BIR expander must REPLAY the result-element hooks the LIR lowerer
+    /// resolved onto `HofExpand.result_elem_fns`.
+    ///
+    /// `validate_hof_result_array_hooks` proves the decision was made; it
+    /// cannot prove it was carried out, because `HofExpand` no longer exists
+    /// by the time the post-BIR module is validated. The runtime
+    /// `gorget_array_extend` check cannot see this either — `map` never calls
+    /// `extend`. Dropping the replay in `expand_map` therefore compiles clean
+    /// and passes every other gate, while a user's `Drop` body silently stops
+    /// running; this test is what goes red.
+    #[test]
+    fn hof_expand_map_replays_result_elem_fns() {
+        use crate::bir::BirModule;
+        use crate::ir::abi::AbiKind;
+        use crate::lir::{
+            ClosureDispatchKind, HofOp, Inst, LirModule, StructDef, Term,
+        };
+
+        let mut module = LirModule::new();
+        module.add_struct(StructDef {
+            name: "GorgetArray".into(),
+            fields: vec![
+                ("data".into(), LirType::Ptr),
+                ("cap".into(), LirType::I64),
+                ("len".into(), LirType::I64),
+                ("elem_size".into(), LirType::I64),
+            ],
+            enum_kind: crate::lir::EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: Some(64),
+            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false, closure_call_fn: None,
+        });
+
+        let mut caller =
+            LirFunction::new("caller".into(), vec![LirType::Ptr, LirType::Ptr], LirType::Void);
+        let arr = caller.next_value();
+        let cl = caller.next_value();
+        let out = caller.next_value();
+        let bb0 = caller.add_block();
+        caller.block_mut(bb0).insts.push(Inst::ParamRef { dst: arr, index: 0, ty: LirType::Ptr });
+        caller.block_mut(bb0).insts.push(Inst::ParamRef { dst: cl, index: 1, ty: LirType::Ptr });
+        caller.block_mut(bb0).insts.push(Inst::HofExpand {
+            coll: arr,
+            hof_op: HofOp::Map,
+            element_ty: LirType::I64,
+            value_ty: None,
+            closure: cl,
+            closure_kind: ClosureDispatchKind::EscapedClosure,
+            closure_ret_ty: LirType::I64,
+            closure_arg_abis: vec![AbiKind::Scalar],
+            dst: Some(out),
+            init: None,
+            result_elem_fns: vec![
+                (40, "HofReplayProbe__drop".to_string()),
+                (48, "HofReplayProbe__clone_inplace".to_string()),
+            ],
+        });
+        caller.block_mut(bb0).terminator = Term::RetVoid;
+        module.add_function(caller);
+        crate::lir::types::compute_module_value_types(&mut module);
+
+        let bir = BirModule::from_lir(module).expect("BIR lowering should succeed");
+        let module = bir.as_lir();
+        let names: Vec<&str> = module
+            .functions
+            .iter()
+            .flat_map(|f| f.blocks.iter())
+            .flat_map(|b| b.insts.iter())
+            .filter_map(|i| match i {
+                Inst::NamedFuncAddr { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            names.contains(&"HofReplayProbe__drop") && names.contains(&"HofReplayProbe__clone_inplace"),
+            "expand_map did not REPLAY result_elem_fns: NamedFuncAddr names = {names:?}",
+        );
+    }
+
     #[test]
     fn sort_by_synthesis_end_to_end_and_opaque_closure_invariant() {
         use crate::bir::BirModule;
@@ -1760,6 +1839,7 @@ mod tests {
             closure_arg_abis: vec![AbiKind::Scalar, AbiKind::Scalar],
             dst: None,
             init: None,
+            result_elem_fns: Vec::new(),
         });
         caller.block_mut(bb0).terminator = Term::RetVoid;
         module.add_function(caller);

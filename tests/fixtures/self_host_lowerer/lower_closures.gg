@@ -1797,6 +1797,56 @@ ClosureSig compute_closure_sig(int cid, Vector[Param] params, Vector[Stmt] body,
     if ret_type == STRING_MARKER:
         ret_type = lookup_or_register_named(&gmod, "GorgetString")
 
+    # The AMBIENT expected type outranks everything inferred above. Where the
+    # destination is declared `Callable[R(...)]` — a typed local, or a callee
+    # parameter at a direct call — the declaration already NAMES the return
+    # type, and re-deriving it from the body is a read site disagreeing with
+    # its writer. Peel the Ptr layers (callables are passed ByPtr) and read the
+    # `GtFnPtr` return, exactly as `combinator_closure_ret_type` does for a
+    # callable passed by name.
+    #
+    # GUARD on `!= UNIT_TYPE`, same reason as that sibling: only a real
+    # `GtFnPtr` return may override, never a recovered `void`.
+    #
+    # ⚠ WHAT MAKES THE PEEL DECLINE IS THE TYPE IN PLAY, NOT THE POSITION, and
+    # the difference is load-bearing. At a BUILTIN-method argument
+    # `expected_type` is whatever `_combinator_et` set (regenerate: `grep -n
+    # '_combinator_et' tests/fixtures/self_host_lowerer/lower_expr.gg`), and
+    # that is NOT one thing:
+    #   `or` / `and_then` / `flat_map` / `or_else` → `peel_ptr_tid(..)` of an
+    #       Option/Result WRAPPER. A wrapper is never a `GtFnPtr`, so the peel
+    #       declines and the body inference below still answers.
+    #   `unwrap_or_else`                           → `ok_type`, the receiver's
+    #       PAYLOAD (`Some_0`/`Ok_0`), NOT the wrapper — that site's own comment
+    #       says so.
+    # ⛔ SO THE OVERRIDE IS NOT SAFE HERE BY CONSTRUCTION. If the payload is
+    # itself a `Callable`, the peel FIRES and reads the payload's OWN return
+    # type — one level too deep. `Option[Callable[String()]] o` with
+    # `o.unwrap_or_else((): h)` emits `Str __Closure_0__call` where the closure
+    # must return the whole `Callable[String()]`, and `cc` rejects it. Rust gg
+    # RUNS that program and is MEMORY-UNSAFE doing it — it copies the 16-byte
+    # closure into a 32-byte `Str` slot and reads past it (ASan
+    # stack-buffer-overflow, READ of size 32) while printing the right answer
+    # and exiting 0. Failing loudly here is the BETTER of the two behaviours.
+    # Pre-existing rather than introduced here — before this
+    # override the same call emitted `int64_t` and `cc` rejected THAT — so it
+    # is a different wrong answer, not a new failure. Filed as `todo/t1303`.
+    # The corpus stays green only because no payload in it is a callable
+    # (Six Questions #6), which is luck, not a guard.
+    #
+    # Mirrors Rust gg `src/ir/lowering/closures.rs` (regenerate:
+    # `grep -n 'ambient' src/ir/lowering/closures.rs`).
+    if expected_type >= 0:
+        int amb_peeled = peel_ptr_tid(&gmod, expected_type)
+        if amb_peeled >= 0 and amb_peeled < gmod.type_table.len():
+            GirType amb_gt = gmod.type_table.get(amb_peeled).unwrap()
+            match amb_gt:
+                case GtFnPtr(_, amb_ret):
+                    if amb_ret != UNIT_TYPE:
+                        ret_type = amb_ret
+                else:
+                    pass
+
     return ClosureSig(!abi_param_types, self_ptr, !body_param_types, !body_param_names, ret_type)
 
 

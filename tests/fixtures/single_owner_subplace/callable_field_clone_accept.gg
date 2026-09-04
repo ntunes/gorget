@@ -1,0 +1,39 @@
+# SINGLE-OWNER SUB-PLACE POS — THE ACCEPT CONTROL. The remedy the widened
+# diagnostic prescribes must COMPILE and RUN, on both spellings the suite
+# rejects: a struct field and a tuple element (both spellings of the element).
+# A reject-only suite cannot tell "the gate works" from "the gate rejects
+# everything", and a remedy nobody verified is a diagnostic that sends users
+# into a wall.
+#
+# `.clone()` is the ONLY in-language remedy at a sub-place — `^h.f` is
+# `E_PartialMove` under D10(a) ADDENDUM (2026-09-02); see the sibling cell.
+#
+# Each `.clone()` materialises its own closure env, so there is one owner per
+# binding and NO double-free — which is the property this cell exists to pin.
+#
+# ⚠ It is NOT `--sanitize`-clean, and that is a KNOWN, FILED, SEQUENCED gap, not
+# a defect of the remedy: LeakSanitizer reports 16 B from `__gorget_closure_env_alloc`
+# because a struct holding a `Callable` field is `[drop: None]` and never drops
+# it — todo/t0948, whose own hard gate names THIS reject as its prerequisite
+# ("does not land without a read-side materializer … landing WITH it"). So the
+# trade this track makes is not "working program -> leaking program"; it is
+# "a construct that is memory-unsafe in general -> a compile error plus a 16 B
+# leak already filed", which is strictly better on the severity ranking. Wire
+# this cell on stdout, and DO NOT add it to a sanitizer battery until t0948
+# lands.
+
+struct Holder:
+    Callable[int()] f
+
+Callable[int()] mk(int n):
+    return (): n + 1
+
+void main():
+    Holder h = Holder(mk(40))
+    Callable[int()] g = h.f.clone()
+    print(g())
+    (int, Callable[int()]) t = (1, mk(50))
+    Callable[int()] gt = t.1.clone()
+    print(gt())
+    Callable[int()] gu = t._1.clone()
+    print(gu())

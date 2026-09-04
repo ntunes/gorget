@@ -48,6 +48,33 @@
 #     cannot see a SECOND leak of a class the fixture already exhibits.
 #     Membership is unchanged by this schema; it only makes the rows honest.
 #
+#  3b. A RETIRING DIRECTION FOR CITED ROWS. Properties 1-3 all push one way:
+#     they stop a leak from GROWING. Nothing pushed the other way. When a row
+#     stopped leaking the gate printed "no longer leaking - DELETE these rows"
+#     and exited 0, so an admitted row was PERMANENT BY DEFAULT: it outlived the
+#     defect it tolerated, and the only thing that ever removed one was a human
+#     noticing an advisory line in a 25-minute log. That is Core #6's
+#     both-directions requirement failing on the allowlist itself - a shrink-only
+#     ratchet with no enforced shrink is an escalator.
+#     A row may now carry a COLUMN 3: comma-separated `<top-frame>=<todo-id>`
+#     naming the filed item that OWNS each tolerated class. That column already
+#     existed for the citation ratchet (tests/lints.rs::UNCITED_LEAK_CLASS_PAIRS,
+#     TARGET 0); this gate now gives it teeth. For a CITED class, "no longer
+#     leaking" and "leaking less than the row admits" are FATAL, not advisory:
+#     the item is done, so the admission must go with it.
+#     ⚠ SCOPED TO CITED ROWS ON PURPOSE. An UNCITED row shedding a class stays
+#     advisory. Making those fatal too would red this gate on inflow nobody has
+#     adjudicated, and the uncited population is by far the larger one - see
+#     tests/lints.rs::UNCITED_LEAK_CLASS_PAIRS for the live count, which is the
+#     one spelling of that figure. It is burned down by CITING rows, which is
+#     exactly the incentive this creates.
+#     ⭐ THE PRECEDENT IS IN-TREE, NOT AN INVENTION: `security_safe_except_on`
+#     (tests/lints.rs, R48 Track R) states the same contract in the same words -
+#     "the moment the cited defect is fixed, this test goes RED and forces the
+#     annotation to be removed." Same shape, different allowlist.
+#     The self-test asserts BOTH polarities: a cited row whose fixture is clean
+#     is forced out, and an uncited one in the same position is not.
+#
 #  4. EVERY VERDICT THE CLASSIFIER EMITS IS CONSUMED. It used to emit nine
 #     labels and diff two. UBSan findings were computed and thrown away (in a
 #     job named "ASan+UBSan"), a `timeout` kill read as CLEAN, and a fixture
@@ -81,7 +108,8 @@
 # read a per-repetition cost off a whole-sweep wall clock.
 #
 # Exit 0 = no NEW corruption, no NEW leak (or leak class), no flaky row, no
-# dropped verdict. Exit 1 = something regressed. Exit 2 = the INSTRUMENT is
+# dropped verdict, and no CITED row whose defect is already fixed.
+# Exit 1 = something regressed, or a cited admission outlived its defect. Exit 2 = the INSTRUMENT is
 # broken (no compiler, malformed allowlist, self-test failed) — that is not a
 # verdict about the tree and must never be read as one.
 # Fixtures that fix a listed defect show up as "no longer failing" — that is a
@@ -380,10 +408,25 @@ export $SWEEP_WORKER_ENV
 adjudicate_leaks() {
   _allow="$1"; _verd="$2"; _dst="$3"; mkdir -p "$_dst"
   : > "$_dst/new_leak"; : > "$_dst/new_class"; : > "$_dst/fixed_leak"; : > "$_dst/shrunk_class"
+  : > "$_dst/retire_due"
   awk -F'\t' -v dst="$_dst" '
     FNR==NR {
       if ($0 ~ /^[[:space:]]*#/ || NF == 0 || $1 == "") next
       allow[$1]=1; sig[$1]=$2
+      # COLUMN 3 IS THE CITATION FIELD: comma-separated `<top-frame>=<todo-id>`.
+      # A pair is CITED when its symbol appears here (tests/lints.rs
+      # ::sanitize_allowlists_shrink_only additionally requires the item to
+      # EXIST and to NAME the symbol; this gate only needs to know a citation
+      # was claimed, so a row whose cited defect is FIXED can be forced out --
+      # see RETIRING DIRECTION in the header of this script).
+      nc=split($3, C, ",")
+      for (ci=1; ci<=nc; ci++) {
+        e=C[ci]; gsub(/^[ \t]+|[ \t]+$/, "", e)
+        pe=index(e, "="); if (pe == 0) continue
+        csym=substr(e, 1, pe-1); gsub(/^[ \t]+|[ \t]+$/, "", csym)
+        if (csym == "") continue
+        cited[$1 SUBSEP csym]=1; anycite[$1]=1
+      }
       next
     }
     $2 ~ /(^|,)LEAK(,|$)/ { seen[$1]=1; got[$1]=$4 }
@@ -405,7 +448,7 @@ adjudicate_leaks() {
           allowed[kv[1]]=kv[2]+0
         }
         m=split(got[s], B, ",")
-        viol=""; shrink=""
+        viol=""; shrink=""; ret=""
         for (i=1;i<=m;i++) {
           split(B[i], kv, "*")
           if (kv[1] == "" || kv[1] == "-") continue
@@ -413,20 +456,29 @@ adjudicate_leaks() {
           if (!(c in allowed))     viol = viol (viol ? "; " : "") c " x" k " (class not tolerated)"
           else if (c in loose)     continue
           else if (k > allowed[c]) viol = viol (viol ? "; " : "") c " x" k " (row tolerates x" allowed[c] ")"
-          else if (k < allowed[c]) shrink = shrink (shrink ? "; " : "") c " x" k " (row says x" allowed[c] ")"
+          else if (k < allowed[c]) { shrink = shrink (shrink ? "; " : "") c " x" k " (row says x" allowed[c] ")"
+                                     if ((s SUBSEP c) in cited) ret = ret (ret ? "; " : "") c " x" k " (row says x" allowed[c] ")" }
         }
         for (c in allowed) {
           found=0
           for (i=1;i<=m;i++) { split(B[i], kv, "*"); if (kv[1] == c) found=1 }
-          if (!found) shrink = shrink (shrink ? "; " : "") c " gone (row says x" allowed[c] ")"
+          if (!found) { shrink = shrink (shrink ? "; " : "") c " gone (row says x" allowed[c] ")"
+                        if ((s SUBSEP c) in cited) ret = ret (ret ? "; " : "") c " GONE (row says x" allowed[c] ")" }
         }
         if (viol   != "") print s "\t" viol   > (dst "/new_class")
         if (shrink != "") print s "\t" shrink > (dst "/shrunk_class")
+        if (ret    != "") print s "\t" ret    > (dst "/retire_due")
       }
-      for (s in allow) if (!(s in seen)) print s > (dst "/fixed_leak")
+      for (s in allow) if (!(s in seen)) {
+        print s > (dst "/fixed_leak")
+        # A CITED row that no longer leaks is a row whose item is DONE. Advisory
+        # is not enough: nothing would ever force it out, and the row would
+        # outlive the defect it cites as a permanent waiver.
+        if (s in anycite) print s "\tno longer leaks at all" > (dst "/retire_due")
+      }
     }
   ' "$_allow" "$_verd"
-  for _f in new_leak new_class fixed_leak shrunk_class; do
+  for _f in new_leak new_class fixed_leak shrunk_class retire_due; do
     sort -o "$_dst/$_f" "$_dst/$_f"
   done
 }
@@ -539,6 +591,22 @@ run_selftest() {
   grep -q  '^selftest_leak	' "$_sout/adj/new_class" \
     && { echo "  SELF-TEST FAIL: a fixture leaking exactly what its row tolerates was reported"; _fail=1; }
 
+  # THE RETIRING DIRECTION, WATCHED FIRING. A ratchet needs BOTH directions or
+  # it greens every step of its own drift (Core #6). `selftest_clean` does not
+  # leak, so a row admitting a leak for it is a row whose defect is FIXED: with
+  # a column-3 citation that must be FATAL, and without one it must stay
+  # advisory. Both polarities are asserted, because a detector that fires on
+  # everything is as useless as one that never fires.
+  printf '%s\t%s\t%s\n' selftest_clean 'gorget_selftest_sym*1' 'gorget_selftest_sym=t1210' \
+      > "$_sout/allow_retire"
+  adjudicate_leaks "$_sout/allow_retire" "$_sout/verdicts.tsv" "$_sout/adj_retire"
+  grep -q '^selftest_clean	' "$_sout/adj_retire/retire_due" \
+    || { echo "  SELF-TEST FAIL: a CITED row whose fixture no longer leaks was not forced out"; _fail=1; }
+  printf '%s\t%s\n' selftest_clean 'gorget_selftest_sym*1' > "$_sout/allow_uncited"
+  adjudicate_leaks "$_sout/allow_uncited" "$_sout/verdicts.tsv" "$_sout/adj_uncited"
+  [ -s "$_sout/adj_uncited/retire_due" ] \
+    && { echo "  SELF-TEST FAIL: an UNCITED row was forced out — retirement must be scoped to cited rows"; _fail=1; }
+
   if [ "$_fail" -ne 0 ]; then
     echo
     echo "❌ THE SANITIZE GATE'S OWN INSTRUMENT IS BROKEN. No corpus verdict is"
@@ -547,7 +615,9 @@ run_selftest() {
     return 1
   fi
   echo "self-test:   OK — leak detector fired, flake detector fired, class check fired on a"
-  echo "             second record of an already-tolerated class, clean control stayed quiet"
+  echo "             second record of an already-tolerated class, clean control stayed quiet,"
+  echo "             retirement forced a CITED row whose fixture no longer leaks and LEFT"
+  echo "             an uncited one alone"
   return 0
 }
 
@@ -785,7 +855,37 @@ if [ "$COVERAGE_FLOOR" -gt 0 ] && [ "$n_covered" -lt "$COVERAGE_FLOOR" ]; then
   echo "    census above (BUILD_FAIL_*), fix it, or lower the floor deliberately."
   rc=1
 fi
+# ⚠ THE "no longer leaks at all" HALF IS ONLY MEANINGFUL OVER THE WHOLE CORPUS.
+# On a FIXLIST demonstration every row whose fixture was not run reads as fixed,
+# so that half is dropped when the coverage floor is disabled — the same signal,
+# and the same reason, as the COVERAGE FELL check below. The per-class half
+# (a cited class that SHRANK or is GONE) only ever fires on a fixture that
+# actually ran, so it stays live in both modes.
+if [ "$COVERAGE_FLOOR" -gt 0 ]; then
+  cp "$OUT/retire_due" "$OUT/retire_fatal" 2>/dev/null || : > "$OUT/retire_fatal"
+else
+  grep -v '	no longer leaks at all$' "$OUT/retire_due" > "$OUT/retire_fatal" 2>/dev/null || : > "$OUT/retire_fatal"
+fi
+if [ -s "$OUT/retire_fatal" ]; then
+  echo; echo "⛔ CITED ROW(S) WHOSE DEFECT IS FIXED — DELETE OR TIGHTEN THEM IN $LEAK_LIST:"
+  sed 's/^/    /' "$OUT/retire_fatal"
+  echo "    These rows CITE a todo/ item in column 3. The leak they admit is gone,"
+  echo "    so the admission has outlived the defect and this gate will not pass"
+  echo "    until the row goes. An uncited row shedding a class is advisory (below);"
+  echo "    a CITED one is not — that is the whole difference a citation buys."
+  rc=1
+fi
 [ -n "$fixed_corrupt" ] && { echo; echo "✅ no longer corrupting — DELETE these rows from $CORRUPT_LIST:"; echo "$fixed_corrupt" | sed 's/^/    /'; }
-[ -s "$OUT/fixed_leak" ] && { echo; echo "✅ no longer leaking — DELETE these rows from $LEAK_LIST:"; sed 's/^/    /' "$OUT/fixed_leak"; }
-[ -s "$OUT/shrunk_class" ] && { echo; echo "✅ leaking LESS than its row admits — TIGHTEN these rows in $LEAK_LIST:"; sed 's/^/    /' "$OUT/shrunk_class"; }
+# ⚠ THE TWO LEAK ADVISORIES BELOW SAY WHAT WAS MEASURED — "this class no longer
+# appears" — and NOT "the defect is fixed", because this instrument cannot tell
+# those apart. A class key is a stack FRAME NAME, so extracting a `static inline`
+# helper makes the old key vanish while the leak is untouched: `b5356f361` hoisted
+# the array growth policy into `__gorget_array_reserve_one` and every row keyed on
+# `gorget_array_push` reported as fixed, with the leaks live at the same site.
+# A rename normally ALSO trips `❌ NEW LEAK CLASS` under the new name, which is why
+# both lines send the reader to look for a paired `❌` on the same fixture first —
+# and if the renamed class happens to be tolerated already at exactly the resulting
+# count, no `❌` fires and one of these advisories is the ONLY thing printed.
+[ -s "$OUT/fixed_leak" ] && { echo; echo "✅ no longer leaking — NO leak record of ANY class was reported for these rows. If the defect is really gone, DELETE them from $LEAK_LIST:"; sed 's/^/    /' "$OUT/fixed_leak"; echo "    ⚠ That is what was MEASURED, not that the defect is fixed. A class key is a"; echo "      stack FRAME NAME: a renamed frame vanishes here exactly like a fixed leak."; echo "      CHECK FOR A PAIRED ❌ ABOVE on the same fixture BEFORE deleting a row."; }
+[ -s "$OUT/shrunk_class" ] && { echo; echo "✅ leaking LESS than its row admits — these classes no longer appear, or appear fewer times. TIGHTEN these rows in $LEAK_LIST:"; sed 's/^/    /' "$OUT/shrunk_class"; echo "    ⚠ Same caveat: a class reported \`gone\` may have been RENAMED, not fixed."; echo "      Look for a paired ❌ NEW LEAK CLASS on the same fixture first."; }
 exit $rc

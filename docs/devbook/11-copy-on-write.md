@@ -99,6 +99,61 @@ That is: closures / `Callable[T]` (all three flavours) / `BoxedCallable`,
 types (`is_copy_type`, checked at `check_stmt.rs:1211`) and the owned `String`
 type short-circuit before this point and never require `!`.
 
+### The carve-out is a property of the PLACE, not of its spelling
+
+The rule ranges over the *position*, so it does not stop at a bare identifier.
+`Callable[int()] g = h.f` reads a field, `g = t.1` reads a tuple element, and
+`g = t._1` reads the same element under its underscore alias — all three bind a
+second owner of one closure environment, exactly as `g = f` would, and all three
+reject. So does `g = v[0].f`: the gate keys on the **outermost projection**, so a
+read *through* a container is a field read like any other.
+
+The three arms of `require_explicit_move_for_single_owner_init`
+(`src/semantic/safety/check_expr.rs`) therefore share one shape — resolve the
+place structurally with `expr_is_place` + `lvalue_value_type`, then ask the
+type. What differs between them is only the question they ask: is this a D53
+unique lock, is it drop-tainted (D4/D12), or is it a by-design carve-out member.
+
+Because the subject of the diagnostic is the sub-place rather than its root, the
+message names the place the user wrote:
+
+```
+error[E_MoveWithoutOperator]: cannot copy `h.f`: `h.f` is a single-owner type
+(no implicit copy) — copy the sub-place with `h.f.clone()`
+```
+
+`.clone()` is the only remedy at a sub-place: a bare `^` on a field or index is
+a partial move and rejects under D10(a), so a message offering `^h.f` would send
+the reader into a second rejection.
+
+**Bare index places (`v[i]`, `d[k]`) are the one outermost projection the gate
+does not key on.** They are single-owner reads like any other, but a call
+through one is overwhelmingly a *call*, and demanding ownership there would put
+a closure-environment clone on every dispatch. The answer is the callee-borrow
+rule — a call does not consume its callee, so `Callable` borrows, `MutCallable`
+mutably borrows, and `ConsumeCallable` consumes — which makes the bind at an
+index place a borrow and leaves nothing to copy. Until that lands the position
+stays accepted, and the gap is tracked in `todo/`.
+
+### One resolver for the tuple alias
+
+A tuple element has two ratified spellings, `t.0` and `t._0`, and the parser
+builds `Expr::TupleFieldAccess` only for the first — the alias arrives as an
+ordinary `Expr::FieldAccess` whose field name happens to be `_0`. Deciding
+whether a field name is a tuple index is therefore a real question, and it has
+exactly one answer: `ast::tuple_field_alias_index` (`src/parser/ast.rs`), which
+the typechecker, the safety walk and ggdef all read.
+
+It lives at the AST layer because the spelling is a fact about surface syntax
+rather than about any one analysis, and because that is the only layer ggdef can
+reach — it shares the lexer, parser and AST, and nothing below them. The
+self-host has never needed the accessor's *placement* argument because its
+parser folds both spellings into a single node, but it makes the same decision
+in the same one place (`tuple_field_index`, `self_host_typechecker/infer.gg`).
+This is layering rule 3 (one source of truth per axis) at its sharpest: a second
+resolver for one spelling means two passes can disagree about what a place *is*,
+and a gate reading the losing answer lets the value through.
+
 ## Local ownership state (the tag on every local)
 
 Each GIR local carries a `LocalOwnership` (a typed field on `Local`, read back
@@ -245,6 +300,15 @@ closure capture; enum field init is the same shape but goes through the
 `emit_enum_init_owned` sibling). At a consuming-position arg the caller may keep
 using the local, so the last-use check is what distinguishes "transfer
 ownership" from "clone and keep."
+
+That split is why a struct-shaped boundary is a *sequence*, not one call.
+`ensure_owned_at_boundary` answers only the borrow half of the table; the
+live-owned half is `clone_multi_use_resource_args`, and the transfer is
+`move_zero_consumed_args`. `lower_struct_init` runs all three in order, and so
+does the closure-env `StructInit` — a capture is the fifth boundary in the set,
+not a position with its own rule. Running only the first is the failure mode
+that boundary has to be watched for: it materializes a borrow and lets a
+still-live owned source be bit-copied into the aggregate as an alias.
 
 ## Materialization points — the enforced boundary set
 
@@ -509,7 +573,7 @@ move):
 | `exprs/mod.rs:608` | tuple-literal field init (`Expr::TupleLiteral` in `lower_expr_inner`) |
 | `exprs/mod.rs:2141` | struct field init (`lower_struct_literal`) |
 | `exprs/mod.rs:3207` | match-arm value escaping an arm |
-| `closures.rs:319,559` | closure capture |
+| `closures.rs:367,637` | closure capture (`:367` is pass 1 of the shared three-pass sequence — see below) |
 
 Both `return` forms go through the SAME helper on purpose. The statement return
 used to hand-roll its own `GirType::Ptr(inner)`-only clone, which was blind to

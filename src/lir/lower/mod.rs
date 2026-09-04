@@ -148,6 +148,19 @@ pub(super) struct ClosureCallSig {
     /// This is the same fact the `skip` above encodes; both come from the one
     /// typed source, so they cannot disagree.
     pub(super) takes_env: bool,
+    /// The closure's GIR return type NAME, kept beside `ret_ty` so that ONE
+    /// resolved type feeds both the result element's size (via `ret_ty` and
+    /// `component_to_lir_type`) and its runtime hooks (via
+    /// `infer_fn_ptr_stores_from_types`). `Vector__U` for `flat_map`, `U` for
+    /// `map`.
+    ///
+    /// This and `ret_ty` are two projections of the SAME `f.return_type`, taken
+    /// side by side, and that shared origin is the point: size and hooks must
+    /// come from one resolved type structurally, not from two lookups that
+    /// happen to agree. Two derivations that agree with each other and disagree
+    /// with reality are self-consistent, and nothing downstream can tell them
+    /// apart.
+    pub(super) ret_gir_name: Option<String>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -278,9 +291,13 @@ impl<'a> LoweringContext<'a> {
                         )
                     })
                     .collect();
+                let ret_gir_name = match self.gir.type_registry.get(f.return_type.clone()) {
+                    Some(crate::ir::types::GirType::Named(n)) => Some(n.clone()),
+                    _ => None,
+                };
                 (
                     f.name.clone(),
-                    ClosureCallSig { ret_ty, param_tys, takes_env: f.takes_env },
+                    ClosureCallSig { ret_ty, param_tys, takes_env: f.takes_env, ret_gir_name },
                 )
             })
             .collect();

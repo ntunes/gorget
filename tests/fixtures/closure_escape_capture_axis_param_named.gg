@@ -1,0 +1,31 @@
+# CLOSURE-ESCAPE CAPTURE AXIS, cell (param × named).
+#
+# The axis is 2×2: what the closure captures (a PARAMETER or a LOCAL) × how the
+# escaping closure is spelled (a returned LITERAL or a returned NAMED binding).
+# Three of the four cells run; the fourth is rejected at check time. The cells:
+#
+#   | capture root | spelling                | fixture                                         |
+#   |--------------|-------------------------|-------------------------------------------------|
+#   | param        | `return (): …` literal  | `closure_captures_param_then_escapes_uaf.gg`     |
+#   | param        | `f = …; return f`       | THIS FILE                                        |
+#   | local        | `return (): …` literal  | `closure_escape_capture_axis_local_literal.gg`   |
+#   | local        | `f = …; return f`       | `known_gaps/closure_escape_local_named_capture_over_rejected.gg` |
+#
+# Only the last cell is ever inspected by `check_expr_for_escaping_closures`,
+# whose arms match `Expr::Identifier` / `Expr::StructLiteral` / `Expr::ArrayLiteral`
+# and have no `Expr::Closure` arm at all — a returned closure LITERAL is never
+# looked at. So the escape diagnostic keys on `local AND named`, and the three
+# other cells all reached the backend with a captured borrow.
+#
+# INTENDED: prints `hello`, rc 0, both backends, no use-after-free.
+
+String mk(String a, String b):
+    return a + b
+
+Callable[String()] make_adder(String p):
+    Callable[String()] f = (): mk(p, "lo")
+    return f
+
+void main():
+    Callable[String()] g = make_adder("hel")
+    print(g())

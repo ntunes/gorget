@@ -1,3 +1,212 @@
+- [2026-09-04] **`t1306` CLOSED BY AN OWNER RULING — the R49 inflow fixture that leaked `t0953`'s mechanism with no allowlist row is ADMITTED, one line, temporary, cited (R49 Track INT-B). It reached the owner as a DECISION because a five-build pre-flight ran before the reconciliation instead of a corpus sweep after it.**
+  **WHAT IT WAS.** `closure_literal_ambient_return_at_call_arg` (R49 inflow, `030d4d2d7`) leaks
+  `__gorget_closure_env_alloc*3` — one record per closure literal at a call-argument position, which is
+  `todo/t0953`, filed 2026-09-03 by R48 Track T-a1 and older than the round. It had NO row, so
+  `scripts/sanitize_sweep.sh` reported `❌ NEW LEAK` and exited 1. The fixture is one of five top-level
+  additions Track L's tree never carried, and therefore one the merged allowlist had never been swept against.
+  **WHY NO AGENT COULD CLEAR IT.** `tests/sanitize/LEAK_ALLOWLIST.txt`'s owner-attributed header reserves a
+  genuinely-NEW-INFLOW row to an OWNER ASK, and this round's earlier ruling on
+  `vector_hof_result_element_sizing` admits THAT ROW and is explicitly not extensible by analogy. Extending it
+  would have been an agent deciding an owner question — the exact move R49 had already had to retract once.
+  So it was filed with its three options rather than absorbed.
+  **THE RULING (2026-09-04), recorded verbatim in the row's `⚖ ADMITTED` block:** *"(a) admit one line,
+  temporary, cited t0953, retiring when t0953 lands"*. Second such ruling this round; both admit exactly one
+  row, and neither is a rule about future new-inflow rows.
+  **WHY NOT "FIX IT INSTEAD".** The fixture's declared axis is (position × body shape) for a closure LITERAL
+  at a DIRECT-CALL ARGUMENT; its five siblings all sit at a declared `Callable[...]` DESTINATION, so the
+  literal-at-an-argument spelling IS the cell. Respelling the callees as named functions deletes the case
+  rather than the leak — the opposite of `vector_hof_result_element_drop`, where the respelling DOES remove
+  the defect and which correctly ships with no row.
+  **THE COST, STATED.** rows 300→301 (the THIRD upward move of that ceiling, and the second this round),
+  pairs 497→498, records 2262→2265. `UNCITED_LEAK_CLASS_PAIRS` does NOT move: the pair is cited to `t0953`,
+  so admission and filing were the same act. `⚖ ADMITTED` inventory 11→12.
+- [2026-09-04] **`t1305` CLOSED — THE R49 FIVE-BRANCH LEAK ALLOWLIST RECONCILED FROM MEASUREMENT (R49 Track INT-B), not from either branch's blob: 37 of 46 examined stems changed, three constants moved, and the row count held at 300 as a COMPENSATING WASH the ceiling structurally cannot see.**
+  **WHAT THE MERGE HAD DONE.** INT-A took Track L's `tests/sanitize/LEAK_ALLOWLIST.txt` blob whole — the right
+  call, since the blob is the census L's constants pin — and the cost was three discarded edits by two other
+  branches: Track N2's tightened `vector_hof_cross_type_map` row, the owner ask N2 formulated for
+  `vector_hof_result_element_sizing`, and the re-seed's `__gorget_array_reserve_one` frame re-key.
+  `cargo test --test lints` was RED on `sanitize_allowlists_shrink_only`'s `uncited` assert by +2.
+  **NEITHER BRANCH WAS UNIFORMLY RIGHT, AND ONE ROW BELONGED TO NEITHER.** The examined set was defined before
+  any edit — (L-vs-N2 divergent stems) ∪ (the re-seed's re-keyed stems) = 24 ∪ 27 = **46** — and every stem in
+  it was set to its MEASURED column 4 from a full corpus sweep. `closure_fstring_capture` measured
+  `__gorget_closure_env_alloc*1,str_alloc_copy*1`: L over-admitted a `gorget_string_format` record it no longer
+  leaks, N2 dropped a `str_alloc_copy` it still does, and only the measurement carries L's `t1210` citation
+  through. `shared_callable` was L's; the four Vector-HOF rows were N2's; `linked_list` shed its push class
+  rather than re-keying it.
+  **THE RE-KEY WAS LIVE AND MANDATORY.** `b5356f361` hoisted the array growth policy into a `static inline`
+  `__gorget_array_reserve_one`, one frame above the realloc every `gorget_array_push` record was keyed on.
+  Without it the full sweep is hard red: `❌ NEW LEAK CLASS` on 22 rows and `retire_fatal` on two. 22 rows now
+  carry the new frame; `self_whole_move_ok` is the one CITED row it reaches and re-keys column 3 with column 2.
+  **THE CONSTANTS.** pairs 511→497, records 2308→2262, uncited 493→480; loose 8 held; rows 300 HELD — and that
+  is `+1` for the admitted row and `-1` for `test_higher_order_named_fn`, measured fully clean and deleted. The
+  `+1` is visible to the block inventory; NOTHING sees the `-1`, so both are written out separately in
+  `tests/lints.rs` rather than netted. All five `sanitize.leak.*.pin` rows re-stamped; the uncited row's
+  waiver keyed to the digits `493` retired and two genuine collisions on `480` in `docs/devbook/` declared.
+  **CORE #6, AND THE GUARD IS NOT A COUNT.** The shipped block said *"RETIRES only when ALL THREE of `t0953`,
+  `t0954` and `t0955` have landed"* while two of the three had already landed and been deleted — a live row, a
+  green tree, and a condition telling the next reader to wait for nothing. A block COUNT cannot catch that
+  (the block was never deleted), and "every id named anywhere must exist" red-lights the CORRECT answer (the
+  replacement narrates both retired items in the past tense). `sanitize_leak_admitting_blocks_declare_a_live_retire_condition`
+  reads the `# RETIRES:` line only: ≥1 per admitting block, `t[0-9]{4}` tokens, every one must still exist.
+  Seen RED both ways, anchored by line — a landed item still named, and a block with its condition removed.
+  **AND THE SWEEP'S ADVISORY HALF, ACCOUNTED FOR RATHER THAN READ.** `fixed_leak` named exactly one row
+  corpus-wide, and it is the one deleted above. `shrunk_class` named 51: 35 are this reconciliation, and the
+  other 16 were measured against a compiler built at the merge base and come back BYTE-IDENTICAL — pre-existing
+  `todo/t0572` debt, proven rather than assumed, and appended there as evidence.
+- [2026-09-04] **`t0877` RE-SCOPED BY POSITION, NOT CLOSED (R49 Track T1) — the self-host inferred a closure's
+  return type from its BODY while the DECLARATION already named it, and a read site does not get to disagree
+  with its writer. 13 lines; SIX cells CC-FAIL → MATCH and a seventh CC-FAIL → CRASH; and the one cell it does NOT fix is
+  the one whose identical body shape passes three lines away.**
+  **THE DEFECT AND ITS LAYER.** `compute_closure_sig` (`grep -n 'ClosureSig compute_closure_sig'
+  tests/fixtures/self_host_lowerer/lower_closures.gg`) derived a closure literal's return type from its body
+  even where the ambient expected type was already a `Callable[R(...)]`. Rust gg prefers the ambient `R`
+  (`grep -n 'ambient' src/ir/lowering/closures.rs`). That is Core #1 and Layering rule 4 — the declaration is
+  the write site — and the RATIFIED record names the class: the type-directed-propagation holes *"all sat at
+  positions where the expected type wasn't threaded inward"* (`grep -n "expected type wasn't threaded inward"
+  docs/define-gorget/decisions.md`). The fix peels the ambient `GtFnPtr` and lets it win, guarded on
+  `!= UNIT_TYPE` exactly as the sibling `combinator_closure_ret_type` already did.
+  **⭐ THE DISCRIMINATOR IS THE POSITION, NOT THE BODY SHAPE — and getting that backwards would have shipped a
+  filed item calling a fixed cell live.** Three probes, each RED-verified against a driver built from pristine
+  committed source:
+
+  | probe | position | body | pre | post |
+  |---|---|---|---|---|
+  | `result_and_then((String s): Ok(mk(s,"?")))` | direct free-call arg | `Ok(..)` | CC-FAIL | rc 0 |
+  | `o.unwrap_or_else((String e): e)` | builtin-**METHOD** arg | bare param | CC-FAIL | **CC-FAIL** |
+  | `apply((String e): e, …)` | direct free-call arg | **same shape as row 2** | CC-FAIL | rc 0 |
+
+  The same body shape that survives at a builtin-method argument is closed at a direct-call argument, so an
+  arm-shaped re-scope would have named the wrong half. The mechanism, read off the two writers: at a direct
+  call `ctx.expected_type` is the CALLEE's declared param type (`grep -n 'int prev_expected_arg =
+  ctx.expected_type' tests/fixtures/self_host_lowerer/lower_expr.gg` — the `-1` beside it is an initial clear,
+  **immediately overwritten**, so the long-standing *"call arguments carry `-1`"* claim was false); at a
+  builtin-method argument it is whatever `_combinator_et` set, and **that is not one thing** (`grep -n
+  '_combinator_et' <same file>`): `or`/`and_then`/`flat_map`/`or_else` take a peeled `Option`/`Result`
+  **WRAPPER**, while `unwrap_or_else` takes `enum_category.ok_type`, the receiver's **PAYLOAD** — that site's
+  own comment says *"uoe returns the PAYLOAD (Some_0 / Ok_0), not the wrapper"*. Neither is a `GtFnPtr` for the
+  types the corpus puts there, so the peel DECLINES.
+  ⛔ **AND THAT LAST CLAUSE IS CONTINGENT, NOT STRUCTURAL — Six Questions #6, caught by review, not by me.**
+  The peel declines because of the TYPE in play, not the POSITION; the position is only a proxy, and the proxy
+  has a hole. Give `unwrap_or_else` a payload that IS a callable (`Option[Callable[String()]] o`, then
+  `o.unwrap_or_else((): h)`) and the peel FIRES one level too deep, emitting `Str __Closure_0__call` for a
+  closure that must return the whole `Callable[String()]`; `cc` rejects it and Rust gg runs the program.
+  **MEASURED both sides of this landing: pre-fix that call emitted `int64_t` and `cc` rejected THAT** — a
+  different wrong type, the same CC-FAIL — so it is pre-existing and not T1 inflow. Filed as `todo/t1303`
+  with a durable repro.
+  ⇒ `t0877` now reads: arms (a)–(d) are closed WHEREVER ambient `expected_type` is a `Callable`/FnPtr — a
+  declared destination or a direct-call argument — and all four survive at a BUILTIN-METHOD argument.
+  **SIX Q#4 is the crux: the surviving case has NO SUBJECT in a body-shape taxonomy**, so no widening of that
+  rule reaches it. Closing it needs the other half Rust carries — Tier-1c closure-param registration, a
+  `lookup_local` beside the `EIdentifier` arm's `fn_sigs` read, and element-type propagation through
+  `EMethodCall`.
+  **SEVEN CHANGED CELLS, ALL SEVEN PINNED** — `|pinned| == |changed|`, which is the readiness criterion;
+  the pins are TEN test functions, because five cells are asserted on both lanes. Three new self-host pins for Track L's
+  capture-ownership cells; a Rust `run_gg` **and** a self-host pin for `sound_move_operand_closure_tail_allowed`,
+  which had **no test whatsoever** — a committed positive control whose intent lived only in its header, and
+  the wiring lint that would have caught it governs `known_gaps/` only; the graduation of
+  `sh_closure_string_body_local_and_method_chain` out of `known_gaps/` onto both lanes; and a new top-level
+  fixture for the position the other six do not cover. ⚠ Its ignored assertion had carried a trailing newline
+  that `self_host_emit_cc_run`'s `trim_end()` could never match — **an ignored test can assert the
+  impossible and nobody finds out**; `sh_lane_expect` now records that in one line beside the helper.
+  **THE NEW FIXTURE PINS THE POSITION AXIS, NOT A SECOND SAMPLE OF THE OLD ONE.** All six existing cells sit at
+  a declared `Callable[...]` destination; `closure_literal_ambient_return_at_call_arg.gg` sits at a direct-call
+  argument over three body shapes (`Ok(..)`, `Error(..)`, bare param), because the rule keys on the position and
+  a one-shape fixture could not say so. Both new top-level fixtures COMPILE and MATCH on the self-host lane the
+  same round.
+  **⚠ ONE CELL'S SEVERITY ROSE, AND IT IS OWNED, NOT ABSORBED.** `box_trait_closure_return.gg` — a live,
+  top-level, non-`#[ignore]`d fixture — went CC-FAIL → **SEGV**. While the closure was mistyped `int64_t` the
+  dynamic call emitted `int64_t__speak` and the program died at LINK; typed correctly it links, and the
+  self-host has no GIR-level trait-object pack at a closure return, so the body returns a **ZEROED**
+  `__gg_Box__Speaker` and `.speak()` dispatches through a NULL vtable. The link error was masking the missing
+  pack, not preventing it. Filed as a new axis cell on **`t1084`** (the already-open item for exactly that
+  missing pack) rather than as a fresh item, with an `#[ignore]`d self-host pin asserting the intended `R2`.
+  ⚠ **NO GATE IN THE ROUND-CLOSE BATTERY OBSERVES THE RISE** — the robustness map has no entry, `sanitize_sweep.sh`
+  has no self-host lane, and the ledger is bucket-neutral — so that item and its pin are the only durable record.
+  ⊕ A brief-review pass had recorded the self-host as mirroring `try_trait_object_construct` "at 4 sites";
+  measured, it is **one** definition and **one** call site, which is why the missing GIR-level pack is a whole
+  absent layer rather than a sibling-site omission.
+  **⊕ THE EIGHTH ANSWER-CHANGE, NAMED BECAUSE IT IS INVISIBLE.** `dataframe_nulls` also changes answer and is
+  **CC-FAIL in both columns**, so nothing observes it: its closure-return error disappears and a second,
+  unrelated error (`assigning to type 'Str' from type 'size_t'`) still fails the build. It is not a pin
+  candidate and it is not a regression; it is the cell that would otherwise look like an unexplained delta.
+  **MERGE.** Landed on `bc762d0d3` — Track L's tip AT THE TIME; L's branch moved afterwards, so "L's tip"
+  was already false when written. Name the commit, not the branch head. `PHASE_D_PROXY_BUDGET` and `ALLOWED_UNWIRED` were each on NEITHER side —
+  both branches removed independently, so the merged truth is the union of the removals, and the ratchet's own
+  site census confirms the proxy figure. Both `PHASE_D_PROXY_BUDGET` doc paragraphs are kept.
+  **⊕ ERRATUM ADDENDUM (post-output-review fold, 2026-09-04 — precedence: this addendum > the body above).**
+  Two statements in the body were FALSE and a reviewer caught both.
+  1. **The safety premise for the new override was false at the one case its own repro exercises.**
+  `_combinator_et` is not one thing: `or`/`and_then`/`flat_map`/`or_else` take a peeled Option/Result WRAPPER,
+  `unwrap_or_else` takes `enum_category.ok_type` — the **PAYLOAD**. So the peel declines because of the TYPES
+  IN PLAY, never because of the POSITION; the position is a proxy and **the proxy has a hole.** Corrected at
+  **8 sites** (the count is 8, not the 7 the review named — the 8th is `todo/t0877`'s front-matter `mechanism`
+  field, which the generated index renders).
+  ⭐ **And chasing it found a HIGH memory-safety defect nobody had:** with a `Callable` payload the peel FIRES
+  one level too deep, and **Rust gg then reads 16 bytes past a 16-byte `GorgetClosure`** — `AddressSanitizer:
+  stack-buffer-overflow`, `READ of size 32` — while printing the right answer and exiting 0. The self-host
+  fails LOUDLY on the same source. Core #8 in one program: the lanes do not agree, and the "working" lane is
+  the unsafe one. **Pre-existing, not this track's inflow — measured on BOTH sides of the landing** (pre: the
+  self-host emitted `int64_t` and `cc` rejected THAT; a different wrong type, the same CC-FAIL). Filed
+  `todo/t1303` with two RED-verified pins, one per lane.
+  2. **The pin declared "the only durable record" of a SEGV could not record one.** `ExitStatus::code()` is
+  `None` for every signal death, so it read `Crashed { exit_code: None }` — indistinguishable from SIGABRT.
+  **Fixed the INSTRUMENT, not the text, and at the CLASS:** `reported_exit_code` spells a signal death
+  `128 + signo` at **all three** `Crashed` constructions in `tests/integration.rs` (the review named one), the
+  convention `gg run`/`gg test` already use. Verified printing `Crashed { exit_code: Some(139) }`.
+  3. **Closed the blindness instead of only documenting it** (Core #6): `robustness_map.py` has a `selfhost`
+  lane and simply had no cell, so the round-close battery now carries `trait_box_returned_from_closure`
+  (C WORKS / LLVM WORKS / **selfhost CRASH** / DIVERGENT), hand-derived expectation, verified `[known]`.
+  ⊕ Running its topic also surfaced `trait_dynamic_dispatch_box` drifting `[selfhost] TRAP → CRASH` with
+  PROGRESS on both Rust lanes — same family, recorded on `todo/t1084`.
+  4. Also corrected: the headline said "seven cells CC-FAIL → MATCH" when one goes CC-FAIL → CRASH; "SEVEN
+  PINS" undercounted ten test functions over seven cells; and "landed on Track L's tip" was false when written
+  (it landed on `bc762d0d3`; L's tip moved after). ⊕ `todo/t0877`'s position table now says it is a SELECTION
+  (~25 `ctx.expected_type` writers exist), and its erratum note had the `unwrap_or_else`/`and_then`
+  coincidence INVERTED.
+  ⊕ Filed `todo/t1304`: the fixture-wiring lint governs `known_gaps/` only, so **46 top-level fixtures are
+  asserted by nothing** — 14 of them the `sound_move_operand_*` reject/allow axis (the family is 15 and
+  exactly one is wired), the same family whose
+  unwired member this track tripped over. No filing was needed for the signal-masking defect: the fix covers
+  the class.
+
+  **GATES, bare rc.** `cargo build` 0 · `--lib` 0 (1186 passed) · `--test lints` 0 (229) ·
+  `--test spec_conformance` 0 (3) · `--test integration self_host` (C, minus `runtime_diff`,
+  `GG_STAGE1_TIMEOUT_SECS=1800`) 0 — **83 passed, 0 failed**, `self_host_bootstrap` and
+  `self_host_bootstrap_fixed_point` both ok · integration `closure`·`sh_closure`·`box_trait`·`sound_move`
+  all 0 on **both** backends · `todo_index.py --check` 0 · the `--release` parity regen 0 with all three
+  gates **ARMED** (zero SKIPPED lines — the profile hole `todo/t0924` describes is why that had to be
+  checked rather than assumed). `RUNTIME_DIFF_NONMATCH_CEILING`, `RUNTIME_DIFF_MATCH_FLOOR` and
+  `GGDEF_ADJUDICATED_FLOOR` were REGENERATED from that one run, never deltaed, and their `scripts/figures.db`
+  mirrors moved with them. ⚠ The ggdef floor's rise is mostly this round's EARLIER landings, not T1's —
+  said so at the constant.
+  ⚠ **AND A MEASUREMENT HAZARD WORTH THE LINE:** a `cargo test` that exceeds its foreground timeout keeps
+  RUNNING in the background. A first self-host gate raced a stale sibling on the SHARED
+  `tests/fixtures/self_host_lowerer/driver` binary — `#[serial]` only serializes WITHIN a process — so both
+  runs were discarded and the gate re-run alone. ⊕ The driver binary was **byte-identical in SIZE** across
+  the pristine and fixed builds; only the emitted `driver.c` md5 distinguishes them, so size is not a
+  rebuild witness.
+- [2026-09-04] **`t0943` CLOSED (R49 Track S-a2) — the tuple-element alias `t._N` had a SECOND resolver,
+  and the two disagreed.** `parse_postfix` builds `Expr::TupleFieldAccess` only for the literal-integer
+  spelling, so the ratified `t._0` arrives as `Expr::FieldAccess{field: "_0"}`. The typechecker resolved
+  that inline with a `strip_prefix('_')`; the safety walk's `lvalue_value_type` did not resolve it at all
+  (its `FieldAccess` arm needed a struct `DefId`, and a tuple has none). Every ownership gate keyed on the
+  safety walk therefore caught `t.0` and walked past `t._0` — `v.push(t.0)` rejected while `v.push(t._0)`
+  was accepted and DOUBLE-FREED, one character apart. Unified on ONE accessor,
+  `ast::tuple_field_alias_index` (`src/parser/ast.rs`), read by the typechecker, the safety walk AND ggdef
+  — it lives at the AST layer because that is the only one ggdef can reach, being fenced out of `semantic/`
+  by `ggdef_import_ratchet`, and because the spelling is a fact about surface syntax rather than about any
+  one analysis. ⭐ THE SELF-HOST WAS THE CORRECT LANE ALL ALONG and is what the fix mirrors: its parser
+  folds both spellings into one node and both its resolvers share `tuple_field_index`, so they cannot
+  diverge by construction ("reference lags the self-host" — fixed on the Rust side, per the succession
+  plan). The known-gap fixture GRADUATED out of `known_gaps/` to
+  `d53_unique_lock/mutex_tuple_alias_local_push_reject.gg` and its test is no longer `#[ignore]`d, running
+  on BOTH lanes. Guarded by `tests/lints.rs::tuple_field_alias_has_exactly_one_resolver` (Core #6): the
+  accessor must exist, all three consumers must call it, and `strip_prefix('_')` may not appear in CODE
+  outside the accessor's own body. ⚠ `t0943`'s own advice was to normalise at the PARSER instead; that was
+  NOT taken, and the reason is worth keeping — the formatter prints `TupleFieldAccess` as `.N`, so folding
+  `._0` into that node makes `gg fmt` rewrite every `._N` in the corpus and loses a documented spelling.
+  Carrying the spelling on the node would be the real parser fix, and it is a much larger change than the
+  one the defect needs. ⚠ A MID-ROUND entry, not a round close.
 - [2026-09-04] **`t0729` RE-SCOPED, NOT CLOSED (R49 Track R) — THE THREE ROUND-CLOSE GATES THAT WERE RED AT
   PRISTINE HEAD ARE ONE ADJUDICATION, NOT THREE: the fixture GRADUATES, both `security_safe_except_on`
   annotations come OUT, and the class is live at HEAD in a green, non-`#[ignore]`d, top-level fixture.**
@@ -529,6 +738,274 @@
   `--test spec_conformance` 3/0 · integration `box`·`trait`·`vector`·`dict`·`index`·`push` =
   40·90·97·100·87/28, 0 failed on BOTH backends · `staging_move_burndown --check` rc 0 ·
   `--clones=stats` identical pristine vs fixed (no CoW charter breach).
+
+- [2026-09-04] **`t0704` + `t0771` CLOSED, `t0703` CLOSED AS ALREADY-FIXED (R49 Track L) — THE CLOSURE
+  CAPTURE WAS THE ONE CONSUMING POSITION WITH ITS OWN PRIVATE OWNERSHIP RULE, and the guard that would
+  have caught it had been blinded by a burn-down.**
+  **THE DEFECT.** `lower_closure` built the creation-site `StructInit` by hand: it ran
+  `ensure_owned_at_boundary` (which materializes BORROWS) and stopped. `lower_struct_init` runs THREE
+  passes for a user struct — `ensure_owned_at_boundary` → `clone_multi_use_resource_args` →
+  `move_zero_consumed_args` — and it is the second that implements the other half of the ratified table:
+  *clone when the source is still live*. So an OWNED capture that stayed live past the capture was
+  bit-copied into the environment as an alias, and the next realloc, rebind or scope exit of the source
+  freed the buffer the environment was still holding. Two arms of ONE rule, not two bugs.
+  **THE FIX (Layering rule 3 / Core #4).** The closure-env `StructInit` now routes through the SAME three
+  passes, so there is one implementation of the consuming-position table instead of two. That supplies
+  the ownership TRANSFER for free: `move_zero_consumed_args` calls `move_zero_and_mark`, which keeps the
+  drop entry and zeroes the slot so `drop_elab` deletes the drop only on the paths where the move
+  happened — the hand-rolled arm used `drops.unregister`, which is not CFG-aware and is the operation
+  that function's own doc warns manufactures the return-borrow double-free class. Two companions: the
+  env `TypeDef` now takes its `drop_strategy`/`copy_semantics` from
+  `compute_drop_strategy_for_struct` like every other aggregate (without it the env owns a value while
+  declaring it owns nothing, and the field leaks); and `CaptureInfo` carries the capture's OCCURRENCE
+  span, because `is_last_use_at` answers a conservative `false` for the enclosing closure span and could
+  never tell a dead source from a live one.
+  **THE GUARD WAS ALREADY THERE.** `is_closure_env` was read at three places in `src/ir/validate.rs` and
+  all three were `continue`s that SKIPPED validation. `git log -S is_closure_env -- src/ir/types.rs`
+  returns ONE commit — a Tier 2a burn-down that minted the flag to zero the violations it was itself
+  producing, on a stated-but-unguarded invariant. Core #14 exactly. All three carve-outs are gone, and
+  the unit test that PINNED the exemption (`tier1c_coherence_closure_env_skipped`) is inverted, with a
+  companion cell so it cannot be satisfied by flagging every env. Deliberately reverting the env metadata
+  by line now fails the build on all ELEVEN capture cells with `[type-metadata-coherence]`.
+  **CELLS RED→GREEN**, all RED-verified against the pre-fix compiler this session: captured collection ·
+  realloc outside the body / inside the body / from a sibling argument of the same aggregate init ·
+  captured scalar `String` rebound under a live capture · the closure-escape 2×2 (param/local ×
+  literal/named), of which three cells ran with a captured borrow and the fourth was the only one the
+  escape diagnostic ever inspected. `heap-use-after-free` in every one at HEAD; none after, on C and
+  LLVM, with `ggdef run` agreeing on every value.
+  ⚠⚠ **SEVERITY-CLASS CHANGE, DISCLOSED — AND THE FIRST TWO VERSIONS OF THIS DISCLOSURE WERE BOTH WRONG.**
+  It said five leaking cells, all of them `t0953`'s mechanism. A base-vs-merged sweep says **EIGHT cells,
+  `t0953` owns NONE of them, and three of the eight are PRE-EXISTING FIXTURES THIS TRACK NEVER TOUCHED.**
+  `known_gaps/` is OUT of the swept corpus and top-level is IN, so graduating four fixtures and adding
+  seven put the closure-capture cells into `scripts/sanitize_sweep.sh` for the first time — but the wider
+  damage is not in the new fixtures at all. Regenerate every row with a verbatim copy of the sweep's own
+  `leak_classes()` (`grep -n 'leak_classes()' scripts/sanitize_sweep.sh`), or run the sweep over just these
+  with `FIXLIST=<file> bash scripts/sanitize_sweep.sh`:
+
+  | cell | base → merged | the sweep's own class key | corpus | owner |
+  |---|---|---|---|---|
+  | `callable_capture_overlap_aggregate_init_uaf` | UAF → 80 B/2 | `__gorget_closure_env_alloc*1,gorget_array_reserve*1` | graduated | `t0948` (72 B Direct) + `t1210` (8 B Indirect) |
+  | `closure_captures_param_then_escapes_uaf` | UAF → 8 B/2 | `str_alloc_copy*2` | graduated | `t1210` |
+  | `closure_capture_then_mutate_source_uaf` | UAF → 6 B/1 | `str_alloc_copy*1` | graduated | **`t0310`** |
+  | `closure_escape_capture_axis_local_literal` | new fixture → 12 B/2 | `gorget_str_cat*1,str_alloc_copy*1` | **NEW INFLOW** | `t1210` |
+  | `closure_escape_capture_axis_param_named` | new fixture → 4 B/1 | `str_alloc_copy*1` | **NEW INFLOW** | `t1210` |
+  | `spawn_unchecked_bypasses_check` | **CLEAN → 33 B/1** | `str_alloc_copy*1` | **NEW INFLOW, fixture untouched** | `t1210` |
+  | `shared_callable` | 16 B/1 → 56 B/3 | `+gorget_shared_new*2` | **NEW INFLOW, fixture untouched** | `t1210` |
+  | `closure_fstring_capture` | 61 B/4 → 66 B/5 | `+str_alloc_copy*1` | **NEW INFLOW, fixture untouched** | `t1210` |
+
+  ⭐ **ONE ROOT, AND IT IS `t1210`: the env BLOCK is freed and the env's FIELDS are not.**
+  `src/lir/lower/drops.rs` (`grep -n 'gorget_closure_free' src/lir/lower/drops.rs`) hardcodes
+  `DropStrategy::Trivial("gorget_closure_free")` for every `GirType::FnPtr` local, and that runtime function
+  (`grep -n 'gorget_closure_free' src/backend/c/runtime/runtime_string.c`) frees the size-prefixed block
+  only. The typed `__Closure_N__drop` that frees the captured fields **is emitted and has zero call sites**
+  (`gg build --emit-c-lir tests/fixtures/closure_escape_capture_axis_local_literal.gg | grep -n
+  '__Closure_0__drop'`: one decl, one definition, no call). A bare `Callable` local is `GirType::FnPtr`,
+  never `GirType::Named`, so that arm never reads the truthful `drop_strategy` this round put on the env
+  `TypeDef`. ⇒ **every value the new capture site materialises INTO an env becomes a leak record, in any
+  fixture that captures something droppable** — which is why three untouched fixtures moved.
+  ⛔ **`t0953` OWNS NOTHING HERE, AND `t1210` DOES NOT OWN ALL OF IT EITHER.** `t0953`'s subject is a
+  closure literal at a **call-argument** position whose env is abandoned when the call returns; no cell has
+  one. Two cells have a different owner again: the aggregate cell's 72 B Direct record is `t0948` (a
+  `Callable` in a STRUCT FIELD — `field_is_transitively_droppable` excludes bare `FnPtr` fields, so `Pair`
+  is `[drop: None, copy: Copy]` and no `Pair__drop` is emitted), and `closure_capture_then_mutate_source_uaf`
+  is `t0310`: its `__Closure_0__drop` **is called**, and its 6 B allocates at frame `__Closure_0__call`
+  — the closure's OWNED RETURN VALUE, which `print(f())` receives and never frees. That one is
+  **pre-existing**, proven by running the same shape minus the realloc loop against the BASE compiler:
+  identical 6 B, with no use-after-free to mask it (SIX Q#6, and the mask is the whole reason it looked new).
+  ⭐ **AND NO ENV-BLOCK FIX GREENS A SINGLE CELL — 72 of 110 BYTES, 0 of 8 CELLS.** Freeing every env block
+  reclaims 72 B and greens **zero** cells: the aggregate cell's other 8 B is an ASan **Indirect** record
+  inside that block, so freeing the block without the field drop only re-grades it as an orphaned **Direct**
+  leak. **The field-drop half is required by every cell.**
+  ⛔ **`t1210` IS NOT A ONE-LINE FIX, AND THE NAIVE VERSION IS A DOUBLE FREE.** Emitting the field drop
+  alone detonates, because `gorget_closure_clone_to_owned` is shallow at field level — a `.clone()` leaves
+  two handles sharing every captured buffer (`grep -n 'THE COPY IS SHALLOW AT FIELD LEVEL'
+  src/backend/c/runtime/runtime_string.c`). The drop half and a typed `Callable.clone()` land together.
+  ⚖ **THE OWNER RULING WAS TAKEN TWICE, AND THE SECOND ANSWER IS THE ONE THAT BINDS.** The first ask
+  described 2-of-5 new inflow. Re-asked on the corrected 5-of-8 figure — three of them untouched fixtures,
+  one going from CLEAN to leaking — the owner confirmed (2026-09-04): **land it, admit the rows, make the
+  admission TEMPORARY.** Eight rows are now in `tests/sanitize/LEAK_ALLOWLIST.txt`: the five new-inflow ones
+  under that ruling, the three graduations under the pre-existing ⚖ EXTENDED (2026-09-02) paragraph for
+  leaks "newly made VISIBLE by a fixture GRADUATING out of `known_gaps/`". On the owner's severity ranking
+  UAF → LEAK is the right direction, but it is a CHANGE OF CLASS and stating it is not optional; the
+  allowlist header's own SIX Q#6 warning is verbatim this shape (*"read CLEAN only because it crashed
+  first"*).
+  ⭐ **WHAT MAKES IT TEMPORARY — the allowlist had no retiring direction, and now it has one.** Every row
+  admitted here CITES its owning item in column 3 (`<top-frame>=<todo-id>`, the schema the citation ratchet
+  `UNCITED_LEAK_CLASS_PAIRS` already defined), and `scripts/sanitize_sweep.sh` now treats a CITED class that
+  has **stopped leaking, or shrunk below what its row admits, as FATAL** rather than advisory. Before this,
+  a row that stopped leaking printed `✅ no longer leaking — DELETE these rows` and exited **0**: an
+  admitted leak was permanent by default and nothing ever forced it out — Core #6's both-directions
+  requirement failing on the allowlist itself. The precedent is in-tree and its doc states the contract in
+  the same words: `security_safe_except_on` — *"the moment the cited defect is fixed, this test goes RED and
+  forces the annotation to be removed."* ⚠ **Scoped to CITED rows on purpose**: an uncited row shedding a
+  class stays advisory, because making those fatal would red the gate on inflow nobody has adjudicated.
+  **Both polarities are demonstrated RED in the sweep's own self-test** — disable the retirement and
+  `a CITED row whose fixture no longer leaks was not forced out` fires (rc 2); remove its scoping and
+  `an UNCITED row was forced out` fires (rc 2).
+  ⚠ **THE SCAN THAT FOUND THE THREE UNTOUCHED FIXTURES WAS A SELECTION, NOT A CENSUS — 368 fixtures.** Eight
+  was therefore a FLOOR, and the authoritative instrument is a full `scripts/sanitize_sweep.sh`.
+  ✅ **RUN, AND IT CLOSES THE QUESTION: 2239 scanned, 1819 covered (floor 1743), flaky 0, class-drift 0,
+  corruption 1 / allowlisted 1, and every leak allowlisted.** **EIGHT IS A CENSUS, NOT A FLOOR** — there is
+  no ninth capture cell anywhere in the corpus — and the retiring direction did NOT fire, so no cited row is
+  stale.
+  ⊕ **It surfaced ONE unrelated pre-existing leak, measured NOT to be this track's: `string_enum_variants`**
+  leaks 12 B in 6 allocations (`str_alloc_copy*1`, `gorget_string_clone_to_owned ← tokenize`) from
+  `String ch = input[i]`, on C and LLVM alike, and a compiler built from this track's BASE commit leaks the
+  identical amount — the fixture has contained no closure since 2026-04-07. Filed as **`t1290`** and
+  admitted with a row citing it, which needs no owner ask (the reserve-to-owner clause covers genuinely NEW
+  inflow). The item records a Track-K (`t0871`, `s[i]` View-tagging) hypothesis and marks it **explicitly
+  unproven**: the base-vs-base measurement rules this track OUT, it rules nothing IN.
+  ⭐ **AND THE FIX PAYS BACK OUTSIDE ITS OWN CELLS — ONE PRE-EXISTING ROW RETIRED, MEASURED BOTH WAYS.**
+  The sweep reported `cow_closure_deferred_mutate` as no longer leaking at all: **96 B in 3 allocations
+  (`str_alloc_copy*3`) against a compiler built from this track's base, ASan-CLEAN after.** Its allowlist row
+  is DELETED here rather than left for a later reader — the round that earned the burn-down does the
+  removal. **Row arithmetic, end to end: 294 + 7 admitted − 1 retired = 300.** The seven are the six
+  capture-class rows plus `string_enum_variants`; two further rows (`shared_callable`,
+  `closure_fstring_capture`) were WIDENED rather than added, and `closure_fstring_capture` was also
+  TIGHTENED in the same edit (`gorget_string_format*5 → *1`, four records it no longer leaks).
+  `LEAK_CLASS_PAIRS` 501 → 511, `LEAK_RECORDS` 2302 → 2308, `UNCITED_LEAK_CLASS_PAIRS` 494 → **493** —
+  the last one lowered not by citing a pair but by FIXING one, which is the direction the owner's
+  burn-down ruling asks for.
+  ⊕ **A CENSUS THE SWEEP HANDED BACK, LEFT DELIBERATELY UNACTIONED: 21 further rows now leak LESS than they
+  admit** (`httpserver_router` alone is `gorget_map_clone` x21 against a row saying x36). Every one is
+  UNCITED, so it stays advisory by design — tightening them is a burn-down someone must adjudicate row by
+  row, not a side effect of this track. They are recorded so the next reader sees the debt is shrinking on
+  its own and the rows are not tracking it.
+  **THE COST IS THE HAND-WRITTEN COUNT.** `closure_capture_capture_cost_axis` pins both directions with
+  `assert_eq!`: a dead source materializes NOTHING, a live one materializes exactly ONCE. Reverting the
+  occurrence span alone measures `string_clone = 1` in the dead cell — RED — while stdout is unchanged,
+  which is why the guard is a clone meter and not an output assertion.
+  **`t0703` was fixed on 2026-08-29 by `e7967d570`**, which created `resolve_collection_identity`, moved
+  both repros out of `known_gaps/` and edited the item without closing it. Both are live and green on C
+  and LLVM. **STILL OPEN, FILED NOT FIXED:** `t1067` (a captured single-owner handle — `Callable`/`FnPtr`,
+  `Mutex`, `RWLock`, the cells with no spellable answer, gated on D7; the `Mutex` member is
+  pre-existing, base-identical and was unfiled until this round) · `t1068` (`E_ClosureEscapesScope`
+  over-rejects the fourth escape cell, and its stated premise is now false) · `t1069` (self-host:
+  `Callable.clone()`'s result gets no env-field drop) · `t1070` (an f-string interpolation carries no
+  span, so that capture cell pays a conservative clone) · `t1071` (the spawn wrapper, the second
+  closure-env `StructInit` producer, still ASSERTS the ownership its sibling now derives) · **`t1210`**
+  (the Rust lane frees the closure env BLOCK and never its FIELDS — `__Closure_N__drop` is emitted with
+  zero call sites; the owner of four of the five residual leak cells above). `t0877` sharpened with **two**
+  more body-shape arms — a bare LOCAL identifier body and a METHOD-CHAIN body; `t0729` recorded as no
+  longer reproducing at base, which is a RED gate there and not this round's doing.
+- [2026-09-04] **`t0954` + `t0955` CLOSED (R49 Track N2) — the array `map`/`flat_map` mint for their RESULT
+  carried NO element metadata and, when the result element differed in width from the source's, the WRONG
+  WIDTH. A user's `equip … with Drop` body silently did not run, and an undersized accumulator was a heap
+  overflow. One resolved name now feeds both the slot width and the hooks.**
+  **THE DEFECT.** `map` is `(T) -> U` and `flat_map` is `(T) -> Vector[U]`, so the accumulator's element is
+  `U`. The expanders synthesize that array in BIR — downstream of the LIR pass that installs `elem_drop` /
+  `elem_clone` / `elem_materialize` for every other array in the program — so it got a bare
+  `gorget_array_new(N)` with all three slots NULL, and `flat_map` additionally sized it by the SOURCE
+  element. Neither showed up as a wrong answer.
+  ⭐ **THE FIRE COUNT IS A `Drop` BODY, NOT A LEAK COUNT.** `Vector[Cust] r = v.map((s): Cust(s))` printed
+  `2`; the push-built control holding the same two values in the same scope printed its two `drop-cust`
+  lines. Same values, same scope, only the minting writer differed — `__gorget_dtor_Cust` was DEFINED AND
+  NEVER REFERENCED. That reframes the class from a leak to silent-wrong-output.
+  ⊕ *Erratum for anyone grepping: that closure-literal spelling is how the cell was MEASURED and is no
+  longer how the fixture READS. `vector_hof_result_element_drop.gg` now calls a named `wrap_cust`, because
+  a closure literal carries `todo/t0953`'s environment leak and the fixture is asserted ASan-clean. Grep it
+  for `via_map`.*
+  ⚡ **AND THE UNDERSIZED CASE IS A HEAP OVERFLOW THAT SIX REVIEW PASSES MEASURED AS A LEAK.**
+  `Vector[int] → Vector[String]` mints 8-byte slots for a 32-byte element. `gorget_array_extend` reserves a
+  MINIMUM of eight slots, so with a two-element source every 32-byte write still lands inside the
+  over-provisioned block and ASan reports only leaked bytes. At EIGHT elements it runs off the end:
+  **`heap-buffer-overflow`, WRITE of size 32**, at rc 0 with correct stdout and `gg check` clean. The
+  element COUNT was the axis nobody scored — every cell in the round had sampled it at two.
+  **THE FIX, at the producer (Core #1).** `ClosureCallSig` gains `ret_gir_name`; the LIR HOF emitter
+  resolves the result element ONCE from the closure's GIR return type and derives BOTH the width (via
+  `c_sizeof_lir_type`) AND the hooks (via `infer_fn_ptr_stores_from_types` — the same decider the user's own
+  `Vector[U]()` goes through, so no new writer) from that single value; `HofExpand.result_elem_fns` carries
+  them; `expand_map` / `expand_flat_map` REPLAY them. BIR decides nothing.
+  ⛔ **THE OBVIOUS REMEDY WAS A MISCOMPILE AND SO WAS THE FIRST CORRECTION.** Copying the source's hooks
+  (`_new_like`) installs `gorget_string_free` over 8-byte int slots. Reading the result element off the
+  DESTINATION local is worse than useless: that local's GIR type is the source receiver's, so it returns
+  `Some(wrong)` — indistinguishable from `Some(right)` — and an intermediate design that did so turned a
+  correct `Vector[Pair]` program into `allocation-size-too-big` and printed `0` for `7`.
+  ⭐ **HENCE THE LOAD-BEARING PROPERTY: ONE RESOLVED GIR RETURN TYPE FEEDS SIZE AND HOOKS.** Precisely: for
+  `flat_map` both go through one stripped element NAME, while for `map` the width comes off that return
+  type's `LirType` projection and the hooks off its mangled-name projection — two projections of the same
+  `f.return_type` type id, taken side by side. Two derivations off the same wrong type AGREE WITH EACH OTHER
+  and disagree only with reality, so a validator comparing them finds them self-consistent and passes.
+  Structure, not checking, is what rules that out.
+  **ORDER-COUPLED, ONE WAY.** Freeing `flat_map`'s drained husk is safe only because the accumulator now
+  carries `elem_clone`: `gorget_array_extend` gates its deep copy on the DESTINATION's hook, so without it
+  the extend is an aliasing memcpy and the free is a use-after-free. Hooks-first is safe; the reverse is not.
+  ⭐⭐ **FOUR GUARD PARTS, BECAUSE `HofExpand` IS EXPANDED AWAY BY BIR AND THE COMPILE-TIME CHECK CANNOT SEE
+  THE REPLAY.** `validate_hof_result_array_hooks` (registered in `VALIDATORS`, keyed on `expects_drop_fn`,
+  which is what sees the `Recursive`/`Custom` element kinds `elem_drop_fn` reads back as `None`) proves the
+  DECISION was made; `assert_module_valid` runs post-BIR on a module where no `HofExpand` remains, so it can
+  never prove the expander CARRIED IT OUT. Deleting the replay in `expand_map`, anchored BY LINE against its
+  identically-spelled `expand_flat_map` sibling, left the validator GREEN, the build clean and `map__cust`
+  silently back to `2` — caught only by the fourth part, a BIR replay test in `bir/synth.rs`. The runtime
+  `gorget_array_extend` check (gated on `-DGORGET_HOF_HOOK_ASSERTS=1`, set only by `--sanitize`) is the
+  ONLY instrument that can catch a result array minted from the wrong NAME, because `src` is an independent
+  derivation of the same element type. Its hook clauses are asymmetric on purpose: they fire when the
+  DESTINATION lacks or contradicts a hook the source carries — the direction that aliases — and stay silent
+  when the destination is richer, which is safe and which a half-pair constructor legitimately produces.
+  **RED EVIDENCE, EVERY PART.** LIR-resolution break → validator rc 101 on the four cleanup-element cells,
+  correctly green on trivial ones. BIR-map-replay break → replay test rc 101, validator green. Runtime check
+  at HEAD → 8 cells SIGABRT, zero false positives on `a + b` / `.extend()` / `extend(map(…))`. Fixtures at
+  the pre-fix compiler → sizes `[8,8,32,32,32,32,32,32,32]` vs `[8,32,32,16,8,32,32,32,16]`, no `drop-cust`
+  line under `map`, and `heap-buffer-overflow`.
+  ⭐ **THE DEQUE RECEIVER IS PINNED, AND IT IS THE ONE CELL THE FIX REASONS ABOUT.** The result hooks are
+  resolved with a hardcoded `CollectionCtorKind::Vector` even for a `Deque` receiver, on the argument that
+  the accumulator is a `gorget_array` either way and the resolver serves both kinds from one arm at one set
+  of offsets. The argument is true — and it was the only claim in the track carried by reasoning rather than
+  a fixture, which is exactly where a cell belongs. Measured: 2 → **4** `drop-cust` on C and on LLVM, and 4
+  is right (2 source + 2 result). ⚠ **The self-host CANNOT COMPILE `Deque.map` AT ALL** — emitted C
+  `incompatible types when assigning to type 'GorgetArray' from type 'int'`, reproducing at the simplest
+  possible shape (`Deque[int]`, trivial closure, no `Drop`). Filed as `t1286`; the cell is parked in
+  `tests/fixtures/self_host_gaps/` so this round's own inflow cannot book a non-MATCH against
+  `RUNTIME_DIFF_NONMATCH_CEILING` (Core #9 ⊕), and `CORPUS_MANIFEST.txt` declares it.
+  ⭐ **THE R48 PIN'S SCOPE CLAIM WAS FALSE AND IS CORRECTED (Core #12).** It claimed the discriminator was
+  `auto` vs `Vector[U]` "for named callees and inline closures alike", and cited a
+  `known_gaps/…_destination_axis.gg` that **does not exist**. Measured over the full 2×2: the destination
+  makes no difference and neither does the closure parameter's typing — the discriminator is the closure's
+  BODY. A CALL body resolved correctly; a CONTAINER LITERAL body did not. All four of that fixture's inline
+  closures have call bodies, which is why it was green on every cell it claimed to cover.
+  **BURN-DOWN, MEASURED — AND THE FIRST CENSUS OF IT WAS A SELECTION.** `vector_hof_cross_type_map` sheds
+  two of its three allowlist classes, leaving 80 bytes in 10 allocations, all `todo/t0953`. Reporting that
+  as the whole delta was SIX Q#3: it enumerated the row the work started from. The re-census took all 35
+  allowlisted fixtures calling `.map(` / `.flat_map(` / `.extend(`, each re-measured with the sweep's own
+  `leak_classes` extraction, its `use_stacks=0` / `detect_leaks=1:exitcode=0` options and its REPS=3
+  per-class MAX — **thirteen more had shed classes**, every one stable across all three reps, and
+  `test_higher_order_named_fn` went fully CLEAN and left the file.
+  ⚠ **AND THE FIRST STATEMENT OF THE RESULT WAS A NET FIGURE THAT HID THIS ROUND'S OWN INFLOW — the same
+  defect a second time, one face further on.** Two fixtures this round ADDED are top-level and therefore
+  swept, and both leaked `todo/t0953`'s closure-environment floor with no allowlist row: unallowlisted leak →
+  `new_leak` → the sweep exits 1, fatal. Reporting `294 → 293 rows` as "a burn-down" netted that inflow
+  against the credit and printed only the credit.
+  ⭐ **ONE OF THE TWO WAS FIXED RATHER THAN ADMITTED, WHICH IS WHAT THE FILE ASKS FOR.** The expander defect
+  does not care whether the callee is a closure literal or a named function, so
+  `vector_hof_result_element_drop` was rewritten with named callees: still RED pre-fix (its `map` section
+  prints no `drop-cust`), 22 bytes in 4 allocations → **fully clean**, no row, and now held there by
+  `vector_hof_result_element_drop_is_sanitize_clean`. The other is IRREDUCIBLE and measured so — a named
+  callee with the same container-literal body sizes its accumulator CORRECTLY at 32 pre-fix, so the closure
+  literal IS the defect's entry condition — and takes one cited row whose `⚖ ADMITTED` block names it as an
+  owner ask under this file's own new-inflow rule.
+  Final, regenerated from the awk census the figure row itself carries rather than by applying deltas:
+  `LEAK_CEILING` 294→**294**, `LEAK_CLASS_PAIRS` 501→**487**, `LEAK_RECORDS` 2302→**2252**,
+  `UNCITED_LEAK_CLASS_PAIRS` 494→**481** (every shed pair was uncited; the one admitted pair is cited to
+  `t0953`), mirrored in `scripts/figures.db`.
+  **SELF-HOST: NOTHING TO PORT, AND IT IS AHEAD.** The self-host LIR has no `HofExpand` variant at all —
+  `try_lower_vector_hof` desugars to a comprehension loop whose ordinary array constructor already wires the
+  hooks — so both new fixtures COMPILE and MATCH on that lane, pinned by `assert_self_host_stdout`. ⭐ And on
+  `flat_map` the reference LAGS: the self-host's nested loop MOVES each element and runs the `Drop` body
+  twice, where Rust's extend-then-free runs it four times. Filed as `t1216`, with the self-host as the
+  existence proof that the reference-grade shape is not hypothetical.
+  ⭐ **`t1216` SHIPS A DURABLE REPRO WITH BOTH LANES WIRED.** `known_gaps/t1216_flat_map_appends_by_clone.gg`
+  carries `push` and `map` controls beside the `flat_map` cell, so the four drops cannot be read as "that is
+  just what `Drop` does". The `#[ignore]`d Rust test asserts the INTENDED two (RED, bare rc 101); the
+  self-host test asserting the SAME string is **un-ignored and GREEN** — the reference-grade shape running
+  in the tree, pinned so it cannot regress while Rust catches up.
+  **FILED:** `t1215` (a Vector HOF through an opaque `Callable` PARAMETER — the callable's type is erased to
+  a bare `Ptr`, so there is no `HofExpand` to carry the metadata; LLVM leaks, C does not link, and the
+  dispatcher is the literal `strip_prefix("Vector__")` shape the no-name-matching rule forbids) ·
+  `t1216` (the append-move) · `t1217` (a nested-collection literal in a closure body does not unify).
+  `t1286` (the self-host cannot compile `Deque.map`) · `t1285` (`E_MoveWithoutOperator` still teaches D27's
+  retired `!` sigil — measured, `!` STILL BUILDS, so it is a stale lesson rather than a broken suggestion).
+  `t0977` gained its `flat_map` cell as EVIDENCE: measured before and after, its accumulator size goes 8→32
+  and **stdout is unchanged garbage**, so the two halves are independent and this fix does not close it.
 
 - [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
   STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,

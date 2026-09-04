@@ -1,0 +1,25 @@
+# SINGLE-OWNER SUB-PLACE NEG — POSITION axis: a consume position (`push`), not
+# a bind. All the consuming positions route through the one helper
+# (`require_explicit_move_for_single_owner_init`, pinned at a fixed call-site
+# count by tests/lints.rs::single_owner_init_helper_call_sites), so position
+# cannot discriminate a sub-place verdict — this cell and the ctor cell pin that
+# the shared route is real rather than argued.
+#
+# Omitted cell: bare INDEX places are deferred behind the callee-borrow ruling
+# (todo/t1225).
+#
+# CELL: type=Callable · place=field of a local · position=PUSH · capture=int.
+# RED at 7bf11017e: `gg check` ACCEPTED (rc 0).
+# ggdef: ABSTAIN (todo/t1227).
+
+struct Holder:
+    Callable[int()] f
+
+Callable[int()] mk(int n):
+    return (): n + 1
+
+void main():
+    Holder h = Holder(mk(40))
+    Vector[Callable[int()]] fns = []
+    fns.push(h.f)
+    print(fns.len())

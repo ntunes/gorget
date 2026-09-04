@@ -668,7 +668,15 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// Lowered 91 → 90 (R49 Track M1): the deleted unreachable `Box` mint in
     /// `lower_struct_literal` carried a `drops.is_registered` guard before its
     /// `register_local`. The live mint's copy stays.
-    const PHASE_D_PROXY_BUDGET: usize = 90;
+    /// Lowered 90 → 89 (R49 Track L, closure-capture ownership). The closure-env
+    /// `StructInit` no longer runs a private capture-ownership predicate; it
+    /// routes through the shared consuming-position sequence
+    /// (`ensure_owned_at_boundary` → `clone_multi_use_resource_args` →
+    /// `move_zero_consumed_args`), so the hand-rolled
+    /// `ctx.drops.is_registered(cap.local_id)` guard in `lower_closure` is gone
+    /// along with the rest of that second opinion.
+    /// The two removals are independent, so the merged budget is 89.
+    const PHASE_D_PROXY_BUDGET: usize = 89;
 
     let count = count_phase_d_proxy_reads();
     assert_exact_ratchet(
@@ -9910,7 +9918,54 @@ fn sanitize_allowlists_shrink_only() {
     // falsified by measurement: the row retires only when ALL THREE of
     // `todo/t0948`, `todo/t0971` and `todo/t0972` land. See the two marked
     // CORRECTION blocks in the allowlist — they are kept deliberately.
-    const LEAK_CEILING: usize = 294;
+    // ⚠⚖ 294 → 300 (R49 Track L, 2026-09-04). SIX new rows, ONE root, and the
+    // owner ruling was taken TWICE — the second time on a corrected figure.
+    // Track L closed a closure-capture use-after-free class by materialising
+    // owned values at the capture site; `todo/t1210` is that the env's FIELDS
+    // are then never dropped, so every newly-materialised capture is a leak.
+    // THREE of the six rows are fixtures the track never touched — and
+    // `spawn_unchecked_bypasses_check` was ASan-CLEAN at the base commit — so
+    // this is genuinely NEW INFLOW, which the allowlist header reserves to an
+    // OWNER ASK. Answered 2026-09-04: land it, admit the rows, make the
+    // admission TEMPORARY. Every one of the six CITES its owning item in
+    // column 3, and `scripts/sanitize_sweep.sh` is now FATAL on a cited class
+    // that stops leaking, so these rows cannot outlive the defect.
+    // ⚠ NOT ALL SIX ARE `t1210`: the aggregate cell's env-BLOCK record is
+    // `todo/t0948`, and `closure_capture_then_mutate_source_uaf` is
+    // `todo/t0310` (its env drop RUNS; the leak is the closure's owned RETURN
+    // value) and is PRE-EXISTING, measured at base once the crash that masked
+    // it is removed.
+    // ⚠⚖ 300 → 301: the full sweep this fold ran surfaced ONE more pre-existing
+    // leak with no row, `string_enum_variants` (`todo/t1290`, `String ch =
+    // input[i]`). It is NOT this round's inflow — a compiler built from Track
+    // L's base leaks the identical 12 B in 6 allocations and the fixture has no
+    // closure in it — so it needs no owner ask, and its row cites `t1290` so the
+    // sweep's retiring direction forces the row out when the leak stops.
+    // ⚠⚖ 301 → 300: and this one is a BURN-DOWN, not an admission. The full
+    // sweep reported `cow_closure_deferred_mutate` as no longer leaking at all,
+    // and the capture-ownership fix is why: measured 96 B in 3 allocations
+    // (`str_alloc_copy*3`) against a compiler built from Track L's base, and
+    // ASan-CLEAN after. A pre-existing row this round's fix RETIRED, removed by
+    // the round that earned it rather than left for a later reader.
+    // ⚖ 300 -> 301 (R49 Track INT-B, OWNER RULING 2026-09-04, recorded verbatim
+    // in the row's `⚖ ADMITTED` block). THE THIRD UPWARD MOVE OF THIS CEILING,
+    // and the second this round. `closure_literal_ambient_return_at_call_arg`
+    // is R49 inflow (`030d4d2d7`) that leaks `todo/t0953`'s mechanism — a
+    // closure LITERAL at a call-argument position, three literals, three
+    // records — and t0953 is OLDER than this round, filed 2026-09-03 with two
+    // durable repros. New inflow is an owner ask by this file's header; the ask
+    // was made as `todo/t1306` and answered. It is NOT a rule for the next such
+    // row: both of this round's rulings admit exactly one row each.
+    // ⚠ THE ROW EXISTS BECAUSE THE FIXTURE'S AXIS REQUIRES THE LEAKING SPELLING.
+    // Its cell is a closure LITERAL at a DIRECT-CALL ARGUMENT; its five siblings
+    // all sit at a declared `Callable[...]` DESTINATION. Respelling the callees
+    // as named functions would delete the case rather than fix the leak — which
+    // is exactly why its own sibling `vector_hof_result_element_drop`, where the
+    // respelling DOES remove the defect, ships with no row at all.
+    // ⊜ FOUND BY A FIVE-BUILD PRE-FLIGHT before the reconciliation, not by the
+    // round-close battery after it — which is the difference between an owner
+    // decision and an owner surprise.
+    const LEAK_CEILING: usize = 301;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -10085,8 +10140,116 @@ fn sanitize_allowlists_shrink_only() {
     // `gg build --sanitize` and `--backend=llvm --sanitize` each report the same
     // 16 allocations, all `__gorget_closure_env_alloc`, and no corruption.
     // See the `⚠⚠ OWNER ASK` block in the allowlist.
-    const LEAK_CLASS_PAIRS: usize = 501;
-    const LEAK_RECORDS: usize = 2302;
+    // ── SUPERSEDED ADDENDUM (R49 sanitize re-seed) — PRECEDENCE: the R49 Track
+    //    INT-B block at the constants below wins. THE RE-KEY THIS BLOCK
+    //    DESCRIBES IS NOW APPLIED: 22 rows in the allowlist are keyed on
+    //    `__gorget_array_reserve_one`, and `self_whole_move_ok` — the one cited
+    //    row the re-key reaches — carries the new frame in column 3 as well.
+    //    ⚠ Its `todo/t0955` reference is STALE — that item was deleted this
+    //    round because its defect was FIXED, so only `todo/t0951` survives to
+    //    carry the erratum, and it legitimately names BOTH spellings. Kept above
+    //    all for the note on the positive control, which spells the OLD symbol
+    //    DELIBERATELY.
+    // ⚠ AND A ROUND CAN CHANGE EVERY CLASS KEY ON A ROW WITHOUT MOVING ANY OF THE
+    // FOUR NUMBERS BELOW, WHICH IS WHY A READER WATCHING ONLY THEM WOULD MISS IT.
+    // `b5356f361` hoisted the array growth policy into a `static inline`
+    // `__gorget_array_reserve_one`, inserting one frame above the realloc every
+    // `gorget_array_push` leak record was keyed on. The affected rows re-seeded
+    // to the new top frame on 2026-09-04; the allowlist header carries the
+    // per-record proof and the regeneration command. Rows, pairs, records and
+    // loose signatures are all UNCHANGED by it — a rename is bookkeeping, and it
+    // is a rename only where the RECORD COUNT held, which is what was checked.
+    // ⚠ `UNCITED_LEAK_CLASS_PAIRS` is the one that WOULD have moved: a re-seeded
+    // class orphans its column-3 citation, so the two cited rows re-seeded
+    // column 3 as well and `todo/t0951` / `todo/t0955` each name the new frame.
+    // The positive control at the bottom of this test still spells the OLD
+    // symbol on purpose: `gorget_array_push` is a live runtime function and
+    // `todo/t0951` legitimately names it, so the control keeps testing
+    // `item_covers` rather than tracking whatever the allowlist happens to key on.
+    //
+    // ── SUPERSEDED ADDENDUM (R49 Track N2) — PRECEDENCE: the R49 Track INT-B
+    //    block at the constants below wins; this one describes N2's OWN branch
+    //    census, not the constants this file declares. Its "NET, which is what
+    //    these constants hold" line was never true of the integration tree.
+    //    Kept verbatim for its selection-vs-enumeration lesson and for its
+    //    burn-down/inflow record, which INT-B RE-MEASURED rather than adopted:
+    //    every figure below was confirmed against a full corpus sweep, and the
+    //    reconciliation took the MEASURED column 4 on every examined row rather
+    //    than either branch's opinion of it.
+    // ⬇ A BURN-DOWN AND AN INFLOW, STATED SEPARATELY — because a NET figure
+    // that reports only the credit side is the same defect as a census that
+    // enumerates only the row you started from, and this number made both
+    // mistakes in one round.
+    //
+    // BURN-DOWN: 14 rows shed classes when the Vector-HOF accumulator started
+    // carrying its result element's hooks and the drained `flat_map` husk began
+    // being freed — the elements it never dropped and the husks it never freed
+    // stop leaking rather than stopping being reachable. One row
+    // (`test_higher_order_named_fn`) went fully clean and left the file.
+    // ⚠ THE FIRST CENSUS OF THAT SAID ONE ROW. It looked only at
+    // `vector_hof_cross_type_map` — the row the work started from — and reported
+    // its 2 shed classes as the whole delta: a SELECTION presented as an
+    // enumeration. The re-census enumerated instead: every allowlisted fixture
+    // calling `.map(` / `.flat_map(` / `.extend(`, each re-measured with the
+    // sweep's own `leak_classes` extraction, its `use_stacks=0` /
+    // `detect_leaks=1:exitcode=0` options and its REPS=3 per-class MAX.
+    // Thirteen more had shed classes, every one stable across all three reps.
+    //
+    // INFLOW: +1 row, +1 pair, +5 records — `vector_hof_result_element_sizing`,
+    // a fixture this round ADDED, whose closure literals are the pinned
+    // defect's entry condition and therefore carry `todo/t0953`'s environment
+    // leak irreducibly. It is cited, and its `⚖ ADMITTED` block names it as an
+    // owner ask. Its sibling `vector_hof_result_element_drop` contributes
+    // NOTHING here because its leak was FIXED rather than admitted — every
+    // callee rewritten as a named function, and the fixture is now asserted
+    // fully clean.
+    //
+    // NET, which is what these constants hold: 294 -> 294 rows, 501 -> 487
+    // pairs, 2302 -> 2252 records. Regenerate with the awk census on
+    // `sanitize.leak.records.pin.regen` in `scripts/figures.db`; never derive
+    // these by applying a delta by hand.
+    //
+    // ⚠⚖ Then both rise with R49 Track L's six new rows and two WIDENED ones:
+    // +10 (fixture, class) pairs and +8 net records. The net hides two moves in
+    // opposite directions, and both are deliberate: `closure_fstring_capture`
+    // was TIGHTENED (`gorget_string_format*5` → `*1`, its row had been admitting
+    // four records it no longer leaks) while gaining `str_alloc_copy*1`, and
+    // `shared_callable` gained `gorget_shared_new*2`. Counts are the EXACT
+    // measured values, never rounded up, so any drift trips the gate — that is
+    // what makes a widened row a measurement rather than a waiver.
+    // LEAK_LOOSE_SIGNATURES is unchanged: no new row carries a `*N+` marker.
+    //
+    // ── ADDENDUM (R49 Track INT-B) — PRECEDENCE: this block wins over every
+    //    superseded one above, because it is the first census taken on the
+    //    RECONCILED file rather than on one branch's blob.
+    // 511 -> 497 pairs, 2308 -> 2262 records, taken from a FULL
+    // `scripts/sanitize_sweep.sh` over the merged tree: every row in the
+    // examined set was set to its MEASURED column 4, not to either branch's
+    // opinion of it. The pairs shed are the frame re-key's five class DROPS plus
+    // Track N2's Vector-HOF burn-down; the records follow them.
+    // ⚠ THE THREE MOVES THIS BLOCK MUST STATE SEPARATELY, because `LEAK_CEILING`
+    // CANNOT SEE THEM. Rows went 300 -> 300, and that is a COMPENSATING WASH,
+    // not a no-op:
+    //   +1  `vector_hof_result_element_sizing` — admitted under the owner ruling
+    //       recorded in its `⚖ ADMITTED` block (2026-09-04).
+    //   -1  `test_higher_order_named_fn` — measured fully CLEAN corpus-wide, so
+    //       the row went with the defect.
+    // A row count is a DIFFERENCE, and a difference of zero is the one reading a
+    // pinned total can never distinguish from "nothing happened". The item
+    // inventory below sees the `+1`; NOTHING sees the `-1` (an uncited row whose
+    // fixture goes clean lands in the sweep's advisory `fixed_leak` bucket and
+    // sets no rc), which is why both are written out here rather than netted.
+    // ⚖ 497 -> 498 pairs, 2262 -> 2265 records (the same 2026-09-04 ruling as
+    // `LEAK_CEILING` above): one row, one class, three records. `todo/t0953`
+    // names `__gorget_closure_env_alloc`, so the new pair is CITED and
+    // `UNCITED_LEAK_CLASS_PAIRS` does NOT move with these two — admission and
+    // filing were the same act, which is the only shape the owner's 2026-09-02
+    // burn-down instruction accepts.
+    // ⚠ AND THIS TIME THE ROW COUNT REALLY MOVES. The +1/-1 wash recorded above
+    // was the reconciliation; this is pure inflow with nothing retiring against
+    // it, so all three of rows, pairs and records step together.
+    const LEAK_CLASS_PAIRS: usize = 498;
+    const LEAK_RECORDS: usize = 2265;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────
@@ -10114,8 +10277,14 @@ fn sanitize_allowlists_shrink_only() {
     // class).  Regenerate:
     //   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -v '^$' \
     //     | cut -f2 | awk -F, '{n[NF]++; p+=NF} END{for (k in n) print k, n[k]; print "pairs", p}'
-    // `vector_hof_cross_type_map` is the live proof: three classes, three
-    // SEPARATE filed items, and one class splitting between two of them.
+    // `callable_literal_at_consuming_positions` is the live proof: ONE class
+    // whose records THREE separate filed items own between them, so a per-row
+    // citation would have discharged it with any one of the three.
+    // ⚠ IT USED TO BE `vector_hof_cross_type_map` (three classes, three items,
+    // one class splitting between two). R49 Track N2 FIXED two of those three
+    // mechanisms, so that row now carries one class and one citation — the
+    // example was retired by the burn-down it was illustrating, which is the
+    // outcome this ratchet exists to produce.
     //
     // ⚠ IT IS AN `assert_eq!`, NOT A `<=`, for the reason stated forty lines
     // above about `LEAK_CEILING`: under `<=` a burn-down that forgets to lower
@@ -10144,13 +10313,28 @@ fn sanitize_allowlists_shrink_only() {
     // the reviewer reading the `⚖ ADMITTED` block: the number says how much is
     // uncited, the block says whether the citation is true.
     //
-    // SEEDED AT THE LANDING VALUE, not at the pre-edit one. 500 pairs, 6 of them
-    // cited by this round's three admitted rows, leaves 494. Seeding at 500 would
-    // have silently admitted six uncited pairs — the same argument this file
-    // makes against leaving headroom in `LEAK_CEILING`.
+    // SEEDED AT THE LANDING VALUE, not at the pre-edit one: seeding at the
+    // then-current pair count would have silently admitted the six pairs this
+    // file's three `⚖ ADMITTED` rows cite — the same argument this file makes
+    // against leaving headroom in `LEAK_CEILING`.
+    // ⬇ Moves with the burn-down: the thirteen rows that shed classes when the
+    // Vector-HOF accumulator started carrying its result element's hooks were
+    // all UNCITED pairs, so every one of them came off this number too.
     // TARGET: 0. Every pair carrying a filed item is the end state; nothing else
     // in this file creates pressure toward it.
-    const UNCITED_LEAK_CLASS_PAIRS: usize = 494;
+    // ⚠⚖ 494 → 493 (R49 Track L fold): NOT by citing a pair, but by FIXING one.
+    // `cow_closure_deferred_mutate`'s row was uncited and its leak is gone (96 B
+    // in 3 allocations at this track's base, ASan-CLEAN after the
+    // capture-ownership fix), so the row went and its pair went with it. This is
+    // the direction the owner's ruling asks for — burnt down, not accounted for.
+    // ⚠⚖ 493 → 480 (R49 Track INT-B). NOT a citation drive: every one of the 13
+    // is a pair that CEASED TO EXIST. Twelve are classes the full sweep measured
+    // GONE from rows the merge left over-admitting (Track N2's Vector-HOF fix
+    // plus the five class DROPS the frame re-key exposed), and the thirteenth is
+    // `test_higher_order_named_fn`'s whole row. The one pair ADDED in the same
+    // commit — `vector_hof_result_element_sizing` — is CITED to `todo/t0953`, so
+    // it lands on the other side of this count and does not offset the 13.
+    const UNCITED_LEAK_CLASS_PAIRS: usize = 480;
 
     // A `todo/` item counts as citable for a pair only if it EXISTS and its body
     // NAMES the pair's top-frame symbol. Cached: 293 rows would otherwise re-read
@@ -10177,8 +10361,10 @@ fn sanitize_allowlists_shrink_only() {
         );
         // Column 3 — the per-class citation, `<class>=<todo-id>[,…]`. A class MAY
         // repeat when more than one filed item owns records of that frame in this
-        // fixture (the DIRECT/INDIRECT split on `vector_hof_cross_type_map` is the
-        // in-tree example). Absent column = every pair on the row is uncited,
+        // fixture (`callable_literal_at_consuming_positions` is the in-tree
+        // example: one frame, three owners. The DIRECT/INDIRECT split on
+        // `vector_hof_cross_type_map` used to be, until R49 Track N2 fixed both
+        // halves of it). Absent column = every pair on the row is uncited,
         // which is a counted debt, not a malformed row.
         let mut citations: Vec<(&str, &str)> = Vec::new();
         if let Some(col3) = cols.get(2) {
@@ -10336,6 +10522,233 @@ fn sanitize_allowlists_shrink_only() {
             "`{smuggled}` parsed as a record count — the signature parse above \
              must REJECT a citation appended to column 2, not read it as a number"
         );
+    }
+}
+
+/// Every block that ADMITS a leak row declares what retires it, on a canonical
+/// line, and every `todo/` item that line names still exists.
+///
+/// **The defect this retires (R49 Track INT-B, measured 2026-09-04 on the
+/// five-branch integration tree).** `vector_hof_cross_type_map`'s `⚖ ADMITTED`
+/// block closed *"RETIRES only when ALL THREE of `todo/t0953`, `todo/t0954` and
+/// `todo/t0955` have landed"* — and two of those three had already landed, in
+/// the same round, deleting both items. The row was live, its counts were
+/// pinned, every existing gate was green, and the block was telling the next
+/// reader to wait for two obligations that no longer existed. A retire
+/// condition rots in exactly one direction: it OVER-STATES its blockers, and an
+/// over-stated blocker is what keeps an admission alive past its defect.
+///
+/// **Why it is not a block COUNT** (SIX QUESTIONS #2 — a guard that cannot catch
+/// its own class). `sanitize_allowlists_shrink_only`'s row ceiling and an
+/// inventory of `⚖ ADMITTED` banners both see a block DELETED WITH ITS ROW. The
+/// defect above deleted nothing: the block stayed, the row stayed, the count
+/// never moved. What went stale was the CONDITION, so the condition is what this
+/// test reads.
+///
+/// **Why it is not "every id named anywhere in the block must exist"** — that
+/// spelling RED-LIGHTS THE CORRECT ANSWER. The replacement block narrates the
+/// two retired items in the PAST TENSE (*"TWO OF THE THREE CLASSES HAVE SINCE
+/// LANDED"*), which is the whole point of keeping the history, and this file's
+/// header names them too. Scoping the subject to the `# RETIRES:` line is
+/// exactly what keeps that legal while still making the CLAIM checkable.
+///
+/// **Both ratchet directions (Core #6).** A block with no condition reds. A
+/// condition naming an item that has since LANDED reds. There is no allowlist,
+/// no `t0000` hole and no pre-existing debt to burn down — every block in the
+/// file satisfies it today.
+#[test]
+fn sanitize_leak_admitting_blocks_declare_a_live_retire_condition() {
+    /// Parse one `# RETIRES:` payload into the ids the line OBLIGES, and count
+    /// the `t<NNNN>` tokens present anywhere in it.
+    ///
+    /// Ids are read from the segment BEFORE any trailing ` — <prose>`, so a
+    /// block admitting two rows can say which condition belongs to which. The
+    /// TOKEN is `t` + four digits: a `(b)`-style sub-item names a bullet inside
+    /// an item rather than a file, so the suffix stays in the prose. The second
+    /// return value is what stops the split from being an evasion — see the
+    /// `assert_eq!` on it, and the probes at the bottom of this test.
+    fn retire_line_ids(rest: &str) -> (Vec<String>, usize) {
+        let ids_part = rest.split_once(" — ").map_or(rest, |(a, _)| a);
+        let ids: Vec<String> = ids_part
+            .split(',')
+            .filter_map(|tok| {
+                let d = tok.trim().strip_prefix('t')?;
+                let digits: String = d.chars().take(4).collect();
+                (digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()))
+                    .then(|| format!("t{digits}"))
+            })
+            .collect();
+        // Every `t<4 digits>` in the WHOLE payload, wherever it sits. The token
+        // must not continue a word, so `output1234` is not an id.
+        let b: Vec<char> = rest.chars().collect();
+        let mut total = 0usize;
+        for i in 0..b.len() {
+            if b[i] != 't' || (i > 0 && b[i - 1].is_alphanumeric()) {
+                continue;
+            }
+            if i + 4 < b.len() && b[i + 1..i + 5].iter().all(|c| c.is_ascii_digit()) {
+                total += 1;
+            }
+        }
+        (ids, total)
+    }
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("tests/sanitize/LEAK_ALLOWLIST.txt");
+    let body = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let lines: Vec<&str> = body.lines().collect();
+
+    // The SUBJECT is every block that admits a row. `⚠⚠ OWNER ASK` is one of
+    // them: it admits `callable_literal_at_consuming_positions` and carries a
+    // retire condition, and a subject that named only `⚖ ADMITTED` would leave
+    // it with no rule at all rather than with a rule it passes (SIX QUESTIONS
+    // #4 — a case with no subject is not fixed by widening the rule's text).
+    let is_start =
+        |l: &str| l.starts_with("# ⚖ ADMITTED (") || l.starts_with("# ⚠⚠ OWNER ASK");
+    let starts: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| is_start(l))
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        starts.len() >= 10,
+        "only {} admitting block(s) found in {} — the banners this test keys on \
+         (`# ⚖ ADMITTED (` / `# ⚠⚠ OWNER ASK`) must have been respelled, which \
+         would make this guard silently vacuous",
+        starts.len(),
+        path.display()
+    );
+
+    let mut conditions = 0usize;
+    for &s in &starts {
+        // A block runs to the next banner or to the first data row, whichever
+        // comes first.
+        let mut e = s + 1;
+        while e < lines.len() && lines[e].starts_with('#') && !is_start(lines[e]) {
+            e += 1;
+        }
+        let block = &lines[s..e];
+        let retires: Vec<&&str> = block
+            .iter()
+            .filter(|l| l.starts_with("# RETIRES: "))
+            .collect();
+        // `>= 1`, NEVER "exactly one". One block admits two rows with two
+        // DIFFERENT conditions, and that per-row split is itself the correction
+        // of an earlier over-statement — collapsing it to a single line would
+        // re-introduce the exact defect this test retires.
+        assert!(
+            !retires.is_empty(),
+            "the admitting block starting at {}:{} has no `# RETIRES: <id>[, <id>…]` \
+             line.\n  {}\nAn admission with no stated end is permanent by default. \
+             Write what retires it on its own line; put the reasoning in prose \
+             around it.",
+            path.display(),
+            s + 1,
+            lines[s]
+        );
+        for r in &retires {
+            let rest = r.trim_start_matches("# RETIRES: ");
+            let (ids, total) = retire_line_ids(rest);
+            assert!(
+                !ids.is_empty(),
+                "`{r}` (block at {}:{}) names no `todo/` item. The line is the \
+                 CONDITION, so it must carry at least one `t<NNNN>` token.",
+                path.display(),
+                s + 1
+            );
+            // ⚠ EVERY id ON THE LINE MUST BE ONE THIS LOOP WILL CHECK. Parsing
+            // the comma-separated head and then trusting the rest is how an
+            // obligation hides in plain sight: `t0953 and t0955` splits into ONE
+            // token, and `t0953 — t0955 has landed too` puts the second id in
+            // prose. Both would then pass while naming a retired item — the
+            // exact defect this test exists to catch, one level down (SIX
+            // QUESTIONS #2). So the count of `t<NNNN>` tokens ANYWHERE on the
+            // line must equal the count this loop actually resolves.
+            assert_eq!(
+                ids.len(),
+                total,
+                "`{r}` (block at {}:{}) carries {total} `t<NNNN>` token(s) but \
+                 only {} of them are in the CHECKED segment. Ids go before any \
+                 ` — ` and are separated by COMMAS; `and`, a dash, or anything \
+                 else leaves an obligation this test cannot verify. Resolved: \
+                 {ids:?}",
+                path.display(),
+                s + 1,
+                ids.len()
+            );
+            for id in &ids {
+                let item = root.join("todo").join(format!("{id}.md"));
+                assert!(
+                    item.is_file(),
+                    "the block at {}:{} says it RETIRES with `{id}`, and \
+                     `todo/{id}.md` does not exist.\n  {r}\nEither the item \
+                     LANDED — in which case this admission has outlived one of \
+                     its blockers and the condition must shrink, and the row's \
+                     counts probably shrink with it — or the id is a typo. An \
+                     over-stated blocker is how an admission survives its own \
+                     defect: it was measured, on `vector_hof_cross_type_map`, \
+                     naming two items that had landed in the same round.",
+                    path.display(),
+                    s + 1
+                );
+            }
+            conditions += 1;
+        }
+    }
+    assert!(
+        conditions >= starts.len(),
+        "{conditions} condition(s) across {} block(s) — every block owes at \
+         least one",
+        starts.len()
+    );
+
+    // ── Core #13: watch the id check fail, on plausible EVASIONS ─────────────
+    //
+    // `sanitize_allowlists_shrink_only` ships these for its citation check for
+    // the reason `todo/t0875` records: four assertions in this tree were each
+    // defeated by respelling what they counted, so the probes are the
+    // respellings a motivated author would actually reach for. They run against
+    // synthetic inputs and touch no tree state.
+    //
+    // ⚠ WHY THIS GUARD NEEDED THEM. It catches the historical defect —
+    // "ALL THREE of `t0953`, `t0954` and `t0955`" — but only through the
+    // COMMA before `t0954`. The `and` before the last id is the natural English
+    // rendering, and on its own it hid a whole obligation. A guard that catches
+    // its own class by one id of margin is not a Core #6 guard yet.
+    {
+        // POSITIVE CONTROLS — the two shapes the file actually uses.
+        let (ids, total) = retire_line_ids("t0953");
+        assert_eq!((ids.as_slice(), total), (["t0953".to_string()].as_slice(), 1));
+        let (ids, total) = retire_line_ids("t0873(b), t0948, t0949 — `a_row_name`");
+        assert_eq!(ids.len(), 3, "the per-row split must still parse: {ids:?}");
+        assert_eq!(total, 3, "and the tail must contribute nothing");
+
+        // EVASION 1 — an id at the very START of the ` — ` tail. It has no
+        // preceding space, so the substring probes this replaced let it pass.
+        let (ids, total) = retire_line_ids("t0953 — t0955 has landed too");
+        assert_ne!(
+            ids.len(),
+            total,
+            "an id hidden at the start of the prose tail was accepted — the \
+             guard has degraded to checking the head and trusting the rest"
+        );
+
+        // EVASION 2 — `and` instead of a comma, which is how the defect this
+        // test retires was actually written.
+        let (ids, total) = retire_line_ids("t0953 and t0955");
+        assert_ne!(
+            ids.len(),
+            total,
+            "`t0953 and t0955` resolved one id and obliged one — the second is \
+             unchecked, and `and` is the spelling the live instance used"
+        );
+
+        // A NEGATIVE for the token rule itself: a `t<4 digits>` that CONTINUES a
+        // word is not an id, or every line mentioning a line count would red.
+        let (_, total) = retire_line_ids("t0953 — see output1234");
+        assert_eq!(total, 1, "`output1234` was counted as a `todo/` id");
     }
 }
 
@@ -24258,6 +24671,16 @@ fn expr_stmt_walker_population_is_pinned() {
     "src/semantic/safety/helpers.rs::find_stale_in_condition [HAND-ROLLED]",
     "src/semantic/safety/helpers.rs::find_with_tracked_in_condition [HAND-ROLLED]",
     "src/semantic/safety/helpers.rs::lvalue_value_type [HAND-ROLLED]",
+    // NOT a walker with a reach obligation, and deliberately not routed through
+    // `visit_expr_children`: it is a PLACE PRINTER whose domain is exactly the
+    // five forms `expr_is_place` (three rows above) admits, and its `_ => None`
+    // is the CONTRACT — a non-place has no place text, and the caller falls back
+    // to the root name. Routing it through the chokepoint would make it descend
+    // into call args and closure bodies and print nonsense. Its arm set must
+    // mirror `expr_is_place`'s: if a form is added there, add it here, or the
+    // printer silently degrades that form to the root name in a diagnostic that
+    // then names the wrong place.
+    "src/semantic/safety/helpers.rs::render_place_expr [HAND-ROLLED]",
     "src/semantic/safety/origins.rs::compute_expr_origin [HAND-ROLLED]",
     "src/semantic/safety/origins.rs::is_string_typed_expr [HAND-ROLLED]",
     "src/semantic/safety/return_borrows.rs::build_aliases_from_stmt [HAND-ROLLED]",
@@ -24811,8 +25234,9 @@ fn staging_move_burndown_shrink_only() {
 /// overwhelmingly the RECENT filings — the `.gg` gets written under time
 /// pressure and the wiring step is the one that gets dropped. Several are
 /// CRITICAL memory-safety repros (`box_*_double_free`,
-/// `closure_capture_then_mutate_source_uaf`,
-/// `read_through_borrow_param_destroys_caller_value`).
+/// `read_through_borrow_param_destroys_caller_value`; and
+/// `closure_capture_then_mutate_source_uaf`, whose row has since LEFT — it was
+/// graduated out of `known_gaps/` into a live regression fixture).
 ///
 /// ## SHRINK-ONLY
 ///
@@ -24829,14 +25253,13 @@ fn staging_move_burndown_shrink_only() {
 #[test]
 fn known_gaps_repros_are_wired_to_a_test() {
     /// Baseline regenerated 2026-08-27 by running this test. SHRINK-ONLY.
-    const ALLOWED_UNWIRED: [&str; 24] = [
+    const ALLOWED_UNWIRED: [&str; 23] = [
         "box_callable_call_through_box_undefined_function",
         "box_enum_payload_c_wont_compile_llvm_double_frees",
         "box_get_bound_to_local_double_free",
         "box_get_non_primitive_llvm_llc_type_error",
         "box_move_without_operator_missing_at_ctor_and_field",
         "box_optional_payload_incomplete_type_both_lanes",
-        "closure_capture_then_mutate_source_uaf",
         "dict_index_assign_during_iteration_ice",
         "dict_value_write_through_silently_dropped",
         "doc_ld_concurrency_example_does_not_typecheck",
@@ -29713,6 +30136,150 @@ fn no_committed_conflict_markers() {
              Python REPL transcript, a shell heredoc and a setext underline. Either drop \
              the attribute or re-open the matcher design with that trade-off on the table.",
             path.display(),
+        );
+    }
+}
+
+/// Core #6 — the TUPLE-FIELD ALIAS has EXACTLY ONE resolver, and every consumer
+/// reads it through that accessor (Layering rule 3: one source of truth per
+/// axis).
+///
+/// ── WHY THIS EXISTS ───────────────────────────────────────────────────────
+/// Gorget spells a tuple element two ways, `t.0` and `t._0`, both ratified and
+/// co-equal. `parse_postfix` builds `Expr::TupleFieldAccess` only for the
+/// literal-integer form, so the alias arrives as
+/// `Expr::FieldAccess { field: "_0" }` and every consumer of a place AST has to
+/// decide whether that name is a tuple index. For a long time TWO of them
+/// decided it independently: the typechecker resolved the alias inline with a
+/// `strip_prefix('_')`, and the safety walk's `lvalue_value_type` did not
+/// resolve it at all (its `FieldAccess` arm needed a struct `DefId`, and a tuple
+/// has none). The two therefore DISAGREED about what `t._0` is — and because the
+/// ownership gates key on the safety walk's answer, `v.push(t.0)` was rejected
+/// while `v.push(t._0)` was accepted and DOUBLE-FREED, one character apart
+/// (`todo/t0943`, closed by unifying them).
+///
+/// Prose cannot hold that: the failure mode is a consumer that quietly
+/// re-implements the rule, and it is invisible until someone writes the other
+/// spelling in a memory-unsafe position. So the guard counts.
+///
+/// ── WHAT IT ASSERTS ───────────────────────────────────────────────────────
+/// 1. The accessor exists at the AST layer. It lives in `src/parser/ast.rs`
+///    rather than `src/semantic/`, because `ggdef` shares the lexer/parser/AST
+///    and is FENCED OUT of `semantic/` by `ggdef_import_ratchet` — a `semantic/`
+///    home would have forced a fourth copy into the definitional interpreter.
+/// 2. NO re-implementation IN THE FOUR FILES THE SCAN WALKS: `src/parser/ast.rs`
+///    (where the accessor's own body is the single allowed occurrence),
+///    `src/semantic/typecheck.rs`, `src/semantic/safety/helpers.rs` and
+///    `spec/ggdef/src/elaborate/mod.rs`. `strip_prefix('_')` is the exact idiom
+///    the inline copy used, so respelling it is a decision the author has to
+///    make deliberately rather than by reflex.
+///    ⚠ THAT SCAN IS THOSE FOUR PATHS, NOT THE TREE. A re-implementation in a
+///    FIFTH file is caught only if it also stops one of the three consumers
+///    calling the accessor, which trips the `CALL_SITES` count in clause 3; a
+///    brand-new fifth consumer that hand-rolls the rule while leaving all three
+///    existing call sites intact evades BOTH clauses. Widen this list the
+///    moment a fourth consumer appears.
+/// 3. Every consumer that resolves a tuple element from a FIELD name calls the
+///    accessor. Pinned as a call-site COUNT, because a name-scoped body scan
+///    only reaches the functions it lists and a brand-new consumer would evade
+///    it entirely (the `todo/t0875` lesson: four successive substring
+///    assertions were each evaded by respelling the thing they counted, and
+///    only a COUNT held).
+///
+/// ── IF THIS FAILS ─────────────────────────────────────────────────────────
+/// A new consumer of the alias: call `ast::tuple_field_alias_index` and bump
+/// `CALL_SITES`. A hand-rolled `strip_prefix('_')`: delete it and call the
+/// accessor — the two-resolver split is a live double-free, not a style point.
+/// A call site REMOVED: the consumer stopped resolving the alias, so a
+/// documented spelling just became invisible to whatever gate it feeds; say
+/// which gate and why that is safe before lowering the count.
+#[test]
+fn tuple_field_alias_has_exactly_one_resolver() {
+    let ast = fs::read_to_string(Path::new("src/parser/ast.rs")).expect("read src/parser/ast.rs");
+    assert!(
+        ast.contains("pub fn tuple_field_alias_index(field_name: &str) -> Option<usize>"),
+        "`tuple_field_alias_index` is missing from src/parser/ast.rs. It lives at the \
+         AST layer because it is a fact about the SURFACE SPELLING and because that is \
+         the only layer ggdef can reach (it is fenced out of `semantic/` by \
+         `ggdef_import_ratchet`). Moving it into `semantic/` forces a fourth copy of \
+         the rule into the definitional interpreter — which is the split this guard exists \
+         to prevent."
+    );
+
+    // The consumers, and what each would lose if it stopped reading the accessor.
+    const CONSUMERS: &[(&str, &str)] = &[
+        (
+            "src/semantic/typecheck.rs",
+            "the FieldAccess field-disposition over a ResolvedType::Tuple — types the READ; \
+             without it `t._0` is E_NoFieldFound on a documented spelling",
+        ),
+        (
+            "src/semantic/safety/helpers.rs",
+            "lvalue_value_type's FieldAccess arm — types the PLACE for every ownership gate \
+             (D53 unique locks, D4/D12 drop taint, the single-owner carve-out); without it \
+             `t._0` types as unknown and those gates walk past it (todo/t0943's double-free)",
+        ),
+        (
+            "spec/ggdef/src/elaborate/mod.rs",
+            "ggdef's infer_ast_ty FieldAccess arm — without it the definitional interpreter \
+             abstains on a spelling it rejects one character away, and the lanes diverge",
+        ),
+    ];
+    /// Total `tuple_field_alias_index(` CALL sites across the consumers — one
+    /// each. A count, not a per-file presence check: presence is evadable by
+    /// adding a second inline resolver beside the call, a count is not.
+    const CALL_SITES: usize = 3;
+
+    let mut total = 0usize;
+    for (path, role) in CONSUMERS {
+        let src = fs::read_to_string(Path::new(path)).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let n = src.matches("tuple_field_alias_index(").count();
+        assert!(
+            n >= 1,
+            "{path} no longer calls `tuple_field_alias_index`. That file is {role}. \
+             One axis, one resolver (Layering rule 3) — if this consumer genuinely \
+             stopped needing the alias, say which gate it feeds and why that gate is \
+             safe blind to a documented spelling, then update CONSUMERS."
+        );
+        total += n;
+    }
+    assert_eq!(
+        total, CALL_SITES,
+        "tuple-alias resolver call-site count changed (expected {CALL_SITES}). A NEW \
+         consumer must call the accessor and bump this pin; a consumer that stopped \
+         calling it has gone blind to `._N` on whatever gate it feeds. Never satisfy \
+         this by re-implementing the rule locally."
+    );
+
+    // No hand-rolled re-implementation anywhere in the tree, including the
+    // consumers above. The accessor's OWN body is the sole legitimate use.
+    for path in [
+        "src/parser/ast.rs",
+        "src/semantic/typecheck.rs",
+        "src/semantic/safety/helpers.rs",
+        "spec/ggdef/src/elaborate/mod.rs",
+    ] {
+        let src = fs::read_to_string(Path::new(path)).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        // CODE lines only. A doc comment that NAMES the idiom — as the accessor's
+        // own comment and the two consumers' comments do, explaining why they
+        // must not re-roll it — is prose, and failing on it would print advice
+        // ("call the accessor instead") that is wrong for a comment. That trap is
+        // recorded on `self_host_safety_place_probes_are_structural`; this guard
+        // does not walk into it.
+        let occurrences = src
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| l.contains("strip_prefix('_')"))
+            .count();
+        let allowed = if path == "src/parser/ast.rs" { 1 } else { 0 };
+        assert_eq!(
+            occurrences, allowed,
+            "{path} contains {occurrences} CODE occurrence(s) of `strip_prefix('_')` \
+             (allowed {allowed}). That is the exact idiom the inline tuple-alias resolver \
+             used before the two resolvers were unified. Call \
+             `ast::tuple_field_alias_index` instead — a second decision site for one \
+             spelling is how `v.push(t.0)` rejected while `v.push(t._0)` was accepted \
+             and double-freed (todo/t0943)."
         );
     }
 }

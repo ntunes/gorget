@@ -1,0 +1,26 @@
+# SINGLE-OWNER SUB-PLACE NEG — SOURCE axis: the field's root is a PARAMETER.
+# `param_exempt` must NOT reach a sub-place: it exists so re-binding a whole
+# borrowed param copies a pointer, and a field read out of a borrowed param is
+# not that — it is a fresh owning copy, exactly like the D53 unique-lock arm,
+# which takes no exemption either. Sibling of the local-root cell.
+#
+# Omitted cell, same as every fixture in this directory: bare INDEX places
+# (`v[0]`, `d[k]`) are deferred behind the callee-borrow ruling (todo/t1225).
+#
+# CELL: type=Callable · place=field of a PARAM · position=bind · capture=int.
+# RED at 7bf11017e: `gg check` ACCEPTED (rc 0).
+# ggdef: ABSTAIN (todo/t1227).
+
+struct Holder:
+    Callable[int()] f
+
+Callable[int()] mk(int n):
+    return (): n + 1
+
+int use_it(Holder h):
+    Callable[int()] g = h.f
+    return g()
+
+void main():
+    Holder h = Holder(mk(40))
+    print(use_it(h))
