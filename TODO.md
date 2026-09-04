@@ -66,11 +66,30 @@ SOURCE.** Three pending branches rewrite it and **their rows were measured again
   `git diff … | cut -f1 | sort -u` row-name sets.
 - ⛔ **git reporting NO conflict is the DANGEROUS outcome here** — taking the re-seed's side silently ADMITS
   FIVE LEAKS A SIBLING TRACK FIXED, the sweep goes green, and no gate catches an over-declaration.
-⭐ **THE REFERENCE-GRADE SHAPE: merge all CODE first, then RE-DERIVE column 2 from a sweep on the FINAL tree**
-(the mechanical path exists — `verdicts.tsv` column 4 → allowlist column 2; the re-seed executor used it),
-**carrying column 3 CITATIONS forward from the union of branches, because citations are NOT derivable.**
-This is with the re-seed's output-reviewer for adjudication; it may report the per-row answer needs a
-post-merge sweep, which is an acceptable answer. **Do not hand-resolve these five rows at the merge.**
+⭐ **ADJUDICATED 2026-09-04 ON A REAL MERGED TREE — the answer is not "it depends":** N2 is right on all
+five overlapping rows AND on `linked_list` (its fix ELIMINATES the record, it does not shrink it), and the
+re-seed is right on the other **22**, where N2's spelling is wrong. **NEITHER FILE IS CORRECT; NEITHER SIDE
+CAN BE TAKEN.** Measured artifacts: `/tmp/rev_rs_probe_out/verdicts.tsv` (merged tree),
+`/tmp/rev_rs_adj_merged/`, `/tmp/rev_rs_overlap.py`.
+⚠ **A CORRECTION TO WHAT THIS BLOCK SAID EARLIER:** *"git reporting no conflict is the dangerous outcome"* is
+**WRONG, and the refutation was measured.** git's conflict set is a SUPERSET of the disagreement set, and
+every row it auto-merged came out right. But it is **ACCIDENTALLY correct (Six Questions #6)** — nothing
+enforces the per-row partition it relies on, and with the third branch and a modify/delete it already fails.
+**Do not build on "git will conflict where it matters".**
+⛔ **THE SAFE DIRECTION TURNS FATAL IN TWO PLACES:** `vector_hof_cross_type_map` is CITED, so once L lands a
+cited-class-GONE routes to `retire_fatal` → `⛔`; and **N2 DELETES `todo/t0954.md` and `todo/t0955.md`**
+(`git diff --name-status 832a3039d..0d9f9cebe -- todo/t0954.md todo/t0955.md` → `D`,`D`) against the
+re-seed's erratum EDIT to `t0955.md` — a modify/delete conflict that moves `UNCITED_LEAK_CLASS_PAIRS`.
+⚡ **THE HAZARD THAT BREAKS THE NAIVE PROCEDURE, MEASURED AND LIVE:** column 4 of `verdicts.tsv` **cannot
+express a `*N+` LOOSE MARKER** (`cut -f4 <verdicts.tsv> | grep -c '+'` → 0 across 2231 rows) while the
+allowlist carries **7** (`grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -c '+'`). A straight
+derivation silently switches all 7 racy rows' count checks back ON and reintroduces the exact flap the gate
+exists to remove. **Carry `+` forward by (stem, class) from the union.**
+📋 **THE FULL 8-STEP PROCEDURE IS `/tmp/brief_INT_v1.md` (Track INT), in brief-review now.** It also splits
+the commits: re-derivation closes `t0572`'s over-declaration backlog as a SIDE EFFECT (22 `shrunk_class`
+rows tighten, `LEAK_CEILING` moves because a fixture disappears), so **the merge resolution and the
+tightening land as SEPARATE commits** — the record must distinguish a row that moved because of a merge from
+one that moved because a defect was fixed.
 
 ✅ **THE `vector_hof_result_element_sizing` OWNER ASK IS ALREADY DISCHARGED BY N2's OWN INFLOW** — the row
 `__gorget_closure_env_alloc*5` cited to `t0953` is committed at `0d9f9cebe`. It was never separate work; the
