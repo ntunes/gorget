@@ -211,6 +211,27 @@ executor should be told to REPORT.**
 - ⛔ **§9 could not brief INT-B** — a reviewer tried and listed seven unanswerable questions, now required
   report contents. ⊕ **The report goes to `/tmp`**: it must quote a figures-DB-covered spelling, which no
   COMMITTED file may contain, and `/tmp` is outside the scan roots.
+✅ **PASS 3 SIGNED OFF THE DESIGN** — it merged all five branches again and reported *"v3's corrections are
+individually correct — none overshoots"*, verifying the acceptance inversion, the `DONE.md` rule TO THE DIGIT
+(T1 missing exactly 46 lines, all inside the paragraph L rewrote, zero outside), the frame staleness, the
+`⚖`-block inventory and the doc union all GREEN. **v4 is now on a NARROW pass-4 charter: can a wrong merge
+still ship?** ⛔ **Four passes spent — the next stop is the executor.**
+🚨 **PASS 3 BUILT A WRONG MERGE THAT PASSED EVERY CHECK.** At merge 5 git **auto-merges the re-seed's 27-row
+frame re-key** and leaves ONE hunk; an executor who applies the overwrite at merge 3 and then resolves that
+hunk — instead of RE-RUNNING the overwrite — ships a file **25 data rows off L's blob with IDENTICAL verdicts
+on every gate**: same census, same panic at the same line, same `deleted_rc=0`, same green mirrors.
+⭐ **Closed by ONE binary line in the REPORT, not the procedure:**
+`git diff --quiet 2f7eb9b58 -- tests/sanitize/LEAK_ALLOWLIST.txt`.
+⊕ **Four more spec gaps folded:** the probe **exits rc 1 for reasons v3 never classified** (a CITED class that
+shrank stays FATAL even at `COVERAGE_FLOOR=0`, and 6 of the set trip it) → expected-red inventory, stop
+condition narrowed to **ASan corruption only**; the probe set was built from **L's blob alone and missed the
+one fixture N2 ADDED that has NO row in the shipped tree** → build it from the three-branch UNION (29, not 28);
+and the deferral lived **only in `/tmp`** → INT-A now files a DURABLE `todo/` item carrying the owner ask
+verbatim, the frame staleness and the expected-red inventory.
+⛔ **AND THE `+2` IS *NOT* A CITATION DEBT — this would have inverted INT-B's action.** N2 deleted
+`t0954`/`t0955` **because those mechanisms are FIXED**; its row drops the classes entirely, so **INT-B's
+correct END STATE is N2's row: the two uncited pairs DISAPPEAR, they are not re-cited.** An INT-B told
+*"burn down the +2"* would file two replacement items for defects that no longer exist.
 ⊕ **Corrections to my own reasoning:** `t1055` was never a content disagreement (both bases are Medium — the
 integration branch PROMOTED it after L and N2 forked); the `16-bir.md` conflict is **two COMPLEMENTARY
 SECTIONS**, not two versions of one paragraph, so a plain UNION is correct and "make it read as one" invites
