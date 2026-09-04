@@ -10,7 +10,20 @@ TYPE METADATA — a memory-safety class fix, plus the owner's ease ruling.**
 lib, ggdef, security, c_runtime, spec_conformance — and every script gate is rc 0. **The ONLY red anywhere is
 `scripts/sanitize_sweep.sh` exiting 1 on ONE row**, and that row is the filed owner ask `t1306`.
 
-⚖ **STEP 0 — THE OWNER RULES ON `todo/t1306`.** `closure_literal_ambient_return_at_call_arg.gg` (R49 inflow
+✅✅ **STEP 0 IS DONE — THE OWNER RULED (a) ON `t1306`, 2026-09-04, VERBATIM:**
+> _"(a) admit one line, temporary, cited t0953, retiring when t0953 lands"_
+⛔ **That is the whole provenance. It admits THIS row.** Second such ruling this round; **both admit exactly
+one row and NEITHER is a rule about future new-inflow rows.** The header clause was **SATISFIED, not
+overridden** — it said new inflow remains an owner ask, and the ask was made and answered. ⚠ **A third
+new-inflow row would be a third ask** unless the owner later takes option (b).
+🔧 **INT-B's executor is applying it** — row at its measured value + `⚖ ADMITTED` block carrying the verbatim
+ruling and **a `# RETIRES: t0953` line, because its own new guard now requires one on every admitting block.**
+Inventory moves again (it was 10 → 11 for the first admission). Constants move: **predict from own census,
+THEN `figures.py check`.** `t1306` closes to `DONE.md`.
+⭐ **THE GATE THAT DECIDES THE ROUND: `scripts/sanitize_sweep.sh` MUST NOW EXIT 0.** It has been rc 1 on this
+single row all round and that row is the last one.
+
+⊖ **Superseded — STEP 0, THE OWNER RULES ON `todo/t1306`.** `closure_literal_ambient_return_at_call_arg.gg` (R49 inflow
 via `030d4d2d7`) leaks `__gorget_closure_env_alloc*3` with no row. **NEW INFLOW ⇒ owner ask by the file's own
 owner-attributed header; the 2026-09-04 ruling admits ONE row and is explicitly NOT extensible by analogy.**
 Options: **(a)** admit one line, temporary, cited `t0953`, retiring when `t0953` lands · **(b)** amend the
