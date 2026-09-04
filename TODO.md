@@ -87,34 +87,34 @@ express a `*N+` LOOSE MARKER** (`cut -f4 <verdicts.tsv> | grep -c '+'` → 0 acr
 allowlist carries **7** (`grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -c '+'`). A straight
 derivation silently switches all 7 racy rows' count checks back ON and reintroduces the exact flap the gate
 exists to remove. **Carry `+` forward by (stem, class) from the union.**
-📋 **THE PROCEDURE IS `/tmp/brief_INT_v3.md` (Track INT) — SECOND REBUILD; v1 and v2 are DELETED, do not
-look for them. Passes returned 9 then 7 BLOCKING. Streak 0.** ⭐ **v3 CHANGED THE MECHANISM.** v1/v2 wanted to
-GENERATE the allowlist from a sweep and guard it with a lint that re-derives and diffs. **Both halves were
-refuted by measurement:**
-- **THE LINT CANNOT EXIST.** `verdicts.tsv` is written ONLY by `scripts/sanitize_sweep.sh` into `$OUT` and
-  **none is committed** (`git ls-files | grep -i verdict`). A lint needing it must run a 25-min sweep, pin
-  against a stored measurement that rots **for the same reason the allowlist rotted**, or skip — inert. The
-  brief specified WHAT it reads and never WHEN it can run.
-- **A GENERATED FILE CANNOT REPRODUCE THIS ONE.** 806 lines, **512 comments**, ⚖ ADMITTED blocks bound
-  POSITIONALLY above the row they admit, and **row order is NOT sorted** (3 rows out of order).
-- **THE RENAME DISCRIMINATOR WAS THE WRONG HALF.** v2 used the frame-adjacency census — that was the
-  re-seed's CORROBORATION. Its real discriminator is **record count unchanged ∧ every other class untouched**.
-  `__gorget_array_reserve_one` is called from BOTH push variants, so **any** push-allocated leak — including
-  genuine new inflow — shows that frame one out. v2's rule would have ADMITTED REAL LEAKS.
-⭐ **v3: MERGE NORMALLY, THEN RECONCILE ROW-BY-ROW IN PLACE — the sweep ADJUDICATES, it does not GENERATE** —
-and **the pins are PREDICTED THEN CONFIRMED via `figures.py check`, never auto-regenerated**, which is what
-actually closes v1's mirror defect.
-⚠ **THREE MEASURED CORRECTIONS v3 CARRIES:** take **L's side** on the allowlist then reconcile (it holds 12
-cited rows + an OWNER-RULED ⚖ block admitting five new-inflow rows); the `+` rule is
-**`count := max(observed, union)`** because a count-drift census over 3 reps names only **one of seven**
-known-racy rows; and **`shrunk_class` is a READING, not a gate** — its class-GONE loop does not skip loose
-classes, so a correctly reconciled row lands there.
-⚠ **v2's expected-red list was written for the WRONG TREE and would have halted a correct run at its first
-gate.** v3 enumerates the reds the merged tree actually produces, including L-only `retire_fatal` firing
-fatally on two cited rows — **already adjudicated as `t1295`, not a stop.**
-🔲 **T1's hash is a LAUNCH-TIME BLANK in the brief.** Fill it before launching.
-⊕ **The three follow-up filings from pass 2 are IN the brief as TRACK SCOPE** (executor writes them, ids
-issued on request) — correcting the orchestrator's earlier drift of filing on a track's behalf.
+📋 **INT IS NOW SPLIT INTO TWO TRACKS. `/tmp/brief_INTA_v1.md` IS LIVE; v1/v2/v3 of the combined brief are
+DELETED.** The single combined brief failed **three** sequential passes — 9, 7, then 8 blocking. ⛔ **AGENTS.md:
+a track that cannot get its design signed off is REBUILT or SPLIT, never reviewed harder.** Two rebuilds were
+spent; pass 3's diagnosis was *"the mechanism is right; the specification of what it OPERATES ON is not yet"* —
+the brief said "take L's side" in one step and "the union" in eight others, and specified the reconciliation
+against an object no step produced.
+⭐ **THE SPLIT: `INT-A` PRODUCES THE OBJECT (one merged tree, allowlist untouched), `INT-B` RECONCILES IT —
+and INT-B is briefed FROM INT-A's REPORT, against a tree that EXISTS rather than a predicted one.** That is
+what dissolves the class of defect that killed all three passes: v2 and v3 both died predicting the sweep's
+output on a tree nobody had built.
+**INT-A carries every non-allowlist resolution, all measured:** take T1's `PHASE_D_PROXY_BUDGET`; iterate the
+`ALLOWED_UNWIRED` lint (converges to T1's value — cross-check, never hand-write; ⚠ an arrival changes the
+array LENGTH, a rustc error BEFORE the lint prints); **T1 seeds FOUR `figures.db` rows that are
+orchestrator-owned — carry, do not re-predict**; take N2's DELETE of `t0954`/`t0955` (its `t0955` erratum is
+discarded WITH the item, deliberately); **`t0951`'s erratum is ALREADY CORRECT — verify, do NOT "fix" it**, a
+hard-coded positive control asserts the old spelling it preserves; **N2 has FOUR folds, not three**;
+`CORPUS_MANIFEST` = union of row KEYS + NEWEST prose per key + counts REGENERATED (L and N2 carry the STALE
+`closure_identity` text); **`t1296` exists only on the re-seed and must survive**.
+**INT-A takes L's allowlist blob VERBATIM and ports in ONE thing** — the re-seed's rename header block, which
+L's side otherwise DELETES and which is the only prose explaining the rename INT-B must reconcile.
+⊕ **L has THIRTEEN cited rows, not twelve** (an earlier brief said 12 and told the executor to enumerate 12),
+and **two ⚖ ADMITTED blocks — one recording the owner's 5-of-8 ruling over 8 rows.** Losing one converts an
+owner-ruled temporary admission into an unmarked row.
+⚠ **KNOWN OPEN QUESTION FOR INT-A's REVIEW:** INT-A discards N2's and the re-seed's allowlist row edits
+entirely (L's blob wins), and **those edits encode MEASUREMENTS** — if INT-B needs them as input, INT-A must
+preserve them somewhere and the brief does not say where.
+⊕ **Pass-3 errata worth keeping:** `t0310` is NOT L-only (it exists on every rev); only `t1290` is; and the
+`t1287`-orphan filing is a NON-FINDING — N2's tip commit IS the withdrawal.
 
 ⛔ **DISK — AND `df` LIES HERE. DO NOT USE ITS `Available` COLUMN.** Owner 2026-09-04: it printed 371G free
 when **real free was under 100G**. The overlay reports the apparent device size, not the host's
