@@ -675,6 +675,45 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔⛔ **U PASS 1: THE COUNT IS EXACT, THE DESIGN WAS AIMED AT THE WRONG LAYER, AND 30 OF 33 SITES ARE A
+SEMANTIC DEFECT BOTH LANES AGREE ON.** It rebuilt the detector **from the brief's TEXTUAL DESCRIPTION, not
+the scout's code** — `#FINDINGS 33 in 18 files` over 2229 fixtures, positive control exact, file list
+reproduced independently. **Then it blocked on what the number MEANS.**
+
+⛔⛔ **30 of 33 are `Result[_, ErrA].unwrap()` INSIDE A FUNCTION RETURNING `Result[_, ErrB]`.** Three-way
+control, same call, same data, **only the enclosing return type varies**: in `void main()` → **rc 101,
+`trap[T_UnwrapError]`**; inside a `Result`-returning fn → **rc 0 printing `err` on BOTH C AND LLVM**.
+**`docs/book/09-option-result.md:268` and `docs/language-reference.md:4049` BOTH pin `unwrap()` on an `Error`
+as a PANIC.** ⇒ **the documented trap is SILENTLY REPLACED BY ERROR PROPAGATION**, and the propagation
+byte-copies a **48-byte `IoError` into a 32-byte `String` error field** — which is the OOB write.
+⇒ ⛔ **THE OOB IS A SYMPTOM. The defect is SILENT-WRONG-OUTPUT + TYPE CONFUSION WITH BOTH BACKENDS AGREEING
+ON THE WRONG ANSWER — Core #8's gate, tripped.** Fixing the memcpy length leaves the wrong output intact
+**merely in bounds** — *the exact trap `t0729` records, one layer higher.*
+
+⛔ **AND I NEARLY ESCALATED A NON-QUESTION TO THE OWNER.** U's §2 asked the executor to settle the void-`map`
+result-slot type "or establish that it is an owner decision". **It is neither — the tree already answers it.**
+A closure-literal `o.map((String s): shout(s))` allocates `%Option__GorgetString`, **0 detector findings,
+rc 0**; only the `Callable[void(String)]` **parameter** spelling allocates `%Option__int64_t` and trips rc 99.
+**The answer is the RECEIVER'S PAYLOAD TYPE, which the non-erased path already emits.** ⚡⚡ **THE rc-139
+`unit` MEASUREMENT I LEANED ON DOES NOT SHOW THE QUESTION IS OPEN — IT SHOWS `unit` IS THE *OTHER* WRONG
+ANSWER. Neither was ever right and the right one was never tried. A FAILED ATTEMPT AT ONE ANSWER IS NOT
+EVIDENCE THAT THE QUESTION IS HARD.**
+
+⭐ **SIX Q#2 ANSWERED BOTH WAYS, MEASURED — state both in any guard's record.** **YES:** `errshape.gg` was
+written by the reviewer, is in no corpus and on no list, and **the detector flagged it before the reviewer ran
+it.** ⛔ **NO:** `o.map(shout)` with a bare **named void function** → detector **0 findings**, `gg check`
+*"OK: no semantic errors"*, **the C backend emits code that will not compile**, LLVM **rc 139**. Same family,
+invisible to a bounds check — **SIX Q#4: that case has NO OVER-LONG COPY AT ALL.** ⊕ **NEW, UNFILED, and a
+Core #10 lower-or-reject violation — check accepts what the backend cannot emit.**
+⊕ **N1: the detector's own oracle is inconsistent inside the family it enumerates** — the same type gets
+`memset 16` in one file and `memset 24` in another while the alloca layout says 24 in both. ⇒ **a ratchet
+keyed to memset DRIFTS WHEN THE MEMSET MOVES; cross-check against the ALLOCA TYPE and treat DISAGREEMENT as a
+finding.**
+⭐ **U SPLITS BY ROOT CAUSE, not "detector vs fix": U1 = the guard** (prototyped, corpus-wide, generalises);
+**U2 = the `unwrap()`-in-`Result`-context semantic fix** (30/33 + a documented-behaviour violation ⇒ full
+Core #9 all-lane). The result-slot type rides with U2. ⊕ **The filing must name FOUR ROWS, not one — an
+executor told to file "33 OOB writes" would re-file the conflation this review took apart.**
+
 ⭐⭐ **A2-α OUTPUT-REVIEW = SIGN OFF ON DESIGN AND CODE (1 BLOCKING records defect, folded). AND IT BUILT THE
 ROUND'S STRONGEST INSTRUMENT: A 320-FIXTURE GIR DIFFERENTIAL.** Rather than trust the executor's single
 probe on the safety-critical *"behaviour-preserving on every accepted program"* claim, it emitted GIR for 320
@@ -762,8 +801,13 @@ round-close sweep cannot see ANY LLVM-only memory defect.*
 ⛔ **CARDINAL-RULE RISK FLAGGED BY R's REVIEWER — PRESERVED HERE SO IT CANNOT BE LOST WITH `/tmp`.**
 `ls todo/ | grep -E 't118[7-9]|t119[0-6]'` → **rc 1, no items.** Track U's measured enumeration lives ONLY in
 `/tmp` briefs, which are pruned at round close. **Durable summary, so it is reconstructible from the repo:**
-**33 live out-of-bounds STACK WRITES at HEAD across 18 files in 5 shapes, one mechanism — the memcpy LENGTH
-comes from the SOURCE value's type while the DESTINATION field is sized from the DECLARED type.** Known
+⛔ **CORRECTED 2026-09-04 — THE ORCHESTRATOR OVERCLAIMED "LIVE" AND "ONE MECHANISM"; BOTH WERE MEASURED
+FALSE.** The accurate statement: **33 EMITTED out-of-bounds aggregate copies across 18 files;
+2 shapes ADJUDICATED LIVE; the remainder UNADJUDICATED because no instrument in the tree can see them** —
+`p2p_basic`, `dataframe_csv` and `d23_traitdefault_generic_throws` are **rc 0 and ASan-clean**, their sites
+sitting on error paths the fixtures never take. ⚡ *The honest headline is also the STRONGER one: it survives
+the first reviewer who runs the fixtures.* ⊕ **And it is not one mechanism: 30 of the 33 are a SEMANTIC
+defect (see below); the length-vs-declared-type story covers 1 site.** Known
 members: **13 p2p fixtures**, the `dataframe_*` family, `d23_traitdefault_generic_throws`, and
 `combinator_callable_param_same_type` (**green, non-`#[ignore]`d, TOP-LEVEL, and rc 99 under LLVM+ASan**).
 ⚠ **ASan SEES NONE OF THEM** — the emitted user IR is not instrumented, only the runtime C is, so a stack OOB
