@@ -683,6 +683,41 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **M2 OUTPUT-REVIEW = SIGN OFF, INTEGRATE — and it built THREE compilers (merge base, pre-fold, post-fold)
+to re-measure rather than read.**
+⭐ **The `BTreeMap` risk I flagged is semantics-neutral, ISOLATED AND PROVEN:** it reverted *only* that change
+on the post-fold tree and compared 102 fixtures — **byte-identical 101, sort-identical-only 1, REAL-DIFF 0**.
+Order-sensitive consumers enumerated: exactly three, one a reachability set, one diagnostic-only, one the
+emission site. **The LLVM backend never reads it.**
+⭐⭐ **AND THE NONDETERMINISM WAS WORSE THAN THE EXECUTOR CLAIMED.** Pre-fold, same binary, same source:
+**three different hashes in three runs** for one fixture, three for another, two for a third. Widened to two
+runs over **314 fixtures**: merge base **3 nondeterministic — none of them the fixtures the fold names** —
+post-fold **0**. ⚡ *"Two runs only catches it when the orderings happen to diverge, so the true pre-fix rate
+is higher."*
+⭐ **The 4-cell widening verified on BOTH backends with PERFECT ORTHOGONALITY:** severing one site → 6
+fixtures RED with index-assign green; severing the other → **only** index-assign RED. ⊕ And the totality
+witness reproduced with a detail worth keeping: **`HASHSET.methods = SET.methods` BY REFERENCE, invisible to
+any textual census** — the fixture pins it explicitly.
+⭐ **The Core #14 third option is CORRECT, and it measured why:** the else arm's predicate does not exclude
+set-kinded protocols, and `s[0] = 2` on a `Set[int]` is **`E_NotIndexable` at CHECK** — *the invariant is
+enforced in a DIFFERENT PASS, which is exactly why it is not this branch's to assert.* **Replacing prose with
+prose, not an assert, is right.**
+⊕ **Reference-grade PASSED AS A DELTA:** leaked bytes **byte-for-byte identical pre/post on every fixture**
+(140/140, 70/70, 105/105, 35/35, 32/32) — **zero new leaked bytes** — while two stack-buffer-overflows became
+correct output. ⊕ CoW charter over 314 fixtures: **311 byte-identical, 3 reorder-only, 0 real diffs.**
+⚠ **MERGE INTELLIGENCE: `ALLOWED_UNWIRED` is base 27 → HEAD 26 → track 25, and the CORRECT MERGED VALUE IS
+24** — the array bodies merge cleanly and only the count conflicts. *(Same class as the Q merge; recompute
+from the merged body, do not pick a side.)*
+⊕ **Round-close item: `robustness_map` needs `--accept`** to fold `trait_dynamic_dispatch_box`, which now runs
+correctly (75/12, rc 0) while its manifest still reads CRASH/TRAP. **It scores as `progress`, not
+`regressions`, so it will NOT red the gate** — but fold it.
+
+⛔⛔ **INTEGRATION HELD DELIBERATELY — THE PRE-CLOSE C SWEEP IS RUNNING ON THIS WORKTREE.** Merging now would
+change the tree under a live sweep and invalidate every remaining test. ⚡⚡ **A HAZARD THE RULES DO NOT NAME:
+"the parent drives the integration sweep" and "the parent integrates" are the SAME WORKTREE, and doing both
+at once corrupts the sweep. SERIALISE THEM — sweep, then integrate, or integrate on a copy.** *Caught by
+checking `pgrep` before merging rather than after.*
+
 ⛔⛔⛔ **W PASS 3 — THE ROUND'S MOST VALUABLE REVIEW: MY OWN PRESCRIPTION WOULD HAVE SHIPPED A SILENT NO-OP.**
 I wrote *"the producer reads the env TypeDef's typed `drop_fn`/`clone_fn` via `src_ty`"*. **MEASURED:
 `TypeMetadata` HAS NO `drop_fn` FIELD** (there is `drop_strategy`, whose `Recursive` variant carries **no
