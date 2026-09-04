@@ -683,6 +683,37 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+📋 **ROUND-CLOSE PLAN (orchestrator, 2026-09-04) — the round has grown past its roster and the shape needs
+stating rather than discovering at the gate.** Ten tracks integrated. Sixteen more exist. **They are not all
+landable, and the honest split is:**
+
+**MUST LAND — owner-bound.** The owner ruled *"fix the leaks and fix SH so that it compiles the new fixtures.
+As part of this round."*
+- **L** — the disclosure + `t1210`. **Built** (`bc762d0d3`), confirming review owed. **Also gates S-a3 and T1.**
+- **T1** — the 13-line SH port. **Fully scouted**, brief written, must base on L's tip.
+- **The LEAK FIX ITSELF** — and ⚠ **this is where the honesty is owed: it is bigger than "one track".** S-a3's
+  pass 1 decomposed it into **(1) synthesize `__Closure_N__drop`/`__Closure_N__clone` — that IS Track L,
+  already built; (2) MAKE CLOSURE CAPTURES OWNING — not yet a track, and a hard precondition, because the
+  naive fix double-frees without it; (3) the env-header channel — what the owner ruled on.** ⇒ **(2) has no
+  brief, no passes and no executor. It will not be reference-grade inside this round's remainder.**
+
+**NEAR-DONE — land this round.** Q (executor live) · N1 (confirming review live) · N2 (executor live) ·
+F-G (fold live) · M1 (confirming review live) · M2 (output-review live).
+
+**⚖ BLOCKED ON THE OWNER.** S-a2 — the per-request-clone question. The reject is right regardless; the
+*remedy* is the ask.
+
+**CANDIDATES TO FILE FOR R50 rather than force.** S-b (`t0942` erasure) · T2 (the 30-variant fall-through +
+its live Core #2 violation) · U1 (the bounds detector) · U2 (the `unwrap()`-in-`Result` semantic defect —
+**30/33 sites, both lanes, silent wrong output**) · S-a1 (producer-side stack-env) · the capture-ownership
+track above.
+⚡ **U2 IS THE HIGHEST-SEVERITY UNSTARTED ITEM IN THE TREE** — a documented panic silently replaced by error
+propagation on both lanes, with a 48-byte error copied into a 32-byte field. **If it does not land this
+round it must be FILED with its four rows (Core #11), not left in a `/tmp` brief.**
+⚠ **NOTHING IS DESCOPED UNILATERALLY — this is a plan to be confirmed, and the owner's leak directive is not
+mine to narrow.** The realistic reading: **the leak fix spans into R50 because its precondition was only
+discovered this round.**
+
 ⚖⚖ **NEW OWNER ASK (S-a2, pass 3) — GATES THAT EXECUTOR.** *Correctly enforcing the ratified single-owner
 rule forces a PER-REQUEST closure-env clone on the httpserver dispatch hot path, because the zero-cost
 spelling `d[k](v)` is `E_NotAFunction` at HEAD and `^` is unavailable (D10(a)). **Accept the clone in the
