@@ -5,7 +5,40 @@
 **▶ ROUND XLIX IS OPEN (2026-09-03), owner-authorised. Headline: THE `Callable` VALUE FORM CARRIES LOSSY
 TYPE METADATA — a memory-safety class fix, plus the owner's ease ruling.**
 
-### 🚨 READ THIS FIRST — LIVE STATE AS OF 2026-09-04. **EVERYTHING BELOW THIS BLOCK IS A RUNNING LOG OF THE
+### 🏁 R49 IS FEATURE-COMPLETE. ONE OWNER DECISION AND FIVE MECHANICAL STEPS REMAIN.
+**Everything is built, reviewed and signed off. `cargo` is FULLY GREEN on the final tree** — 231 lints, 1187
+lib, ggdef, security, c_runtime, spec_conformance — and every script gate is rc 0. **The ONLY red anywhere is
+`scripts/sanitize_sweep.sh` exiting 1 on ONE row**, and that row is the filed owner ask `t1306`.
+
+⚖ **STEP 0 — THE OWNER RULES ON `todo/t1306`.** `closure_literal_ambient_return_at_call_arg.gg` (R49 inflow
+via `030d4d2d7`) leaks `__gorget_closure_env_alloc*3` with no row. **NEW INFLOW ⇒ owner ask by the file's own
+owner-attributed header; the 2026-09-04 ruling admits ONE row and is explicitly NOT extensible by analogy.**
+Options: **(a)** admit one line, temporary, cited `t0953`, retiring when `t0953` lands · **(b)** amend the
+header to permit extension-by-analogy, which settles the CLASS · **(c)** fix `t0953` instead — reference-grade,
+but a compiler track, so R49 carries open into it.
+⊕ The item is decision-ready: measurement, `flaky 0`, `class-drift 0`, the already-filed repro, the
+irreducibility argument (its declared axis IS the literal-at-an-argument cell), proof it is NOT merge damage,
+and a regenerate command.
+
+**THEN, IN ORDER:**
+1. **If (a): INT-B's executor adds the row + `⚖ ADMITTED` block** (it holds the context and its worktree is
+   deliberately KEPT for this). Sweep goes rc 0. **Constants move — predict, then `figures.py check`.**
+2. **Integrate `intb-ad3c5ffd` into this branch.** Tip **`4d55dbeac`** (fold) on `b230a992d` (reconciliation),
+   off INT-A's `54dafc26d`. ⊕ **The merge is PREDICTED CLEAN** — only `TODO.md` overlaps and in a different
+   region — **but VERIFY THE RESULT, do not trust that**; `todo_index_is_current` catches index breakage.
+3. **Run the FULL round-close battery** (AGENTS.md step 4; its list is verified reconciled against CI by
+   `round_close_battery_covers_ci_steps`, green). ⚠ **Convergence FIRST, before the sweeps** (owner
+   2026-08-06). ⚠ **C sweep and LLVM sweep SERIAL, never simultaneous.** ⚠ **Read every rc off the BARE
+   command.**
+4. ⚠ **THE PARITY COMPOSITION RISK IS MEASURED HERE AND NOWHERE ELSE.** The three parity constants came from
+   **T1 alone**, on a tree WITHOUT N2's lowering change and WITHOUT S-a2's rejects, and all three moved
+   TIGHTENING, so there is **zero slack**. Own-inflow is discharged. **A red there is a COMPOSITION finding,
+   not the fault of whoever runs the battery** — do not mis-attribute it.
+5. **Records:** `DONE.md` entry ending with the `Convergence:` line quoted from `scripts/convergence.sh`;
+   rewrite this handover **pending-only**; ⊕ **clear the `t1305` landed breadcrumb** (it is CLOSED — `git rm`
+   + `DONE.md` already done by INT-B); prune worktrees and `/tmp`; then report and open R50.
+
+### 🚨 SUPERSEDED LIVE STATE — AS OF 2026-09-04. **EVERYTHING BELOW THIS BLOCK IS A RUNNING LOG OF THE
 ROUND AND IS SUPERSEDED BY IT ON ANY QUESTION OF STATUS.**
 *(This session already crashed once on disk exhaustion. This block exists so a cold restart is not read from
 4,800 lines of prose. It is condensed into a proper pending-only handover at round close.)*
