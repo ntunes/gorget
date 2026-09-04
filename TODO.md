@@ -683,6 +683,31 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **N1 CONFIRMING REVIEW = SIGN OFF — AND THE "INVENT A THIRTEENTH MUTANT" BRIEF FOUND *THREE* GREEN ONES.**
+Each `cargo build` bare rc 0, guard run bare, applied to pristine `src/bir/lower.rs`:
+**(A)** a **7th borrowed field** whose NAME is outside the hardcoded six → **GREEN**;
+**(D)** a destructure through a **`type` ALIAS** → **GREEN**, and it produces **no tenth brace site**, so the
+census clause cannot see it;
+**(E)** the **EXISTING bare local `first_ptr` in `expand_reduce`** → **GREEN** — ⭐ **and E NEEDS NO NEW CODE
+SHAPE: that pointer is already in the tree today** (`src/bir/lower.rs:1520`, currently only `Load`-ed, so
+benign). **A latent site, not a hypothetical.**
+⇒ **MECHANISM: `BORROW_FIELDS` (6 names) and `ctx_struct_re` (3 names) are THE ENUMERATOR'S OWN LISTS WITH NO
+INDEPENDENT WITNESS — readiness row 2, the round's most repeated failure, now inside a guard written to catch
+exactly that class.**
+⚡⚡ **THE PROCEDURE IS THE TRANSFERABLE PART: "invent a mutant the author did not design" HAS NOW FOUND A HOLE
+IN TWO SUCCESSIVE GENERATIONS OF THE SAME GUARD** — the prior reviewer found 2, this one found 3 more after
+the fix. **The discipline is not MORE mutants; it is mutants SOMEBODY ELSE designed.** ⊕ **And it did not
+block**: the fold's own posture (*ratchet NOT sufficient, `t1090` owed*) is correct and these findings
+STRENGTHEN it — **blocking would leave the tree with the strictly-worse pre-fold guard.**
+⊕ **Five one-line errata sent before integration**, because they are claims now *measurably* wrong in
+permanent records — including one of `t1090`'s own examples (**same-file helper-return is CAUGHT**, guard
+rc 101). ⚡ *Shipping a known-wrong claim into `t1090` is exactly what `t1090` exists to prevent.*
+⊕ **Recommendation taken: pin the ctx structs' DECLARED FIELD COUNT (closes A) and STOP** — chasing D and E
+with more text patterns is what `t1090` itself argues is the wrong answer.
+⊕ Reviewer independently re-verified the `t0705` class keys (temp scrutinee **13 B = 8 + 5**, the 5 framing
+`gorget_array_clone_elem_inplace`; bind-first **8 B only**, pure `t0953`, zero extra) and reproduced
+`find_index`'s build failure verbatim.
+
 📋 **ROUND-CLOSE PLAN (orchestrator, 2026-09-04) — the round has grown past its roster and the shape needs
 stating rather than discovering at the gate.** Ten tracks integrated. Sixteen more exist. **They are not all
 landable, and the honest split is:**
