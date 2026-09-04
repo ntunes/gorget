@@ -258,15 +258,20 @@ written through rather than recomputed.
 
 Two properties make that arrangement load-bearing rather than stylistic.
 
-**One name feeds both consumers.** The result element name is resolved once, at
-the LIR emitter, off the closure's GIR return type, and the width and the hooks
-both derive from that single value. Deriving them independently is what makes a
-mis-resolution invisible: two lookups off the same wrong name agree with each
-other and disagree only with reality, so neither the emitted C nor a validator
-comparing them against each other can tell the pair apart from a correct one.
-The element name is also not readable off the destination local — that local's
-GIR type is the source receiver's, so it yields a confidently wrong answer
-rather than no answer.
+**One resolved type feeds both consumers.** The result element is resolved once,
+at the LIR emitter, off the closure's GIR return type. For `flat_map` the width
+and the hooks both go through the single stripped element NAME; for `map` the
+width comes off that return type's `LirType` projection and the hooks off its
+mangled-name projection — two projections taken side by side, of the same GIR
+type id. The shared origin is what holds, and it is worth stating as a type
+rather than as a name, because only one of the two producers reduces to a name.
+
+Deriving them from independent lookups is what makes a mis-resolution invisible:
+two derivations off the same wrong type agree with each other and disagree only
+with reality, so neither the emitted C nor a validator comparing them against
+each other can tell the pair apart from a correct one. The element is also not
+readable off the destination local — that local's GIR type is the source
+receiver's, so it yields a confidently wrong answer rather than no answer.
 
 **The two edits are ordered, one way.** `flat_map`'s callee returns a fresh
 vector per element; the loop drains it into the accumulator and then frees the

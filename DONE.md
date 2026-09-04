@@ -8,7 +8,8 @@
   `gorget_array_new(N)` with all three slots NULL, and `flat_map` additionally sized it by the SOURCE
   element. Neither showed up as a wrong answer.
   ⭐ **THE FIRE COUNT IS A `Drop` BODY, NOT A LEAK COUNT.** `Vector[Cust] r = v.map((s): Cust(s))` printed
-  `2`; the push-built control holding the same two values in the same scope printed `2 / bye / bye`. Same
+  `2`; the push-built control holding the same two values in the same scope printed its two `drop-cust`
+  lines. Same
   values, same scope, only the minting writer differed — `__gorget_dtor_Cust` was DEFINED AND NEVER
   REFERENCED. That reframes the class from a leak to silent-wrong-output.
   ⚡ **AND THE UNDERSIZED CASE IS A HEAP OVERFLOW THAT SIX REVIEW PASSES MEASURED AS A LEAK.**
@@ -27,9 +28,12 @@
   DESTINATION local is worse than useless: that local's GIR type is the source receiver's, so it returns
   `Some(wrong)` — indistinguishable from `Some(right)` — and an intermediate design that did so turned a
   correct `Vector[Pair]` program into `allocation-size-too-big` and printed `0` for `7`.
-  ⭐ **HENCE THE LOAD-BEARING PROPERTY: ONE NAME FEEDS SIZE AND HOOKS.** Two derivations off the same wrong
-  name AGREE WITH EACH OTHER and disagree only with reality, so a validator comparing them finds them
-  self-consistent and passes. Structure, not checking, is what rules that out.
+  ⭐ **HENCE THE LOAD-BEARING PROPERTY: ONE RESOLVED GIR RETURN TYPE FEEDS SIZE AND HOOKS.** Precisely: for
+  `flat_map` both go through one stripped element NAME, while for `map` the width comes off that return
+  type's `LirType` projection and the hooks off its mangled-name projection — two projections of the same
+  `f.return_type` type id, taken side by side. Two derivations off the same wrong type AGREE WITH EACH OTHER
+  and disagree only with reality, so a validator comparing them finds them self-consistent and passes.
+  Structure, not checking, is what rules that out.
   **ORDER-COUPLED, ONE WAY.** Freeing `flat_map`'s drained husk is safe only because the accumulator now
   carries `elem_clone`: `gorget_array_extend` gates its deep copy on the DESTINATION's hook, so without it
   the extend is an aliasing memcpy and the free is a use-after-free. Hooks-first is safe; the reverse is not.
@@ -50,26 +54,49 @@
   at HEAD → 8 cells SIGABRT, zero false positives on `a + b` / `.extend()` / `extend(map(…))`. Fixtures at
   the pre-fix compiler → sizes `[8,8,32,32,32,32,32,32,32]` vs `[8,32,32,16,8,32,32,32,16]`, no `drop-cust`
   line under `map`, and `heap-buffer-overflow`.
+  ⭐ **THE DEQUE RECEIVER IS PINNED, AND IT IS THE ONE CELL THE FIX REASONS ABOUT.** The result hooks are
+  resolved with a hardcoded `CollectionCtorKind::Vector` even for a `Deque` receiver, on the argument that
+  the accumulator is a `gorget_array` either way and the resolver serves both kinds from one arm at one set
+  of offsets. The argument is true — and it was the only claim in the track carried by reasoning rather than
+  a fixture, which is exactly where a cell belongs. Measured: 2 → **4** `drop-cust` on C and on LLVM, and 4
+  is right (2 source + 2 result). ⚠ **The self-host CANNOT COMPILE `Deque.map` AT ALL** — emitted C
+  `incompatible types when assigning to type 'GorgetArray' from type 'int'`, reproducing at the simplest
+  possible shape (`Deque[int]`, trivial closure, no `Drop`). Filed as `t1286`; the cell is parked in
+  `tests/fixtures/self_host_gaps/` so this round's own inflow cannot book a non-MATCH against
+  `RUNTIME_DIFF_NONMATCH_CEILING` (Core #9 ⊕), and `CORPUS_MANIFEST.txt` declares it.
   ⭐ **THE R48 PIN'S SCOPE CLAIM WAS FALSE AND IS CORRECTED (Core #12).** It claimed the discriminator was
   `auto` vs `Vector[U]` "for named callees and inline closures alike", and cited a
   `known_gaps/…_destination_axis.gg` that **does not exist**. Measured over the full 2×2: the destination
   makes no difference and neither does the closure parameter's typing — the discriminator is the closure's
   BODY. A CALL body resolved correctly; a CONTAINER LITERAL body did not. All four of that fixture's inline
   closures have call bodies, which is why it was green on every cell it claimed to cover.
-  **BURN-DOWN, MEASURED.** `vector_hof_cross_type_map` sheds two of its three allowlist classes —
-  `gorget_array_push*6` and `str_alloc_copy*13` stop leaking rather than stop being reachable — leaving 80
-  bytes in 10 allocations, all `todo/t0953`. `LEAK_CLASS_PAIRS` 501→499, `LEAK_RECORDS` 2302→2283, both
-  regenerated from the row's own census command and mirrored in `scripts/figures.db`.
+  **BURN-DOWN, MEASURED — AND THE FIRST CENSUS OF IT WAS A SELECTION.** `vector_hof_cross_type_map` sheds
+  two of its three allowlist classes, leaving 80 bytes in 10 allocations, all `todo/t0953`. Reporting that
+  as the whole delta was SIX Q#3: it enumerated the row the work started from. The re-census took all 35
+  allowlisted fixtures calling `.map(` / `.flat_map(` / `.extend(`, each re-measured with the sweep's own
+  `leak_classes` extraction, its `use_stacks=0` / `detect_leaks=1:exitcode=0` options and its REPS=3
+  per-class MAX — **thirteen more had shed classes**, every one stable across all three reps, and
+  `test_higher_order_named_fn` went fully CLEAN and left the file. Final: `LEAK_CEILING` 294→293,
+  `LEAK_CLASS_PAIRS` 501→486, `LEAK_RECORDS` 2302→2247, `UNCITED_LEAK_CLASS_PAIRS` 494→481 (every shed pair
+  was uncited), all regenerated from the awk census the figure row itself carries and mirrored in
+  `scripts/figures.db`.
   **SELF-HOST: NOTHING TO PORT, AND IT IS AHEAD.** The self-host LIR has no `HofExpand` variant at all —
   `try_lower_vector_hof` desugars to a comprehension loop whose ordinary array constructor already wires the
   hooks — so both new fixtures COMPILE and MATCH on that lane, pinned by `assert_self_host_stdout`. ⭐ And on
   `flat_map` the reference LAGS: the self-host's nested loop MOVES each element and runs the `Drop` body
   twice, where Rust's extend-then-free runs it four times. Filed as `t1216`, with the self-host as the
   existence proof that the reference-grade shape is not hypothetical.
+  ⭐ **`t1216` SHIPS A DURABLE REPRO WITH BOTH LANES WIRED.** `known_gaps/t1216_flat_map_appends_by_clone.gg`
+  carries `push` and `map` controls beside the `flat_map` cell, so the four drops cannot be read as "that is
+  just what `Drop` does". The `#[ignore]`d Rust test asserts the INTENDED two (RED, bare rc 101); the
+  self-host test asserting the SAME string is **un-ignored and GREEN** — the reference-grade shape running
+  in the tree, pinned so it cannot regress while Rust catches up.
   **FILED:** `t1215` (a Vector HOF through an opaque `Callable` PARAMETER — the callable's type is erased to
   a bare `Ptr`, so there is no `HofExpand` to carry the metadata; LLVM leaks, C does not link, and the
   dispatcher is the literal `strip_prefix("Vector__")` shape the no-name-matching rule forbids) ·
   `t1216` (the append-move) · `t1217` (a nested-collection literal in a closure body does not unify).
+  `t1286` (the self-host cannot compile `Deque.map`) · `t1285` (`E_MoveWithoutOperator` still teaches D27's
+  retired `!` sigil — measured, `!` STILL BUILDS, so it is a stale lesson rather than a broken suggestion).
   `t0977` gained its `flat_map` cell as EVIDENCE: measured before and after, its accumulator size goes 8→32
   and **stdout is unchanged garbage**, so the two halves are independent and this fix does not close it.
 

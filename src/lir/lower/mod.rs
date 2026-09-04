@@ -160,10 +160,12 @@ pub(super) struct ClosureCallSig {
     /// `infer_fn_ptr_stores_from_types`). `Vector__U` for `flat_map`, `U` for
     /// `map`.
     ///
-    /// Size and hooks must come from a single name structurally, not from two
-    /// lookups that happen to agree: two derivations that agree with each
-    /// other and disagree with reality are self-consistent, and nothing
-    /// downstream can tell them apart.
+    /// This and `ret_ty` are two projections of the SAME `f.return_type`, taken
+    /// side by side, and that shared origin is the point: size and hooks must
+    /// come from one resolved type structurally, not from two lookups that
+    /// happen to agree. Two derivations that agree with each other and disagree
+    /// with reality are self-consistent, and nothing downstream can tell them
+    /// apart.
     pub(super) ret_gir_name: Option<String>,
 }
 

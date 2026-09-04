@@ -9518,7 +9518,7 @@ fn sanitize_allowlists_shrink_only() {
     // falsified by measurement: the row retires only when ALL THREE of
     // `todo/t0948`, `todo/t0971` and `todo/t0972` land. See the two marked
     // CORRECTION blocks in the allowlist — they are kept deliberately.
-    const LEAK_CEILING: usize = 294;
+    const LEAK_CEILING: usize = 293;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -9693,16 +9693,26 @@ fn sanitize_allowlists_shrink_only() {
     // `gg build --sanitize` and `--backend=llvm --sanitize` each report the same
     // 16 allocations, all `__gorget_closure_env_alloc`, and no corruption.
     // See the `⚠⚠ OWNER ASK` block in the allowlist.
-    // ⬇ A GENUINE BURN-DOWN, and the first one these numbers have recorded:
-    // 501 -> 499 / 2302 -> 2283 as `vector_hof_cross_type_map` sheds TWO of its
-    // three classes. The Vector-HOF accumulator is now built from the RESULT
-    // element type's resolved hooks, so `str_alloc_copy*13` (the elements it
-    // never dropped) and `gorget_array_push*6` (the `flat_map` husks it never
-    // freed) both stop leaking rather than stopping being reachable. Re-measured
-    // on the fixture itself: 80 bytes in 10 allocations, all
-    // `__gorget_closure_env_alloc` — `todo/t0953`, the one class still open.
-    const LEAK_CLASS_PAIRS: usize = 499;
-    const LEAK_RECORDS: usize = 2283;
+    // ⬇ A GENUINE BURN-DOWN, and the largest these numbers have recorded:
+    // 501 -> 486 pairs / 2302 -> 2247 records / 294 -> 293 rows. The Vector-HOF
+    // accumulator is now built from the RESULT element type's resolved hooks and
+    // the drained `flat_map` husk is freed, so the elements it never dropped and
+    // the husks it never freed stop leaking rather than stopping being
+    // reachable.
+    //
+    // ⚠ FOURTEEN ROWS MOVED, NOT ONE, AND THE FIRST CENSUS SAID ONE. That first
+    // reading looked only at `vector_hof_cross_type_map` — the row the work
+    // started from — and reported its 2 shed classes as the whole delta: a
+    // SELECTION presented as an enumeration. The re-census enumerated instead:
+    // every allowlisted fixture calling `.map(` / `.flat_map(` / `.extend(`
+    // (35 of the 294), each re-measured with the sweep's own `leak_classes`
+    // extraction, its `use_stacks=0` / `detect_leaks=1:exitcode=0` options and
+    // its REPS=3 per-class MAX. Thirteen more had shed classes, every one stable
+    // across all three reps, and `test_higher_order_named_fn` went fully clean
+    // and left the file. Regenerate with the awk census on
+    // `sanitize.leak.records.pin.regen` in `scripts/figures.db`.
+    const LEAK_CLASS_PAIRS: usize = 486;
+    const LEAK_RECORDS: usize = 2247;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────
@@ -9760,13 +9770,16 @@ fn sanitize_allowlists_shrink_only() {
     // the reviewer reading the `⚖ ADMITTED` block: the number says how much is
     // uncited, the block says whether the citation is true.
     //
-    // SEEDED AT THE LANDING VALUE, not at the pre-edit one. 500 pairs, 6 of them
-    // cited by this round's three admitted rows, leaves 494. Seeding at 500 would
-    // have silently admitted six uncited pairs — the same argument this file
-    // makes against leaving headroom in `LEAK_CEILING`.
+    // SEEDED AT THE LANDING VALUE, not at the pre-edit one: seeding at the
+    // then-current pair count would have silently admitted the six pairs this
+    // file's three `⚖ ADMITTED` rows cite — the same argument this file makes
+    // against leaving headroom in `LEAK_CEILING`.
+    // ⬇ Moves with the burn-down: the thirteen rows that shed classes when the
+    // Vector-HOF accumulator started carrying its result element's hooks were
+    // all UNCITED pairs, so every one of them came off this number too.
     // TARGET: 0. Every pair carrying a filed item is the end state; nothing else
     // in this file creates pressure toward it.
-    const UNCITED_LEAK_CLASS_PAIRS: usize = 494;
+    const UNCITED_LEAK_CLASS_PAIRS: usize = 481;
 
     // A `todo/` item counts as citable for a pair only if it EXISTS and its body
     // NAMES the pair's top-frame symbol. Cached: 293 rows would otherwise re-read

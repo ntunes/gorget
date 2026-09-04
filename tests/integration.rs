@@ -4644,12 +4644,14 @@ fn iter_trait_default_trait_args() {
 // the Rust lane, abort on the self-host lane.
 //
 // ⚠ THIS SET DOES NOT SAMPLE THE CLOSURE-BODY AXIS, and that omission is
-// named here rather than left for the next reader to discover. Every inline
-// closure below has a body that is a CALL (`int_to_str(…)`, `Boxed(…)`,
-// `fan(n)`), and a call body resolves the result element correctly. A closure
-// whose body is a CONTAINER LITERAL (`(n): [mk("t", "ag")]`) did not, so the
-// discriminator was never `auto` vs `Vector[U]` — measured, both destinations
-// behave the same and both callee typings behave the same. That axis lives in
+// named here rather than left for the next reader to discover. NO inline
+// closure below has a CONTAINER-LITERAL body: the ones that produce a heap
+// element are calls (`int_to_str(…)`, `Boxed(…)`, `fan(n)`), and the remaining
+// two are arithmetic (`n * 7`) and a comparison (`n > 1`) in the same-type
+// controls. A closure whose body is a container literal (`(n): [mk("t",
+// "ag")]`) resolved the result element WRONG, so the discriminator was never
+// `auto` vs `Vector[U]` — measured, both destinations behave the same and both
+// callee typings behave the same. That axis lives in
 // `vector_hof_result_element_sizing`, and the hook half of the same class in
 // `vector_hof_result_element_drop`.
 #[test]
@@ -4694,6 +4696,52 @@ fn vector_hof_result_element_sizing() {
     run_gg(
         "vector_hof_result_element_sizing.gg",
         "8\ntag\n7\n2\n8\n8\n0",
+    );
+}
+
+/// The DEQUE receiver for the result-element metadata class — the one cell the
+/// fix REASONS about instead of measuring.
+///
+/// `infer_fn_ptr_stores_from_types` is called with a hardcoded
+/// `CollectionCtorKind::Vector` even when the receiver is a `Deque`, on the
+/// argument that the accumulator is a `gorget_array` either way and that the
+/// resolver serves both kinds from one arm at one set of offsets. That is true
+/// today (`grep -n 'CollectionCtorKind::Vector | CollectionCtorKind::Deque'
+/// src/lir/lower/insts.rs`), and this is what notices if it stops being true.
+///
+/// RED-VERIFIED against the pre-fix compiler: TWO `drop-cust` lines, not four.
+///
+/// ⚠ Lives in `tests/fixtures/self_host_gaps/`, NOT at top level, and separate
+/// from `vector_hof_result_element_drop` for one reason: the self-host cannot
+/// compile `Deque.map` at all (`todo/t1286`). A top-level fixture is
+/// auto-scanned into `runtime_parity_corpus`, so leaving it there would book a
+/// self-host non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING` for this round's
+/// OWN inflow, which Core #9 ⊕ forbids. Its ASan reading is declared in
+/// `tests/sanitize/CORPUS_MANIFEST.txt` rather than hidden.
+#[test]
+fn deque_hof_result_element_drop() {
+    run_gg(
+        "self_host_gaps/deque_hof_result_element_drop.gg",
+        "deque-map\ndrop-cust\ndrop-cust\ndrop-cust\ndrop-cust\n2\nend",
+    );
+}
+
+/// `todo/t1286` — the self-host cannot compile `Deque.map`: its emitted C fails
+/// with `incompatible types when assigning to type 'GorgetArray' from type
+/// 'int'`. The Rust lane compiles and runs the identical program correctly on
+/// both backends, so the direction is settled — Rust is right, the self-host
+/// lags. The element type is `int`, the simplest shape that reproduces.
+#[test]
+#[ignore = "todo/t1286 — the self-host cannot compile Deque.map (emitted C: incompatible types \
+assigning GorgetArray from int). Asserts the intended output on the self-host lane."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_t1286_sh_deque_map_cc_failure() {
+    // SELF-HOST lane deliberately: the Rust lane is already correct here, so a
+    // `run_gg` body would be GREEN ON ARRIVAL and pin nothing (Core #12).
+    assert_self_host_stdout(
+        "known_gaps/t1286_sh_deque_map_cc_failure.gg",
+        "kg_t1286_deque_map",
+        "3\n60",
     );
 }
 
@@ -8213,6 +8261,46 @@ fn known_gap_vector_hof_accumulator_elem_drop_missing() {
 #[test]
 fn known_gap_flat_map_callee_result_vector_leak() {
     assert_gg_sanitize_clean("known_gaps/flat_map_callee_result_vector_leak", "10\n3");
+}
+
+// `todo/t1216` — `flat_map` appends by DEEP CLONE and then frees the drained
+// husk, so a two-element result runs the element's `Drop` body FOUR times where
+// `map` and a hand-built `push` run it twice. Sound (every value is dropped
+// exactly once) but one clone more than the ownership state requires, which is
+// a `feedback-cow-charter-optimal-clones` breach with a user-visible signature.
+//
+// The `push` and `map` controls in the same program are what make the four
+// unambiguous rather than "that is just what Drop does".
+#[test]
+#[ignore = "todo/t1216 — flat_map deep-clones each appended element and then frees the husk, so the \
+element's Drop body runs twice per result element. Asserts the intended two."]
+fn known_gap_t1216_flat_map_appends_by_clone() {
+    run_gg(
+        "known_gaps/t1216_flat_map_appends_by_clone.gg",
+        "push\ndrop-cust\ndrop-cust\n2\nmap\ndrop-cust\ndrop-cust\n2\n\
+         flat_map\ndrop-cust\ndrop-cust\n2",
+    );
+}
+
+/// The SELF-HOST half of `todo/t1216`, and it is GREEN — which is the whole
+/// point. The self-host desugars `flat_map` into a nested loop that publishes
+/// the inner loop variable directly, so each element is MOVED and there is no
+/// husk to free: TWO `drop-cust`, matching `map` and the `push` control.
+///
+/// This is a "reference lags the self-host" pin in the sense the succession
+/// plan means it: the reference-grade shape is not hypothetical, it is running
+/// in this tree, and this test is what keeps it running while the Rust side
+/// catches up. It asserts the same string the Rust test above asserts as its
+/// INTENDED output.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_t1216_flat_map_appends_by_move() {
+    assert_self_host_stdout(
+        "known_gaps/t1216_flat_map_appends_by_clone.gg",
+        "sh_t1216_flat_map_move",
+        "push\ndrop-cust\ndrop-cust\n2\nmap\ndrop-cust\ndrop-cust\n2\n\
+         flat_map\ndrop-cust\ndrop-cust\n2",
+    );
 }
 
 // `todo/t1215` — a Vector HOF whose callable arrives as an opaque

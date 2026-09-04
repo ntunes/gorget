@@ -3498,12 +3498,20 @@ impl<'a> FuncLowering<'a> {
         // its `Vector__`/`Deque__` prefix stripped, since `flat_map` is
         // `(T) -> Vector[U]`.
         //
-        // The accumulator's `elem_size` and its runtime hooks both derive from
-        // this single value. Deriving them separately is what makes a
-        // mis-resolution invisible: two lookups off the same wrong name agree
-        // with each other, so neither the emitted C nor a validator comparing
-        // them can tell the pair apart from a correct one. One name, two
-        // consumers.
+        // The accumulator's `elem_size` and its runtime hooks both trace back
+        // to ONE GIR RETURN TYPE, and being precise about that matters. For
+        // `flat_map` both go through `result_elem_name` below, so it is
+        // literally one name. For `map` the width comes off `closure_ret_ty`
+        // (the `LirType` projection) while the hooks come off `ret_gir_name`
+        // (the mangled-name projection) — two projections, but of the SAME
+        // `f.return_type` type id, taken side by side where `ClosureCallSig` is
+        // built. That shared origin is the invariant; "one name" would be the
+        // right claim only for `flat_map`.
+        //
+        // Deriving them from independent lookups is what makes a mis-resolution
+        // invisible: two derivations off the same wrong type agree with EACH
+        // OTHER, so neither the emitted C nor a validator comparing them can
+        // tell the pair apart from a correct one.
         let result_elem_name: Option<String> = closure_call_sig
             .as_ref()
             .and_then(|sig| sig.ret_gir_name.as_deref())
