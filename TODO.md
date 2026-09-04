@@ -48,6 +48,31 @@ too, which is a **rustc** error before the lint message prints.
 ⊕ **`PHASE_D_PROXY_BUDGET` is NOT "do not touch"** — it must land at T1's value; taking HEAD's 90 reds an
 exact ratchet.
 
+✅ **T1 IS SIGNED OFF AND THE PARITY CLAIM IS CONFIRMED ON THE REAL MERGE.** Its output-review BUILT
+T1+L-tip — the tree T1 never had — and reproduced every figure exactly, with the gates verified **ARMED**
+(`grep -nE "SKIPPED|skipped \(debug profile|DISABLED|floor skipped" <parity log>` → rc 1, no output; all
+three assertions evaluated). **The integration order stands and L can land.**
+⛔ **THE CEILING AND THE ggdef FLOOR NOW SIT AT THEIR VALUES WITH *ZERO* SLACK — any further inflow this round
+REDS IMMEDIATELY.** Only the MATCH floor keeps its documented jitter margin. **Regenerate before trusting:**
+`rm -f tests/fixtures/self_host_lowerer/driver{,.c}; GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600
+GG_TEST_TIMEOUT_SECS=600 GG_STAGE1_TIMEOUT_SECS=1800 cargo test --test integration --release
+self_host_runtime_diff -- --nocapture` — ⚠ **`--release` is NOT optional: all three gates SKIP under
+`cfg!(debug_assertions)` (`t0924`).**
+⊕ **L's two missing commits are parity-NEUTRAL, measured** — one touches a fixture comment only, the other no
+fixture at all.
+🔧 **TWO BLOCKING ERRATA RETURNED TO T1's EXECUTOR (ids `t1303`–`t1310` issued):**
+- **The new override's safety premise is FALSE at `unwrap_or_else`** — `expected_type` there is the receiver's
+  **PAYLOAD**, not the wrapper, so the peel goes one level too deep. It survives only because no payload in
+  the corpus is a callable (**Six Questions #6**). Measured: a `Callable` payload BUILDS AND RUNS on Rust gg
+  and is REJECTED by `cc` on self-host. **Not T1 inflow** (pre-existing on both lanes) but blocking under
+  Core #14 — a new invariant-asserting comment whose invariant is untrue, **repeated at 7 sites**.
+- **The pin promising `rc 139` cannot observe a SEGV**: `self_host_emit_cc_run` reports
+  `run.status.code()`, which is **`None` for any signal death** — indistinguishable from SIGABRT/SIGILL.
+  ⭐ Fixing the INSTRUMENT (`128 + signo`), not the text; the repo already does this elsewhere in the same
+  file, including for the SH driver.
+⊕ **Also folded:** `robustness_map.py` HAS a `selfhost` lane and simply has no cell for the SEGV fixture —
+adding one makes it visible to the round-close battery (Core #6, close the blindness rather than document it).
+
 ⚠ **T1 CARRIES ONLY A PARTIAL L.** `git merge-base --is-ancestor bc762d0d3 2f7eb9b58` → rc 0 but
 `… 2f7eb9b58 fd7d3d413` → rc 1: T1 merged an L fold and is **missing L's last two commits**
 (`3ad101364`, `2f7eb9b58`) — **precisely the two that touch the leak allowlist.** So "T1+L together" is a
