@@ -15,8 +15,8 @@
 # `drop-cust` lines while `via_map` printed NONE.
 #
 # RED-VERIFIED against the pre-fix compiler: the `map` section emitted no
-# `drop-cust` line at all, at rc 0 with `gg check` clean, and the program
-# leaked under `--sanitize`.
+# `drop-cust` line at all, at rc 0 with `gg check` clean, and the program leaked
+# 22 bytes in 4 allocations under `--sanitize` where it is now clean.
 #
 # ⚠ `flat_map` IS DELIBERATELY NOT A CELL HERE, and the reason is a
 # measurement rather than an oversight. On the Rust lane its expander appends
@@ -30,11 +30,14 @@
 # instead by `known_gap_flat_map_callee_result_vector_leak`, which goes from
 # 777 bytes to ASan-clean and requires BOTH the hooks and the husk free.
 #
-# NOT ASSERTED ASan-CLEAN, and the reason is cited rather than hidden: every
-# cell here needs a closure LITERAL to reach the expander, and each literal
-# leaks an 8-byte environment through `todo/t0953`, which is a different defect
-# with its own durable repro. Post-fix this program sits at exactly that floor
-# — 32 bytes in 4 allocations, one per closure literal.
+# ASSERTED ASan-CLEAN, and that is what the named callees buy. An earlier draft
+# spelled every cell as a closure literal and could not be: each literal leaks
+# an 8-byte environment through `todo/t0953`, so the program sat at that floor
+# (22 bytes in 4 allocations pre-fix) and would have needed a row in
+# `tests/sanitize/LEAK_ALLOWLIST.txt` — a shrink-only file whose own header says
+# adding one means fixing the leak instead. The expander does not care which
+# shape the callee has, so switching to named functions costs no coverage and
+# removes the leak rather than admitting it.
 #
 # AXIS CELLS — result element type × producer:
 #   Custom drop (`equip Drop`)  × {push control, map}
@@ -61,8 +64,25 @@ struct Pair:
 String mk(String a, String b):
     return a + b
 
+# Every callee here is a NAMED function, never a closure literal, and that is
+# deliberate: a literal would add `todo/t0953`'s 8-byte environment leak per
+# call site and this program could then never be asserted ASan-clean. The
+# defect lives in the expander and does not care which shape the callee has, so
+# the isolation costs no coverage — the same choice `todo/t0954`'s repro made.
+Cust wrap_cust(String s):
+    return Cust(s)
+
+Wrap wrap_rec(String s):
+    return Wrap(s)
+
+int str_len(String s):
+    return s.len()
+
+Pair to_pair(String s):
+    return Pair(s.len(), 7)
+
 int via_map(Vector[String] src):
-    Vector[Cust] r = src.map((s): Cust(s))
+    Vector[Cust] r = src.map(wrap_cust)
     return r.len()
 
 # CONTROL: same element type, same values, same scope — only the writer that
@@ -87,12 +107,12 @@ void main():
 
     # Trivial-element controls: a fix that types every accumulator as a
     # resource would install a drop here and corrupt these.
-    Vector[int] ints = v.map((s): s.len())
+    Vector[int] ints = v.map(str_len)
     print(f"{ints.len()}")
-    Vector[Pair] pairs = v.map((s): Pair(s.len(), 7))
+    Vector[Pair] pairs = v.map(to_pair)
     print(f"{pairs.len()}")
 
     # Recursive-drop element: `Wrap` has no `equip Drop` body to print, so it
     # pins the hook through the leak rather than through stdout.
-    Vector[Wrap] wraps = v.map((s): Wrap(s))
+    Vector[Wrap] wraps = v.map(wrap_rec)
     print(f"{wraps.len()}")

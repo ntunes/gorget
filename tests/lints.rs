@@ -9518,7 +9518,7 @@ fn sanitize_allowlists_shrink_only() {
     // falsified by measurement: the row retires only when ALL THREE of
     // `todo/t0948`, `todo/t0971` and `todo/t0972` land. See the two marked
     // CORRECTION blocks in the allowlist — they are kept deliberately.
-    const LEAK_CEILING: usize = 293;
+    const LEAK_CEILING: usize = 294;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -9693,26 +9693,40 @@ fn sanitize_allowlists_shrink_only() {
     // `gg build --sanitize` and `--backend=llvm --sanitize` each report the same
     // 16 allocations, all `__gorget_closure_env_alloc`, and no corruption.
     // See the `⚠⚠ OWNER ASK` block in the allowlist.
-    // ⬇ A GENUINE BURN-DOWN, and the largest these numbers have recorded:
-    // 501 -> 486 pairs / 2302 -> 2247 records / 294 -> 293 rows. The Vector-HOF
-    // accumulator is now built from the RESULT element type's resolved hooks and
-    // the drained `flat_map` husk is freed, so the elements it never dropped and
-    // the husks it never freed stop leaking rather than stopping being
-    // reachable.
+    // ⬇ A BURN-DOWN AND AN INFLOW, STATED SEPARATELY — because a NET figure
+    // that reports only the credit side is the same defect as a census that
+    // enumerates only the row you started from, and this number made both
+    // mistakes in one round.
     //
-    // ⚠ FOURTEEN ROWS MOVED, NOT ONE, AND THE FIRST CENSUS SAID ONE. That first
-    // reading looked only at `vector_hof_cross_type_map` — the row the work
-    // started from — and reported its 2 shed classes as the whole delta: a
-    // SELECTION presented as an enumeration. The re-census enumerated instead:
-    // every allowlisted fixture calling `.map(` / `.flat_map(` / `.extend(`
-    // (35 of the 294), each re-measured with the sweep's own `leak_classes`
-    // extraction, its `use_stacks=0` / `detect_leaks=1:exitcode=0` options and
-    // its REPS=3 per-class MAX. Thirteen more had shed classes, every one stable
-    // across all three reps, and `test_higher_order_named_fn` went fully clean
-    // and left the file. Regenerate with the awk census on
-    // `sanitize.leak.records.pin.regen` in `scripts/figures.db`.
-    const LEAK_CLASS_PAIRS: usize = 486;
-    const LEAK_RECORDS: usize = 2247;
+    // BURN-DOWN: 14 rows shed classes when the Vector-HOF accumulator started
+    // carrying its result element's hooks and the drained `flat_map` husk began
+    // being freed — the elements it never dropped and the husks it never freed
+    // stop leaking rather than stopping being reachable. One row
+    // (`test_higher_order_named_fn`) went fully clean and left the file.
+    // ⚠ THE FIRST CENSUS OF THAT SAID ONE ROW. It looked only at
+    // `vector_hof_cross_type_map` — the row the work started from — and reported
+    // its 2 shed classes as the whole delta: a SELECTION presented as an
+    // enumeration. The re-census enumerated instead: every allowlisted fixture
+    // calling `.map(` / `.flat_map(` / `.extend(`, each re-measured with the
+    // sweep's own `leak_classes` extraction, its `use_stacks=0` /
+    // `detect_leaks=1:exitcode=0` options and its REPS=3 per-class MAX.
+    // Thirteen more had shed classes, every one stable across all three reps.
+    //
+    // INFLOW: +1 row, +1 pair, +5 records — `vector_hof_result_element_sizing`,
+    // a fixture this round ADDED, whose closure literals are the pinned
+    // defect's entry condition and therefore carry `todo/t0953`'s environment
+    // leak irreducibly. It is cited, and its `⚖ ADMITTED` block names it as an
+    // owner ask. Its sibling `vector_hof_result_element_drop` contributes
+    // NOTHING here because its leak was FIXED rather than admitted — every
+    // callee rewritten as a named function, and the fixture is now asserted
+    // fully clean.
+    //
+    // NET, which is what these constants hold: 294 -> 294 rows, 501 -> 487
+    // pairs, 2302 -> 2252 records. Regenerate with the awk census on
+    // `sanitize.leak.records.pin.regen` in `scripts/figures.db`; never derive
+    // these by applying a delta by hand.
+    const LEAK_CLASS_PAIRS: usize = 487;
+    const LEAK_RECORDS: usize = 2252;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────

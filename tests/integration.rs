@@ -4685,6 +4685,21 @@ fn vector_hof_result_element_drop() {
     );
 }
 
+/// The drop fixture is ASan-CLEAN, and this is what enforces it. Every callee
+/// in it is a NAMED function rather than a closure literal, so `todo/t0953`'s
+/// 8-byte-per-literal environment leak is absent and the program can be held to
+/// a full clean run instead of to a floor. That is why it needs no row in
+/// `tests/sanitize/LEAK_ALLOWLIST.txt` while its `..._sizing` sibling does.
+///
+/// RED-VERIFIED against the pre-fix compiler: 22 bytes in 4 allocations.
+#[test]
+fn vector_hof_result_element_drop_is_sanitize_clean() {
+    assert_gg_sanitize_clean(
+        "vector_hof_result_element_drop",
+        "push-control\ndrop-cust\ndrop-cust\n2\nmap\ndrop-cust\ndrop-cust\n2\n2\n2\n2",
+    );
+}
+
 /// Companion stdout pin for the sizing fixture. ⚠ THIS ASSERTION IS GREEN AT
 /// THE PRE-FIX COMPILER TOO and pins nothing on its own — every cell reads
 /// back correctly over a mis-sized accumulator. It is here so that a fix which

@@ -76,10 +76,24 @@
   allowlisted fixtures calling `.map(` / `.flat_map(` / `.extend(`, each re-measured with the sweep's own
   `leak_classes` extraction, its `use_stacks=0` / `detect_leaks=1:exitcode=0` options and its REPS=3
   per-class MAX — **thirteen more had shed classes**, every one stable across all three reps, and
-  `test_higher_order_named_fn` went fully CLEAN and left the file. Final: `LEAK_CEILING` 294→293,
-  `LEAK_CLASS_PAIRS` 501→486, `LEAK_RECORDS` 2302→2247, `UNCITED_LEAK_CLASS_PAIRS` 494→481 (every shed pair
-  was uncited), all regenerated from the awk census the figure row itself carries and mirrored in
-  `scripts/figures.db`.
+  `test_higher_order_named_fn` went fully CLEAN and left the file.
+  ⚠ **AND THE FIRST STATEMENT OF THE RESULT WAS A NET FIGURE THAT HID THIS ROUND'S OWN INFLOW — the same
+  defect a second time, one face further on.** Two fixtures this round ADDED are top-level and therefore
+  swept, and both leaked `todo/t0953`'s closure-environment floor with no allowlist row: unallowlisted leak →
+  `new_leak` → the sweep exits 1, fatal. Reporting `294 → 293 rows` as "a burn-down" netted that inflow
+  against the credit and printed only the credit.
+  ⭐ **ONE OF THE TWO WAS FIXED RATHER THAN ADMITTED, WHICH IS WHAT THE FILE ASKS FOR.** The expander defect
+  does not care whether the callee is a closure literal or a named function, so
+  `vector_hof_result_element_drop` was rewritten with named callees: still RED pre-fix (its `map` section
+  prints no `drop-cust`), 22 bytes in 4 allocations → **fully clean**, no row, and now held there by
+  `vector_hof_result_element_drop_is_sanitize_clean`. The other is IRREDUCIBLE and measured so — a named
+  callee with the same container-literal body sizes its accumulator CORRECTLY at 32 pre-fix, so the closure
+  literal IS the defect's entry condition — and takes one cited row whose `⚖ ADMITTED` block names it as an
+  owner ask under this file's own new-inflow rule.
+  Final, regenerated from the awk census the figure row itself carries rather than by applying deltas:
+  `LEAK_CEILING` 294→**294**, `LEAK_CLASS_PAIRS` 501→**487**, `LEAK_RECORDS` 2302→**2252**,
+  `UNCITED_LEAK_CLASS_PAIRS` 494→**481** (every shed pair was uncited; the one admitted pair is cited to
+  `t0953`), mirrored in `scripts/figures.db`.
   **SELF-HOST: NOTHING TO PORT, AND IT IS AHEAD.** The self-host LIR has no `HofExpand` variant at all —
   `try_lower_vector_hof` desugars to a comprehension loop whose ordinary array constructor already wires the
   hooks — so both new fixtures COMPILE and MATCH on that lane, pinned by `assert_self_host_stdout`. ⭐ And on

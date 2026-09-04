@@ -795,6 +795,31 @@ vector_higher_order	__gorget_closure_env_alloc*4
 # `known_gaps` repro with a NAMED callee where the isolation needs one, and an
 # `#[ignore]`d `assert_gg_sanitize_clean` test asserting the clean run.
 vector_hof_cross_type_map	__gorget_closure_env_alloc*10	__gorget_closure_env_alloc=t0953
+# ⚖ ADMITTED (R49 Track N2, 2026-09-04) — and NAMED AS AN OWNER ASK, because
+# this file's own header says a row whose leak is genuinely NEW INFLOW is one.
+# The FIXTURE is this round's; the MECHANISM is not. Every record is
+# `__gorget_closure_env_alloc`, one per closure literal, which is `todo/t0953` —
+# filed, with its own durable heap-forced repro and an `#[ignore]`d test. That
+# is the same shape the ⚖ EXTENDED A SECOND TIME paragraph above records for
+# `iter_trait_default_trait_args` / `self_whole_move_ok` /
+# `vector_hof_cross_type_map`, but those three are covered BY NAME and this row
+# is not, so it is put to the owner rather than assumed.
+# ⭐ THE LEAK IS IRREDUCIBLE HERE, MEASURED RATHER THAN ASSERTED, and that is
+# what distinguishes it from the sibling fixture that ships with NO row. The
+# closure literals are the defect's ENTRY CONDITION: measured against the
+# pre-fix compiler, a NAMED callee whose body is the same container literal
+# (`Vector[String] f(int n): return [mk("t","ag")]`) sizes its accumulator
+# CORRECTLY at 32 — the GIR lane refines a named callee's result type and does
+# not refine a closure literal's. Spelling these cells with named functions
+# would not reduce the leak, it would delete the defect being pinned.
+# ⊕ ITS SIBLING `vector_hof_result_element_drop` HAS NO ROW BECAUSE ITS LEAK WAS
+# FIXED, NOT ADMITTED: the expander defect does not care about callee shape, so
+# every callee there was rewritten as a named function and the fixture is now
+# asserted fully clean by `vector_hof_result_element_drop_is_sanitize_clean`.
+# That is the "fix it instead" this file asks for, applied where it was possible
+# and declined only where it is not.
+# RETIRES when `todo/t0953` lands.
+vector_hof_result_element_sizing	__gorget_closure_env_alloc*5	__gorget_closure_env_alloc=t0953
 vector_methods2	__gorget_closure_env_alloc*4,gorget_array_push*1
 vector_sort_by	__gorget_closure_env_alloc*3
 vector_sort_by_key	__gorget_closure_env_alloc*3,str_alloc_copy*2

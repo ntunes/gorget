@@ -24,9 +24,16 @@
 # 32, inside `gorget_array_extend` — at rc 0 with correct stdout and `gg check`
 # clean when not under the sanitizer. Two inputs report nothing.
 #
-# NOT ASSERTED ASan-CLEAN: each closure literal leaks an 8-byte environment
-# through `todo/t0953`. Post-fix this program sits at exactly that floor, 40
-# bytes in 5 allocations.
+# NOT ASSERTED ASan-CLEAN, and unlike its `..._drop` sibling this one CANNOT be
+# — the closure literals are the defect's entry condition, not a stylistic
+# choice. Measured against the pre-fix compiler: a NAMED callee whose body is
+# the same container literal (`Vector[String] f(int n): return [mk("t","ag")]`)
+# sizes its accumulator CORRECTLY at 32, because the GIR lane refines a named
+# callee's result type and does not refine a closure literal's. Swap the
+# literals for named functions and the cells stop being broken at all.
+# So the `todo/t0953` environment leak comes with the defect: 40 bytes in 5
+# allocations, one per literal, admitted with a citation in
+# `tests/sanitize/LEAK_ALLOWLIST.txt` rather than hidden.
 #
 # AXIS CELLS — direction × closure body × destination:
 #   (a) UNDERSIZED  8 -> 32  literal body, typed dst   — the heap overflow
