@@ -683,6 +683,37 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⚖⚖⚖ **THE FOURTH AND SHARPEST OWNER ASK — L's INTEGRATION IS A TRILEMMA AND EVERY BRANCH COSTS SOMETHING.**
+Track L converts a set of **use-after-frees into leaks** — a strict improvement on the owner's own ranking
+(mem-unsafety > silent-wrong-output > ICE > leak). **But landing it turns `scripts/sanitize_sweep.sh` RED
+with five leaking cells, two of them GENUINELY NEW INFLOW**, and `tests/sanitize/LEAK_ALLOWLIST.txt:29-35`
+reserves new inflow to an **owner decision**. ⛔ **A red round-close battery is NEVER waivable.**
+The three branches:
+**(a) LAND L + admit the rows** — the round closes, the UAFs are gone, and the tree carries two admitted leak
+rows until the fix lands. Needs the owner's assent to the admission.
+**(b) HOLD L** — the **use-after-frees stay live**, **Track T1 stays blocked** (it must base on L's tip), and
+the owner's *"fix SH so that it compiles the new fixtures"* directive goes unmet this round.
+**(c) LAND L + LAND THE LEAK FIX** — ⛔ **not achievable.** S-a3's pass 1 decomposed the fix into three parts
+and the middle one — **make closure captures OWNING** — has no brief, no passes and no executor, and the naive
+shape without it **double-frees (ASan-confirmed)**.
+⇒ **This is (i) a genuine DESIGN decision under Round-lifecycle step 7 and it is the owner's, not mine.**
+⊕ **Confirming review launched regardless**, briefed to answer the one question that is mine: *is the diff
+correct and safe on its own merits, independent of the sweep question?*
+⊕ ⚠ **And it carries a FIFTH attribution check on that same five-cell table:** a later pass measured
+`closure_capture_then_mutate_source_uaf` is **not in the class at all** — it already calls
+`__Closure_0__drop`, and its 6 B is a body-local `.get().unwrap()` (`t0949` family) — **yet `todo/t1210`
+lists it as one of its four cells.** If confirmed, the item is corrected before integration.
+
+⚖ **TWO MORE OWNER-ASK CANDIDATES QUEUED behind S-a2's** (surfaced together when that one is answered, unless
+asked for sooner):
+**(1) `Set[Box[Trait]]` hashes the `{data, vtable}` BYTES — pointer identity — so two equal `Robot`s hash
+differently.** If that is unsound, then `Set.add`'s *newly-safe* acceptance is also wrong and the
+reference-grade answer is to **reject the shape** (Core #8: *"most often by making the language reject it"*).
+**(2) `t1198` — implicit f64→f32 narrowing at consuming positions is UNRATIFIED.** `float32` appears **zero
+times** in `decisions.md`; `float32 x = 1.5` and `takes(1.5)` REJECT, while `Box[float32](1.5)`, `S(1.5)` and
+`v.push(1.5)` ACCEPT and store zero. The filed item correctly asserts only what neither disposition permits
+(accept-and-store-zero) rather than pinning one.
+
 ✅ **N1 INTEGRATED** (`9b1433788`) **and M1 INTEGRATED** (`12274b77e`) — twelve tracks landed. Post-integration
 bare rcs both times: `build_rc=0 · lib_rc=0 · lints_rc=0 · todo_rc=0`.
 ⭐ **N1's errata pass CAUGHT ITS OWN OVERCLAIM IN THE SAME BREATH:** its reach note said three shapes were
