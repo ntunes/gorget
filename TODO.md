@@ -103,7 +103,26 @@ discriminator, ships the derivation as a **committed script + empty-diff lint** 
 `shrunk_class` and `retire_fatal` **EMPTY**, not merely "zero ❌".
 ⚠ **`CORPUS_MANIFEST.txt` DECIDES THE DERIVATION'S INPUT POPULATION and v1 omitted it entirely** — four
 distinct hashes across the five blobs, and its counts are REGENERATED post-merge, never merged.
-🔲 **T1's hash is a LAUNCH-TIME BLANK in the brief** — T1 has not committed. Fill it before launching. It also splits
+🔲 **T1's hash is a LAUNCH-TIME BLANK in the brief** — T1 has not committed. Fill it before launching.
+📎 **`/tmp/brief_INT_addendum_A.md` FOLDS ON PASS 2's RETURN** (precedence: addendum > body). It carries the
+TWO READINESS-FIVE ROWS v2 DOES NOT MEET: `|pinned| == |changed|` is never stated as a number (fixed by making
+step 9's disposition table a COMPLETE ledger over the changed set, with the equality asserted), and the
+inherited counts are quoted from two output-reviews' runs on trees that no longer exist rather than
+regenerated (fixed by making the executor re-measure each and report ITS number beside the brief's).
+**Neither resets the streak — they grow scope inside a sound design.**
+
+⚠ **ORCHESTRATOR CONDUCT — CORRECTED 2026-09-04 AFTER RE-READING `AGENTS.md`, and the next orchestrator should
+check itself the same way:**
+- **I filed `t1300`/`t1301` with my own hands from a TRACK's findings.** MA-0's carve-out is a typo, a stale
+  figure, or a one-line correction **"never on a TRACK's behalf"**, and the default is to incorporate a
+  finding into the track's SCOPE, filing only when genuinely disjoint. **Findings route back to the track;
+  a disjoint filing goes to an executor.**
+- **I was not running the READINESS FIVE at all.** It is binary and checkable without judgement, and applying
+  it to a brief that had already survived a hostile pass still found two unmet rows. **Run it on every brief
+  before the executor launches, not as a formality at the end.**
+- **I pruned worktrees by hand instead of `scripts/round_cleanup.sh --dry-run` first.** The substance was
+  right (clean check, capture-then-prune, keep-list for live agents) but the script exists so the keep-list
+  is not a judgement call. It also splits
 the commits: re-derivation closes `t0572`'s over-declaration backlog as a SIDE EFFECT (22 `shrunk_class`
 rows tighten, `LEAK_CEILING` moves because a fixture disappears), so **the merge resolution and the
 tightening land as SEPARATE commits** — the record must distinguish a row that moved because of a merge from
