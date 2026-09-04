@@ -2565,6 +2565,21 @@ new guards caught the orchestrator hours later.
 every round close by mandate, so anything recorded only here is deleted by the next one — which is why
 this pointer exists instead of the list.
 
+### ⚠⚠ A ROUND-CLOSE GATE IS **ALREADY RED AT HEAD** AND IT IS NOBODY'S INFLOW — VERIFY BEFORE BLAMING
+⭐ **ORCHESTRATOR-VERIFIED 2026-09-04, bare rc, at pristine HEAD: `census_bare_rc=1`, roster 215 · PASS 7 ·
+FAIL 208 · allowlist 113 rows. THE SOLE UN-ALLOWLISTED PASSER IS `llvm_nested_option_match_no_memcpy_overlap`**
+(found by M2's pass 4, independently confirmed here). **The other six PASSes are allowlisted and fine.**
+⊕ The script's own header states the adjudication it wants: *"A PASS is a FINDING, not a graduation … probe
+the axis its filing names, and BREAK THE CITED FIX SITE to watch the test go red (Core #13). Then GRADUATE
+it, or REWIRE its assertion onto the lane the gap lives on, or — only if neither applies — add a row with a
+REASON CODE."* ⇒ ⛔ **DO NOT attribute this to whichever track lands next, and DO NOT let an
+executor allowlist its own row beside it without noticing.** A `known_gaps` fixture that starts PASSING is
+the census telling you to GRADUATE it; the red is a real signal, just not this round's.
+⚡ **THE GENERAL SHAPE, worth more than the instance: run the round-close gates ONCE AT PRISTINE HEAD BEFORE
+THE FIRST EXECUTOR LANDS.** Otherwise the first integration inherits every pre-existing red, and the round
+spends its budget bisecting someone else's debt. **This round found it only because a reviewer measured the
+gate on both sides of its own patch.**
+
 ### 🔁 THE ROUND-CLOSE BATTERY — COMMANDS, NOT NUMBERS (regenerate every figure; Core #5)
 ```
 scripts/run_integration.sh                                    # C sweep (GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600)
