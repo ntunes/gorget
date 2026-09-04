@@ -1,0 +1,51 @@
+# KNOWN GAP — a `Vector[Box[Concrete]]` whose element type ALSO has a trait
+# `equip` emits `Box__Robot__drop` TWICE, with two different signatures, and
+# the C compiler refuses the translation unit:
+#
+#   :3584  static inline void Box__Robot__drop(Box__Robot self) { GORGET_FREE(...); }
+#   :3621  void Box__Robot__drop(void* slot) { ... }
+#   error: redefinition of 'Box__Robot__drop'
+#
+# TWO PRODUCERS, ONE SYMBOL. The collection element-drop path emits the
+# `static inline` helper taking the box by value; the vtable path emits the
+# non-static `void*`-slot drop that `__gg_Speaker_VTable` stores a pointer to
+# (`:3601`). Neither knows about the other, so a program that needs BOTH — a
+# concrete box held in a collection, of a type that is also equipped with a
+# trait — collides at C emit.
+#
+# ⚠ THE DISCRIMINATOR IS THE ELEMENT TYPE'S BOX-NESS, NOT THE TRAIT. The
+# `Vector[Box[Speaker]]` spelling of the same program (element typed as the
+# TRAIT box rather than the CONCRETE box) compiles and runs. Only the
+# concrete-box element reaches both emitters.
+#
+# ⚠ PRE-EXISTING and unchanged by R49 Track M2's trait-object pack fix: this
+# is a C-emit symbol collision, not an ownership or lowering decision. It is
+# reachable at pristine HEAD and under that fix identically.
+#
+# ⚠ `v[0].id` — the FIELD read rather than the method call — takes a different
+# path and is rejected earlier with
+# `error[E_DerefCoercionUnimplemented]: field 'id' exists on 'Robot' but deref
+# coercion (design-doc §9.4) is not yet implemented for 'Box'`. That is a
+# separate, already-known gap; the method call is what reaches C emit.
+#
+# INTENDED: prints `R2!`, rc 0, on both backends.
+from std.collections import Box
+from std.collections import Vector
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[Box[Robot]] v = Vector[Box[Robot]]()
+    v.push(Box.new(Robot(mk("R", "2"))))
+    print(v[0].speak())

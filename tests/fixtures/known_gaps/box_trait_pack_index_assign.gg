@@ -1,0 +1,54 @@
+# LIVE REGRESSION FIXTURE — `v[i] = x` and `d[k] = x` are consuming positions,
+# and no widening of the METHOD path ever reaches them.
+#
+# ⭐ WHY THIS IS ITS OWN CELL AND NOT A METHOD ROW. `lower_index_assign` does
+# not call `lower_call_arg` at all — it lowers the value, then calls the
+# runtime `__set` / `__put` directly. So the destination-type hint threaded
+# through the method path CANNOT arrive here no matter which method names it
+# covers: the position has no subject in that rule rather than a subject that
+# is too narrow. The Ownership table in `AGENTS.md` names `v[i] = x` in the
+# same breath as `push`/`put`/`set`; these two rows are that sentence's
+# regression net.
+#
+# ⚠ THE ONLY SHAPE THAT REACHES THE PACK HERE IS THE TEMP FORM. `d[k] = b`,
+# `v[i] = b` and even `v[i] = ^b` with a named `Box[Robot] b` are
+# `E_TypeMismatch: expected 'trait Speaker', found 'Box[Robot]'` at check time
+# — the index-assign typecheck has already lost the Box on the destination
+# side. That reject is a pre-existing sibling of the `Deque.push_back` "lost
+# the Box" gap, filed separately; it is also what bounds this position: the
+# pack here cannot create a double owner because no live named source can
+# reach it.
+#
+# ⚠ Payloads are heap-forced through `mk`.
+#
+# ⚠ It stays in `known_gaps/` deliberately: moving the file registers a
+# non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING`, and Core #9 ⊕ forbids
+# raising that ceiling for a round's own inflow.
+#
+# INTENDED: prints `B2!`, `C3!` on both backends.
+from std.collections import Box
+from std.collections import Vector
+from std.collections import Dict
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[Box[Speaker]] v = Vector[Box[Speaker]]()
+    v.push(Box.new(Robot(mk("A", "1"))))
+    v[0] = Box.new(Robot(mk("B", "2")))
+    print(v[0].speak())
+
+    Dict[String, Box[Speaker]] d = Dict[String, Box[Speaker]]()
+    d[mk("k", "1")] = Box.new(Robot(mk("C", "3")))
+    print(d.get(mk("k", "1")).unwrap().speak())

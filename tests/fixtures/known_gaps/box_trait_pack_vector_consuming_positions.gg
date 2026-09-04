@@ -1,0 +1,61 @@
+# LIVE REGRESSION FIXTURE — the trait-object pack must fire at EVERY builtin
+# `Vector` consuming position, not just at the call-argument positions that
+# carry a real signature.
+#
+# THE CLASS: a builtin collection method has no `fn_sigs` entry carrying its
+# element type — the value param falls back to `I64_TYPE` — so the pack at
+# `lower_call_arg` was asked "is the destination a `Box[Trait]`?", answered
+# "no, it is `int`", and declined. A `Box[Concrete]` then reached
+# `Vector__Box__Speaker__set` unpacked, and the runtime memcpy'd 16 bytes of
+# `{data, vtable}` out of an 8-byte `void*` slot. Every row below was rc 135
+# before the destination type was routed through the protocol table.
+#
+# ⚠ ONE ROW PER SIBLING (Core #4 / Core #12). `push` alone is one value of a
+# typed axis; `set`, `insert` and `fill` are the same position class reached
+# through three more `BuiltinMethodDecl` arms. `fill` and `get_or_put` are
+# deliberately NOT consuming positions — they take the destination type as a
+# HINT only — so they also pin that the hint path and the consume path read
+# the same carrier.
+#
+# ⚠ THE PUSHED VALUE MUST BE A TEMP. A `Box` is single-owner-by-design, so a
+# live named source at these positions is `E_MoveWithoutOperator` at check
+# time; the temp form is the only shape that reaches the pack here.
+#
+# ⚠ Payloads are heap-forced through `mk`. A literal would not reallocate and
+# would hide a stale-pointer read.
+#
+# ⚠ It stays in `known_gaps/` deliberately: moving the file registers a
+# non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING`, and Core #9 ⊕ forbids
+# raising that ceiling for a round's own inflow. The self-host lane has no
+# analogue of the GIR-level pack at consuming positions — its
+# `try_emit_trait_obj_construct` mirrors the Rust LIR Assign/SlotStore
+# coercion only — and still crashes on this shape.
+#
+# INTENDED: prints `C3!`, `B2!`, `F6!` on both backends.
+from std.collections import Box
+from std.collections import Vector
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[Box[Speaker]] v = Vector[Box[Speaker]]()
+    v.push(Box.new(Robot(mk("A", "1"))))
+    v.set(0, Box.new(Robot(mk("B", "2"))))
+    v.insert(0, Box.new(Robot(mk("C", "3"))))
+    print(v[0].speak())
+    print(v[1].speak())
+
+    Vector[Box[Speaker]] f = Vector[Box[Speaker]]()
+    f.fill(2, Box.new(Robot(mk("F", "6"))))
+    print(f[1].speak())

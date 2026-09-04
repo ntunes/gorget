@@ -1,0 +1,55 @@
+# KNOWN GAP — a `Box[Trait]` collection's element type LOSES THE BOX at three
+# separate boundaries, so the receiver reads back as `Deque[trait Speaker]` /
+# `trait Speaker` instead of `Deque[Box[Speaker]]` / `Box[Speaker]`.
+#
+# THREE CELLS OF ONE FAMILY, each a different boundary; this file pins the
+# first, the other two are recorded here because they discriminate it:
+#
+#   (1) THE READ SIDE (this file). `q.get(0).unwrap().speak()` on a
+#       `Deque[Box[Speaker]]` builds and then FAILS TO LINK:
+#         undefined reference to `int64_t__speak'
+#       The element type collapsed to `int64_t`, so the method mangle is
+#       computed against `int` rather than against the boxed trait. The
+#       INDEX read `q[0].speak()` on the same collection WORKS — that is the
+#       discriminator, and it is why this is the `.get()`-chain boundary and
+#       not the collection itself.
+#
+#   (2) THE METHOD-LOOKUP SIDE. `q.push_back(Box.new(Robot("R2")))` is
+#       `error[E_NoMethodFound]: no method `push_back` found on type
+#       `Deque[trait Speaker]`` — the printed receiver type has already lost
+#       the Box. `q.push(...)` on the identical receiver resolves and runs.
+#
+#   (3) THE INDEX-ASSIGN DESTINATION SIDE. `v[0] = ^b` with a named
+#       `Box[Robot] b` into a `Vector[Box[Speaker]]` is
+#       `error[E_TypeMismatch]: type mismatch: expected `trait Speaker`,
+#       found `Box[Robot]`` — the destination element type lost the Box, so
+#       the only spelling that reaches the lowering is the TEMP form.
+#
+# ⚠ ALL THREE ARE PRE-EXISTING AND UNCHANGED by R49 Track M2's trait-object
+# pack fix, which is the WRITE side of a different axis (whether the pack
+# fires at a consuming position). This family is the axis of what the element
+# type IS by the time the typecheck and the mangler read it.
+#
+# ⚠ Payload is heap-forced through `mk`.
+#
+# INTENDED: prints `R2!`, rc 0, on both backends.
+from std.collections import Box
+from std.collections import Deque
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Deque[Box[Speaker]] q = Deque[Box[Speaker]]()
+    q.push(Box.new(Robot(mk("R", "2"))))
+    print(q.get(0).unwrap().speak())

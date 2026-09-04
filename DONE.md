@@ -332,6 +332,62 @@
   folding it in would make one fixture assert two mechanisms. Filed with its own repro as `t1197`, beside
   `t1198` — the `float` literal is rejected at a local bind and a plain call argument and ACCEPTED at the
   Box ctor, the struct ctor and a collection push, all three then storing zero.
+- [2026-09-04] **`t0697` + `t0709` CLOSED (R49 Track M2) — the TRAIT-OBJECT PACK never fired at a builtin
+  CONSUMING POSITION, so a `Box[Concrete]` was memcpy'd unpacked into a `Box[Trait]` slot: rc 135/139 on
+  BOTH backends at `push`/`set`/`insert`/`fill`/`put`/`get_or_put` and at `v[i] = x` / `d[k] = x`.
+  12 cells RED→GREEN, both lanes; `t0697`'s two faces closed together and both repros now ASan-SILENT.**
+  **THE DEFECT, in one line.** A builtin collection method has no `fn_sigs` entry carrying its element
+  type — the value param falls back to `I64_TYPE` — so `maybe_pack_trait_object_at_arg` asked "is the
+  destination a `Box[Trait]`?", was told "no, it is `int`", and declined. `gorget_array_push` then
+  memcpy'd 16 bytes of `{data, vtable}` out of an 8-byte `void*` slot: `stack-buffer-overflow` in
+  `__interceptor_memcpy`.
+  **ONE AXIS, FIVE CARRIERS — and the two obvious ones are both WRONG.** `fn_sigs` answers `I64_TYPE`
+  (measured `TypeId(4)` at the exact `Vector[Box[Speaker]].push` site), and
+  `extract_elem_type_id_from_type_name` — the `strip_prefix("Vector__")` extractor — answers `None` for
+  EVERY `Dict__` receiver by construction, leaving `Dict[String, Box[Speaker]].put` at rc 135. The pack
+  is routed off `builtin_type_args_from_name` + `protocol_for_mangled_name`, the sanctioned
+  protocol-table accessor, which covers all 30 protocols including the three that hold another's method
+  table BY REFERENCE (`DEQUE → VECTOR`, `HASHMAP → DICT`, `HASHSET → SET`) and therefore have no
+  `BuiltinMethodDecl` text for a census to match. ⚠ It returns `(elem, key, val, elem_name, val_name)`
+  — on a 2-arity protocol `.0` is the KEY; the destructuring form is prescribed in the code.
+  **FOUR HUNKS, AND EACH WAS SHOWN LOAD-BEARING BY A LINE-ANCHORED DELIBERATE BREAK.**
+  (a) the pack CONSUMES its source (`drops.unregister` + `move_zero`) — break it and
+  `box_trait_bare_ctor_struct_field_uaf` returns to rc 1 `gorget_string_free invariant`;
+  (b) `Box.new` registers its mint at BIRTH (Core #3) — break it and the discarded-box repro returns to
+  the exact 65 B / 2 leak the filing records; (c) the destination type reaches `lower_call_arg` as a
+  typed `pack_dest_hint` — break it and the six method cells go red while index-assign stays green;
+  (d) `lower_index_assign` runs the same pack at its own site — break it and only index-assign goes red.
+  ⭐ **(a) AND (b) MUST SHIP TOGETHER AND ARE EACH OTHER'S POSITIVE CONTROL.** The asymmetry is the whole
+  reason: pack-consume alone is a no-op on an unregistered source (safe); registration alone creates a
+  second owner (unsafe) and reds the committed `box_trait_struct_field.gg`. `box_trait_struct_field` was
+  green at HEAD for a reason unrelated to correctness — the mint under-registered and the pack
+  under-consumed, and the two defects cancelled to exactly one owner.
+  **THE GUARD COULD NOT SEE ITS OWN CLASS.** `pack_trait_object_call_sites_count` counted only literal
+  `pack_trait_object_for_smart_ptr_ctor(` calls and stayed GREEN at 12 while a genuinely new formation
+  site landed through the `maybe_pack_trait_object_at_arg` wrapper. Widened to count both spellings
+  (12 → 14).
+  **CELLS, both backends, bare rc:** `Vector.push` temp 135→0 · `Vector.set` · `Vector.insert` ·
+  `Vector.fill` · `Dict.put` 135→0 · `Dict.get_or_put` · `Deque.push` (alias) · `HashMap.put` (alias) ·
+  `v[i] = x` · `d[k] = x` · `v.push(^b)` named-local 139→0 · bare `Box(` struct field 1→0.
+  Six fixtures wired to NON-`#[ignore]`d tests, all RED-verified against the pristine compiler; the two
+  `t0697` repros wired through `assert_gg_sanitize_clean` because the value lane is structurally blind
+  to the leak face — with the registration hand-disabled the program still prints `1` at rc 0.
+  **BASELINE CORRECTED, NOT FITTED:** `robustness_map` cell `trait_dynamic_dispatch_box` expected
+  `78 / 12`; the program computes `3 * r * r` with `r = 5`, which is **75**. Checkable without running
+  anything (78 ≈ πr² — the expectation was derived from the INTENT, the code implements `3r²`). Fixed at
+  both sites.
+  **LANES.** C and LLVM landed. Self-host does NOT have it — its `try_emit_trait_obj_construct` mirrors
+  the Rust LIR coercion only, with no GIR-level analogue at consuming positions — filed as `t1084` with
+  a green control and an `#[ignore]`d assertion. ggdef is structurally unable: `Item::Trait` has no
+  elaboration arm at all, so the entire trait topic abstains, including programs green on both
+  production lanes — filed as `t1081`. Also filed: `t1082` (a `Box[Trait]` collection's element type
+  loses the Box at three boundaries) and `t1083` (`Box__{T}__drop` emitted twice with two signatures).
+  `t0700`'s blast radius grew by 12 cells — noted there, not re-filed.
+  **Gates, bare rc:** `--lib` 1185/0 · `--test lints` 224/0 · `--test security` 213/0 ·
+  `--test spec_conformance` 3/0 · integration `box`·`trait`·`vector`·`dict`·`index`·`push` =
+  40·90·97·100·87/28, 0 failed on BOTH backends · `staging_move_burndown --check` rc 0 ·
+  `--clones=stats` identical pristine vs fixed (no CoW charter breach).
+
 - [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
   STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,
   garbage or empty stdout on BOTH backends. Two producer sites now stamp the View tag; 12 cells RED→GREEN.**

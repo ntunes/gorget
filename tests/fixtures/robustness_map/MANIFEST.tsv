@@ -592,7 +592,7 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 18 traits & generics	trait_derive_default	WORKS	0 / 0 / false			WORKS	WORKS		WORKS	NO-VERDICT
 18 traits & generics	trait_displayable	WORKS	(3, 4)			WORKS	WORKS		WORKS	WORKS
 18 traits & generics	trait_displayable_print	WORKS	(3, 4)			WORKS	WORKS		WORKS	WORKS
-18 traits & generics	trait_dynamic_dispatch_box	CRASH	78 / 12			TRAP	TRAP		SANITIZE-FAIL	NO-VERDICT
+18 traits & generics	trait_dynamic_dispatch_box	CRASH	75 / 12			TRAP	TRAP		SANITIZE-FAIL	NO-VERDICT
 18 traits & generics	trait_equatable	WORKS	true / false			WORKS	WORKS		WORKS	WORKS
 18 traits & generics	trait_equatable_neq	WORKS	false / true			WORKS	WORKS		WORKS	WORKS
 18 traits & generics	trait_equip_basic	WORKS	50			WORKS	WORKS		WORKS	NO-VERDICT
