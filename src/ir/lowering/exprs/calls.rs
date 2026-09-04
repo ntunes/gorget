@@ -1258,17 +1258,16 @@ pub(super) fn lower_call(
         if (name == "Box" || name.starts_with("Box__")) && args.len() == 1 {
             let mut val_op = lower_expr(ctx, builder, &args[0].node.value);
             let raw_type = infer_operand_type_full(ctx, &val_op, builder);
-            // Unwrap Ptr(T) → T: bare-borrowed resource params are passed by pointer.
-            // Box should box the value, not the pointer.
-            let val_type = match ctx.type_registry.get(raw_type) {
-                Some(crate::ir::types::GirType::Ptr(inner)) | Some(crate::ir::types::GirType::MutPtr(inner)) => {
-                    let pointee = *inner;
-                    if let Operand::Copy(ref place) | Operand::Move(ref place) = val_op {
-                        let derefed = builder.load_ref(place.clone(), pointee);
-                        val_op = FunctionBuilder::copy(derefed);
-                    }
-                    pointee
-                }
+            // Peel a `Ptr(T)`/`MutPtr(T)` only to ASK the closure carve-out
+            // below. The materialization itself belongs to the ownership
+            // chokepoint (`materialize_for_slot`), which is the single owner
+            // of the `Ptr`→owned policy — devbook/24 rules 3-4 (one source of
+            // truth per axis; resolve once, write through). The mint used to
+            // hand-roll a `load_ref` here, unconditionally, BEFORE the
+            // ownership shim ran, which laundered a borrow into what the shim
+            // then read as a move-eligible temp.
+            let peeled = match ctx.type_registry.get(raw_type) {
+                Some(crate::ir::types::GirType::Ptr(inner)) | Some(crate::ir::types::GirType::MutPtr(inner)) => *inner,
                 _ => raw_type,
             };
             // SIBLING OF `methods.rs`'s `Box.new(closure)` CARVE-OUT (Core #4).
@@ -1277,15 +1276,78 @@ pub(super) fn lower_call(
             // boxed the closure env and then emitted a call to an undefined
             // function, which failed GIR validation and ICEd (`todo/t0681`).
             // CARRIER #1 supplies the typed test the carve-out needs.
-            if ctx.closure_call_fn_for_type(val_type).is_some() {
+            //
+            // Asked ONCE, on `peeled`, and deliberately BEFORE the chokepoint:
+            // a closure environment has no owning materialization to perform.
+            // `materialize_for_slot` cannot turn a non-closure into a closure,
+            // so the post-materialization repeat this arm used to carry was
+            // unreachable — a second copy of the policy inside the very fix
+            // that exists to stop the mint being hand-copied.
+            if ctx.closure_call_fn_for_type(peeled).is_some() {
                 return val_op;
+            }
+            // THE OWNERSHIP BOUNDARY, asked once (D47, ratified 2026-08-27:
+            // "enumerate the boundary set and ask which positions actually
+            // fire, rather than patching three sites"). `SlotType::FromOperand`
+            // is documented for exactly this situation — the slot does not
+            // exist yet, it is MINTED from the materialized operand.
+            let (materialized, val_type) = ctx.materialize_for_slot(
+                builder,
+                val_op,
+                &args[0].node.value,
+                super::super::context::SlotType::FromOperand,
+                crate::ir::ImplicitCloneReason::ConsumingArg,
+            );
+            val_op = materialized;
+            // The enforcing guard for the claim above: `materialize_for_slot`
+            // cannot turn a non-closure operand into a closure one, so the
+            // carve-out really is answerable once, before it. Core #14 — the
+            // claim gets a check or it gets deleted.
+            debug_assert!(
+                ctx.closure_call_fn_for_type(val_type).is_none(),
+                "the `Box(closure)` carve-out is asked once, on the peeled operand \
+                 type, on the premise that the ownership boundary cannot PRODUCE a \
+                 closure type from a non-closure one. It just did, for `{}` — so the \
+                 carve-out has to move back after the boundary, or the boundary has \
+                 grown a case that mints closure environments.",
+                builder.name,
+            );
+            // Core #10 LOWER-OR-REJECT. The chokepoint answers `PassThrough`
+            // for a resource pointee that has no clone fn — the single-owner
+            // carve-outs (`ptr_materialization_kind`, whose own comment names
+            // `Box[Trait]` as the live example). The operand then survives the
+            // boundary STILL POINTER-TYPED, and the mint cannot express that:
+            // `c_type_name_for_id` has no name for a `Ptr` and falls to its
+            // residue arm, collapsing the element to `int64_t` — `todo/t0680`'s
+            // defect in a second form, reached by a route no primitive fixture
+            // can see. Refuse to mint rather than mint a wrong box.
+            //
+            // ⚠ STOPGAP, cited to `todo/t0682`. The reference-grade rejection
+            // for this program is a `gg check` diagnostic
+            // (`E_MoveWithoutOperator` at constructor positions and for field
+            // sources) in `src/semantic/safety/` — a different layer. Once
+            // `t0682` lands, the program is rejected before lowering and this
+            // arm becomes an unreachable backstop — the same shape as
+            // `methods.rs`'s no-dispatch-name `.clone()` refusal, which is the
+            // in-tree idiom this follows.
+            {
+                use crate::ir::types::*;
+                let still_ptr = matches!(
+                    ctx.type_registry.get(val_type),
+                    Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+                );
+                if still_ptr {
+                    panic!(
+                        "lower-or-reject (AGENTS.md Core #10): `Box(...)` in `{}` was given a single-owner borrow the ownership chokepoint cannot materialize (GIR type {:?}). Minting would collapse the element to `int64_t` (`todo/t0680`), so the box is refused instead. This is a lowering-layer stopgap for `todo/t0682`, which owes the check-time diagnostic.",
+                        builder.name,
+                        ctx.type_registry.get(val_type),
+                    );
+                }
             }
             let inner_c = if let Some(rest) = name.strip_prefix("Box__") {
                 rest.to_string()
             } else {
-                ctx.type_name_for_id(val_type)
-                    .unwrap_or("int64_t")
-                    .to_string()
+                ctx.c_type_name_for_id(val_type)
             };
             let box_mangled = format!("Box__{inner_c}");
             let box_type = if let Some(tid) = ctx.type_mapper.lookup_named(&box_mangled) {
@@ -1308,12 +1370,6 @@ pub(super) fn lower_call(
             // returned TFunction's box and the caller's named_ty sharing the
             // same Vector data — a use-after-free that, on this specific
             // shape, manifests as infinite Type__clone recursion.
-            val_op = ctx.ensure_owned_at_consuming_arg(
-                builder,
-                val_op,
-                &args[0].node.value,
-                crate::ir::ImplicitCloneReason::ConsumingArg,
-            );
             // Box takes ownership: after the alloc shallow-copies the value
             // into the heap, the source's slot still holds the same interior
             // pointers (Box children, String data, Vector handles). If we

@@ -301,6 +301,50 @@ value that is in the set answers `false`.
 The tuple literal is the shape the others follow — it has always materialized
 first and re-inferred afterwards.
 
+### `Box[T](v)` mints a slot too
+
+A container literal is not the only boundary whose destination does not exist
+yet. `Box[T](v)` mints a heap cell, and everything downstream is named after the
+element: the `Box__<elem>` typedef the backend emits, the
+`__gorget_box_alloc_<elem>` helper that allocates it, and the `__drop` wrapper
+that frees it. So the constructor faces exactly the container literal's
+question, and answers it the same way — one `materialize_for_slot` call with
+`SlotType::FromOperand`, taking the value and the element type back together.
+
+Two things follow from that being one call rather than two steps.
+
+The first is that **the deref decision is not the mint's to make.** A
+bare-borrowed resource argument arrives as `Ptr(T)`, and turning that into an
+owned `T` is `ptr_materialization_kind`'s question — clone through the pointee's
+clone fn, load it by value, or leave the pointer standing. Deref-loading first
+and asking about ownership afterwards inverts the order: by the time the
+ownership machinery sees the operand it is an unnamed temp, which reads as an
+expression temp, which is move-eligible. The borrow provenance is gone, so a
+still-live source is moved out of instead of cloned, and two owners drop one
+allocation. The order is the whole of it — there is no extra case to add at the
+read site, and the fix is to stop asking twice.
+
+The second is that **the mint can be handed something it has no name for.** The
+pass-through answer exists precisely for the single-owner carve-outs: a
+`Box[T]`, a `Callable[T]`, a `Task` has no owning representation to materialize
+into, so the pointer stands. A pointer has no C element name, and the honest
+response is the one Gorget takes everywhere the lowering meets a shape it cannot
+express — refuse it, naming the position. Minting anyway is what produces a
+correct-looking `Box__int64_t` beside the `Box__double` it should have been, and
+a wrong value is a far worse outcome than a rejected program.
+
+That is also why the mint wants to be ONE site. `Box(x)`, `Box.new(x)` and a
+struct-literal path were once three hand-written copies of the same operation,
+under a comment asserting they produced identical IR. They did not: they
+disagreed on which call instruction they emitted, on how they derived the
+element name, on whether they registered the fresh box for drop, and on where
+the ownership shim ran relative to the deref — four axes of drift under a
+sentence denying all four. The struct-literal copy turned out to be unreachable
+and is gone; the remaining two converge on the constructor, which is the shape
+the self-host frontend already has: it normalises `Box.new` into the ctor path
+and lowers one thing. A comment cannot hold two copies in agreement. Only having
+one copy can, which is why the convergence is the fix and not the tidy-up.
+
 Every implicit clone now carries its `ImplicitCloneReason` not just in the
 side-car diagnostic but **on the emitted instruction** — a typed
 `Instruction::Call.reason: Option<ImplicitCloneReason>`, stamped at the producer
@@ -553,8 +597,8 @@ is already handled:
   below. No copy needed.
 - **Carry it past an owning boundary** (`out.push(x)`, `return Some(x)`, struct
   field init, closure capture). Every such boundary materializes a `Ptr` source:
-  `ensure_owned_at_boundary` Case 1 (`context.rs:2562`) and
-  `ensure_owned_at_consuming_arg` Case 1 (`context.rs:2741`) both consult
+  `ensure_owned_at_boundary`'s Case 1 and `ensure_owned_at_consuming_arg`'s
+  Case 1 (both `context.rs`) consult
   `ptr_materialization_kind`, the single accessor that decides what producing an
   owned value out of a `Ptr(T)` requires — a deep clone through
   `clone_fn_for_ptr` where the pointee has one, a by-value load where it is a
@@ -565,7 +609,7 @@ is already handled:
 
   The *slot* the materialized value lands in is a separate question from the
   *value*, and a boundary that mints its own destination type must answer both
-  together. `materialize_for_slot` (`context.rs:2369`) is that answer: it
+  together. `materialize_for_slot` (`context.rs`) is that answer: it
   materializes an operand and reports the type of the value it produced, in one
   call. A destination whose type is DECLARED — a struct field, a return
   signature, a `Ptr`/`MutPtr` target — passes `SlotType::Known(t)` and keeps its

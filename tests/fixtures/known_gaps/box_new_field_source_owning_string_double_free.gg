@@ -1,0 +1,38 @@
+# KNOWN GAP — the `Box.new` HALF of the field-source double free.
+#
+# This is `tests/fixtures/box_ctor_field_source_owning_string.gg` with exactly
+# one token changed: `Box[String](w1.s)` becomes `Box.new(w1.s)`. The bare-ctor
+# spelling now clones the still-live field and exits 0; this spelling still
+# takes a shallow copy and dies with
+#
+#     free(): double free detected in tcache 2
+#
+# on both backends, with `gg check` clean.
+#
+# ⚠ IT IS THE SAME OPERATION AND THE SPELLING IS THE ONE THE BOOK TEACHES
+# (`docs/book/16-smart-pointers.md`). The two spellings are lowered by two
+# hand-written mints that have drifted apart on four axes — which mint you get,
+# `call` vs `call_extern`, drop registration, and shim ordering — under a
+# comment asserting they produce identical IR. The self-host already has the
+# reference-grade shape: it normalises `Box.new` into the one ctor path.
+#
+# THE FIX is to unify the two mints so `Box.new(x)` IS `Box(x)`, not to
+# hand-copy the ctor's ownership fix into the second mint.
+#
+# ⛔ HEAP-FORCE — see the sibling fixture's header: a string LITERAL is a
+# `.rodata` view with `cap = 0` and exits 0 even under the defect.
+#
+# EXPECTED OUTPUT (what the language SHOULD do): built
+# EXPECTED EXIT: 0, and clean under ASan.
+
+String mk(String a, String b):
+    return a + b
+
+struct W:
+    String s
+
+int main():
+    W w1 = W(mk("aaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbb"))
+    Box[String] b = Box.new(w1.s)
+    print("built")
+    return 0

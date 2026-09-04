@@ -349,10 +349,13 @@ impl TypeMapper {
                     // Coherence-at-construction: write Box's typed metadata
                     // (Resource + Trivial("free") + is_box) here so any
                     // wrapper computing its drop_strategy from inner.needs_drop
-                    // sees the true answer at first registration. Mirrors the
-                    // Box arm in `register_collection_alias`; the two paths
-                    // exist because field-type pre-registration takes a
-                    // different entry point than wrapper-arg recursion.
+                    // sees the true answer at first registration.
+                    //
+                    // SITE 2 OF FOUR on the Box-TypeDef axis. The roster —
+                    // which four, why each exists, and the lint that pins the
+                    // count — lives on `ensure_box_type_def`
+                    // (`lowering/exprs/type_reg.rs`). This comment used to say
+                    // "the two paths"; there were already four.
                     if base == "Box" && generic_args.len() == 1 {
                         let inner_type = self.map_ast_type_mut(&generic_args[0].node, registry);
                         if let Some(&id) = self.named_types.get(&mangled) { return id; }
@@ -986,6 +989,9 @@ pub(super) fn register_collection_alias(
     // upgrade scan (`upgrade_types_from_fields` in lowering/mod.rs) already
     // detects collection fields via `is_collection_type_name(field_type_name)`
     // regardless of TypeDef presence — so the upgrade fires either way.
+    // SITE 3 OF FOUR on the Box-TypeDef axis — roster on `ensure_box_type_def`
+    // (`lowering/exprs/type_reg.rs`), pinned by
+    // `box_typedef_registration_sites_count` in `tests/lints.rs`.
     if base_name == "Box" {
         let inner_type = mapper.map_ast_type(&_type_args[0].node);
         let type_def = TypeDef {

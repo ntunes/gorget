@@ -1,0 +1,30 @@
+# A single-owner carve-out at a STRUCT-INIT position still requires an explicit
+# operator — `H(b)` may not silently copy a `Box[T]`.
+#
+# `move_without_operator_error.gg` pins the BARE-ASSIGN position of the same
+# rule. This fixture pins the CONSTRUCTOR position, which had no cell at all:
+# the ownership boundary at the `Box` mint decides clone-vs-move from typed
+# ownership state, and the failure mode when that decision widens is an
+# implicit copy of a type whose whole contract is that no implicit copy path
+# exists (AGENTS.md, Ownership at Consuming Positions — the carve-out list).
+#
+# BOTH diagnostics below are required, so a fix that loosens either position
+# is visible here:
+#   `Box[String] b = a`  — bare assign from a live local
+#   `H h = H(b)`         — struct init from a live local
+#
+# `gg check` must REJECT with `E_MoveWithoutOperator`, naming the source and
+# offering `^` or `.clone()`.
+
+from std.collections import Box
+
+struct H:
+    Box[String] b
+
+void main():
+    String s1 = "aaaaaaaaaaaaaaaaaaaa"
+    String s2 = "bbbbbbbbbbbbbbbbbbbb"
+    Box[String] a = Box[String](s1 + s2)
+    Box[String] b = a
+    H h = H(b)
+    print("built")

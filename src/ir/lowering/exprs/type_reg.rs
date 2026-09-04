@@ -120,12 +120,34 @@ pub(crate) fn get_or_register_type(
 ///
 /// Coherence-at-construction: tag `is_box: true` here so downstream
 /// consumers reading `TypeRegistry::is_box(type_id)` see the truth at
-/// every Box-TypeDef registration path. This is one of three Box-registration
-/// entry points (alongside `register_collection_alias`'s Box arm in
-/// `lowering/types.rs:789` and `monomorphize_struct`'s Box arm in
-/// `lowering/generics/mod.rs:2334`). All three must populate `is_box`
-/// uniformly — see `docs/devbook/24-layering-discipline.md` rule 3
-/// (one source of truth per axis).
+/// every Box-TypeDef registration path.
+///
+/// ## THE ROSTER — FOUR sites, and this comment is where it lives
+///
+/// The Box-TypeDef axis is written from FOUR places, each reached by a
+/// different route into type registration. All four must populate `is_box`
+/// (and `copy_semantics` / `drop_strategy`) identically —
+/// `docs/devbook/24-layering-discipline.md` rule 3, one source of truth per
+/// axis:
+///
+/// 1. `ensure_box_type_def` (here) — the mint's own registration, for a
+///    `Box[T]` first seen as a constructor call.
+/// 2. `TypeMapper::map_ast_type_mut`'s `Box` arm (`lowering/types.rs`) — the
+///    AST `Type::Named` recursion, for a `Box[T]` first seen in a declared
+///    type position.
+/// 3. `register_collection_alias`'s `Box` branch (`lowering/types.rs`) — the
+///    collection-alias registrar, which also carries the full protocol
+///    metadata for the other builtin containers.
+/// 4. `monomorphize_struct`'s `Box` metadata arm
+///    (`lowering/generics/mod.rs`) — the AST-template-driven monomorph path.
+///
+/// ⚠ Sites are named by FUNCTION, never by line number: this roster
+/// previously said "three" and cited two line numbers that had drifted 200
+/// and 111 lines. The enforcing guard is
+/// `box_typedef_registration_sites_count` (`tests/lints.rs`), which counts
+/// the `is_box: true` construction sites and fails when a fifth appears
+/// without joining this roster (Core #14 — an invariant-asserting comment
+/// needs an enforcing guard, or it rots).
 pub fn ensure_box_type_def(ctx: &mut LoweringContext, box_type_name: &str, inner_type: TypeId) {
     use crate::ir::types::{CopySemantics, DropStrategy, StructDef, StructField, TypeDef, TypeDefKind, TypeMetadata};
     if ctx.type_registry.get_type_def(box_type_name).is_some() { return; }

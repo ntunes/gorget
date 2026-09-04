@@ -1,0 +1,50 @@
+# KNOWN GAP — the `float` → `float32` TYPE CHECK is enforced at declared-slot
+# and plain-call-arg positions and NOT at CONSUMING positions, and every
+# position that escapes it stores zero.
+#
+# The checker knows this is an error. Measured, `gg check` alone:
+#
+#     float32 x = 1.5           local bind        -> REJECTED  E_TypeMismatch
+#     takes(1.5)                plain call arg    -> REJECTED  E_TypeMismatch
+#     Box[float32](1.5)         Box ctor          -> ACCEPTED  prints 0.000000
+#     S(1.5)  where S.f:float32 struct ctor       -> ACCEPTED  prints 0.000000
+#     v.push(1.5) on Vector[float32]              -> ACCEPTED  prints 0.000000
+#
+# The rejected spelling and the accepted ones describe the SAME operation:
+# putting an `f64` literal into an `f32` slot. Where it is rejected the user
+# gets `expected float32, found float`; where it is accepted the value is
+# written eight bytes wide into a four-byte slot and reads back as `0.000000`.
+#
+# ⚠ THIS IS THE CONSUMING-POSITION SET, on the TYPE axis. It is the same shape
+# as the ownership gap already filed for those positions — the rule holds at a
+# bare binding and a plain argument, and the constructor / collection-put
+# family escapes it — which is why the fix belongs at the shared consuming-arg
+# expected-type hint rather than at three sites.
+#
+# ⛔ DISCRIMINATOR from its neighbour
+# `known_gaps/box_float32_element_reads_zero.gg`: THAT one uses an explicit
+# `1.5 as float32`, so the source really is `float32` and the checker has
+# nothing to say — it fails in the C emitter instead. This one is the CHECKER
+# half. Both print `0.000000`, and fixing either alone leaves the other live,
+# so a repro that does not state which half it exercises adjudicates neither.
+#
+# EXPECTED (what the language SHOULD do): `gg check` REJECTS all three
+# accepted rows with `E_TypeMismatch`, naming `float32` and `float`, exactly as
+# it already does for the local bind and the plain call argument. If instead an
+# implicit f64->f32 narrowing at consuming positions is ratified, then all
+# three must print 1.500000 — what must NOT stand is accepting them and
+# storing zero.
+#
+# EXPECTED, as asserted by the test that cites this file: `gg check` FAILS.
+
+struct S:
+    float32 f
+
+void main():
+    Box[float32] a = Box[float32](1.5)
+    S s = S(1.5)
+    Vector[float32] v = []
+    v.push(1.5)
+    print((*a))
+    print(s.f)
+    print(v.get(0).unwrap())

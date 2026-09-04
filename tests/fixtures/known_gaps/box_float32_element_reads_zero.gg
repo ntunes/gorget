@@ -1,0 +1,53 @@
+# KNOWN GAP — `Box[float32]` READS ZERO on the C lane and will not BUILD on
+# the LLVM lane. The allocator's NAME and its BODY disagree about how wide the
+# element is.
+#
+# The element name is derived correctly: `c_type_name_for_id(F32_TYPE)` is
+# `"float"`, which is the right C spelling, and the emitted call really is
+# `__gorget_box_alloc_float`. The BODY generated for that name is
+#
+#     static inline void* __gorget_box_alloc_float(double val) {
+#         double* p = (double*)GORGET_ALLOC(sizeof(double)); *p = val; ... }
+#
+# — eight bytes, storing a `double`. The reader is `*(float *)(p)`, four bytes.
+# The value is written as a `double` and read back as a `float`: the low four
+# bytes of `1.5` are all zero, so C prints `0.000000` with `gg check` clean.
+# LLVM's typed IR sees the same disagreement and refuses at `llc`
+# (`call ptr @__gorget_box_alloc_float(double %v2)`), which is exactly the
+# signature of the element-type collapse the ten-primitive fixture closed —
+# here on the one arm that fixture does not cover.
+#
+# ⚠ MEASURED ON BOTH SIDES OF THAT FIX, so nobody reads this as a regression
+# it is not: identical before and after — C build rc 0 / run rc 0 / prints
+# `0.000000`, LLVM build rc 1. The `float32` arm was never reached by the
+# element-naming fix.
+#
+# ⚠ MECHANISM, and it is a Layering rule 1 loss rather than a naming bug:
+# `emit_runtime_helpers` (`src/backend/c_lir/emit_types.rs`) types the helper's
+# parameter with `box_alloc_inner_c_type`, which for a primitive IGNORES the
+# name suffix and uses the LIR param type instead — and the LIR param type has
+# already widened the `f32` to `double`. `box_alloc_suffix_to_c_type`, right
+# beside it in `helpers.rs`, maps `"float"` correctly; the emitter just does
+# not ask it on this path. The f32-ness survives in the NAME and is gone from
+# the LIR type, and the emitter trusts the lossy one.
+#
+# ⛔ DISCRIMINATORS, so this is not lumped with its neighbours:
+#   * NOT the element-type collapse that
+#     `tests/fixtures/box_ctor_primitive_element_types.gg` pins. That was the
+#     NAME axis — every unnamed element collapsing onto `Box__int64_t`. Here
+#     the name is RIGHT and the body is wrong, which is precisely why a
+#     ten-cell net over the other primitives cannot see it.
+#   * NOT the missing type check at consuming positions
+#     (`known_gaps/float32_consuming_positions_accept_float_literal.gg`).
+#     THAT is why this fixture writes `1.5 as float32` rather than a bare
+#     `1.5`: the cast makes the source genuinely `float32`, so the checker has
+#     nothing to say and the emitter defect is the ONLY one left standing. A
+#     repro written with a bare literal exercises both and adjudicates neither.
+#
+# EXPECTED OUTPUT (what the language SHOULD do): 1.500000
+# EXPECTED EXIT: 0, on BOTH backends.
+
+void main():
+    float32 x = 1.5 as float32
+    Box[float32] a = Box[float32](x)
+    print((*a))

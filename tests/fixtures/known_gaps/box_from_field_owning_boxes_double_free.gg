@@ -1,9 +1,7 @@
-# KNOWN GAP — MEMORY SAFETY, BOTH BACKENDS, ACCEPTED BY THE CHECKER.
-#
-# `Box[N](p1.node)` reads an enum value out of a STILL-LIVE struct field. The
-# source is live, so CoW's rule is clone-not-move — but the clone is SHALLOW:
-# the copy and `p1` end up owning the SAME inner `Box[N]` children, and both
-# drop them at scope exit.
+# REGRESSION (Rust lane) — `Box[N](p1.node)` reads an enum value out of a
+# STILL-LIVE struct field. The source is live, so CoW's rule is
+# clone-not-move; the copy used to be SHALLOW, so the copy and `p1` ended up
+# owning the SAME inner `Box[N]` children and both dropped them at scope exit:
 #
 #     free(): double free detected in tcache 2
 #
@@ -16,25 +14,36 @@
 #     freed by thread T0 here:
 #       #1 __gorget_global_dealloc_fn   #2 __gorget_box_free_N   #3 Box__N__drop
 #
-# THE DISCRIMINATOR is that the field's value TRANSITIVELY OWNS `Box`es. The
-# same shape one level shallower is fine — `Box[N](l1.node)` where `l1.node` is
-# a `Leaf(String)` clones correctly, and a `Box` built from a field read twice
-# (`Box[N](p.node)` twice over a `Leaf`) also runs clean. It is specifically the
-# nested-`Box` payload whose clone does not recurse.
+# `gg check` ACCEPTED it, so it was a one-sided accept of a memory-unsafe
+# program — Core #8: "both backends agree" is not a pass when the agreed-on
+# behaviour is a double free.
+#
+# ⛔ THIS FIXTURE'S ORIGINAL HEADER NAMED THE WRONG DISCRIMINATOR, and the
+# correction is the more useful half of the story. It claimed the axis was
+# "specifically the nested-`Box` payload whose clone does not recurse", and
+# cited a `Leaf(String)` cell as a clean control. Measured: `N__clone` is
+# CORRECT and is NEVER CALLED, and the real axis is HEAP vs LITERAL payload —
+# `Box[String](w1.s)` with a runtime-built `String` and no `Box` in the payload
+# at all double-freed identically. The `Leaf(String)` control was green only
+# because string literals are immortal `.rodata` views with `cap = 0`, on which
+# `gorget_string_free` no-ops. A control that cannot allocate acquits nothing
+# (Core #12). The minimal shape now lives beside this one as
+# `known_gaps/box_ctor_field_source_owning_string.gg`.
 #
 # NOT a use-after-move on the user's part and NOT dependent on aliasing between
-# the two sources: the crashing shape reproduces with every leaf distinct and no
-# value read twice (l1,l2 -> p1; l3,l4 -> p2; p1,p2 -> p3). It also reproduces
+# the two sources: the crashing shape reproduced with every leaf distinct and no
+# value read twice (l1,l2 -> p1; l3,l4 -> p2; p1,p2 -> p3). It also reproduced
 # with a traversal instead of a plain drop.
 #
-# `gg check` ACCEPTS it, so this is a one-sided accept of a memory-unsafe
-# program — CLAUDE.md Core #8: "both backends agree" is not a pass when the
-# agreed-on behaviour is a double free.
+# ⛔ WHY THIS LIVES IN `known_gaps/` DESPITE BEING A PASSING REGRESSION FIXTURE
+# WITH A LIVE TEST (the `box_ctor_closure_matches_box_new` precedent): the
+# SELF-HOST lane cannot compile the emitted C for a resource field read feeding
+# a box mint — it types the read as `void*` and hands that to
+# `__gorget_box_alloc_N`. Pre-existing, unrelated to the Rust-lane fix, filed.
+# A top-level fixture is auto-scanned into `runtime_parity_corpus`, so it must
+# stay out of that directory until the self-host lane can build it.
 #
-# Found while probing why the self-host's AST walkers clone so heavily
-# (R44 clone-reclaim); it is not itself a clone-count issue.
-#
-# EXPECTED OUTPUT (what the language SHOULD do): built
+# EXPECTED OUTPUT: built
 # EXPECTED EXIT: 0, and clean under ASan.
 
 enum N:
@@ -52,8 +61,9 @@ int main():
     W p1 = W(N.Pair(Box[N](l1.node), Box[N](l2.node)))
     W p2 = W(N.Pair(Box[N](l3.node), Box[N](l4.node)))
     # `p1.node` / `p2.node` are enum values that THEMSELVES own `Box`es, and
-    # both structs are still live. The clone taken here does not recurse into
-    # those inner boxes, so they are owned twice and freed twice.
+    # both structs are still live. The clone taken here must recurse into those
+    # inner boxes; before the mint routed through the ownership chokepoint it
+    # did not, so they were owned twice and freed twice.
     W p3 = W(N.Pair(Box[N](p1.node), Box[N](p2.node)))
     print("built")
     return 0
