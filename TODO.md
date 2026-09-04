@@ -132,8 +132,20 @@ one that moved because a defect was fixed.
 `__gorget_closure_env_alloc*5` cited to `t0953` is committed at `0d9f9cebe`. It was never separate work; the
 orchestrator nearly launched a track to redo it. **Check the pending branches before launching anything.**
 
-⚠ **DISK IS A STANDING CONSTRAINT** — the box crashed on it. **Every agent builds its own compiler**; prune
-finished **reviewers'** scratch too, not just executors'. Keep pending agents' worktrees AND their `/tmp`.
+⛔ **DISK — AND `df` LIES HERE. DO NOT USE ITS `Available` COLUMN.** Owner 2026-09-04: it printed 371G free
+when **real free was under 100G**. The overlay reports the apparent device size, not the host's
+thin-provisioned image. **Measure with `du`**: `du -sh /workspace/gorget /tmp` + per-worktree
+`find /workspace/gorget/.claude/worktrees -maxdepth 1 -mindepth 1` + `du -sm /tmp/* | sort -rn | head -20`.
+**The box crashed on disk once already.** Every agent builds its own compiler, and reviewers outnumber
+executors several to one and never integrate — each leaves ~200-700M of `/tmp` scratch plus a 2-4G worktree.
+**Reclaim order:** (1) `/tmp` dead-agent dirs — routinely 9-10G; ⚠ **KEEP `/tmp/gg_fuzz_lint_target`**, it is
+a live `CARGO_TARGET_DIR` for a lint (`grep -n gg_fuzz_lint_target tests/lints.rs`) and deleting it forces a
+rebuild on EVERY `cargo test --test lints`. (2) Finished agents' worktrees, 2-4G each — **branches survive
+`git worktree remove`**, so nothing is lost; a completed agent can hold a STALE LOCK, so check `ps -p <pid>`
+from the lock reason before `remove -f -f`. (3) A checkout's own `target/` is ~12G but only reclaim it at
+ROUND CLOSE — the orchestrator runs lint targets every heartbeat.
+⚠ **Keep pending agents' worktrees AND their `/tmp` namespaces.** Main (~27G) is the largest single consumer
+and is still never yours to prune.
 
 ### 📍 R49 LIVE STATE (2026-09-03, orchestrator) — supersedes the per-track prose below on STATUS
 ⭐ **TRACK E IS SIGNED OFF AND EXECUTING — the round's first executor.** FIVE sequential fresh brief-reviews,
