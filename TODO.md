@@ -683,6 +683,47 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔⛔ **W PASS 3 — THE ROUND'S MOST VALUABLE REVIEW: MY OWN PRESCRIPTION WOULD HAVE SHIPPED A SILENT NO-OP.**
+I wrote *"the producer reads the env TypeDef's typed `drop_fn`/`clone_fn` via `src_ty`"*. **MEASURED:
+`TypeMetadata` HAS NO `drop_fn` FIELD** (there is `drop_strategy`, whose `Recursive` variant carries **no
+name**); **`clone_fn` is `None` for every closure env** (L's mint ends `..TypeMetadata::default()`); **and the
+LIR mirrors are equally empty.**
+⇒ ⛔⛔ **AN EXECUTOR FOLLOWING THAT SENTENCE GETS `{NULL, NULL}` AT EVERY PRODUCER SITE — THE BUILD GOES
+GREEN, THE FIXTURES STOP FAILING, AND THE HEADER CLOSES ZERO CELLS. A NO-OP THAT PASSES EVERY GATE THAT ONLY
+CHECKS "IT COMPILES".** ⚡⚡ **THE LESSON: A PRESCRIPTION THAT NAMES A FIELD MUST CITE THE GREP THAT SHOWS THE
+FIELD EXISTS. I named two, and neither carries what I claimed.**
+⭐ **The correct read exists and is in scope:** `LirModule.type_drop_fns` → `TypeDropInfo.drop_fn_name`
+(*"mangled for collisions"* — so the prototype's `"%s__drop"` string arithmetic is **wrong whenever a mangle
+applies**), populated **before** function lowering. ⭐⭐ **AND THE SELF-HOST ALREADY READS EXACTLY THIS
+(`lir_lower.gg:5034`) — reference lags the self-host for the third time this round.** ⛔ **The CLONE half has
+NO carrier at all** — every `__clone_inplace` name is `format!`-ed; **one must be ADDED.**
+⛔ **MY Z1 SET WAS 2 OF ≥4 — AND THE SHAPE I MISSED BREAKS THE COMMITTED CORPUS.** `field_is_transitively_droppable`
+excludes **anything not `GirType::Named`** *and* **every primitive via an early return**; I named only the
+`FnPtr` exclusion. **S3 (POD `int` capture) is the DOMINANT in-tree shape: under the naive header
+`security/attack_91_…` and `callable_clone_value_form_axis.gg` (13 producer sites) FAIL TO COMPILE.**
+⇒ ⭐ **That upgrades the mandatory fix from "a missing case" to "the naive design breaks the committed
+corpus."**
+⛔ **THE SELF-HOST LANE DOUBLE-FREES WHEN THE HEADER LANDS, AND NO ADDENDUM ANALYSED IT.** The SH **already**
+emits `__Closure_N__drop` immediately before `gorget_closure_free` — the very block the brief cites as its
+ORDERING PRECEDENT — so once `gorget_closure_free` calls `h->drop` itself, **the field drops twice.**
+⚡ *"A diff of two PROGRAMS cannot show whether two PATCHES compose" — on the LANE axis, and `brief_S_a3.md`
+§6 asked for exactly this analysis and never got it.*
+⭐ **AND THE LEDGER UNDERSTATED THE TRACK: it closes 3 of 4, not 2** — `then_escapes` reaches CLEAN under
+header+move — **plus both cells that motivated the design.** ⛔ **But my "the two residuals are DIFFERENT
+defects" is a MISATTRIBUTION**: both are the **same allocation at identical source positions** modulo an
+11-line shift, **two complementary halves of ONE chain.** *Saying "different defects" would let an executor
+think either half is independently valuable. Neither is.*
+⚖ **THE OWNER'S COST QUESTION IS ANSWERED: THE NULL-ENV SKIP BELONGS IN ITS OWN TRACK.** The header adds
+**+16 B to EVERY heap closure env** and the skip reaches only S1; corpus bound **+5,360 B ≈ 1%**, and **no
+allowlist churn because rows key on `site*count`, not bytes.** ⇒ **bundling a discretionary optimisation with
+a compile-failure fix makes the mandatory half hostage to a design conversation.**
+⭐ **Readiness row 4 resolved cheaply: dfB and dyn ARE the guards** — 12 B/2 at base, CLEAN under header+move,
+so both go RED on revert.
+⊕ **`X5`'s "16 clone sites" is wrong — the grep X5 itself prescribes returns 21.** ⊕ **TWO functions are named
+`infer_drop_strategy`; anchor by impl or the wrong one gets deleted.** ⊕ **Measurement discipline: under LSan
+a leak-abort with stdout redirected to a FILE loses buffered stdout — and `stdbuf` is NOT the fix, it breaks
+ASan ordering.**
+
 ⛔⛔ **N2's CONFIRMING REVIEW: THE TRACK'S OWN TWO NEW TOP-LEVEL FIXTURES LEAK, ARE UNALLOWLISTED, AND WOULD
 HAVE REDDED THE ROUND-CLOSE SANITIZE GATE.** `vector_hof_result_element_drop` (`__gorget_closure_env_alloc*4`)
 and `…_sizing` (`*5`), both STABLE across three reps, **neither in the allowlist**. The chain is mechanical
