@@ -675,6 +675,36 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐ **TRACK U LAUNCHED (pass 1) AND S-a2 RE-SCOPED TO *PLACES ONLY* (pass 2 launched), 2026-09-04.**
+U's brief makes **filing the 33-site enumeration its FIRST deliverable, before any fix work, unconditional on
+the design succeeding** — and tells the reviewer to **RECONSTRUCT THE DETECTOR AND RE-DERIVE THE NUMBER**
+(memset-believed-size vs memcpy-written-length, read out of the emitted code) rather than pass 33 through.
+⊕ **U's real centre is the OPEN DESIGN CALL R left it:** what type should a void `map`'s result slot have?
+**"Just use `unit`" HAS ALREADY BEEN TRIED AND MEASURED rc 139 ON BOTH BACKENDS**, per
+`combinator_callable_param_same_type.gg`'s own header. ⊕ SIX Q#2 pressed explicitly: **a detector built only
+from the 33 known sites is built in its own image — it must catch a 34th nobody has seen.**
+
+⛔ **S-a2's SCOPE WAS RE-CUT TWICE NOW. The right axis is `expr_is_place`:** PLACES (struct field, tuple
+element, `v[i]`) → **check-time GATE, this track**; TEMPS (`.get().unwrap()`, dict value, `Option` payload, a
+returned `Callable`) → **LOWERING ownership-at-birth, NOT this track** — they are move-eligible shape #2 and
+**a reject-fixture written on `.get().unwrap()` would green-light forever, because that cell is CORRECTLY
+accepted.** ⚠ **A third wrong cut is worse than a slow one; pass 2 must cite an INDEPENDENT witness for the
+partition, not a grep.**
+⛔ **THE OPEN TRADE PASS 2 MUST RESOLVE (B5):** cell G is **memory-clean at HEAD**, and this track turns it
+into a compile error whose **only legal remedy leaks 16 B** (`^h.f` is ratified to reject under D10(a)
+ADDENDUM; `h.f.clone()` hits `t0948`). ⇒ *working program → rejected program → user writes the clone → now it
+leaks.* **Must `t0948` land first? A recommendation is owed, not a survey.**
+
+⛔⛔ **THREE FILINGS NOW OWED FROM S-a2's BLOCK `t1225`–`t1234`, UNCONDITIONAL ON ITS DESIGN:**
+1. **the ctor-arg-temp double-free** (`Holder(mk(40))` + a field read; **both frees in `main`, no
+   `Holder__drop` participates** ⇒ the second owner is the constructor-argument TEMP, never move-zeroed);
+2. **`Vector[Callable].push(^c)` ICEs** — `Tier 2a consume-site violation … untracked source consumed`,
+   `src/ir/lowering/mod.rs:2154`, **build rc 101 with `gg check` rc 0**; not `t0873`, not `t0949`;
+3. ⛔⛔ **THE ESCAPING-CAPTURE UAF — IT OUTRANKS THE TRACK THAT FOUND IT.**
+   `Callable[int()] make(String s): return (): s.len()` is **memory-unsafety from ORDINARY SAFE SYNTAX with
+   `gg check` CLEAN.** ⚡ **AND IT IS WHAT SILENTLY CONTAMINATED EVERY CELL OF S-a's EVIDENCE TABLE** — a live
+   compiler defect masquerading as test-harness noise for two review passes. **Candidate for its own track.**
+
 ✅ **TRACK R INTEGRATED** (`b2f6eb30a`, output-review SIGN OFF). Post-integration bare rcs on the integration
 branch: `lints_rc=0` (224) · `census_rc=0` · `lib_rc=0` (1185) · `todo_rc=0`. `known_gaps_census.sh --check`
 is **rc 1 → rc 0**; roster held 215, PASS 7→6, set-equality against the unchanged 6-row allowlist holds.
