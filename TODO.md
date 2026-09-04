@@ -683,6 +683,33 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔⛔ **T1 PASS 1 — AND ITS L4 REACHES THE ROUND-CLOSE BATTERY ITSELF: THE RUNTIME-DIFF CEILING NO-OPS IN
+DEBUG BUILDS.** The ceiling's own comment says it **prints a note instead of evaluating** in debug, and that
+**"R48 Track C SHIPPED TWO FIXTURES THAT WOULD HAVE BREACHED IT AND ITS DEBUG FAMILY RUN WAS GREEN."**
+⇒ ⚡⚡ **A GATE THAT SILENTLY DEGRADES BY BUILD PROFILE IS WORSE THAN NO GATE, BECAUSE IT PRODUCES A GREEN.**
+**Any ledger-moving track must run `--release` with `GG_RUNTIME_DIFF=1` and REGENERATE both constants, never
+apply deltas — and the round-close battery inherits the same caution.** ⊕ And T1's *"MATCH floor +1"* is
+**wrong**: L's graduation adds **8 already-MATCH rows beneath T1's own**, against deliberately tight slack.
+⛔ **T1 CLOSES AN ARM IT NEVER CLAIMED, WITH A PASSING TEST STILL `#[ignore]`d.** `t0877`'s **second** repro —
+which the brief never measured — goes **CC-FAIL → `hello\nworld` rc 0, exactly the string its ignored test
+asserts.** ⇒ **the round would SHIP A FIX WHILE ITS FILED ITEM STILL CALLS THE DEFECT LIVE.** Owed: un-ignore
+the test, **re-scope `t0877` to arm (a) alone**, narrow the sibling ignore text.
+⛔ **Both headline figures came from a tree WITHOUT Track L** — `grep -c` for L's 11 fixtures in the scout's
+pre-sweep → **0**. The conclusion survives (pass 1 measured all 11 itself); **the numbers do not.** ⊕ **And of
+3 claimed answer-changes only TWO ARE OBSERVABLE** — one is CC-FAIL in *both* columns, **and the brief never
+names it.**
+⊕ **Readiness #3: `sound_move_operand_closure_tail_allowed` HAS NO TEST AT ALL** — its name appears in no
+file's content, and the wiring lint governs only `known_gaps/`. ⚡ **The track books a "free gain" on a cell
+whose intent lives ONLY IN A COMMENT.**
+⭐ **AND PASS 1 SUPPLIED THE SPLIT'S BEST DEFENCE, WHICH THE BRIEF LEFT TO BE INFERRED (SIX Q#4):**
+`sh_closure_literal_ok_body_typed_int` passes its closures as call **ARGUMENTS** (`expected_type = -1`), so
+**no widening of T1's rule can reach it** — it needs T2's machinery. **The T1/T2 split is PRINCIPLED, not
+convenient.**
+⊕ **It also confirmed the brief's SELECTION is correct even though its evidence is absent:** L adds **11**
+top-level files and the parity corpus auto-scans all of them; pass 1 measured all 11 and **exactly the 3 named
+go CC-FAIL→MATCH**, the other 8 already matching. *The claim is right; a downstream reviewer just cannot check
+it from the brief.*
+
 ⭐⭐ **N2's FOLD 2 DID BETTER THAN THE BRIEF: IT *FIXED* ONE OF THE TWO LEAKS INSTEAD OF ADMITTING IT.**
 Before writing any paperwork it asked whether the leaks could simply be removed — and one could.
 **`vector_hof_result_element_drop` now has NO ROW AT ALL:** the expander defect **does not care whether the
