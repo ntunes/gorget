@@ -683,6 +683,38 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **N2 OUTPUT-REVIEW = SIGN OFF ON THE FIX AND THE GUARD** — *"the strongest guard package I have reviewed
+on this repo"* — **2 BLOCKING (both cheap, both coverage/bookkeeping), folded.**
+⭐ **It CONFIRMED the round's biggest finding by building a real pre-fix compiler:** an **8-element** probe →
+**rc 99 `heap-buffer-overflow, WRITE of size 32`**, while the **2-element** probe is clean — with the
+mechanism read out of the runtime source, `new_cap = old_cap == 0 ? 8 : old_cap`. **SIX Q#6 confirmed: every
+cell this round sat under the reserve.**
+⭐ **And it measured all FOUR guard parts RED on four DISTINCT line-anchored breaks** (sibling at 2407 left
+untouched), **plus the validator staying GREEN on the two it structurally cannot see.** ⚡ **Break D is the
+decisive one: the runtime check aborts BEFORE the memcpy, so ASan reports NO overflow — it catches the CAUSE,
+not the symptom, and is genuinely the only instrument that sees that row.**
+⛔ **B1 — `|pinned| == |changed|` fails on the Deque cell, and it is THE ONE PLACE THE FIX REASONS INSTEAD OF
+MEASURING.** No Deque cell exists in either fixture (`grep -in deque … ` → rc 1). Measured: **C and LLVM both
+2 → 4 `drop-cust`, and 4 is CORRECT** — a genuine user-visible fix with **zero coverage on both backends.**
+The fix's own comment argues at length that passing `CollectionCtorKind::Vector` for a Deque receiver is safe;
+**the argument is TRUE** (one shared arm at `insts.rs:2305`) — *but the one place it reasoned is the one place
+with no fixture.*
+⛔ **B2 — `t1216`'s `repro` field cites a fixture that DELIBERATELY CANNOT EXHIBIT THE BUG.** The item's own
+body admits the repro must be constructed. ⚡ **The contrast INSIDE the same commit is what makes it blocking:
+`t1215` and `t1217` ship real repros (both verified reproducing), `t1218` carries a VALID no-repro exemption —
+`t1216` has neither, and it is the one defect this round's fix MOVED (0 → 4).**
+⛔⛔ **N1 AFFECTS THE ROUND CLOSE — the leak burn-down is WIDER than the commit records (SIX Q#3).** 32
+allowlisted fixtures call `.map(`/`.flat_map(`; **one row was edited.** Spot-checks: `test_vector_str_higher_order`
+141 B/18 → **119 B/14**; `string_higher_order` 300 B/41 → **169 B/19**. ⇒ **the sanitize sweep will print a
+TIGHTEN list at close, and those tightenings are THIS ROUND'S OWN INFLOW.** Folded as executor work — better
+landed than met as a surprise at the gate.
+⊕ **It also REFUTED the executor's own census diagnosis:** it could not reproduce rc 1, found the
+`PASSING_ALLOWLIST.txt` attribution to Track R **unsupported** (that file's last edit IS an ancestor of the
+executor's base), and measured **rc 0, roster 219 · PASS 6, set-equal** on the tree I will integrate —
+**decisively, the diff cannot be the cause**, since both new `#[ignore]`d tests genuinely FAIL.
+⊕ **Both new fixtures COMPILE and MATCH on the SH lane** (2/0), and the bootstrap ran **1025 s green with the
+new validator live over the entire self-host compiler.**
+
 ⭐ **U's FILING DELIVERABLE LAUNCHED AS ITS OWN EXECUTOR (2026-09-04) — fix work DEFERRED, filing is NOT.**
 U's 33-site enumeration, its detector method and three genuinely-new defects exist **only in a `/tmp` brief**,
 which round close prunes. ⇒ **an executor scoped to the FILING ALONE**, discharging the Cardinal Rule
