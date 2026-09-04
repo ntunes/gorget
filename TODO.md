@@ -87,8 +87,22 @@ not the one named; zero `.status.code()` maskers remain, so that filing was not 
 ⊕ **A robustness-map cell was added** for the SEGV (hand-derived expectation, beginner idiom per the map's
 "not from our own corpus" rule) — and running it surfaced a SECOND drifting cell, `trait_dynamic_dispatch_box`
 `[selfhost] TRAP → CRASH`, recorded on `t1084`.
-✅ **T1's ERRATA DIFF IS SIGNED OFF — no blocking. Three small errata folding now; T1's TIP WILL MOVE, and
-INT-A's brief PINS T1 BY HASH — update the blank before its executor launches.**
+✅✅ **TRACK T1 IS COMPLETE.** Main diff + errata both output-reviewed and SIGNED OFF; the three closing
+errata are folded. **Tip `c089fe6ac` on `worktree-agent-a646a4a5eb16b14ca` — but INT-A resolves it from the
+BRANCH at launch, not this hash.**
+⊕ **No FOURTH review pass on T1, deliberately, and here is the reasoning to inherit:** the closing errata are
+corrections a SIGNED-OFF review prescribed, and `git diff --name-only 0da7f78b6 <tip>` touches **no `src/` and
+no top-level fixture** — so the compiler and the parity corpus are untouched. **The gate is RELOCATED, not
+skipped: INT-A merges T1 and runs the full set, and INT-A's own output-review covers it.**
+⊕ **The `t1303` mechanism is now split by write site, which localizes both fixes.** Regenerated emitted C: the
+closure signature AND the call temp are both correctly typed; **only the DESTINATION SLOT is wrong, and the
+value round-trips through a wrongly-typed 32-byte intermediate.** So the **Rust** fix is at the
+`unwrap_or_else` call-result slot typing and **must not touch the closure signature** — while the
+**self-host** gets the *signature* wrong one layer earlier, which is why it fails to BUILD instead of
+overreading. Two write sites, one symptom class.
+⭐ **A QUESTION WORTH CARRYING TO R50, from T1's executor:** what turned a comment fix into a reproducible
+HIGH memory-safety defect was refusing *"widen the sentence until it is true"* and asking what the position
+was a **PROXY** for. **`t1304`'s 46 orphans are 46 fixtures nobody has asked that question about at all.**
 ✅ **THE PARITY REASONING WAS VERIFIED AT THE MECHANISM, not the conclusion:** every fixture enumeration in
 `tests/integration.rs` is `read_dir` on the TOP LEVEL with `p.is_file()`
 (`grep -n 'let fixtures_dir = ' tests/integration.rs` → 12 sites, all identical), so nothing under
