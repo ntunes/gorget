@@ -242,7 +242,31 @@ touches neither. **Six Questions #2, on the replacement guard — the same failu
 one, one level up.** ⭐ **THE CLASS IS "AN `⚖ ADMITTED` BLOCK'S RETIRE CONDITION OVER-STATES ITS BLOCKERS",
 and the guard is a required `# RETIRES: <id>…` line per block with every id asserted to exist** — both
 directions, no allowlist, no sentinel hole, and it fires TODAY on the live instance.
-⊕ **FOUR uncovered AXES have now been found, one per pass, each closed by an instrument the executor does not
+🚀 **INT-B's EXECUTOR IS LAUNCHED on `/tmp/brief_INTB_v6.md` after FIVE sequential brief-reviews.** Pass 5's
+verdict was *"fold and launch"*, and it delivered a row-by-row TOTALITY ARGUMENT for every axis except the one
+it found.
+🚨 **THE FIFTH AXIS: `fixed_leak` OUTSIDE THE EXAMINED SET — ~254 ROWS POLICED BY NOTHING.** An uncited row
+that measures ∅ lands there with **no rc**, and once outside the 46 no acceptance item names it. **287 of 300
+rows carry no column 3 at all.** ⚠ **AND THE EXAMINED SET IS ITSELF A SELECTION (Six Questions #3, on the
+enumerator):** both its terms are computed from BLOBS — where two branch AUTHORS disagreed — with **no
+dependence on the ~1984 insertions across lowering/typecheck/LIR that L never measured against.** A row
+nobody thought to touch is absent BY CONSTRUCTION. **The class has fired before: one row was retired this
+round only because a track happened to look, and R48 deleted 16 after re-verifying them clean.**
+⭐ **Closed for ZERO extra runs** — same base-comparison criterion, appended to a FIXLIST already mandated.
+⛔ **AND IT REORDERS THE TRACK: run the full sweep EARLY and PIN THE CONSTANTS LAST**, because a `fixed_leak`
+row found in scope moves them.
+⛔ **THREE GUARD-SPEC CORRECTIONS, each of which would have RED-LIT THE CORRECT END STATE:** "exactly one
+RETIRES line" **manufactures the class the guard retires** (one block admits two rows with two conditions, and
+that split is itself a correction of an over-statement) ⇒ `≥1`; two conditions name **SUB-ITEMS** that are not
+filenames ⇒ token is `t[0-9]{4}`, ignore the suffix; and **N2's own two blocks spell RETIRES as prose without
+a colon**, so adopt-verbatim + canonicalise-the-existing-ten leaves them unmatched ⇒ canonicalise N2's too.
+⊕ **ERRATUM: FOUR constants were ruling-gated, not five** — the admitted row's pair is CITED, so the uncited
+count never depended on the ruling. The fiddliest part was executable throughout.
+⚠ **A FIVE-BUILD PRE-FLIGHT GOES FIRST:** five top-level fixtures are swept that **L's tree never had** — no
+rows, unmeasured. **If any leaks, acceptance 2 cannot pass without a row, and by the file's own header that is
+A SECOND OWNER ASK.** The executor is told to STOP and report rather than admit it.
+
+⊖ **Superseded: FOUR uncovered AXES have now been found, one per pass, each closed by an instrument the executor does not
 author:** a row left at its old value (advisory) · a row whose fixture stops BUILDING (coverage) · a row KEPT
 for a fixture that no longer leaks (`fixed_leak`) · and COLUMN 3, which is **fully forced — zero degrees of
 freedom — so stating the rule closes it.** **Pass 5's single question is whether a FIFTH axis exists.**
