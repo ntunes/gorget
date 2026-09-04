@@ -683,6 +683,39 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **N2's FOLD 2 DID BETTER THAN THE BRIEF: IT *FIXED* ONE OF THE TWO LEAKS INSTEAD OF ADMITTING IT.**
+Before writing any paperwork it asked whether the leaks could simply be removed — and one could.
+**`vector_hof_result_element_drop` now has NO ROW AT ALL:** the expander defect **does not care whether the
+callee is a closure literal or a named function**, so every callee became a named function — **still RED
+pre-fix, and fully clean after**, held by a new `…_is_sanitize_clean` test. ⚡ *"That is the file's own 'fix
+it instead', applied."*
+⭐ **And it proved the OTHER leak IRREDUCIBLE by measurement rather than asserting it:** against the pre-fix
+compiler **a named callee whose body is the same container literal sizes its accumulator CORRECTLY** — the
+GIR lane refines a named callee's result type and not a closure literal's. ⇒ **respelling those cells would
+DELETE THE DEFECT BEING PINNED, not shrink the leak.** *The closure literals ARE the entry condition.*
+⚖⚖ **AND IT DECLINED MY OWN TWO-ROW CORRECTION, CORRECTLY, AND FLAGGED AN OWNER ASK.** My header says a
+genuinely-new-inflow row is an **owner ask**, and the ⚖ ruling covering this shape **names three rows BY
+NAME — not this one.** So the row ships with an `⚖ ADMITTED` block **saying so explicitly rather than quietly
+claiming a ruling that does not reach it.** ⚡⚡ **A TRACK REFUSING TO INHERIT AN OWNER RULING IT WAS NOT
+GIVEN — exactly the discipline the ⚖ marks exist for, and it caught ME trying to hand one over.**
+⇒ **OWNER ASK, now ONE row not two: admit `vector_hof_result_element_sizing`
+(`__gorget_closure_env_alloc*5`, cited `t0953`), whose leak cannot be removed without deleting the defect the
+fixture pins.**
+⊕ **Constants regenerated from the census, never by delta**, and they differ from my simulation by exactly one
+row / one pair / four records — **that difference IS the drop fixture's leak being fixed rather than
+admitted.** The `lints.rs` comment now states **burn-down and inflow SEPARATELY**, names which rows each
+covers, and says never to derive them by hand.
+⛔ **PROBABLE DUPLICATE TO RESOLVE AT INTEGRATION: `t1287` (N2) and `t1290` (L) are almost certainly the same
+`string_enum_variants` leak**, found independently by two tracks in the same round — **L ADMITTED it, N2
+FILED it.** Exactly one must survive and the allowlist row must cite the survivor. **N2's confirming review
+is asked to adjudicate, not to resolve.** ⊕ N2 discriminated its filing from `t0218` (same fixture, but a
+self-host OUTPUT parity cell already closed) — **grep alone would have merged them.**
+⊕ **N2's sweep rc 1 is solely `string_enum_variants`** — i.e. **it goes green the moment L's admission lands**,
+which is the same defect from the other side.
+⊕ **A 16-row advisory TIGHTEN list with ZERO overlap with N2's 35-fixture HOF set** — its class is fully
+burned down; the rest is pre-existing corpus drift, **left for the orchestrator to route rather than swept
+into the track.**
+
 ⛔⛔ **I RE-SPELLED A COVERED FIGURE AGAIN — IN THE VERY ENTRY THAT RECORDED THE RULE, ONE COMMIT LATER.**
 `figures_db_values_have_one_spelling` fired on `sanitize.coverage_floor` because I quoted a sweep summary
 line verbatim into the handover. ⚡⚡ **THE FIRST FIX WAS A ONE-OFF EDIT; WHAT WAS MISSING WAS A HABIT.**
