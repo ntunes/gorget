@@ -1,3 +1,72 @@
+- [2026-09-04] **`t0729` RE-SCOPED, NOT CLOSED (R49 Track R) — THE THREE ROUND-CLOSE GATES THAT WERE RED AT
+  PRISTINE HEAD ARE ONE ADJUDICATION, NOT THREE: the fixture GRADUATES, both `security_safe_except_on`
+  annotations come OUT, and the class is live at HEAD in a green, non-`#[ignore]`d, top-level fixture.**
+  ⚠ A MID-ROUND entry, not a round close — the headline deliberately does NOT open `ROUND`/`Round`/`Rnn`,
+  which `scripts/clone_meter_check.sh --round-close-census` counts as round-ish
+  (`done_md_round_close_shapes_are_pinned`).
+  **THE THREE GATES.** `scripts/known_gaps_census.sh --check` rc 1 (sole un-allowlisted passer
+  `llvm_nested_option_match_no_memcpy_overlap`), and `GG_BACKEND=llvm cargo test --test security` red on
+  `sec_64_deep_option_unwrap` and `sec_70_inline_none_nested`. None was this round's inflow and all three
+  trace to one item, so they are ONE adjudication, not three. `security_safe_except_on` is **not** a
+  guard-design defect: its doc comment says it asserts the trip STILL happens, so that fixing the cited
+  item forces the annotation out. **The red was the ratchet firing in the good direction**, and the panic
+  text prescribed the remedy verbatim.
+  **THE ALIASING INPUT FOR THIS INSTANCE IS GONE — THE CLASS IS NOT RETIRED.** Cite Track U for the class;
+  this entry closes only the instance.
+  **THE ROOT CAUSE WAS A MIS-TYPED SLOT, NOT ALIASING.** The inner `None()` temp took the OUTER Option's
+  type, so the payload copy's length followed the wrong type. At HEAD the payload copy is 16 — exactly the
+  destination field's size (`%s2 = alloca %Option__int64_t` / `memset(%s2, 0, 16)`, then
+  `%v53 = getelementptr %s3, i64 8` / `memcpy(%v53, %s2, i64 16)` into a 16-byte field).
+  **THE GUARANTEE IS STATIC AND ARCH-INDEPENDENT, BY DIRECT x86_64 MEASUREMENT.** Filing-era
+  `memcpy(224(%rsp), 240(%rsp), 24)` — [224,248) against [240,264), an 8-byte overlap; HEAD
+  `memcpy(232(%rsp), 248(%rsp), 16)` — [232,248) against [248,264), disjoint. **The length is a CONSTANT
+  OPERAND in the emitted IR, and no frame layout on any target can change a constant.** ⚠ Do NOT reach for
+  the earlier *"two distinct 24-byte allocas cannot be placed 16 apart"* argument — it was right by luck:
+  x86_64 places them 24 apart, exactly as that argument said it must, and the 16 was a GEP offset.
+  ⛔ **`t0729`'s OWN PRESCRIBED FIX WAS A TRAP.** It prescribed `llvm.memmove`, which TOLERATES overlap: it
+  would have SILENCED ASan while PRESERVING the 8-byte overrun, converting a loud defect into an invisible
+  one.
+  ⚠ **AND THE INSTRUMENT SEES ONLY A CORNER OF ITS CLASS (SIX Q#2).** ASan-clean on the LLVM lane is **not**
+  evidence that no overlapping or overrunning aggregate copy exists: the emitted USER IR is not
+  instrumented — only the runtime C is — so a stack OOB write is invisible unless the overrun lands
+  EXACTLY on the source buffer and trips the `memcpy` interceptor's overlap check. **`t0729` was found by
+  that accident**, and so was its successor.
+  **WHAT LANDED.** Both annotations deleted and the plain `security_safe` calls restored
+  (`tests/security.rs`, `sec_64` / `sec_70`); the helper KEPT with `#[expect(dead_code, reason = …)]` —
+  `expect`, not `allow`, so it fires `unfulfilled_lint_expectation` the moment a caller returns and the
+  annotation retires itself. The repro GRADUATED to top-level
+  `tests/fixtures/nested_option_match_inline_some_none.gg` — **placement DECIDED BY MEASUREMENT, not
+  judgement**: `assert_self_host_stdout` MATCHES on the self-host lane, so no `CORPUS_MANIFEST.txt` edit,
+  no `LEAK_ALLOWLIST.txt` row (measured ASan- and leak-clean on both lanes) and no
+  `RUNTIME_DIFF_NONMATCH_CEILING` move — with TWO live tests: the LLVM/ASan one and a default-lane
+  `run_gg`, because a C-lane regression to `outer-none` would otherwise leave every gate green (top-level
+  enrolment in `runtime_parity_corpus` / `c_emit_comparison` is diagnostic-always-pass). The two inline
+  LLVM-sanitize probes are now one helper, `assert_llvm_sanitize_clean_stdout`, whose doc carries the
+  instrument's narrowness so no future caller reads a green as a class-wide claim.
+  ⛔ **`t0729` RE-SCOPED, NOT CLOSED**, with a new durable repro
+  `known_gaps/llvm_option_map_void_callable_result_slot_oob.gg` and an `#[ignore]`d test asserting the
+  intended `hello%` — RED-verified at HEAD: rc 99, `memcpy-param-overlap`, `#1 void_map`.
+  **TWO DEFECTS, ONE LOUD, measured on BOTH lanes at HEAD:** `Option[T].map(f)` with a VOID-returning
+  `Callable` PARAM allocates the result as `Option[int64]` on **both** lanes — so the mistyping is UPSTREAM
+  of the backends — but the C backend sizes the aggregate copy from the DESTINATION FIELD
+  (`memcpy(__v44, __v30, sizeof(int64_t))`: in bounds, a truncated `String`) while the LLVM backend sizes
+  it from the SOURCE VALUE (`memcpy(%s17+8, %s16, i64 32)` into an 8-byte field — 24 bytes OOB).
+  ⇒ **The C lane's cleanliness is NOT a vindication of the lowering (Core #8)**: it is clean only because a
+  void `map` discards its result, so nothing reads the truncated payload. **And fixing the LLVM length
+  alone would silence ASan while leaving the type disagreement** — the same trap as the memmove
+  prescription. What the result TYPE of a void `map` should be is left OPEN and unprescribed: the
+  `I64_TYPE` fallback is a documented retreat (minting `unit` measured rc 139 on both backends), not an
+  oversight.
+  ⛔ **A GREEN, NON-`#[ignore]`d, TOP-LEVEL FIXTURE CARRIES THIS CELL.**
+  `combinator_callable_param_same_type.gg` trips rc 99 `#1 void_map` under `--backend=llvm --sanitize`; a
+  plain `--backend=llvm` build exits 0 with correct output — benign BY LUCK. Its neighbouring doc comment
+  asserted that fixture *"is ASan-clean"* — TRUE on C, FALSE on LLVM, **never measured on the lane it
+  claimed** (Core #14). Corrected in place with the measurement.
+  **GATES (bare rc):** `cargo build` 0 · `cargo test --lib` 0 (1185) ·
+  `GG_BACKEND=llvm cargo test --test security` **0** (213 passed, 30 ignored) ·
+  `scripts/known_gaps_census.sh --check` **0** (was 1; roster 215 held, PASS 7→6, FAIL 208→209 — the
+  graduated row leaves and the re-scoped row lands in FAIL, so set-equality against the unchanged 6-row
+  allowlist holds and `CEILING` stays 6; `tests/lints.rs` untouched) · `cargo test --test lints` 0 (224).
 - [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
   STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,
   garbage or empty stdout on BOTH backends. Two producer sites now stamp the View tag; 12 cells RED→GREEN.**

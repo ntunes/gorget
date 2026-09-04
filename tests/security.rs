@@ -444,6 +444,17 @@ fn security_safe(name: &str, expected_stdout: &str) {
 /// output" would also be satisfied by an unrelated segfault, so the exemption
 /// would silently widen to cover a defect nobody adjudicated. Name the class
 /// the filed item describes, and nothing else.
+#[expect(
+    dead_code,
+    reason = "No lane exemption is live. The last two — attack_64 and attack_70, \
+              both citing todo/t0729 — were removed when the LLVM backend stopped \
+              allocating a nested Option's inner `None()` temp with the OUTER \
+              Option's type, which is what made the payload copy overrun by 8 \
+              bytes. The CONTRACT this helper encodes is the reusable artifact, so \
+              it stays. `expect` rather than `allow`: it fires \
+              `unfulfilled_lint_expectation` the moment a caller returns, so the \
+              annotation retires itself instead of rotting."
+)]
 fn security_safe_except_on(
     name: &str,
     expected_stdout: &str,
@@ -1428,16 +1439,7 @@ fn sec_63_huge_vector_capacity_traps() {
 
 #[test]
 fn sec_64_deep_option_unwrap() {
-    security_safe_except_on(
-        "attack_64_deep_option_unwrap",
-        "42\ninner-none",
-        "llvm",
-        "todo/t0729",
-        "memcpy-param-overlap",
-        "the LLVM backend emits an aggregate copy for a nested Option match as a \
-         raw memcpy between two OVERLAPPING stack slots, which is UB; the C lane is \
-         clean and is the oracle",
-    );
+    security_safe("attack_64_deep_option_unwrap", "42\ninner-none");
 }
 
 #[test]
@@ -1471,15 +1473,7 @@ fn sec_70_inline_none_nested() {
     // regress only at the top level. `level_1(None())`, `level_2(None())`,
     // `level_2(Some(None()))` all used to emit NULL-ptr-deref; now each
     // constructs the correct Option[T]::None struct from expected_type.
-    security_safe_except_on(
-        "attack_70_inline_none_nested",
-        "-1\n42\n-2\n-1\n7",
-        "llvm",
-        "todo/t0729",
-        "memcpy-param-overlap",
-        "same overlapping-memcpy aggregate-copy defect as attack_64 — this is the \
-         second of the two suite fixtures it reddens, not an independent bug",
-    );
+    security_safe("attack_70_inline_none_nested", "-1\n42\n-2\n-1\n7");
 }
 
 // ── Round 6 attacks: float casts, async panics, struct ABI, enum dispatch ─
