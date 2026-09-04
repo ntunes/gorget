@@ -675,6 +675,26 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+✅ **WORKTREES PRUNED 2026-09-04 (owner ask): 34 → 18, sixteen removed, ZERO loss.** My tree clean, all six
+live agents intact, every unintegrated track commit still reachable (`b1ae8c650` `de20ce344` `bc762d0d3`
+`77efa75d0` `b5356f361`). ⚡ **`git worktree remove` drops the CHECKOUT ONLY — the branch and its commits
+survive, so an integrated track's worktree is always safe to prune.**
+⛔⛔ **AND THE CLEANUP SCRIPT WOULD HAVE DESTROYED LIVE WORK — third instance of `t1146`, now MEASURED.** Its
+dry-run proposed `--force` removal of **every** `agent-*` worktree including all six live agents, and its own
+capture step flagged **3 dirty worktrees of which 2 WERE LIVE AGENTS** (N1's executor mid-fold, N2's
+mid-implementation). ⊕ **Two compounding defects:** no keep-list, **and** the capture uses bare `git diff`,
+which **silently omits untracked files** — lossy for exactly the executor that just wrote new fixtures.
+⭐ **THE PROCEDURE THAT WORKED, worth repeating verbatim:** explicit keep-list of live ids → skip any
+non-empty `git status --porcelain` → remove **without `--force`**, rc read off the BARE command per worktree
+→ **treat `locked` as a SIGNAL, and use `stat -c %Y` to separate a STALE LOCK from a LIVE AGENT** (six idle
+8–15 h released cleanly; two idle under 2 h left alone).
+⚠ **One orphaned worktree KEPT, not pruned:** `agent-a06fcd05f52c7c4f0` holds **23 modified files / 1148
+diff lines** from an early-R49 agent, branch head still at round-open. Captured to
+`/tmp/recover_orch_a06fcd05_tracked.patch` (no untracked files, so the capture is complete) — **but `/tmp` is
+volatile, so the worktree stays until someone adjudicates the work.**
+⚠ **Two locked worktrees left alone as too recent to call:** `a2a207bbf7411a930` (A2-α, integrated, 31 min
+idle) and `abc5e1517ab8c315f` (103 min, unidentified).
+
 ⊕ **FOLDS OUT 2026-09-04: Q addendum 2 → pass 3 launched; S-a2 addendum 2 → pass 3 launched; S-a3 brief
 written on the owner-approved shape → pass 1 launched.** ⚠ **Q's pass-3 brief asks for a NINTH marker shape
 specifically because the independent witness has falsified the enumerator's set TWICE** (pass 1: `|||||||` +
