@@ -683,6 +683,59 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐⭐ **W PASS 1 INDEPENDENTLY ARRIVED AT THE OWNER-APPROVED S-a3 DESIGN, WITH A MEASURED PROTOTYPE — AND
+FOUND THE RUNTIME'S OWN DISMISSAL OF IT IS A CONFLATION.** `runtime_string.c:180-183` rejects the idea as
+*"a vtable slot the 16-byte layout does not have"* — ⚡⚡ **BUT THE HEADER IS NOT THE HANDLE, AND IT HAS
+ALREADY BEEN GROWN ONCE (for `size`). The objection that shaped two rounds of this design was measuring the
+wrong struct.** ⇒ **W AND S-a3 ARE ONE TRACK; merged.**
+⛔⛔ **AND THE NAIVE DESIGN IS NOT EXPRESSIBLE AT ALL.** `GirType::FnPtr` carries **no env type** — the carrier
+lives on the env STRUCT's TypeDef and **is gone once `ClosurePack` produces a `GorgetClosure`.** Measured with
+two env types flowing through one `Callable[String()]`: at the `.clone()` site **neither `__Closure_N__clone`
+is nameable**, and the drop site cannot name a drop either. **THE SAME ERASURE BLOCKS BOTH HALVES** ⇒ a
+best-effort routing leaves every unreached site a **DOUBLE FREE — strictly worse than today's leak, inverting
+the owner's own ruling.**
+⭐ **The header design reaches it, and SHRINKS the diff:** written at **exactly two producer sites**
+(`operands.rs:1546`/`:1839` — the only two `__gorget_closure_env_alloc` calls, **both already holding
+`src_ty`**) instead of routing 17 drop sites and 16 clone sites. **16-byte handle ABI unchanged.** Prototype
+measured CLEAN on the dyn cell and no-double-free on the clone cell.
+⛔ **X3 — MY "OUT OF SCOPE, CAPTURE-OWNERSHIP WORK" WAS NOT HONEST AT THAT PRECISION.** `--clones=verbose`
+shows **ONE implicit clone**: `ReturnFromBorrow`, deep-copying a **freshly-constructed StructInit temp** —
+one of CoW's three MOVE-ELIGIBLE shapes — and orphaning the original. **Turning that one clone into a move
+takes the cell to rc 0, ASan CLEAN.** ⭐ Discriminator: **`return (): …` (LITERAL) vs `f = (): …; return f`
+(NAMED LOCAL)**.
+⛔ **X4 — THE ALLOWLIST ROWS I FRAMED THE BRIEF AROUND DO NOT EXIST**; `t1210` says so deliberately (*"no
+row, so the sweep is RED on this item continuously"*). **And it is FOUR red cells, not two.**
+⛔⛔ **SIX Q#4, the killer: `closure_capture_then_mutate_source_uaf` has ZERO `gorget_closure_free` CALL
+SITES** (spelled `String() f`, the `t0942` bare-fn-type erasure) — **a rule about what to emit AT the free
+site has no subject there.**
+⭐ **X6 — `drops.rs:784`'s comment is FALSE *and the branch NEVER FIRES*: 0 fires over 498 fixtures**, and
+disabling it is **byte-for-byte identical** across all 23 httpserver fixtures. Core #14.
+⭐ **X7 — the guard cell does not exist: ALL 13 fixtures that clone a `Callable` have a POD capture**, so none
+goes red under the naive fix — including a 12-cell fixture calling itself a *"WIDE NET"*. ⊕ **THIRD axis
+value: DROPPABLE-BUT-EXCLUDED** (an env capturing a `Callable` gets no drop emitted at all), **which is why
+`t1067`'s carve-out is protected today FOR THE WRONG REASON.**
+⚠ **SWEEP-GRADING TRAP: the naive double-free aborts with `RUN_RC=0`** — under the sweep's `exitcode=0`
+convention **an rc read alone grades it GREEN.** Only stderr classification catches it.
+
+⭐⭐ **U's FILING LANDED — AND TWO OF THE FOUR ROWS WERE ALREADY FILED. GREP-BEFORE-YOU-FILE CAUGHT IT.**
+Updated in place rather than duplicated: **`t0729`'s *"the void-`map` result type is an open design call"*
+paragraph is RETRACTED BY MEASUREMENT** (the closure-literal spelling already allocates
+`%Option__GorgetString` and runs clean — **`unit`'s rc 139 was the OTHER wrong answer, not evidence the
+question was open**), and **`t0394(a4)`**, which had `repro = []` and probes in a long-gone `/tmp`, now has a
+durable one.
+⭐ **New: `t1187` CRITICAL · `t1188` HIGH · `t1189` HIGH (the detector, with its METHOD written out so it
+survives the prototype's deletion).**
+⭐ **`t1187`'s discriminator is a 2×2, not a condition:** three cells trap correctly at rc 101; **only
+call-receiver × `Result`-returning fn** is rc 0 printing `err`, and **binding the same call to a local
+restores the trap.** ⇒ *rules out both "unwrap is broken" and "Result-returning functions are broken"*, and
+points at `maybe_auto_propagate`, whose suppression keys on the **destination's** expected type while
+`todo/t0434` states the violated invariant from the other side. ⊕ **It flagged that root as READ FROM SOURCE,
+NOT INSTRUMENTED — "the fix owes a fire count."**
+⭐ **Row (c) moved from UNADJUDICATED to ADJUDICATED LIVE:** the mangled name carries the **UNSUBSTITUTED**
+type parameter, and a repro that **TAKES THE ERROR PATH — which nothing in the corpus ever did** — prints `1`
+where `-1` is correct, **both lanes, ASan clean.**
+⊕ Two of my brief's figures had drifted again: the doc line `:4049 → :4053`, and the corpus counts.
+
 ⭐⭐ **Q EXECUTOR COMPLETE (`a73cca58f`) — output-review launched. ITS FLOORS CAUGHT TWO *VACUOUS-PASS*
 BREAKS, WHICH IS THE WHOLE POINT OF THEM.** Six breaks, every one anchored by line. **Breaks 3 and 4 — a walk
 that reads no files, and a line loop that reads no lines — both leave `findings` EMPTY**, so **without the
