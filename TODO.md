@@ -516,10 +516,43 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   files `t0968`–`t0972`; adds a **third repro** to `t0704`. Gates bare at the integrated state: build 0 ·
   `--lib` 1181/0 · `--test lints` **221/0/1**.
   ⚠ **THE MERGE NEEDED RECONCILIATION, NOT A SIDE.** Track E **deleted** an allowlist row and A1-M **added**
-  one, so all three leak ratchets were recomputed from both: **`LEAK_CEILING` 294 · `LEAK_CLASS_PAIRS` 501 ·
-  `LEAK_RECORDS` 2302**, mirrored in `figures.db`. ⊕ Then `figures_db_values_have_one_spelling` caught that
+  one, so all three leak ratchets were recomputed from both: **`LEAK_CEILING` · `LEAK_CLASS_PAIRS` ·
+  `LEAK_RECORDS`** all recomputed and mirrored in `figures.db` (read the values off `tests/lints.rs`;
+  regenerate with the row's own `regen` awk census). ⊕ Then `figures_db_values_have_one_spelling` caught that
   my rewritten ledger comment **no longer re-spells the value**, making the R48 waiver dead — **retired
   rather than carried.** **Two guards, two catches, both on my own edits.**
+
+- **✅ F · CONFIRMING REVIEW: INTEGRATE. THE EXECUTOR WAS RIGHT AND MY DELETE ORDER WAS WRONG.**
+  Independently confirmed: `lib/std/iter.gg:818` is a bare `equip [T] Set[T]:` block declaring `each`,
+  `for_each`, `any`, `all`, **`find`**, **`find_index`**, `fold`; `Set[String].find(…)` is `gg check` **OK
+  WITH the import** and `E_NoMethodFound` **WITHOUT**. **Only `Dict.update` was fabricated.**
+  ⭐⭐ **AND THE PER-FAMILY GUARD WAS PROVEN BY AN EVASION NEITHER OF US THOUGHT OF.** The reviewer's own
+  third attempt used **`("Set","map")` — decisive, because `map` is BOTH a Vector `HofOp` arm AND in the
+  Vector `equip` block, so A FLAT UNION WOULD HAVE GREEN-LIT IT.** The shipped guard catches it and the
+  HashSet twins. ⇒ **the per-family design was not a preference, it was necessary.**
+  ✅ **The `--accept` fix confirmed by count: DIVERGENT 155 → 157 → 157 (ZERO erasures); empty-LLVM
+  baselines 1 → 24 → 1** (the survivor is the pre-existing positive control). **The bad run was indeed not
+  committed.**
+  ⛔ **ERRATUM · `t0987` HAS NARROWED A FIFTH TIME — AND THE ENUMERATOR WAS ALREADY IN HAND.** The fourth
+  correction says *"Measured, `Set[String]`, EVERY CELL"* and marks **`Set.find` ✅ "check OK"** — measured,
+  that program **BUILD-FAILs** with `implicit declaration of 'gorget_set_find'`, **in a column where every
+  other ✅ means "builds"**; and **`Set.find_index` is absent and also fabricates.**
+  ⭐ **`calls.rs` HAS THREE per-family exclusion arms** (`gorget_array` `:356-363`, `gorget_map` `:410-411`,
+  **`gorget_set` `:435` listing only `filter|fold|each|any|all|map`**) ⇒ the Set fabrication set is
+  **`for_each` ∪ `find` ∪ `find_index`, derivable in ONE GREP.** ⛔ **The item's OWN rule — "enumerate from
+  that exclusion arm, never by analogy" — WAS APPLIED TO THE ARRAY ARM ONLY.**
+  ⊕ **Scope errata:** three cites regenerated against the **PRE-diff** file (right at base; **the same
+  commit inserted 266 lines above them**) · the census figure has **THREE spellings on one branch**
+  (672 base / 671 mid / **673** at branch HEAD — its own cells moved it) · S5 fixed the MANIFEST note but
+  **not the fixture** · the lint's `equip` scrape mis-parses multi-generic decls (**harmless today, but
+  `iter.gg:396-401` PLANS deleting the builtin HOF entries**, which would red it).
+  ⚠⚠ **A PROCESS FINDING THAT INVALIDATED THE REVIEWER'S OWN FIRST RUN, NOW A RULE:** **`cargo test`
+  REBUILDS `target/debug/gg`**, so RED-verification edits it had made *and reverted* were **baked into the
+  binary the robustness map then measured.** It killed that run and rebuilt from committed source.
+  ⇒ **AGENTS.md Core #5 SHARPENED: a measurement must be taken against the binary the COMMIT builds.**
+
+- ⚠ **AND I WROTE A COVERED FIGURE INTO THIS HANDOVER FOR THE THIRD TIME** — `figures_db_values_have_one_spelling`
+  caught it again. **The guard is faster at auditing me than I am.** Constants cited, values removed.
 
 - ⚖ **ROUND SIZING — I AM NOT OPENING AN EIGHTH TRACK, AND THE REASON SHOULD BE ON THE RECORD.** R49 carries
   **SEVEN** tracks (E · H · C · A1-M landed; K · F · A1-I in their final gate), above the owner's 4-6
