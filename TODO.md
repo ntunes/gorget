@@ -127,7 +127,15 @@ moving A1-I: **K holds `t1048`–`t1051` (all four SPENT); A1-I holds `t1054`–
 and `t1053` unchanged and still A1-I's. ⚡ **THE LESSON, WHICH IS NOT THE ONE MA-3b ALREADY ENCODES:**
 **a block NARROWING is an ALLOCATION EVENT and must be pushed to the holder — the ledger being right
 is not enough if the brief that the executor reads is stale.**
-⚡ **FIRST UNISSUED ID IS NOW `t1064`.**
+⚡ **WAVE-3 BLOCKS (the owner lifted the sizing hold 2026-09-04 to bring more CRITICALs in):**
+
+| L — closure-capture | M — Box/trait-object | N — `t0988` | P — drop side |
+|---|---|---|---|
+| **`t1066`–`t1075`** | **`t1076`–`t1085`** | **`t1086`–`t1095`** | **`t1096`–`t1105`** |
+
+⊕ **`t1053` RETURNED TO THE POOL** — A1-I refused to file it because `todo/t0774` already owned the subject,
+**following GREP-BEFORE-YOU-FILE over my instruction.** It is free.
+⚡ **FIRST UNISSUED ID IS NOW `t1106`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
