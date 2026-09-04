@@ -272,7 +272,20 @@ signing off. **Four obligations, all measured:**
 ⊕ **When the red goes green, FOUR asserts execute for the FIRST TIME** (the `t0951` positive control plus
 three evasion negatives) — they sit AFTER `uncited` and have never run on this tree.
 
-✅✅✅ **INT-A's MERGED TREE IS SIGNED OFF.** The output-review found no wrong tree and no lost content, and
+✅✅✅✅ **TRACK INT-A IS FULLY COMPLETE — tree SIGNED OFF and `todo/t1305.md` corrected. TIP `54dafc26d` on
+`worktree-agent-a1a7ca4acbc53bfa5`.** Only `todo/t1305.md` changed after the sign-off, so the sign-off stands.
+⛔ **INTEGRATION INTO THIS BRANCH IS DELIBERATELY DEFERRED UNTIL INT-B LANDS — "NEVER COMMIT RED" IS NOT
+WAIVABLE.** INT-A's tree carries the declared `--test lints` red by design; INT-B works ON that branch and
+produces the green tree. **Integrate ONCE, green, when INT-B is done.** Everything is reachable by branch
+meanwhile; nothing is at risk.
+⚠ **AN ERRATUM OF MINE, and it is the class I have been enforcing all round:** I handed out
+`grep -n 'SELECTION presented as an enumeration' tests/lints.rs` as a locate command and **it returns
+NOTHING** — the phrase wraps across comment lines. **The working anchor is
+`grep -n 'a SELECTION presented as an' tests/lints.rs`.** That is the THIRD regeneration command I have
+shipped this session that regenerates nothing. **Core #15(a) cuts both ways: run your own locate before you
+hand it to anyone.**
+
+⊖ **Superseded: INT-A's MERGED TREE IS SIGNED OFF.** The output-review found no wrong tree and no lost content, and
 ran **the check nobody had: `src/` is BYTE-IDENTICAL to a mechanical `git merge-tree` replay** of the same
 five-merge chain — no hand edit, no lost hunk, no injected hunk, no reordering. **Every deviation from a plain
 merge is confined to NINE files, all audited.** ⭐ **THAT REPLAY-IDENTITY CHECK IS THREE COMMANDS AND CATCHES
