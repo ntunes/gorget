@@ -683,6 +683,44 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔ **W PASS 2 — SIGNS OFF THE *CHOICE*, BLOCKS ON THE *BRIEF*. AND IT FOUND AN AXIS VALUE NO PASS HAD
+EXERCISED: THE HEADER DESIGN FAILS TO COMPILE.** A non-capturing closure escaping into a `Callable` — base
+rc 0, ASan CLEAN — under the prototype gives **`error: '__Closure_0__drop' undeclared`** plus the same for
+`__Closure_0__clone_inplace`. Its env is `{char __pad}` and **neither symbol is emitted at all.**
+⚡⚡ **EVERY PROTOTYPE CELL CAPTURED A DROPPABLE `String`, SO THE ZERO-PAIR AXIS VALUE WAS NEVER TESTED.**
+⇒ Fix is small (runtime already null-checks; the producer reads `drop_fn`/`clone_fn` off the env TypeDef via
+`src_ty` and passes NULL when absent) — **but the "non-capturing negative control" is PROMOTED FROM A LEAK
+CONTROL TO A BUILD-GATE CELL: it catches a LINK FAILURE, not a leak.**
+⛔ **AND THE HEADER HAS NO SUBJECT FOR `closure_capture_then_mutate_source_uaf` EITHER** — zero
+`gorget_closure_free` sites, **zero producer sites**, the prototype **asserts out**. ⇒ **HONEST LEDGER: the
+merged track closes 2 OF 4 red cells and tightens a third**, and `then_escapes`'s 4 B residual is a **CAPTURE
+CLONE — a THIRD mechanism** the executor owes an attribution for.
+⭐ **X3 IS IN SCOPE, MEASURED: NEITHER HALF ALONE CLOSES `local_literal`.** Header alone 6 B; the move alone
+6 B; **both → CLEAN.** ⚡ **And the two 6-byte figures are DIFFERENT DEFECTS** — the orphaned original (X3's
+move) and the env's field (the header).
+⚠ **INSTRUMENT CAVEAT: `--clones=verbose` UNDER-REPORTS** — it lists only the capture clone for a cell whose
+emitted C calls `__Closure_0__clone` and whose ASan record proves it. **Use emitted-C call sites or ASan
+records as the fire count for this class.**
+⛔ **N1: ALL THREE VERSIONS OF THE `ends_with("__drop")` FACT ARE WRONG — INCLUDING MY OWN CORRECTION.** The
+real set is `1094, 1275, **1325**, 1406, 1407, 1803`, and the map at `:1274` **does** carry a generic arm.
+⚡ *Regenerate, never inherit — three passes in a row inherited a wrong grep.*
+⭐ **X6 is stronger than stated: with a POSITIVE CONTROL FIRING 31,609 TIMES, `infer_drop_strategy()` is
+called ZERO times** and the arm zero times; **0 fires over 2242 fixtures.** ⇒ **the WHOLE FUNCTION is
+unreached**, not merely the branch.
+⛔ **N3: the prototype derives symbols by STRING ARITHMETIC — fine for measuring a DESIGN, a Layering-rule-2
+violation if folded as a PRESCRIPTION.** The real write site reads the typed `drop_fn`/`clone_fn`, never a
+formatted name.
+✅ **Press point 6 DOWNGRADED — the committed sweep is NOT fooled:** it self-tests its ASan-stderr classifier
+and captures the kind from **stderr, not rc**. `RUN_RC=0` is a measurement discipline, not a gate hole.
+
+⚖⚖ **OWNER-FACING CORRECTION OWED (Y3) — AND IT COMES WITH A BETTER OPTION.** My S-a3 brief told the owner
+non-capturing closures *"have a NULL env and allocate nothing"*. **Measured FALSE:** the producer emits
+`__gorget_closure_env_alloc(0)` → **8 B today**, becoming **24 B (exactly 3×)** under the three-word header,
+on every non-capturing closure escaping into a `Callable`.
+⭐ **THE MITIGATION THE OWNER SHOULD SEE WITH THE CORRECTION: the producer ALREADY KNOWS the env is zero-size
+and non-droppable, so it can set `env = NULL` and SKIP THE ALLOCATION ENTIRELY — 8 B → 0, NOT 8 → 24.**
+**A scope question for the owner, not an executor's call.**
+
 ⭐⭐ **M2's FOLD CAME BACK BIGGER THAN BRIEFED, AND FOUND A NONDETERMINISTIC COMPILER ON THE WAY.**
 ⭐ **The blocking fix was ONE AXIS SPLIT ACROSS TWO MATCHES.** `pack_dest_ty` (type) and
 `value_arg_idx_for_method` (index) are now **one match returning `Option<(usize, TypeId)>`** — and deriving
