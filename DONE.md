@@ -32,62 +32,84 @@
   literal/named), of which three cells ran with a captured borrow and the fourth was the only one the
   escape diagnostic ever inspected. `heap-use-after-free` in every one at HEAD; none after, on C and
   LLVM, with `ggdef run` agreeing on every value.
-  ⚠⚠ **SEVERITY-CLASS CHANGE, DISCLOSED: FIVE CELLS CONVERT UAF → LEAK, AND FOUR OF THE FIVE ARE NOT THE
-  MECHANISM THIS ENTRY FIRST NAMED.** `known_gaps/` is OUT of the swept corpus and top-level is IN, so
-  graduating four fixtures and adding seven puts five leaking cells into `scripts/sanitize_sweep.sh` for
-  the first time, with **zero allowlist rows**. **At the base commit the sweep's own classifier reports
-  `heap-use-after-free` on all five, not a leak** — the residue is what is LEFT once the use-after-free is
-  gone. Regenerate the table with a verbatim copy of the sweep's own `leak_classes()`
-  (`grep -n 'leak_classes()' scripts/sanitize_sweep.sh`) over `gg build --sanitize <cell>` +
-  `ASAN_OPTIONS=detect_leaks=1:exitcode=0 LSAN_OPTIONS=use_stacks=0 ./<cell>`:
+  ⚠⚠ **SEVERITY-CLASS CHANGE, DISCLOSED — AND THE FIRST TWO VERSIONS OF THIS DISCLOSURE WERE BOTH WRONG.**
+  It said five leaking cells, all of them `t0953`'s mechanism. A base-vs-merged sweep says **EIGHT cells,
+  `t0953` owns NONE of them, and three of the eight are PRE-EXISTING FIXTURES THIS TRACK NEVER TOUCHED.**
+  `known_gaps/` is OUT of the swept corpus and top-level is IN, so graduating four fixtures and adding
+  seven put the closure-capture cells into `scripts/sanitize_sweep.sh` for the first time — but the wider
+  damage is not in the new fixtures at all. Regenerate every row with a verbatim copy of the sweep's own
+  `leak_classes()` (`grep -n 'leak_classes()' scripts/sanitize_sweep.sh`), or run the sweep over just these
+  with `FIXLIST=<file> bash scripts/sanitize_sweep.sh`:
 
-  | cell | bytes/allocs | the sweep's own class key | corpus | owner |
+  | cell | base → merged | the sweep's own class key | corpus | owner |
   |---|---|---|---|---|
-  | `callable_capture_overlap_aggregate_init_uaf` | 80 B/2 | `__gorget_closure_env_alloc*1,gorget_array_reserve*1` | graduated | **`t0948`** (72 B Direct) + `t1210` (8 B Indirect) |
-  | `closure_escape_capture_axis_local_literal` | 12 B/2 | `gorget_str_cat*1,str_alloc_copy*1` | **NEW** | `t1210` |
-  | `closure_captures_param_then_escapes_uaf` | 8 B/2 | `str_alloc_copy*2` | graduated | `t1210` |
-  | `closure_capture_then_mutate_source_uaf` | 6 B/1 | `str_alloc_copy*1` | graduated | `t1210` |
-  | `closure_escape_capture_axis_param_named` | 4 B/1 | `str_alloc_copy*1` | **NEW** | `t1210` |
+  | `callable_capture_overlap_aggregate_init_uaf` | UAF → 80 B/2 | `__gorget_closure_env_alloc*1,gorget_array_reserve*1` | graduated | `t0948` (72 B Direct) + `t1210` (8 B Indirect) |
+  | `closure_captures_param_then_escapes_uaf` | UAF → 8 B/2 | `str_alloc_copy*2` | graduated | `t1210` |
+  | `closure_capture_then_mutate_source_uaf` | UAF → 6 B/1 | `str_alloc_copy*1` | graduated | **`t0310`** |
+  | `closure_escape_capture_axis_local_literal` | new fixture → 12 B/2 | `gorget_str_cat*1,str_alloc_copy*1` | **NEW INFLOW** | `t1210` |
+  | `closure_escape_capture_axis_param_named` | new fixture → 4 B/1 | `str_alloc_copy*1` | **NEW INFLOW** | `t1210` |
+  | `spawn_unchecked_bypasses_check` | **CLEAN → 33 B/1** | `str_alloc_copy*1` | **NEW INFLOW, fixture untouched** | `t1210` |
+  | `shared_callable` | 16 B/1 → 56 B/3 | `+gorget_shared_new*2` | **NEW INFLOW, fixture untouched** | `t1210` |
+  | `closure_fstring_capture` | 61 B/4 → 66 B/5 | `+str_alloc_copy*1` | **NEW INFLOW, fixture untouched** | `t1210` |
 
-  ⛔ **`t0953` OWNS NONE OF THE FIVE, AND SAYING IT DID WAS THE ERROR.** `grep -c
-  __gorget_closure_env_alloc` over the five run logs is `1,0,0,0,0`: only the aggregate cell carries an
-  env-BLOCK frame at all, and that one is a closure literal stored in a **struct field** (`struct Pair:
-  Callable[int(int)] f`), which is `t0948` — `field_is_transitively_droppable` excludes bare
-  `GirType::FnPtr` fields, so `Pair` is classified `[drop: None, copy: Copy]`, no `Pair__drop` is emitted,
-  and the env block is never freed. `t0953`'s subject is a closure literal at a **call-argument** position
-  whose env is abandoned when the call returns; no cell here has one. The count was re-measured and the
-  attribution was inherited (Core #5 applied to one half of a sentence).
-  ⭐ **THE OTHER FOUR CELLS — AND THE 8 B REMAINDER OF THE FIRST — ARE ONE UNFILED RUST-LANE GAP, NOW
-  `t1210`: the env BLOCK is freed and the env's FIELDS are not.** `src/lir/lower/drops.rs`
-  (`grep -n 'gorget_closure_free' src/lir/lower/drops.rs`) hardcodes
-  `DropStrategy::Trivial("gorget_closure_free")` for every `GirType::FnPtr` local, and
-  `gorget_closure_free` (`grep -n 'gorget_closure_free' src/backend/c/runtime/runtime_string.c`) frees the
-  size-prefixed block only. The typed `__Closure_N__drop` that frees the captured fields **is emitted and
-  has zero call sites** — read it off the emitted C with `gg build --emit-c-lir
-  tests/fixtures/closure_escape_capture_axis_local_literal.gg | grep -n '__Closure_0__drop'`: one forward
-  decl, one definition, no call. A bare `Callable` local is `GirType::FnPtr`, never `GirType::Named`, so
-  that arm never reads the truthful `drop_strategy` this round put on the env `TypeDef`. **`t1069` records
-  this as an aside** (*"this is the half Rust gg does not have"*) inside a `lane = "self-host"` item; the
-  Rust-lane half had no owner until now.
-  ⭐ **AND NO ENV-BLOCK FIX GREENS A SINGLE CELL — 72 of 110 BYTES, 0 of 5 CELLS.** Freeing every env block
-  reclaims 72 of the 110 B and greens **zero** of the five: the aggregate cell's other 8 B is an ASan
-  **Indirect** record — a `GorgetArray` buffer held by a field *inside* the 72 B block — so freeing the
-  block without the field drop only re-grades it as an orphaned **Direct** leak, and the other four cells
-  have no env-block record at all. **The field-drop half is required by every one of the five.**
+  ⭐ **ONE ROOT, AND IT IS `t1210`: the env BLOCK is freed and the env's FIELDS are not.**
+  `src/lir/lower/drops.rs` (`grep -n 'gorget_closure_free' src/lir/lower/drops.rs`) hardcodes
+  `DropStrategy::Trivial("gorget_closure_free")` for every `GirType::FnPtr` local, and that runtime function
+  (`grep -n 'gorget_closure_free' src/backend/c/runtime/runtime_string.c`) frees the size-prefixed block
+  only. The typed `__Closure_N__drop` that frees the captured fields **is emitted and has zero call sites**
+  (`gg build --emit-c-lir tests/fixtures/closure_escape_capture_axis_local_literal.gg | grep -n
+  '__Closure_0__drop'`: one decl, one definition, no call). A bare `Callable` local is `GirType::FnPtr`,
+  never `GirType::Named`, so that arm never reads the truthful `drop_strategy` this round put on the env
+  `TypeDef`. ⇒ **every value the new capture site materialises INTO an env becomes a leak record, in any
+  fixture that captures something droppable** — which is why three untouched fixtures moved.
+  ⛔ **`t0953` OWNS NOTHING HERE, AND `t1210` DOES NOT OWN ALL OF IT EITHER.** `t0953`'s subject is a
+  closure literal at a **call-argument** position whose env is abandoned when the call returns; no cell has
+  one. Two cells have a different owner again: the aggregate cell's 72 B Direct record is `t0948` (a
+  `Callable` in a STRUCT FIELD — `field_is_transitively_droppable` excludes bare `FnPtr` fields, so `Pair`
+  is `[drop: None, copy: Copy]` and no `Pair__drop` is emitted), and `closure_capture_then_mutate_source_uaf`
+  is `t0310`: its `__Closure_0__drop` **is called**, and its 6 B allocates at frame `__Closure_0__call`
+  — the closure's OWNED RETURN VALUE, which `print(f())` receives and never frees. That one is
+  **pre-existing**, proven by running the same shape minus the realloc loop against the BASE compiler:
+  identical 6 B, with no use-after-free to mask it (SIX Q#6, and the mask is the whole reason it looked new).
+  ⭐ **AND NO ENV-BLOCK FIX GREENS A SINGLE CELL — 72 of 110 BYTES, 0 of 8 CELLS.** Freeing every env block
+  reclaims 72 B and greens **zero** cells: the aggregate cell's other 8 B is an ASan **Indirect** record
+  inside that block, so freeing the block without the field drop only re-grades it as an orphaned **Direct**
+  leak. **The field-drop half is required by every cell.**
   ⛔ **`t1210` IS NOT A ONE-LINE FIX, AND THE NAIVE VERSION IS A DOUBLE FREE.** Emitting the field drop
   alone detonates, because `gorget_closure_clone_to_owned` is shallow at field level — a `.clone()` leaves
   two handles sharing every captured buffer (`grep -n 'THE COPY IS SHALLOW AT FIELD LEVEL'
   src/backend/c/runtime/runtime_string.c`). The drop half and a typed `Callable.clone()` land together.
-  ⚠ **TWO OF THE FIVE ARE NEW INFLOW, NOT GRADUATIONS**, and that distinction is what the allowlist header
-  turns on: `tests/sanitize/LEAK_ALLOWLIST.txt` extends the admit-with-citations ruling to leaks *"newly
-  made VISIBLE by a fixture GRADUATING out of `known_gaps/`"* and says *"a row whose leak is genuinely NEW
-  INFLOW remains an OWNER ASK"* (`grep -n 'NEW INFLOW' tests/sanitize/LEAK_ALLOWLIST.txt`).
-  **No rows were admitted and none is sought**: the owner ruled this round *"fix the leaks"*, so the
-  residue is being closed rather than allowlisted, and this track integrates only once the env-field-drop
-  face is closed — at which point the inflow is zero and no ask is owed. On the owner's severity ranking
+  ⚖ **THE OWNER RULING WAS TAKEN TWICE, AND THE SECOND ANSWER IS THE ONE THAT BINDS.** The first ask
+  described 2-of-5 new inflow. Re-asked on the corrected 5-of-8 figure — three of them untouched fixtures,
+  one going from CLEAN to leaking — the owner confirmed (2026-09-04): **land it, admit the rows, make the
+  admission TEMPORARY.** Eight rows are now in `tests/sanitize/LEAK_ALLOWLIST.txt`: the five new-inflow ones
+  under that ruling, the three graduations under the pre-existing ⚖ EXTENDED (2026-09-02) paragraph for
+  leaks "newly made VISIBLE by a fixture GRADUATING out of `known_gaps/`". On the owner's severity ranking
   UAF → LEAK is the right direction, but it is a CHANGE OF CLASS and stating it is not optional; the
   allowlist header's own SIX Q#6 warning is verbatim this shape (*"read CLEAN only because it crashed
   first"*).
+  ⭐ **WHAT MAKES IT TEMPORARY — the allowlist had no retiring direction, and now it has one.** Every row
+  admitted here CITES its owning item in column 3 (`<top-frame>=<todo-id>`, the schema the citation ratchet
+  `UNCITED_LEAK_CLASS_PAIRS` already defined), and `scripts/sanitize_sweep.sh` now treats a CITED class that
+  has **stopped leaking, or shrunk below what its row admits, as FATAL** rather than advisory. Before this,
+  a row that stopped leaking printed `✅ no longer leaking — DELETE these rows` and exited **0**: an
+  admitted leak was permanent by default and nothing ever forced it out — Core #6's both-directions
+  requirement failing on the allowlist itself. The precedent is in-tree and its doc states the contract in
+  the same words: `security_safe_except_on` — *"the moment the cited defect is fixed, this test goes RED and
+  forces the annotation to be removed."* ⚠ **Scoped to CITED rows on purpose**: an uncited row shedding a
+  class stays advisory, because making those fatal would red the gate on inflow nobody has adjudicated.
+  **Both polarities are demonstrated RED in the sweep's own self-test** — disable the retirement and
+  `a CITED row whose fixture no longer leaks was not forced out` fires (rc 2); remove its scoping and
+  `an UNCITED row was forced out` fires (rc 2).
+  ⚠ **THE SCAN THAT FOUND THE THREE UNTOUCHED FIXTURES WAS A SELECTION, NOT A CENSUS — 368 fixtures.** Eight
+  was therefore a FLOOR, and the authoritative instrument is a full `scripts/sanitize_sweep.sh`.
+  ✅ **RUN, AND IT CLOSES THE QUESTION: 2239 scanned, 1819 covered (floor 1743), leaks 300 / allowlisted
+  300, flaky 0, class-drift 0, corruption 1 / allowlisted 1.** The eight cells are exactly eight — no ninth
+  capture cell anywhere in the corpus — and the retiring direction did NOT fire, so no cited row is stale.
+  ⊕ **One unrelated RED, measured NOT to be this track's: `string_enum_variants`** leaks 12 B in 6
+  allocations (`str_alloc_copy*1`, `gorget_string_clone_to_owned ← tokenize`) from `String ch = input[i]`,
+  and a compiler built from this track's BASE commit leaks the identical amount. The fixture has no closure
+  in it. Filed as `t1290` with that measurement and with the Track-K hypothesis marked explicitly unproven.
   **THE COST IS THE HAND-WRITTEN COUNT.** `closure_capture_capture_cost_axis` pins both directions with
   `assert_eq!`: a dead source materializes NOTHING, a live one materializes exactly ONCE. Reverting the
   occurrence span alone measures `string_clone = 1` in the dead cell — RED — while stdout is unchanged,
