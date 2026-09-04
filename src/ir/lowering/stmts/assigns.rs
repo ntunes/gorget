@@ -1516,6 +1516,21 @@ pub(super) fn lower_index_assign(
             maybe_move_zero(ctx, builder, &val);
         }
     } else {
+        // ⚠ STATED EXCLUSION from the trait-object pack's cell set, not an
+        // oversight. A USER `__setitem__` / `IndexMut` destination is not a
+        // builtin protocol, so `protocol_for_mangled_name` above answers
+        // `None` and the pack declines here by construction. Its destination
+        // type would have to come from `fn_sigs` — the carrier that answers
+        // `I64_TYPE` for a builtin collection's value parameter, and whose
+        // repair is `todo/t0992`'s territory, not a rider on this one.
+        //
+        // REACHABILITY IS UNMEASURED: the obvious probe (a user type indexed
+        // with a `Box[Trait]` value) is rejected before lowering with
+        // `E_NotIndexable`, so whether a program can reach this arm carrying a
+        // widening `Box[Concrete]` is an open question rather than a known
+        // hole. Recorded so the enumerated set closes WITH an exclusion rather
+        // than silently short.
+        //
         // Check for IndexMut / set equip method (operator overload)
         if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
             let candidates = [
