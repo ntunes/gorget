@@ -120,7 +120,14 @@ and the orchestrator must not re-issue it.
 ⚠ **THE OVERLAP IS REAL AND IS RESOLVED THIS WAY: K holds `t1048`–`t1050` ONLY** (issued for the `&`-route
 CoW leak, the String `.enumerate()` byte/codepoint defect, and the string-iteration torn read); **A1-I holds
 `t1051`–`t1060`.** If K needs more, it gets `t1061`+, never `t1051`–`t1057`.
-⚡ **FIRST UNISSUED ID IS NOW `t1061`.**
+⛔⛔ **COLLISION, 2026-09-04 — I CAUSED IT AND IT IS RECORDED HERE SO THE SHAPE IS NOT REPEATED.** I
+narrowed K's block in this ledger **without propagating the change to K, whose brief still said
+`t1057`.** K then filed **`t1048`–`t1051`**, so **`t1051` collided with A1-I's block.** Resolved by
+moving A1-I: **K holds `t1048`–`t1051` (all four SPENT); A1-I holds `t1054`–`t1063`**, with `t1052`
+and `t1053` unchanged and still A1-I's. ⚡ **THE LESSON, WHICH IS NOT THE ONE MA-3b ALREADY ENCODES:**
+**a block NARROWING is an ALLOCATION EVENT and must be pushed to the holder — the ledger being right
+is not enough if the brief that the executor reads is stale.**
+⚡ **FIRST UNISSUED ID IS NOW `t1064`.**
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
@@ -504,6 +511,46 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   at its budget with zero headroom**, so **every future ratification must ship its spec citation IN THE SAME
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
+
+- **⚡ K · EXECUTOR RETURNED (`a4f63e55a`, `96f88408b`) — OUTPUT-REVIEW LAUNCHED. AND THE BRIEF WAS WRONG
+  ABOUT THE BIGGEST THING.**
+  ⛔⛔ **"SELF-HOST: ALREADY CORRECT … NO PORT IS OWED" IS FALSE — and §5, ADDENDUM 4 S-E and ADDENDUM 5 ALL
+  REST ON IT.** The SH **does** tag both producers `LoView()` as claimed — **but
+  `decide_svardecl_emission`'s Branch A (`self_host_lowerer/lower.gg:2210`) FOLDS `LoView` AND `LoBorrowed`
+  INTO ONE `source_is_borrow_alias` STATE** and returns `BorrowAlias()` for both, **while Branch E carried a
+  comment declaring ITSELF DEAD** because *"the CoW-default-borrow design intent is to alias, not
+  materialize."* ⭐ **The distinction that comment misses: a `LoBorrowed` points into an aggregate whose
+  owner OUTLIVES the bind; a `LoView` is a cap=0 header over a buffer THE SOURCE CAN REALLOCATE.**
+  ⇒ **All four index/slice bind cells printed NONDETERMINISTIC GARBAGE on the SH lane — 7 DISTINCT OUTPUTS
+  OVER 7 RUNS — and `self_host_runtime_diff` FAILED with a NEW NONDETERMINISTIC ROW.**
+  ⚡ **It PORTED rather than stopping**, because the owner's 2026-08-10 rule leaves no other move (excluding
+  the fixture is the gate's own named *"forbidden parity-inflation"*), **and the fix uses the SELF-HOST'S OWN
+  TIER-2 IDIOM so it costs ZERO where nothing is mutated** — a view aliases only while both the bound name
+  and the source root are `cow_pristine_after` the bind, **the same test the `GtPtr`-to-resource branch
+  twelve lines below already applies.** Both heavy SH gates re-run clean afterwards.
+  ✅ **THE EQUIVALENCE GUARD (owner ruling) SHIPPED AND WAS SEEN RED IN BOTH DIRECTIONS.**
+  `no_dot_slice_after_d22` and its walker **DELETED**; `slice_spelling_cost_equivalence` asserts both
+  spellings cost `0` at a temp and `LOOP_N` at a bind — **`assert_eq!`, not `<=`** — and dropping one
+  producer tag at a time (**line-anchored**, since the two `set_view_of` calls are near-identical) gives
+  **`(0,100)` and `(100,0)`.**
+  ⭐ **CORE #14: SIX COMMENTS, NOT FIVE** — a sixth found in `emit_call_extern.rs` repeating the same refuted
+  claim. **One was GUARDED rather than deleted:** `assigns.rs:2102` got a `debug_assert!` that a String base
+  never reaches index-assign lowering — **the comment's claim is TRUE for collection elements and FALSE for
+  a String base, and nothing said so.**
+  ⊕ **Filings `t1048`–`t1051`, each with a durable repro** — `t1048` **wired to read `live_bytes`, NOT
+  stdout, because ASan is blind** · `t1049` bytes-vs-codepoints · `t1050` **re-measured: TWO unguarded
+  inline helpers, both with DEAD GUARDED DEFINITIONS in the emitted C** · **`t1051` — the reference now lags
+  the self-host ON COST (100 clones vs 0 on the same program).**
+  ⚠ **No `known_gaps/string_index_slice_bind_dangles.gg` was created** — the defect is fixed, so an
+  `#[ignore]`d test asserting correct output would be **a dead row**; the repro **graduated into four live
+  top-level fixtures** instead. The review adjudicates.
+  ⚠ **Brief errata pushed back on:** ADDENDUM 5's *"`context.rs:3983` cites a devbook section that does not
+  exist"* is **FALSE** — `docs/devbook/11-copy-on-write.md:1240` is `#### View-producer enumeration rule`
+  (doc-write-through'd) · `check_expr.rs:868` not `:869`.
+  **Gates bare:** build 0 · `--lib` **1181/0/0** · `--test lints --release` **220/0** · `-p ggdef` 187/0 ·
+  `spec_conformance` 3/0 · targeted string/cow/slice on **C and LLVM** · **`self_host_runtime_diff --release`
+  ok (MATCH 1541, ADJ-MATCH 482, BOTH-WRONG 2 unchanged, NO new nondeterministic rows)** ·
+  **`self_host_bootstrap_fixed_point --release` ok.**
 
 - **⚡ F · FOLD LANDED (`537d95628`) — CONFIRMING OUTPUT-REVIEW LAUNCHED. AND MY INSTRUCTION WAS HALF WRONG.**
   ⛔⛔ **THREE OF THE FOUR ROWS I ORDERED DELETED ARE REAL AND STAY — AND THE REVIEWER MADE THIS ROUND'S
