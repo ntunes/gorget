@@ -1766,8 +1766,13 @@ fn sort_empty_collection_no_ub() {
 /// The `unwrap_or_else` result is a `Callable[String()]` (a 16-byte
 /// `GorgetClosure`) and the destination slot is typed `Str` (32 bytes), so the
 /// `memcpy` overreads: `AddressSanitizer: stack-buffer-overflow`, `READ of size
-/// 32`. The lowering took the payload's OWN return type for the closure's, one
-/// level too deep, rather than the payload type.
+/// 32`. ⚠ The emitted C is INTERNALLY INCONSISTENT and that localizes the fix:
+/// the closure is declared `GorgetClosure __Closure_0__call(const void*)` and
+/// the call temp is a `GorgetClosure`, both correct — only the DESTINATION slot
+/// is `Str`. So the defect is the `unwrap_or_else` CALL-RESULT SLOT typing, not
+/// the closure signature. (The SELF-HOST gets the signature wrong instead, which
+/// is why it fails to build rather than overreading — same wrong type, recorded
+/// one layer earlier.)
 ///
 /// ⚠ IT PRINTS THE RIGHT ANSWER AND EXITS 0, so no value lane can see it —
 /// which is why this is ASan-gated. The SELF-HOST fails loudly on the same
@@ -1788,7 +1793,7 @@ fn security_closure_literal_callable_payload_overflow() {
     // INTENDED: the closure's type is the PAYLOAD type, the copy is 16 bytes,
     // and the program is sanitizer-clean.
     security_safe(
-        "attack_100_closure_literal_callable_payload_overflow",
+        "attack_103_closure_literal_callable_payload_overflow",
         "hello",
     );
 }

@@ -109,7 +109,8 @@
   (~25 `ctx.expected_type` writers exist), and its erratum note had the `unwrap_or_else`/`and_then`
   coincidence INVERTED.
   ⊕ Filed `todo/t1304`: the fixture-wiring lint governs `known_gaps/` only, so **46 top-level fixtures are
-  asserted by nothing** — 15 of them the `sound_move_operand_*` reject/allow axis, the same family whose
+  asserted by nothing** — 14 of them the `sound_move_operand_*` reject/allow axis (the family is 15 and
+  exactly one is wired), the same family whose
   unwired member this track tripped over. No filing was needed for the signal-masking defect: the fix covers
   the class.
 

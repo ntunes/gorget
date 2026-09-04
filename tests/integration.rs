@@ -41148,9 +41148,6 @@ fn with_silent_panic_hook<R>(f: impl FnOnce() -> R) -> R {
     // `_guard` drops here (or on unwind), restoring the previous hook.
 }
 
-/// Build a fixture through the self-host driver (`F lib --emit-c`) → `cc` →
-/// run, returning the trimmed stdout on success or a non-Match outcome on any
-/// failure. `tmp_root` must already exist; the caller owns its cleanup.
 /// The exit code to REPORT for a finished process, with a signal death spelled
 /// the way a shell spells it: `128 + signo`.
 ///
@@ -41180,6 +41177,9 @@ fn reported_exit_code(status: &std::process::ExitStatus) -> Option<i32> {
     status.code()
 }
 
+/// Build a fixture through the self-host driver (`F lib --emit-c`) → `cc` →
+/// run, returning the trimmed stdout on success or a non-Match outcome on any
+/// failure. `tmp_root` must already exist; the caller owns its cleanup.
 fn self_host_emit_cc_run(
     driver_exe: &Path,
     lib_dir: &Path,

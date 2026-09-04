@@ -4,10 +4,14 @@
 # and no FFI.
 #
 # `AddressSanitizer: stack-buffer-overflow`, `READ of size 32` at a `memcpy`
-# whose source `__coal0` is a 16-byte `GorgetClosure`: the `unwrap_or_else`
-# result is a `Callable[String()]` and the destination slot is typed `Str`
-# (32 B). The lowering took the PAYLOAD'S OWN return type (`String`) for the
-# closure's, one level too deep, instead of the payload type.
+# whose source `__coal0` is a 16-byte `GorgetClosure`.
+#
+# ⚠ THE EMITTED C IS INTERNALLY INCONSISTENT, and that localizes the fix. The
+# closure is declared `GorgetClosure __Closure_0__call(const void*)` — CORRECT —
+# and the call temp is a `GorgetClosure` too; only the DESTINATION slot is
+# `Str __s14` (32 B), and `memcpy(&__s14, &__v24, sizeof(Str))` takes 32 bytes
+# out of the 16-byte result. ⇒ The fix is at the `unwrap_or_else` CALL-RESULT
+# SLOT typing, NOT at the closure signature, which is already right.
 #
 # ⚠ IT PRINTS THE RIGHT ANSWER AND EXITS 0 in an ordinary build, which is why
 # no value lane can see it and why this pin is ASan-gated rather than
