@@ -522,6 +522,46 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   my rewritten ledger comment **no longer re-spells the value**, making the R48 waiver dead — **retired
   rather than carried.** **Two guards, two catches, both on my own edits.**
 
+- **✅ K · OUTPUT-REVIEW: INTEGRATE AFTER THREE ERRATA. All three mandatory gates PASS; the fix is called
+  REFERENCE-GRADE.** Errata sent; merge on their return.
+  ⭐⭐ **THE SH PORT WAS NECESSARY — PROVEN THREE INDEPENDENT WAYS, so "already correct / one-lane fix" was
+  FALSE BY CONSTRUCTION.** (1) **Source:** `lower.gg:2202-2207` folds `LoBorrowed` and `LoView` into ONE
+  bool and Branch A at `:2251` returns `BorrowAlias()` for both, **while Branch E declared itself dead
+  BECAUSE *"the design intent is to alias, not materialize"***. (2) **Owner rule:** all eight fixtures are
+  top-level ⇒ auto-scanned, so the no-own-inflow rule owes the SH lane the same round **regardless of
+  pre-existing state**. (3) ⭐ **MECHANICAL — the decisive one:** the `NEW NONDETERMINISTIC row(s)` assertion
+  at `integration.rs:40610` is **exactly the gate the executor reported firing pre-port**, and it is **green
+  post-port with NO allowlist edit and NO parity constant touched.** ⇒ **A "NO PORT OWED" LANDING WOULD HAVE
+  BEEN RED.**
+  ✅ **The cost claim holds BY CONSTRUCTION**, traced through `cow_source_root_name` peeling
+  `EIndex`/`EFieldAccess` to the root and `cow_mark_assign_target` marking only assign targets ⇒ **zero
+  clones where nothing is mutated.** ✅ **The equivalence guard FIRES IN BOTH DIRECTIONS**, reproduced at
+  **`(0,100)`** and **`(100,0)`**, with the for-element cell going four-empty-lines.
+  ⛔ **ERRATUM 1 — THE ggdef ADJUDICATION IS OVERCLAIMED ON EXACTLY THE FOUR NOVEL CELLS.** `.insert()` is
+  out of the phase-0 subset and **elaboration fails for the WHOLE FILE**, so **A5 (field assign), A6
+  (`Vector.set`) and A7 (`v[i] =`) get NO adjudication either** — **8 of 12, not 11.**
+  ⚠ **Why it matters more than a number: A5–A8 are the round's most novel finding, and as recorded they rest
+  on "both backends agree" ALONE — which Core #8 calls NECESSARY, NOT SUFFICIENT — while the record says the
+  DEFINITION backs them.** ⚡ **Two-minute remedy, verified: split the `.insert()` cell out and three cells
+  convert to ggdef-adjudicated.**
+  ⛔ **ERRATUM 2 — CORE #14 ROT THIS DIFF ITSELF CREATES** (Core #15(d)): a `known_gaps` fixture still says
+  it *"is allowlisted in `no_dot_slice_after_d22`"* — **which this diff DELETES** — and asserts the colon
+  form *"materializes NOTHING — 1,002 vs 2"*, **measured at this HEAD as `string_clone=65`, identical to
+  `.slice()`** ⇒ **its stated conclusion is INVERTED.** `t0316`/`t0850` still call the deleted lints
+  "live and SUSPENDED".
+  ⛔ **ERRATUM 3 — A FABRICATED SYMBOL INSIDE A NEW CORE #14 COMMENT:** `assigns.rs:2088` cites
+  `check_index_assign_target`, which **exists nowhere in the tree**; the real function is
+  `check_index_mut_assign`. **Substance verified sound.**
+  ⚡ **FILED, NOT FIXED → `t1064`: `todo/` `repro` PATHS ARE UNGUARDED.** `t0871`'s cited repro **never
+  existed on any branch**, and a scan of all **247** `repro` paths finds **9 MORE BROKEN across 8 items**
+  (`t0106` ×3, `t0124`, `t0126`, `t0311`, `t0387`, `t0591`, `t0633`). The existing guard covers **only**
+  `tests/fixtures/self_host_*`.
+  ⊕ **Noted, no work:** the ratchet's header claims *"every {producer, consuming position} pair"* while the
+  String family has **no rows** for `push`/`put`/`send`/`returns`/`captures` — **all measured SOUND at the
+  pre-fix compiler**, so they need a **named non-claim row**, not fixtures (**SIX Q#3, the error its own
+  header calls out**). ⊕ `bind→return` is a third `t0871` shape the matrix does not pin — same root, no
+  hole, but **Core #12 says NAME each omitted cell.**
+
 - **✅ F · CONFIRMING REVIEW: INTEGRATE. THE EXECUTOR WAS RIGHT AND MY DELETE ORDER WAS WRONG.**
   Independently confirmed: `lib/std/iter.gg:818` is a bare `equip [T] Set[T]:` block declaring `each`,
   `for_each`, `any`, `all`, **`find`**, **`find_index`**, `fold`; `Set[String].find(…)` is `gg check` **OK
