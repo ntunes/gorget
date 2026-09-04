@@ -25,8 +25,17 @@ function (C: exit 0 with a nondeterministic heap-derived number; LLVM: `llc`
 type failure — the backends DISAGREED), its own direct calls re-typed by the
 injected `unit` return type so the result was DISCARDED, and, through
 `extern "C"`, exit 139. The callee's identity now rides on
-`Instruction::CallIndirect` — a runtime-resolved callee has no name to
+`Instruction::CallIndirect` — for these two conventions there is no name to
 manufacture, so there is nothing left to collide.
+
+⚠ **SCOPED TO THE TWO RETIRED PREFIXES, NOT TO INDIRECT DISPATCH AS A WHOLE.**
+Five of the nine indirect-dispatch arms still pass a NAME (`IndirectCallee::
+Named`), because their callee is a genuine emitted symbol: a lifted closure's
+`__Closure_N__call` thunk, a trait-object vtable slot, a `Constant::FuncRef`.
+`__Closure_N__call` is still MINTED (`src/ir/lowering/closures.rs`), so a user
+function spelled `__Closure_0__call` still collides with it — loudly: `gg check`
+accepts and `gg build` exits 101 on `duplicate function name`, identically
+before and after this work. Loud is not fixed. `todo/t1235`.
 
 They assert **stdout**, not exit codes, and family 2 asserts the VALUE `42`
 never a snapshot: its wrong answer is a live pointer plus a constant and differs

@@ -16,6 +16,15 @@
   **VERIFIED:** `hi` / `101` on C and LLVM; ASan-clean under `detect_leaks=1`, with a positive control
   (a `closure_identity/` sibling reports its known 32 bytes in the same run, so CLEAN is a verdict and
   not a silent instrument). Test un-ignored as `callable_local_var_consuming_arg`.
+  ⚠⚠ **AND IT OWES A SECOND, `#[ignore]`d ROW, BECAUSE A LIVE TEST IS INVISIBLE TO THE GRADUATION
+  CENSUS.** `scripts/known_gaps_census.sh` runs only `#[ignore]`d tests citing a `known_gaps/`
+  fixture, so un-ignoring the fixed Rust half dropped this fixture off the roster ENTIRELY —
+  measured, `--list | grep callable_local_var` returned ZERO rows — and nothing would ever have
+  noticed the self-host half being fixed. `sh_callable_local_var_consuming_arg` restores it (roster
+  218 → 219) and is RED. ⚠ **The general trap, worth more than this cell: graduating ONE LANE of a
+  two-lane gap silently un-gates the other.** This is the first fixture in the tree to host both a
+  live test and an ignored one; `tests/integration.rs`'s wiring-census comment, which asserted
+  "every one is `#[ignore]`d", is corrected to match.
   ⚠ **THE FIXTURE STAYS IN `known_gaps/`, AND THE REASON IS A DECAYED ORACLE CLAIM.** `t0389` recorded
   this as a *"reference lags the self-host"* cell — Rust panicking where the self-host printed correctly.
   **Re-measured 2026-09-04: the self-host exits 139 on it.** Reproduced with a driver rebuilt from
@@ -31,7 +40,9 @@
   THAT NAME SHARED THE MODULE'S FUNCTION NAMESPACE WITH USER CODE. `int __callable_1(int, int)` plus
   any closure call was a SILENT WRONG-OUTPUT MISCOMPILE on C, an `llc` type failure on LLVM, a
   DISCARDED direct-call result, a build failure with ZERO Gorget diagnostics, and exit 139 through
-  `extern "C"`. Four mints deleted, all six decode sites gone, 16 cells RED→GREEN on both backends.**
+  `extern "C"`. Four mints deleted, all six decode sites gone, 8 cells RED→GREEN on both backends
+  inside a 16-cell net (the other 8 are 2 discrimination cells green before and after, and 6
+  negative controls).**
   **THE DEFECT.** Every indirect-dispatch arm manufactured its callee name — `__callable_<slot>`,
   `__gorget_closure_call_<slot>` — emitted a plain `Instruction::Call` with it, and left three layers
   below to recognise the SPELLING. `__callable_1` is a legal Gorget identifier and a legal `extern "C"`
@@ -55,6 +66,17 @@
   `Option<…>` beside a still-required name, the four arms must still mint a name to pass and the track
   retires nothing.** `lower_call_arg` takes a `CalleeAbi::{Named, Declared}` for the same reason, so the
   declared signature is HANDED to it instead of round-tripping through a shared table.
+  ⚠ **TWO BEHAVIOUR DELTAS, BOTH STATED, BECAUSE "BEHAVIOUR-PRESERVING" WITHOUT A SCOPE IS A CLAIM
+  NOBODY CAN CHECK.** (a) `lower_call_arg`'s `fn_param_abis` lookup was DEAD for every indirect call —
+  the producer keyed `"__callable_1@apply"`, the reader looked up `"__callable_1"` — so the decision
+  fell through to `fn_param_ownerships`. It is live now. The one cell where the two paths disagree, a
+  non-resource `&`-declared param called with `^`, is REJECTED at check (`E_OwnershipMismatch`),
+  verified by probe ⇒ behaviour-preserving on every accepted program. **That sentence is scoped to the
+  ABI channel and to nothing else.** (b) `register_call_result` early-returns on an absent callee name,
+  so an indirect call returning an owned `String` whose signature was never tracked is no longer marked
+  `FreshOwned`. Conservative by construction — more clones, never fewer — and deliberate: a
+  runtime-resolved callee's body is not in scope to prove it allocates. The output-review's 320-fixture
+  GIR differential found zero cells exercising it, and the four self-host clone pins hold.
   ⭐ **THE DECODE IS DELETED, NOT NARROWED.** `insts.rs`'s 110-line name-decode branch is gone; so are
   both LLVM extern-declaration suppressions, both dead `validate.rs` prefix predicates, and
   `abi::indirect_callee_key` — a helper that qualified the ABI key with the enclosing function BECAUSE
@@ -100,9 +122,16 @@
   __v5 = __callable_1(__v3, __v2);`), so an investigator pointed at the decode finds it inert and
   concludes the repro is wrong. Four `known_gaps/` repros wired `#[ignore]` asserting `42`, `t1055`
   re-graded MED→HIGH with a per-cell disposition, and both false clauses corrected in place.
+  ⚠ **THE FIVE `Named` ARMS ARE NOT COVERED BY ANY OF THIS, AND ONE OF THEM STILL COLLIDES.**
+  `__Closure_N__call` is still minted (`src/ir/lowering/closures.rs`), so a user function spelled
+  `__Closure_0__call` beside any closure call is accepted by `gg check` (rc 0) and then fails
+  `gg build` with rc 101, `duplicate function name @__Closure_0__call`. Measured identical before and
+  after this work ⇒ pre-existing, and LOUD rather than silent, which is why the `Named` spelling is
+  still the honest one there — but loud is not fixed, and the 16-cell net has no cell for it. `t1235`.
   **FILED:** `t1116` (`auto_register_externs`), `t1117` (the two ABI-driven validator walkers have no
   `CallIndirect` arm — a gap this change made visible rather than created, and one whose colliding-name
-  mis-classification it closed).
+  mis-classification it closed), `t1235` (the residual `Named` arms), `t1236` (the Tier-2a
+  consume-site sibling census `t0389` asked for and nothing inherited).
 
 - [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
   STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,

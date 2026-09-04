@@ -6260,6 +6260,46 @@ fn sh_indirect_callee_name_decode_sibling() {
     );
 }
 
+/// KNOWN GAP (`todo/t1118`), SELF-HOST lane — calling a `Callable[…]`-typed
+/// LOCAL VARIABLE with a consuming argument exits **139** on the self-host,
+/// on a program Rust gg compiles and runs correctly.
+///
+/// ⚠ THIS TEST EXISTS BECAUSE ITS FIXTURE'S OTHER TEST IS LIVE, AND A LIVE
+/// TEST IS INVISIBLE TO THE GRADUATION CENSUS. `scripts/known_gaps_census.sh`
+/// runs only `#[ignore]`d tests that cite a `known_gaps/` fixture; the Rust
+/// half of this cell graduated in R49 Track A2-α and its test is now the live
+/// `callable_local_var_consuming_arg`, so without THIS row the fixture sits on
+/// the roster zero times and nothing would ever notice the self-host half
+/// being fixed. `bash scripts/known_gaps_census.sh --list | grep
+/// callable_local_var` counts the rows.
+///
+/// THE TWO HALVES, so neither is mistaken for the other:
+///   * Rust gg — used to PANIC at IR lowering (`Tier 2a consume-site
+///     violation … CollectionMutator(__gorget_closure_call_3, arg #0)`), a
+///     false positive manufactured by the callee's own name. Fixed; asserted
+///     live by `callable_local_var_consuming_arg`.
+///   * self-host — exits 139. PRE-EXISTING: reproduced with a driver built
+///     from pristine committed source, so A2-α neither caused nor fixed it.
+///
+/// ⚠ AND IT IS NOT `t1055`. That item is the self-host's indirect-callee NAME
+/// decode firing on a USER function's spelling. Here the callee genuinely IS a
+/// closure, so the prefix decode is doing its job and the mechanism is
+/// something else. Establish it before folding the two.
+#[test]
+#[ignore = "KNOWN GAP (t1118): the self-host exits 139 on a Callable-typed \
+LOCAL VARIABLE called with a consuming arg — a program Rust gg compiles and \
+runs correctly on both backends. Pre-existing (reproduced with a driver built \
+from pristine source), and NOT the t1055 name-decode. Asserts the INTENDED \
+`hi` / `101`."]
+#[serial(self_host_lowerer_driver)]
+fn sh_callable_local_var_consuming_arg() {
+    sh_known_gap_expect(
+        "known_gaps/callable_local_var_consuming_arg_ices.gg",
+        "sh_callable_local_var_consuming_arg",
+        "hi\n101",
+    );
+}
+
 /// Shared body for the SELF-HOST-lane `known_gaps` pins above: build (cached)
 /// the self-host lowerer driver, emit C for the fixture, compile and run it,
 /// and assert the CORRECT output — the output Rust gg already produces. Each
@@ -59799,7 +59839,11 @@ fn d27_caret_fn_type_sigil_before_type_error() {
 // further. The rows below are the COMPLETE unwired set as of this round,
 // derived by censusing `tests/fixtures/known_gaps/` against the test hosts:
 //
-//   callable_local_var_consuming_arg_ices.gg          -> WIRED below
+//   callable_local_var_consuming_arg_ices.gg          -> WIRED below, TWICE:
+//       its Rust half graduated in R49 Track A2-α and is now the LIVE
+//       `callable_local_var_consuming_arg`, so the `#[ignore]`d row that keeps
+//       it on the graduation census is the SELF-HOST one,
+//       `sh_callable_local_var_consuming_arg` (`t1118`).
 //   sh_resolver_equip_self_receiver_res_missing.gg    -> WIRED below
 //   gorget_arena_snag_1_llvm_ffi_only_typedef/        -> WIRED below (2 cells)
 //   (fmt_snag_2_multiline_header_trailing/ was one of these; the gap is
@@ -59811,8 +59855,19 @@ fn d27_caret_fn_type_sigil_before_type_error() {
 //       is the expected-output DATA COMPANION of the already-wired
 //       `snag53_nested_struct_field_mut.gg`, not a reproducer of its own.
 //
-// Every one asserts the INTENDED behaviour and is `#[ignore]`d with a
-// citation, so it flips green the round the bug is fixed. Wire, don't fix.
+// Every one asserts the INTENDED behaviour, and every one still carries an
+// `#[ignore]`d row with a citation, so it flips green the round its bug is
+// fixed. Wire, don't fix.
+//
+// ⚠ "EVERY ONE IS `#[ignore]`d" IS NO LONGER TRUE OF EVERY *TEST* — only of
+// every *row on the census*. A fixture whose gap is fixed on one lane and open
+// on another hosts BOTH a live test and an ignored one
+// (`callable_local_var_consuming_arg_ices.gg` is the first). That is the
+// correct shape, and the trap it avoids is worth stating: the graduation
+// census runs ONLY `#[ignore]`d tests, so un-ignoring the fixed half without
+// adding a row for the open half drops the fixture off the roster entirely and
+// nothing ever notices the remaining lane being fixed. Count the rows with
+// `bash scripts/known_gaps_census.sh --list`, never by reading this comment.
 
 #[test]
 #[ignore = "KNOWN GAP (Core #8 soundness, found 2026-08-17 by the example-rot scout, \
