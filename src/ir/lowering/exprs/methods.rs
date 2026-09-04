@@ -348,6 +348,27 @@ pub(super) fn lower_method_call(
                 // `Module::heap_alloc_consumer_externs`.
                 ctx.heap_alloc_consumer_externs.insert(alloc_fn.clone());
                 let dst = builder.call(alloc_fn, vec![val], box_type);
+                // Core #3 — register at the value's BIRTH. `Box.new(x)` mints a
+                // fresh owned heap allocation exactly as the bare `Box(x)`
+                // spelling does (`__gorget_box_alloc_*` at the `CallExtern`
+                // arm), and the bare spelling has always registered it here.
+                // Leaving this arm unregistered made the two spellings differ in
+                // ownership rather than in lowering path — `Box.new` LEAKED
+                // where `Box(` freed (`t0697`'s two faces). Registration alone
+                // is unsafe: it needs the trait-object pack to CONSUME its
+                // source, or the pack's copy and this registration become two
+                // owners of one allocation. The pair ships together and is its
+                // own positive control.
+                //
+                // No already-registered guard: `dst` comes from
+                // `FunctionBuilder::call` → `emit_with_temp`, which mints a
+                // FRESH `LocalId`, so there is nothing to collide with. A
+                // `ctx.drops.is_registered(dst)` guard here would also be a
+                // Phase-D ownership PROXY READ, which
+                // `no_growth_in_phase_d_proxy_reads` exists to keep from
+                // growing.
+                ctx.drops.register_local(dst, box_type, &ctx.type_registry);
+                ctx.set_owned_fresh(builder, dst);
                 if let Some(src) = consumed_source {
                     ctx.move_zero_and_mark(builder, src);
                 }
@@ -848,7 +869,7 @@ pub(super) fn lower_method_call(
             // back to the trait forwarder `Hasher_for_H__write_int` for
             // user-defined Hashers that only provide the `equip H with
             // Hasher:` block (no inherent equip).
-            let h = lower_call_arg(ctx, builder, &args[0], None, CalleeAbi::Named("FxHasher__write_int"), 0);
+            let h = lower_call_arg(ctx, builder, &args[0], None, CalleeAbi::Named("FxHasher__write_int"), 0, None);
             let hasher_type_name = infer_type_name_from_operand_full(ctx, &h, builder)
                 .unwrap_or_else(|| "FxHasher".to_string());
             let resolve_fn = |op: &str| -> String {
@@ -2778,6 +2799,62 @@ pub(super) fn lower_method_call(
         // move-zero) the value here would double-free a live source
         // (`fill(2, live_string)` / `get_or_put(k, live_default)`).
         let elem_type_hint = extract_elem_type_id_from_type_name(ctx, &type_name);
+        // WHERE this method's value argument sits, and WHAT TYPE the receiver
+        // holds in that slot — resolved TOGETHER, in one match, through the
+        // sanctioned single accessor (`builtin_type_args_from_name` +
+        // `protocol_for_mangled_name`). A builtin collection method reaches
+        // `lower_method_call` with `method_param_types` EMPTY (it is filled only
+        // on the `is_gir_method` path), so `callee_param_type` at
+        // `lower_call_arg` is `None` and `maybe_pack_trait_object_at_arg` takes
+        // its `None => return val` early exit: the trait-object pack is never
+        // even asked the question, and a `Box[Concrete]` reaches a runtime
+        // `push` that memcpys 16 bytes of `{data, vtable}` out of an 8-byte
+        // `void*` slot. (`fn_sigs` is NOT consulted at this site — it would
+        // answer `I64_TYPE`, which is why this carrier exists, but the pack
+        // never sees that answer.) This is the pack's destination-type carrier
+        // and nothing else's: it is passed as `pack_dest_hint` and only ever
+        // fills in a `None` signature answer.
+        //
+        // ⭐ INDEX AND TYPE COME OUT OF ONE MATCH ON PURPOSE (Core #4). They
+        // are the same axis — "which slot does this method write, and what does
+        // that slot hold?" — and the R49 M2 defect was exactly a split between
+        // them: the type was computed correctly for `insert` while the index
+        // came from a SEPARATE match whose key-value arm is guarded
+        // `args.len() >= 2`. `Set`/`HashSet` `insert` is a ONE-ARG alias for
+        // `add` on the same runtime callee (`gorget_set_add`,
+        // `builtins.rs` `name: "insert"` SET arm), so it failed that guard, fell
+        // to the `_` arm, and the correctly-computed destination type was thrown
+        // away — leaving `Set[Box[Trait]].insert(temp)` a live
+        // stack-buffer-overflow while `.add(temp)` was fixed. Do not re-split.
+        //
+        // ⚠ `builtin_type_args_from_name` returns `(elem, key, val, elem_name,
+        // val_name)`. On a 2-arity protocol `.0` is the KEY, so `elem` is a
+        // misleading name for it there; destructure and select `val` for the
+        // key-value methods. No arity-2 protocol carries a push-family method,
+        // so the push arm only ever reads `.0` where `.0 == .2`.
+        //
+        // The value is the LAST argument of a key-value writer —
+        // `put(k, v)` / `set(i, v)` / `insert(i, v)` / `fill(n, v)` /
+        // `get_or_put(k, default)` — and for the one-argument members of that
+        // family the SOLE argument is the value slot. Regenerate that
+        // enumeration from the declaration table, never from this list:
+        //   grep -n 'name: "put"\|name: "set"\|name: "insert"\|name: "fill"\|name: "get_or_put"' \
+        //       src/ir/lowering/builtins.rs
+        // — 9 rows, of which exactly 3 declare a single param: `SET.insert`
+        // (aliased by `HASHSET`), `GUARD.set` and `WRITE_GUARD.set`.
+        let pack_dest: Option<(usize, TypeId)> =
+            crate::ir::lowering::builtins::protocol_for_mangled_name(&type_name)
+                .and_then(|protocol| {
+                    let (elem, _key, val, _elem_name, _val_name) =
+                        ctx.builtin_type_args_from_name(protocol, &type_name);
+                    match method_name {
+                        "push" | "add" | "extend" | "send" | "push_back" | "push_front" =>
+                            Some((0usize, elem)),
+                        "put" | "set" | "insert" | "fill" | "get_or_put"
+                            if !args.is_empty() => Some((args.len() - 1, val)),
+                        _ => None,
+                    }
+                });
         let (value_arg_idx_for_method, value_arg_type_hint): (Option<usize>, Option<TypeId>) =
             match method_name {
                 "push" | "add" | "extend" | "send" | "push_back" | "push_front" =>
@@ -2811,7 +2888,12 @@ pub(super) fn lower_method_call(
                 }
                 // Method args: i is 0-based for non-self args, but fn_param_ownerships
                 // includes self at index 0, so offset by 1.
-                let op = lower_call_arg(ctx, builder, arg, callee_pt, CalleeAbi::Named(&effective_name), i + 1);
+                let pack_hint = match pack_dest {
+                    Some((value_idx, dest_ty)) if value_idx == i => Some(dest_ty),
+                    _ => None,
+                };
+                let op = lower_call_arg(
+                    ctx, builder, arg, callee_pt, CalleeAbi::Named(&effective_name), i + 1, pack_hint);
                 if i == 0 {
                     // ⛔ TRAP: `infer_operand_type` (`type_reg.rs:285`) is the
                     // 2-argument sibling of this call. It scans only

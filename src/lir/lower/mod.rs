@@ -100,7 +100,7 @@ pub(super) struct FuncLowering<'a> {
     pub(super) recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String, String)>>,
     /// Struct types with field-level drop functions.
     pub(super) recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String, String)>>,
-    pub(super) type_drop_fns: &'a std::collections::HashMap<String, crate::lir::TypeDropInfo>,
+    pub(super) type_drop_fns: &'a std::collections::BTreeMap<String, crate::lir::TypeDropInfo>,
     /// Extern ABI kinds from module declarations (fn_name → Vec<AbiKind>).
     pub(super) extern_abi_kinds: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
     /// Extern return ABI kinds (fn_name → AbiKind).
@@ -1505,7 +1505,7 @@ impl<'a> FuncLowering<'a> {
         runtime_callees: &'a rustc_hash::FxHashMap<String, crate::ir::RuntimeCalleeInfo>,
         recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String, String)>>,
         recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String, String)>>,
-        type_drop_fns: &'a std::collections::HashMap<String, crate::lir::TypeDropInfo>,
+        type_drop_fns: &'a std::collections::BTreeMap<String, crate::lir::TypeDropInfo>,
         extern_abi_kinds: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
         return_abi_kinds: &'a rustc_hash::FxHashMap<String, crate::ir::abi::AbiKind>,
         closure_call_sigs: &'a std::collections::HashMap<String, ClosureCallSig>,

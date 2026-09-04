@@ -1,5 +1,5 @@
 # Design 4.8: a Vector of Box[Trait] dispatches dynamically.
-# Expected: 78 / 12
+# Expected: 75 / 12
 trait Shape:
     int area(self)
 

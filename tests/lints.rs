@@ -1584,14 +1584,24 @@ fn index_arm_type_name_gates_count() {
 ///
 /// LAND sites at N2 close: smart-ptr ctors (×6) + maybe_pack_at_arg + struct
 /// field + emit_enum_init_owned + array-lit (×2) + closure return = 12.
+///
+/// ⚠ THE COUNT NOW SPANS BOTH SPELLINGS — the direct producer AND the
+/// `maybe_pack_trait_object_at_arg` wrapper — because a site added through the
+/// wrapper added no literal producer call and left this ratchet green at 12
+/// while a real new formation site landed. 14 = the 12 above + the wrapper's
+/// two call sites (`lower_call_arg`'s call-argument boundary and
+/// `lower_index_assign`'s `v[i] = x` / `d[k] = x` boundary).
 #[test]
 fn pack_trait_object_call_sites_count() {
-    const EXPECTED: usize = 12;
+    const EXPECTED: usize = 14;
     let count = count_pack_trait_object_calls();
     assert_eq!(
         count, EXPECTED,
-        "pack_trait_object_for_smart_ptr_ctor call-site count changed: {count} vs \
+        "Box[Trait] pack call-site count changed: {count} vs \
          expected {EXPECTED}.\n\n\
+         This counts BOTH `pack_trait_object_for_smart_ptr_ctor(` and its \
+         wrapper `maybe_pack_trait_object_at_arg(`; a site added through the \
+         wrapper is still a new formation site.\n\
          If a new Box[Trait] formation site was added, wire it through the pack \
          helper (or emit_enum_init_owned for enum fields) and bump EXPECTED.\n\
          If a site was removed / centralized, lower EXPECTED.",
@@ -2280,6 +2290,15 @@ fn sh_amp_operand_reject_sites_count() {
     );
 }
 
+/// ⚠ THE BLIND SPOT THIS FUNCTION USED TO HAVE, AND WHY IT IS WIDENED.
+/// It counted only literal `pack_trait_object_for_smart_ptr_ctor(` calls. A
+/// formation site added through the WRAPPER — `maybe_pack_trait_object_at_arg`,
+/// which peels `Ptr`/`MutPtr` off a destination type and then delegates to the
+/// producer — added no literal call, so the count STAYED AT 12 and the guard
+/// stayed GREEN through the addition of a genuinely new pack site
+/// (`lower_index_assign`). A ratchet that cannot see the sibling it exists to
+/// force through review is worse than none, so BOTH spellings are counted:
+/// direct producer calls and wrapper calls, in one total.
 fn count_pack_trait_object_calls() -> usize {
     let mut count = 0;
     for path in walkdir_rs("src/ir/lowering") {
@@ -2292,13 +2311,20 @@ fn count_pack_trait_object_calls() -> usize {
             if t.starts_with("//") || t.starts_with("///") {
                 continue;
             }
-            if t.contains("fn pack_trait_object_for_smart_ptr_ctor") {
+            if t.contains("fn pack_trait_object_for_smart_ptr_ctor")
+                || t.contains("fn maybe_pack_trait_object_at_arg")
+            {
                 continue;
             }
-            if t.contains("use ") && t.contains("pack_trait_object_for_smart_ptr_ctor") {
+            if t.contains("use ")
+                && (t.contains("pack_trait_object_for_smart_ptr_ctor")
+                    || t.contains("maybe_pack_trait_object_at_arg"))
+            {
                 continue;
             }
-            if t.contains("pack_trait_object_for_smart_ptr_ctor(") {
+            if t.contains("pack_trait_object_for_smart_ptr_ctor(")
+                || t.contains("maybe_pack_trait_object_at_arg(")
+            {
                 count += 1;
             }
         }
@@ -3077,11 +3103,28 @@ fn collection_elem_drop_routes_through_type_drop_fns() {
 ///
 /// Two structural assertions:
 ///  1. The consuming-mutator name list (`"push" | "add" | "extend" | "send" |
-///     "push_back" | "push_front"`) appears exactly TWICE — the value-arg
-///     type-hint arm and the consuming-position arm. A new collection-mutator
-///     name (or a copy of the arm) forces an audit: is it a value-position
-///     HINT only (like `fill`/`get_or_put`, which must NOT consume), or a true
-///     consume? — then re-pin.
+///     "push_back" | "push_front"`) appears exactly THREE times — the value-arg
+///     type-hint arm, the consuming-position arm, and the trait-object pack's
+///     destination arm. A new collection-mutator name (or a copy of the arm)
+///     forces an audit: is it a value-position HINT only (like
+///     `fill`/`get_or_put`, which must NOT consume), or a true consume? — then
+///     re-pin.
+///
+///     AUDIT OF THE THIRD ARM (`pack_dest`, added 2026-09-04 by the R49 M2
+///     output-review fold): **HINT ONLY, never a consume decision.** It answers
+///     "what type does this method's value slot hold", so the trait-object pack
+///     can decide whether a `Box[Concrete]` needs packing into a `Box[Trait]`
+///     `{data, vtable}` pair; the consume/clone decision stays with arm 2,
+///     which this fold did not touch on purpose — widening arm 2 would move the
+///     Null-materialization hint's blast radius, a different axis.
+///     ⚠ **IT IS ALSO WHY THE ARM EXISTS AT ALL: arm 3 carries the value-slot
+///     INDEX AND the destination TYPE out of ONE match.** The defect it retires
+///     was precisely a SPLIT between those two — the type was computed for
+///     `insert` while the index came from arm 1, whose key-value clause is
+///     guarded `args.len() >= 2`, so the one-argument members of that family
+///     (`Set`/`HashSet` `insert`, `Guard`/`WriteGuard` `set`) had a correct
+///     destination type computed and then discarded, and stayed
+///     stack-buffer-overflows. Do not "simplify" arm 3 by reading arm 1's index.
 ///  2. The consuming-position match is preceded by the `if is_gir_method` gate.
 ///     Dropping the gate (re-introducing the raw name-match) drops this
 ///     substring, so the guard trips structurally — a name-match reintroduction
@@ -3105,7 +3148,7 @@ fn consuming_position_name_match_is_gir_gated() {
 
     // (1) The consuming-mutator name list appears in exactly two arms:
     //     the value-arg type-hint arm + the consuming-position arm.
-    const EXPECTED_ARMS: usize = 2;
+    const EXPECTED_ARMS: usize = 3;
     let arms = src
         .matches("\"push\" | \"add\" | \"extend\" | \"send\" | \"push_back\" | \"push_front\"")
         .count();
@@ -24786,15 +24829,13 @@ fn staging_move_burndown_shrink_only() {
 #[test]
 fn known_gaps_repros_are_wired_to_a_test() {
     /// Baseline regenerated 2026-08-27 by running this test. SHRINK-ONLY.
-    const ALLOWED_UNWIRED: [&str; 26] = [
+    const ALLOWED_UNWIRED: [&str; 24] = [
         "box_callable_call_through_box_undefined_function",
         "box_enum_payload_c_wont_compile_llvm_double_frees",
         "box_get_bound_to_local_double_free",
         "box_get_non_primitive_llvm_llc_type_error",
         "box_move_without_operator_missing_at_ctor_and_field",
-        "box_new_discarded_trait_pack_leak",
         "box_optional_payload_incomplete_type_both_lanes",
-        "box_trait_bare_ctor_struct_field_uaf",
         "closure_capture_then_mutate_source_uaf",
         "dict_index_assign_during_iteration_ice",
         "dict_value_write_through_silently_dropped",

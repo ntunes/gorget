@@ -124,6 +124,7 @@ pub(super) fn lower_call_arg(
     callee_param_type: Option<TypeId>,
     callee: CalleeAbi<'_>,
     arg_idx: usize,
+    pack_dest_hint: Option<TypeId>,
 ) -> Operand {
     // Look up the unified ParamABI (single source of truth when available).
     let abi = callee_param_abi(ctx, callee, arg_idx);
@@ -540,7 +541,24 @@ pub(super) fn lower_call_arg(
     // Box, when both Boxes have the same inner, or when the destination
     // inner isn't a trait — so it costs a single string-strip + typedef
     // lookup on the non-firing paths.
-    let val = maybe_pack_trait_object_at_arg(ctx, builder, val, callee_param_type);
+    //
+    // `callee_param_type` is the declared-signature answer and is the right
+    // one wherever a signature exists. For a builtin collection method there
+    // IS no such answer here: `lower_method_call` fills `method_param_types`
+    // only on the `is_gir_method` path, so `callee_param_type` arrives `None`
+    // and the pack below would take its `None => return val` early exit —
+    // NEVER ASKED THE QUESTION, rather than asked and answered wrong.
+    // (`fn_sigs` is not consulted for this argument. It would answer
+    // `I64_TYPE` for the value param, which is why the destination type had to
+    // be ADDED as a carrier rather than repaired in place — but that wrong
+    // answer never reaches the pack. An earlier revision of this comment said
+    // it did; corrected rather than silently swapped, per Core #14.)
+    // So a builtin consuming position hands the destination type in through
+    // `pack_dest_hint`, resolved from the protocol table at the caller (see
+    // `lower_method_call`). Signature first, hint second: the hint only ever
+    // fills a `None`.
+    let val = maybe_pack_trait_object_at_arg(
+        ctx, builder, val, callee_param_type.or(pack_dest_hint));
     // G2 site-3 UAF-fold close: the projection above minted transient
     // element/field handles INTO the freshly-materialized private copy. Reset
     // their CoW tags now (before the borrow is built and the arg is forwarded)
@@ -1037,7 +1055,7 @@ pub(in crate::ir::lowering) fn pack_closure_at_dest_type(
 /// peel one layer of Ptr/MutPtr, then delegate to the same helper the smart-
 /// pointer ctors use — the helper's typed-metadata checks (Box + trait_obj
 /// registration + source-is-different-Box) provide the fine filtering.
-pub(super) fn maybe_pack_trait_object_at_arg(
+pub(crate) fn maybe_pack_trait_object_at_arg(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     val: Operand,
@@ -1169,11 +1187,36 @@ pub(crate) fn pack_trait_object_for_smart_ptr_ctor(
     // `{data, vtable}` TraitObj into the temp's slot.
     // Tag FreshOwned so EnumInit / StructInit consume-site validation sees a
     // decided ownership (Round XIX N2 cell E: untracked pack temp panicked
-    // the Tier-2a validator). No drop-register: the consumer takes the value
-    // (enum/struct/ctor/return) and the temp is dead by construction.
+    // the Tier-2a validator).
+    //
+    // No drop-register on `tmp`: every consumer of the packed value TAKES the
+    // allocation. That covers both consumer shapes, not just the original one:
+    // the enum / struct / ctor / return positions consume it structurally, and
+    // the builtin collection consuming positions (`push` / `put` / `set` /
+    // `insert` / `fill` / `get_or_put` and `v[i] = x` / `d[k] = x`) memcpy the
+    // `{data, vtable}` pair into the collection's backing store, which then
+    // owns it. Registering here would mint a SECOND owner of one allocation —
+    // the exact defect `t0697` records in the opposite direction. (The
+    // collection's own failure to drop trait-box elements is a separate,
+    // filed write site: `elem_drop_fn_for_type`, `todo/t0700`.)
+    //
+    // THE SOURCE IS CONSUMED. Without this the pack emits `tmp = copy src`
+    // and leaves `src` registered and live, so `src`'s scope drop and the
+    // consumer's ownership both free one allocation (`t0697`'s crash face).
+    // Only a bare local can be consumed: a projection (`s.f`, `v[i]`) is a
+    // place inside a larger owner and move-zeroing it would punch a hole in
+    // that owner's drop.
     let tmp = builder.add_local(box_trait_tid, None);
+    let src_local = match &val_op {
+        Operand::Copy(pl) | Operand::Move(pl) if pl.projections.is_empty() => Some(pl.local),
+        _ => None,
+    };
     builder.assign(Place::local(tmp), val_op);
     ctx.set_owned_fresh(builder, tmp);
+    if let Some(src) = src_local {
+        ctx.drops.unregister(src);
+        builder.move_zero(Place::local(src));
+    }
     FunctionBuilder::copy(tmp)
 }
 
@@ -2074,7 +2117,7 @@ pub(super) fn lower_call(
                 let sig_params = ctx.fn_sigs.get(call_fn.as_str()).map(|(p, _)| p.clone());
                 for (i, arg) in args.iter().enumerate() {
                     let param_type = sig_params.as_ref().and_then(|p| p.get(i + 1).copied());
-                    call_args.push(lower_call_arg(ctx, builder, arg, param_type, CalleeAbi::Named(&call_fn), i + 1));
+                    call_args.push(lower_call_arg(ctx, builder, arg, param_type, CalleeAbi::Named(&call_fn), i + 1, None));
                 }
                 let ret_type = if let Some((_, ret)) = ctx.fn_sigs.get(call_fn.as_str()) {
                     *ret
@@ -2150,7 +2193,7 @@ pub(super) fn lower_call(
                         // ONE gate and `cow_before_mutation` becomes a hard
                         // invariant, not a bypass-conditional call.
                         let param_type = sig_params.get(i).copied();
-                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, callee_abi, i));
+                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, callee_abi, i, None));
                     }
                 } else {
                     report_callable_sig_erased(dispatch_kind, "unit-param", args.len());
@@ -2226,7 +2269,7 @@ pub(super) fn lower_call(
                         // fast-path lives inside `lower_call_arg` now, on the
                         // sanctioned path with `cow_before_mutation`.
                         let param_type = sig_params.get(i).copied();
-                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, callee_abi, i));
+                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, callee_abi, i, None));
                     }
                 } else {
                     report_callable_sig_erased(dispatch_kind, "fnptr-local", args.len());
@@ -2283,7 +2326,7 @@ pub(super) fn lower_call(
                 if let Some(pt) = callee_pt {
                     ctx.func_state.expected_type = Some(pt);
                 }
-                let op = lower_call_arg(ctx, builder, arg, callee_pt, CalleeAbi::Named(&effective_name), i);
+                let op = lower_call_arg(ctx, builder, arg, callee_pt, CalleeAbi::Named(&effective_name), i, None);
                 // Snag #35: a throws-call result at this arg site is a
                 // Result[T, E] operand. The typecheck pass already
                 // certified that this is either a capture (param type is
@@ -2491,7 +2534,7 @@ pub(super) fn lower_call(
                     let sig_params = ctx.fn_sigs.get(call_fn.as_str()).map(|(p, _)| p.clone());
                     for (i, arg) in args.iter().enumerate() {
                         let param_type = sig_params.as_ref().and_then(|p| p.get(i + 1).copied());
-                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, CalleeAbi::Named(&call_fn), i + 1));
+                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, CalleeAbi::Named(&call_fn), i + 1, None));
                     }
                     let ret_type = if let Some((_, ret)) = ctx.fn_sigs.get(call_fn.as_str()) {
                         *ret
@@ -2567,7 +2610,7 @@ pub(super) fn lower_call(
             };
             for (i, arg) in args.iter().enumerate() {
                 let param_type = sig_params.get(i).copied();
-                call_args.push(lower_call_arg(ctx, builder, arg, param_type, callee_abi, i));
+                call_args.push(lower_call_arg(ctx, builder, arg, param_type, callee_abi, i, None));
             }
         } else {
             for arg in args {

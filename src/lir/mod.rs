@@ -15,7 +15,7 @@ pub mod ssa;
 pub mod types;
 pub mod validate;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 // ── Identity types ──────────────────────────────────────────────────────────
@@ -1852,7 +1852,15 @@ pub struct LirModule {
     /// Unified drop function info for all types with droppable fields.
     /// Maps type name → drop function specification. The C backend generates
     /// one `Type__drop(void*)` per entry. Scope-exit emits a single call.
-    pub type_drop_fns: HashMap<String, TypeDropInfo>,
+    /// ⚠ BTreeMap, NOT HashMap — THIS MAP IS ITERATED TO EMIT CODE
+    /// (`backend/c_lir/mod.rs`'s `__gorget_dtor_*` forward declarations).
+    /// A hash-ordered map made `gg build --emit-c` NONDETERMINISTIC: the same
+    /// binary on the same source emitted the forward decls in a different
+    /// order on different runs. Ordered at the PRODUCER rather than sorted at
+    /// each consumer, so a future emission site cannot reintroduce it
+    /// (Core #4: centralize at the producer). Measured 2026-09-04 by the R49
+    /// M2 output-review fold, on `tests/fixtures/vector_userspace_hofs.gg`.
+    pub type_drop_fns: BTreeMap<String, TypeDropInfo>,
     /// Target environment: "native" (default), "freestanding".
     /// Affects which runtime is emitted by the C backend.
     pub target: String,
@@ -1917,7 +1925,7 @@ impl LirModule {
             recursive_drop_structs: HashMap::new(),
             recursive_drop_enums: HashMap::new(),
             drop_collision_types: HashSet::new(),
-            type_drop_fns: HashMap::new(),
+            type_drop_fns: BTreeMap::new(),
             target: "native".to_string(),
             clone_stats: false,
             clone_site_count: 0,

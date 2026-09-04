@@ -419,6 +419,116 @@
   `Pair[Point]` with a non-`Equatable` `Point` is ALREADY refused with `E_UnsatisfiedTraitBound` naming
   `Point`. What is actually missing is narrower and is what `t1127` records: the derive does not IMPLY the
   bound, so the same program without the hand-written `[Equatable T]` is accepted.
+- [2026-09-04] **`t0697` + `t0709` CLOSED (R49 Track M2) — the TRAIT-OBJECT PACK never fired at a builtin
+  CONSUMING POSITION, so a `Box[Concrete]` was memcpy'd unpacked into a `Box[Trait]` slot: rc 135/139 on
+  BOTH backends at `push`/`set`/`insert`/`fill`/`put`/`get_or_put` and at `v[i] = x` / `d[k] = x`.
+  19 cells RED→GREEN, both lanes; `t0697`'s two faces closed together and both repros now ASan-SILENT.**
+  **THE DEFECT, in one line — AND THE PACK WAS TOLD NOTHING, NOT TOLD `int`.** In `lower_method_call`,
+  `method_param_types` is filled ONLY on the `is_gir_method` path and is `Vec::new()` for every builtin
+  collection method, so `callee_param_type` at `lower_call_arg` is `None` and
+  `maybe_pack_trait_object_at_arg` takes its `None => return val` early exit: the pack is never asked the
+  question at all. **`fn_sigs` IS NEVER CONSULTED AT THIS SITE** — it *would* answer `I64_TYPE`, which is
+  why a carrier had to be added rather than repaired, but the pack never sees that answer. Regenerate:
+  `grep -n 'is_gir_method\|method_param_types' src/ir/lowering/exprs/methods.rs`. `gorget_array_push` then
+  memcpy'd 16 bytes of `{data, vtable}` out of an 8-byte `void*` slot: `stack-buffer-overflow` in
+  `__interceptor_memcpy`.
+  ⚠ **THE `"was told 'no, it is int'"` WORDING IS WRONG AND WAS REPEATED FIVE TIMES** — commit message
+  `c73683336`, this entry, two fixture headers and the code comment. Corrected everywhere it can be
+  edited; the commit message is immutable history and this line is its erratum. It does not change the
+  fix — it matters because `t0992`'s repair note rests on which carrier is actually read here.
+  **ONE AXIS, FIVE CARRIERS — and the two obvious CANDIDATES are both WRONG.** (Candidates for the new
+  carrier, not things the pack was reading: it was reading nothing.) `fn_sigs` answers `I64_TYPE`
+  (measured `TypeId(4)` at the exact `Vector[Box[Speaker]].push` site), and
+  `extract_elem_type_id_from_type_name` — the `strip_prefix("Vector__")` extractor — answers `None` for
+  EVERY `Dict__` receiver by construction, leaving `Dict[String, Box[Speaker]].put` at rc 135. The pack
+  is routed off `builtin_type_args_from_name` + `protocol_for_mangled_name`, the sanctioned
+  protocol-table accessor, which covers all 30 protocols including the three that hold another's method
+  table BY REFERENCE (`DEQUE → VECTOR`, `HASHMAP → DICT`, `HASHSET → SET`) and therefore have no
+  `BuiltinMethodDecl` text for a census to match. ⚠ It returns `(elem, key, val, elem_name, val_name)`
+  — on a 2-arity protocol `.0` is the KEY; the destructuring form is prescribed in the code.
+  **FOUR HUNKS, AND EACH WAS SHOWN LOAD-BEARING BY A LINE-ANCHORED DELIBERATE BREAK.**
+  (a) the pack CONSUMES its source (`drops.unregister` + `move_zero`) — break it and
+  `box_trait_bare_ctor_struct_field_uaf` returns to rc 1 `gorget_string_free invariant`;
+  (b) `Box.new` registers its mint at BIRTH (Core #3) — break it and the discarded-box repro returns to
+  the exact 65 B / 2 leak the filing records; (c) the destination type reaches `lower_call_arg` as a
+  typed `pack_dest_hint` — break it and the six method cells go red while index-assign stays green;
+  (d) `lower_index_assign` runs the same pack at its own site — break it and only index-assign goes red.
+  ⭐ **(a) AND (b) MUST SHIP TOGETHER AND ARE EACH OTHER'S POSITIVE CONTROL.** The asymmetry is the whole
+  reason: pack-consume alone is a no-op on an unregistered source (safe); registration alone creates a
+  second owner (unsafe) and reds the committed `box_trait_struct_field.gg`. `box_trait_struct_field` was
+  green at HEAD for a reason unrelated to correctness — the mint under-registered and the pack
+  under-consumed, and the two defects cancelled to exactly one owner.
+  **THE GUARD COULD NOT SEE ITS OWN CLASS.** `pack_trait_object_call_sites_count` counted only literal
+  `pack_trait_object_for_smart_ptr_ctor(` calls and stayed GREEN at 12 while a genuinely new formation
+  site landed through the `maybe_pack_trait_object_at_arg` wrapper. Widened to count both spellings
+  (12 → 14).
+  **CELLS — 19, both backends, bare rc.** `Vector.push` temp 135→0 · `Vector.set` · `Vector.insert` ·
+  `Vector.fill` · `Dict.put` 135→0 · `Dict.get_or_put` · `HashMap.put` (alias) · `HashMap.get_or_put`
+  (alias) · `Set.add` · `Set.insert` · `HashSet.add` (alias) · `HashSet.insert` (alias) · `Deque.push`
+  (alias) · `Guard.set` · `WriteGuard.set` · `v[i] = x` · `d[k] = x` · `v.push(^b)` named-local 139→0 ·
+  bare `Box(` struct field 1→0.
+  ⚠ **AN EARLIER REVISION OF THIS ENTRY SAID 12 AND THAT WAS AN UNDERCOUNT, not a different definition:
+  it omitted `Set.add`, `HashSet.add` and `HashMap.get_or_put`, which the same diff FIXED SILENTLY with
+  no fixture of their own, and the two `insert` cells, which it did not fix at all.** `Set`/`HashSet`
+  `insert` is a ONE-ARG alias for `add` on the same runtime callee (`gorget_set_add`), and the value-slot
+  INDEX came from a match arm guarded `args.len() >= 2` while the destination TYPE was computed correctly
+  for it three lines above: the hint was computed and thrown away. Index and type now come out of ONE
+  match. Verified per cell by severing `pack_hint` at `exprs/methods.rs` BY LINE (Core #13) — every
+  method-call cell goes rc 135/139 and `box_trait_pack_index_assign` stays rc 0, which is the
+  discriminating control for hunk (c) against hunk (d).
+  ⭐ **THE ONE-ARGUMENT FAMILY IS NOW TOTAL, AND THE ENUMERATION HAS AN INDEPENDENT WITNESS.**
+  Regenerate it from the declaration table, never from a hand list:
+  `grep -n 'name: "put"\|name: "set"\|name: "insert"\|name: "fill"\|name: "get_or_put"'
+  src/ir/lowering/builtins.rs` → 9 rows, of which exactly THREE declare a single param: `SET.insert`
+  (aliased by `HASHSET`), `GUARD.set` and `WRITE_GUARD.set`. All three are pinned.
+  Eight fixtures wired to NON-`#[ignore]`d tests, all RED-verified; the two
+  `t0697` repros wired through `assert_gg_sanitize_clean` because the value lane is structurally blind
+  to the leak face — with the registration hand-disabled the program still prints `1` at rc 0.
+  ⚠ **NOT COVERED, NAMED RATHER THAN IMPLIED:** `Shared[Mutex[Box[Speaker]]].lock()` is
+  `E_NoMethodFound` on `Shared[Mutex[trait Speaker]]` — the Box is gone from the printed type before the
+  pack is anywhere near it, which is `t1082`'s axis, not this one.
+  ⭐ **AND THE CoW CHARTER CHECK FOUND A SECOND DEFECT — IN THE INSTRUMENT.** `gg build --emit-c` was
+  **NONDETERMINISTIC**: two runs of the SAME binary on the SAME source emitted different C. Two sites,
+  both a hash-ordered container iterated to produce OUTPUT — `adapter_fids`
+  (`backend/c_lir/mod.rs`, the `__adapt_*` thunks) and `type_drop_fns`
+  (`src/lir/mod.rs`, the `__gorget_dtor_*` forward declarations). Both files were `sort`-identical
+  across runs, i.e. pure reordering, so nothing MISCOMPILED — but reproducible builds were broken and
+  emitted-C diffing was useless as an instrument, which is how it surfaced: it cost the charter diff
+  three false positives (`dict_box_callable`, `vector_hof_cross_type_map`, `vector_userspace_hofs`).
+  ⚠ **THE SECOND SITE WAS FOUND ONLY BECAUSE THE FIRST FIX DID NOT MAKE THE DIFF CLEAN** — the comment
+  written at site 1 claimed it was the last one, and re-running the same measurement falsified that in
+  one step. `adapter_fids` → `BTreeSet` at the site; `type_drop_fns` → `BTreeMap` **at the PRODUCER**
+  (Core #4 — centralize, so no future emission site can reintroduce it). Verified: three `--emit-c`
+  runs of one binary on `vector_hof_cross_type_map.gg` and `vector_userspace_hofs.gg` are now
+  byte-identical, and were NOT before.
+  **CoW CHARTER, measured after that:** 382 programs emitted with the pre- and post-fix compilers,
+  `diff -rq` over the emitted C → **exactly 2 files differ, both of them this fold's own new fixtures**;
+  the `clone` token count in each is IDENTICAL (155 → 155), and the delta is one extra `Box__Speaker`
+  slot per pack site, which IS the pack temp. No clone growth anywhere.
+  ⊕ **FOUND WHILE PROBING THE GUARD CELL, FILED NOT FIXED:** `with m.lock() as g:` ICEs `gg build`
+  rc 101 on both backends (`move-follow-through`, `src/ir/lowering/mod.rs:1853`) for EVERY guarded type
+  including `int`, with no write through the guard at all, while `Guard[int] g = m.lock()` on the
+  identical program is rc 0. Unrelated to the pack and measured to be so. `t1270`, durable repro
+  `known_gaps/with_lock_guard_binding_ices.gg`.
+  ⚖ **OPEN OWNER QUESTION, deliberately not decided here:** a `Set[Box[Trait]]` hashes the
+  `{data, vtable}` PAIR — pointer identity — so two structurally equal elements occupy two slots.
+  Whether the language should REJECT that shape rather than accept it is an owner call; this round
+  makes the accepted form memory-safe and takes no position on the accept/reject axis.
+  **BASELINE CORRECTED, NOT FITTED:** `robustness_map` cell `trait_dynamic_dispatch_box` expected
+  `78 / 12`; the program computes `3 * r * r` with `r = 5`, which is **75**. Checkable without running
+  anything (78 ≈ πr² — the expectation was derived from the INTENT, the code implements `3r²`). Fixed at
+  both sites.
+  **LANES.** C and LLVM landed. Self-host does NOT have it — its `try_emit_trait_obj_construct` mirrors
+  the Rust LIR coercion only, with no GIR-level analogue at consuming positions — filed as `t1084` with
+  a green control and an `#[ignore]`d assertion. ggdef is structurally unable: `Item::Trait` has no
+  elaboration arm at all, so the entire trait topic abstains, including programs green on both
+  production lanes — filed as `t1081`. Also filed: `t1082` (a `Box[Trait]` collection's element type
+  loses the Box at three boundaries) and `t1083` (`Box__{T}__drop` emitted twice with two signatures).
+  `t0700`'s blast radius grew by 12 cells — noted there, not re-filed.
+  **Gates, bare rc:** `--lib` 1185/0 · `--test lints` 224/0 · `--test security` 213/0 ·
+  `--test spec_conformance` 3/0 · integration `box`·`trait`·`vector`·`dict`·`index`·`push` =
+  40·90·97·100·87/28, 0 failed on BOTH backends · `staging_move_burndown --check` rc 0 ·
+  `--clones=stats` identical pristine vs fixed (no CoW charter breach).
 
 - [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
   STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,

@@ -1412,6 +1412,29 @@ pub(super) fn lower_index_assign(
     ctx.func_state.expected_type = prev_expected;
 
     let type_name = ctx.type_name_for_id(obj_type).unwrap_or("").to_string();
+    // `v[i] = x` / `d[k] = x` are consuming positions — the Ownership table
+    // names them alongside `push`/`put`/`set` — so the value needs the same
+    // trait-object pack the call-argument path runs, reading the destination
+    // type through the same sanctioned accessor. Index-assign is ALWAYS a
+    // value write, so unlike the method path it needs no method-name match:
+    // the value slot of a 2-arity protocol and the element slot of a 1-arity
+    // one are both `.2`.
+    //
+    // Placement is load-bearing and correct by construction: this sits before
+    // the `is_vector` / `is_dict` branches, hence before their
+    // `ensure_owned_at_consuming_arg` calls — exactly as the pack at
+    // `calls.rs`'s `lower_call_arg` precedes the method path's. The clone /
+    // move decision therefore sees the PACK TEMP, not the user's local, and
+    // cannot mint a second owner of the source.
+    let val = {
+        let pack_dest_ty = crate::ir::lowering::builtins::protocol_for_mangled_name(&type_name)
+            .map(|protocol| {
+                let (_elem, _key, val_ty, _elem_name, _val_name) =
+                    ctx.builtin_type_args_from_name(protocol, &type_name);
+                val_ty
+            });
+        crate::ir::lowering::exprs::maybe_pack_trait_object_at_arg(ctx, builder, val, pack_dest_ty)
+    };
     // Read typed `collection_kind` from TypeMetadata (Phase A) instead of
     // matching `type_name.starts_with("Vector__"/"Dict__"/...)`. The kind
     // covers Vector/Deque/GorgetArray as Array; Dict as OrderedMap; HashMap/
@@ -1493,6 +1516,39 @@ pub(super) fn lower_index_assign(
             maybe_move_zero(ctx, builder, &val);
         }
     } else {
+        // ⚠ WHAT THE TRAIT-OBJECT PACK DOES FOR A USER `__setitem__` /
+        // `IndexMut` DESTINATION. This arm is NOT excluded from the pack: the
+        // pack runs UNCONDITIONALLY above, before the `is_vector` / `is_dict`
+        // split, for every receiver. What differs here is only its INPUT — a
+        // user type has no builtin protocol, `protocol_for_mangled_name`
+        // answers `None`, and the pack therefore receives `None` as its
+        // destination type and early-exits.
+        //
+        // ⚠ NO INVARIANT IS ASSERTED HERE, DELIBERATELY (Core #14). An earlier
+        // revision of this comment claimed the pack "declines here by
+        // construction". That is not what the branch says. This arm's
+        // predicate is `collection_kind` being neither `Array` nor a map kind
+        // (`:1444-1445`) — it does not exclude builtin set-kinded protocols,
+        // for which `protocol_for_mangled_name` answers `Some`. So
+        // `debug_assert!(protocol_for_mangled_name(&type_name).is_none())`
+        // asserts something the predicate does not establish, and the honest
+        // move is to state the mechanism rather than dress it as a guarded
+        // invariant.
+        // The same revision said the destination type "would have to come from
+        // `fn_sigs`, the carrier that answers `I64_TYPE`". That is wrong for
+        // THIS arm: a user `__setitem__` has a real `fn_sigs` entry with real
+        // declared parameter types — the loop below looks it up by name — so
+        // if this arm ever needs a pack, `fn_sigs` is the RIGHT carrier for it,
+        // not the degenerate one. `todo/t0992` is about the BUILTIN value
+        // parameter, a different row.
+        //
+        // REACHABILITY IS UNMEASURED: the obvious probe (a user type indexed
+        // with a `Box[Trait]` value) is rejected before lowering with
+        // `E_NotIndexable`, so whether a program can reach this arm carrying a
+        // widening `Box[Concrete]` is an open question rather than a known
+        // hole. Recorded so the enumerated set closes WITH a stated open cell
+        // rather than silently short.
+        //
         // Check for IndexMut / set equip method (operator overload)
         if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
             let candidates = [
