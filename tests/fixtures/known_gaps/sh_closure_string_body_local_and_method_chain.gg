@@ -1,0 +1,52 @@
+# KNOWN GAP (`todo/t0877`, arms (c) and (d)) — SELF-HOST lane. Two more body
+# shapes the self-host's `guess_return_type` has no arm for, so a
+# `String`-returning closure is emitted `int64_t`-returning and the C build
+# fails:
+#
+#     error: incompatible types when returning type 'Str' but 'int64_t' was expected
+#
+# THE TWO NEW ARMS (`tests/fixtures/self_host_lowerer/lower_closures.gg`):
+#
+#   (c) a bare LOCAL identifier body — `(): s`, where `s` is an outer LOCAL
+#       rather than a closure parameter. `guess_return_type` has **no
+#       `EIdentifier` arm at all**; only `ECall(EIdentifier(fname), …)` is
+#       matched, so a bare identifier falls off the end of the `match` to the
+#       `I64_TYPE` default. Arm (b) of this item names the closure-PARAMETER
+#       spelling and diagnoses it as "the EIdentifier arm consults `fn_sigs`
+#       only" — the arm it describes does not exist, and the local spelling
+#       fails identically, so the subject is wider than (b) states.
+#
+#   (d) a METHOD-CHAIN body whose result is a `String` — `(): v.get(0).unwrap()`
+#       over a `Vector[String]`. The `EMethodCall` arm does not carry the
+#       element type back out of the collection, so the chain types `int64_t`.
+#
+# ⚠ THE DISCRIMINATOR IS THE BODY SHAPE, NOT THE RETURN TYPE. A `String`-
+# returning closure whose body is a plain CALL — `(): mk(p, "lo")` — compiles
+# and runs correctly on the self-host, because the `ECall` arm reads `fn_sigs`.
+# That control is why this is `guess_return_type` and not the `Callable[…]`
+# annotation being lost.
+#
+# Rust gg compiles and runs this correctly on C and LLVM, so it is a self-host
+# lag — fix the self-host, do not dumb the shape down.
+#
+# BLAST RADIUS, measured 2026-09-04: three top-level fixtures cannot run on the
+# self-host lane for this reason —
+# `closure_capture_then_mutate_source_uaf.gg` (arm d),
+# `closure_capture_string_then_reassign_source.gg` (arm c),
+# `closure_capture_param_bare_identifier_body.gg` (arm b).
+# All three are capture-ownership regression cells whose body shape is the
+# thing under test, so none of them can be respelled around this.
+#
+# INTENDED, on the SELF-HOST lane: prints `hello` then `world`, rc 0.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("hel", "lo")
+    Callable[String()] f = (): s
+    print(f())
+
+    Vector[String] v = [mk("wor", "ld")]
+    Callable[String()] g = (): v.get(0).unwrap()
+    print(g())

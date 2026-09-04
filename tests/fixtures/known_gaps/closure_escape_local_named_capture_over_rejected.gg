@@ -1,0 +1,46 @@
+# KNOWN GAP (`todo/t1068`) — OVER-REJECTION. The one cell of the closure-escape
+# 2×2 that the escape diagnostic actually inspects is now rejected for a hazard
+# that no longer exists.
+#
+#   | capture root | spelling               | today                              |
+#   |--------------|------------------------|------------------------------------|
+#   | param        | `return (): …` literal | runs, correct                      |
+#   | param        | `f = …; return f`      | runs, correct                      |
+#   | local        | `return (): …` literal | runs, correct                      |
+#   | local        | `f = …; return f`      | ⛔ `error[E_ClosureEscapesScope]`   |
+#
+# `check_expr_for_escaping_closures` (`src/semantic/safety/helpers.rs`) matches
+# the returned expression against `Expr::Identifier` / `Expr::StructLiteral` /
+# `Expr::ArrayLiteral`. There is NO `Expr::Closure` arm, so a returned closure
+# LITERAL is never inspected at all — the diagnostic keys on `local AND named`,
+# which is a SPELLING, not a hazard. The three unrejected cells were the unsound
+# ones; the rejected one is the same program written with a name.
+#
+# The premise the message states — "captures local variable `p` which will be
+# dropped" — is no longer true. A by-value capture is materialised at the
+# capture site, so the environment holds an independent value and the local's
+# scope exit frees only the local's own buffer. The three sibling cells prove it
+# by running correctly:
+# `closure_escape_capture_axis_local_literal.gg` is THIS PROGRAM with the
+# binding inlined.
+#
+# ⚠ DO NOT "fix" this by widening the diagnostic to the closure-literal arm —
+# that would reject three correct programs instead of accepting one. The
+# rescue owed is retiring the over-rejection (D34 territory), and the
+# discriminator to delete is `local AND named`.
+#
+# INTENDED (asserted by the `#[ignore]`d
+# `known_gap_closure_escape_local_named_capture_over_rejected`):
+# prints `hello!`, rc 0, both backends, ASan-clean.
+
+String mk(String a, String b):
+    return a + b
+
+Callable[String()] make_local():
+    String p = mk("hel", "lo")
+    Callable[String()] f = (): mk(p, "!")
+    return f
+
+void main():
+    Callable[String()] g = make_local()
+    print(g())

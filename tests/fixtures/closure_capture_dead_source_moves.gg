@@ -1,0 +1,26 @@
+# CAPTURE COST, cell A: the captured source is DEAD after the capture, so the
+# capture MOVES and materialises nothing.
+#
+# `prefix`'s only mention after the capture is INSIDE the closure body, and a
+# by-value capture reads the ENVIRONMENT FIELD there, not the outer local. So
+# the outer local is dead at the capture and the ratified answer is
+# move-if-it-is-dead: zero clones, and the two allocations are the two `mk`
+# results.
+#
+# ⚠ THE INSTRUMENT IS `--clones=stats`, NOT stdout. This program prints
+# `prefix!` whether the capture moves, clones, or (unsoundly) aliases — see
+# `closure_capture_capture_cost_axis` in `tests/integration.rs`, which asserts
+# both cells of the axis with exact equality.
+#
+# ⚠ ITS TWIN IS `closure_capture_live_source_clones.gg`, identical but for one
+# extra read of `prefix` AFTER the capture. One fixture cannot pin this: a
+# compiler that always clones passes the twin, and one that never clones passes
+# this one and is unsound. The pair is the guard.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String prefix = mk("pre", "fix")
+    Callable[String()] f = (): mk(prefix, "!")
+    print(f())

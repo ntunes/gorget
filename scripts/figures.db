@@ -513,7 +513,7 @@ lint.typed_metadata.sidecars.mirror = tests/lints.rs:TYPED_METADATA_SIDECAR_BUDG
 lint.typed_metadata.sidecars.input = none
 
 row = lint.phase_d.proxy_reads
-lint.phase_d.proxy_reads.value = 91
+lint.phase_d.proxy_reads.value = 90
 lint.phase_d.proxy_reads.unit = Phase-D ownership proxy reads in src/
 lint.phase_d.proxy_reads.polarity = exact-pin
 lint.phase_d.proxy_reads.provenance = derived
@@ -523,7 +523,7 @@ lint.phase_d.proxy_reads.regen_extract = ^(?P<value>[0-9]+)
 lint.phase_d.proxy_reads.regen_fires = ^[0-9]+$
 lint.phase_d.proxy_reads.regen_env = none
 lint.phase_d.proxy_reads.instrument = grep over the lint const
-lint.phase_d.proxy_reads.measured_at = db9ec6a13
+lint.phase_d.proxy_reads.measured_at = 8bd978079
 lint.phase_d.proxy_reads.home = tests/lints.rs:PHASE_D_PROXY_BUDGET
 lint.phase_d.proxy_reads.scan = none
 lint.phase_d.proxy_reads.caveat = too small and too common to police by scanning; only figures_db_mirrors_agree guards it

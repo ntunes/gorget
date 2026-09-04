@@ -1,0 +1,45 @@
+# KNOWN GAP (`todo/t1067`) — a closure that CAPTURES ANOTHER CLOSURE reads freed
+# memory once the captured `Callable`'s scope ends. rc 0 with SILENTLY WRONG
+# OUTPUT (a garbage integer); `AddressSanitizer: heap-use-after-free` in
+# `__Closure_1__call` under `--sanitize`; `ggdef run` prints `41`.
+#
+# MECHANISM — THE CELL WITH NO SUBJECT. `c5` and the closure capturing it are
+# both declared inside the loop body, so `c5`'s environment is freed at the end
+# of each iteration while `outer` — assigned out of the loop — still holds a
+# bitwise alias of it.
+#
+# Every other capture of a droppable value is closed by the ordinary
+# consuming-position rule: clone if the source is live, move if it is dead.
+# `Callable[T]` is the one type where NEITHER answer can be spelled. It is a
+# ratified single-owner-by-design carve-out with no implicit-copy path in the
+# lowering:
+#
+#   * an implicit CLONE breaches the carve-out;
+#   * an implicit MOVE breaches it too, and silently consumes under D31
+#     full-strict;
+#   * a REJECTION has no fix-it the user can write — `(^c5)(int y): …` is a
+#     parse error, `^(int y): …` is `E_ClosureKindMismatch`, and D7's
+#     per-variable capture list (the construct that would let a user say
+#     "capture `c5` by value") is UNIMPLEMENTED.
+#
+# ⇒ THE GATE IS D7, not the capture rule. Until a capture list exists there is
+# nothing to widen the rule to. The consume-site validator carries a matching
+# carve-out — `lacks_materialization_path` in `src/ir/validate.rs` — so this
+# program still BUILDS rather than failing with a diagnostic no one can act on.
+# That carve-out is why this file is a repro and not a red test.
+#
+# ⚠ THE INSTRUMENT IS C + ASan. The plain build is rc 0 and merely prints the
+# wrong number.
+#
+# INTENDED (asserted by the `#[ignore]`d `known_gap_closure_capture_callable_block_scope_uaf`):
+# prints `41`, rc 0, ASan-clean — the value `ggdef run` gives today.
+
+void main():
+    Callable[int()] outer = (): 0
+    int n = 1
+    while n > 0:
+        int base = 41
+        Callable[int()] c5 = (): base
+        outer = (): c5()
+        n = n - 1
+    print(outer())
