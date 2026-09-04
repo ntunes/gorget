@@ -683,6 +683,40 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔⛔ **T1 PASS 2 CHANGES THE INTEGRATION ORDER: TRACK L, INTEGRATING ALONE, MAY BREACH THE PARITY CEILING
+— AND NO DEBUG RUN WOULD EVER SHOW IT.** `runtime_parity_corpus` scans top-level fixtures **non-recursively
+with no scan-time exclusions**; **L adds 11 top-level fixtures and deletes 3, and THREE of the 11 are CC-FAIL
+on the self-host lane** ⇒ **+3 of L's OWN INFLOW, which Core #9 ⊕ forbids absorbing.**
+⛔⛔ **AND THE GATE FAMILY IS THREE, NOT ONE: the non-MATCH ceiling, the MATCH floor AND the ggdef ADJ floor
+ALL take an `eprintln!` branch under `cfg!(debug_assertions)` instead of evaluating. ALREADY FILED AS
+`todo/t0924` (HIGH).** ⇒ ⚡ **only `--release` with `GG_RUNTIME_DIFF=1` evaluates them.**
+⇒ ⭐ **T1 IS WHAT DISCHARGES THIS AND KEEPS L LEGAL** (three cells CC-FAIL → MATCH), and **`t0877`'s own
+erratum already raises it as a step-5 OWNER ASK — which T1 LANDING DISCHARGES rather than escalates.**
+**Sent to L's live confirming reviewer to adjudicate before L integrates.**
+⛔ **"MATCH floor +1" is WRONG** — slack is deliberately tight and MATCH gains **L's 8 already-MATCH rows plus
+T1's 4, less 3 deleted — roughly +12.** *(The ceiling's "−1" IS sound.)*
+
+⛔⛔ **AND MY OWN L2 PRESCRIPTION WAS INVERTED — MEASURED BY SPLIT PROBES.** I wrote *"re-scope `t0877` to arm
+(a) alone"* and *"the bare-param half is now closed"*. **Backwards: arm (a) is CLOSED; the bare-param arm
+SURVIVES.** My directive would have **named the arm T1 closed and dropped the one that survives.**
+⭐ **The real mechanism is better than the brief's story:** the ambient read fires only where `expected_type`
+is a `Callable`/FnPtr. **At a direct-call argument or declared destination it IS the FnPtr, so the peel
+answers for any body shape; at a BUILTIN-METHOD argument `expected_type` is already the closure's RETURN type,
+so the peel correctly DECLINES.** ⇒ **the split is SOUND; only its stated reason was wrong** — and **my
+SIX-Q#4 defence ("call arguments ⇒ `expected_type = -1`") is MEASURABLY FALSE as written.**
+⛔ **READINESS #4 IS UNMET AND §8's "un-`#[ignore]` the SH pins" IS FALSE — there are NO `#[ignore]`d SH pins
+to un-ignore.** L's three cells are wired **only** as Rust-lane `run_gg`. ⇒ **reverting the fix turns NOTHING
+red in a debug run.** ⊕ And `sound_move_operand_closure_tail_allowed` **appears in no tracked file's content
+except this handover** — the track books a free gain on a cell with no test at all.
+⛔ **NO GATE IN THE ROUND-CLOSE BATTERY OBSERVES THE CC-FAIL → SEGV RISE** — not the robustness map, not the
+sanitize sweep (no self-host lane), and the parity gate is ceiling-neutral there. **`t1177` + its repro is the
+ONLY durable record**, or a future round reads a green battery as *"the SEGV is gone"*.
+⊕ **The T1 base NO LONGER MERGES CLEANLY** — four conflicts including `ALLOWED_UNWIRED` **24-vs-28, where L
+REMOVES a row**; it needs a **real union, not a side-pick**. ⊕ **And the SH tests use `build_gg_dir_cached` —
+a newly-un-`#[ignore]`d test can go GREEN ON A STALE DRIVER unless the cache is confirmed to invalidate.**
+⭐ **Grounding found in the RATIFIED record:** `decisions.md:1303-1305` says the propagation holes *"all sat
+at positions where the expected type wasn't threaded inward"* — **T1's defect class, named in the ledger.**
+
 ✅ **TRACK N2 IS COMPLETE AND READY (`0d9f9cebe`)** — `--test lints` rc 0, `todo_index --check` rc 0, `src/`
 byte-identical to its fix commit.
 ⭐ **It RE-DERIVED the correction before accepting it rather than relaying my message:**
