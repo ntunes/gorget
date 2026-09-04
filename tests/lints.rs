@@ -28887,11 +28887,24 @@ fn line_is_conflict_marker(arms: &[regex::Regex], raw_line: &str) -> bool {
 /// ⚠ `tracked_files()`' own `assert!(set.len() > 500)` does NOT stand in for the
 /// floors. It lives inside a `OnceLock::get_or_init` closure shared with every
 /// other lint, so whichever lint arrives first consumes it; it proves git
-/// enumerated paths, not that THIS test opened one.
+/// enumerated paths, not that THIS test opened one. (Measured during an
+/// integration merge: it returned 7527 paths and passed cleanly while this test
+/// went RED on a deliberately broken walk.)
+///
+/// ⊕ `tracked_files()` collects into a `HashSet`, and that dedup is load-bearing
+/// TODAY rather than hypothetically: while the index is UNMERGED, `git ls-files`
+/// lists a conflicted path ONCE PER STAGE — measured mid-merge,
+/// `git ls-files tests/lints.rs | wc -l` → 3. Without the set this walk would
+/// read such a file three times and report each finding in it three times.
 ///
 /// ⭐ The table is mandatory for a second reason: the tree currently contains
-/// ZERO CRLF files, so the walk NEVER exercises the CRLF cell. Verifying this
-/// guard by the tree sweep alone gives vacuous CRLF coverage.
+/// ZERO CRLF files, so on the CLEAN tree the walk NEVER exercises the CRLF
+/// cell, and verifying this guard by the tree sweep alone gives vacuous CRLF
+/// coverage. ⊕ The cell is nonetheless reachable END-TO-END and has been
+/// reached: a CRLF `=======` planted with NO final newline in a real tracked
+/// file is caught by the WALK, not merely by the table. That is precisely the
+/// shape the explicit `\r` strip exists for, and it is the one cell where
+/// `str::lines()` alone would have missed it.
 ///
 /// # THE MARKER SET'S WITNESS
 ///
@@ -28911,8 +28924,10 @@ fn line_is_conflict_marker(arms: &[regex::Regex], raw_line: &str) -> bool {
 /// git merge-file` emits no `|||||||`. Only the `--diff3` / `--zdiff3` FLAGS, a
 /// REAL `git merge` with the config set, or `git checkout --conflict=` honour it.
 /// A real merge under `merge.conflictStyle=zdiff3` emits `||||||| <sha>`; on a
-/// multi-base recursive merge git labels that line with its virtual merge base
-/// instead. `git rerere`'s preimage normalises BOTH ends to a BARE `<<<<<<<`
+/// criss-cross history with TWO merge bases the same line comes out verbatim as
+/// `||||||| merged common ancestors`, git's name for the virtual base it builds
+/// — measured byte-for-byte from a real merge, not inferred from the labelled
+/// form. `git rerere`'s preimage normalises BOTH ends to a BARE `<<<<<<<`
 /// and `>>>>>>>` with no trailing space — which is why every bracket arm needs
 /// the `( |$)` alternation and not a required trailing space. For the `|` arm no
 /// producer emits a bare form: `--diff3 -L ""` still gives `||||||| ` WITH the
@@ -28935,9 +28950,22 @@ fn line_is_conflict_marker(arms: &[regex::Regex], raw_line: &str) -> bool {
 /// * **A UTF-8 BOM before the marker.** `"\u{feff}<<<<<<< HEAD"` does not match —
 ///   after decoding, the marker is no longer at column 0. Exposure: zero tracked
 ///   BOM files.
-/// * **Non-UTF-8 and vanished paths** are skipped, never panicked on. Measured:
-///   zero of each. `git ls-files` reads the INDEX, so a listed path can be absent
-///   from disk, and a sibling agent's checkout can race a path away mid-scan.
+/// * **NON-UTF-8 TEXT — and this escape is REAL, not theoretical.** git writes
+///   `<<<<<<< HEAD` into a Latin-1 file exactly as happily as into a UTF-8 one,
+///   and the result fails `String::from_utf8`, so the walk SKIPS it and the
+///   markers ride along invisible. Exposure is measured ZERO — and unlike the
+///   two cells above that is PINNED rather than hoped for: `non_utf8` is
+///   asserted zero below, on the same philosophy as the `.gitattributes` check,
+///   so introducing a non-UTF-8 tracked file is a DECISION rather than an
+///   accident that silently shrinks this guard's reach. ⊕ `from_utf8_lossy`
+///   would also close it and is the WRONG trade: it would newly scan
+///   `scripts/figures.db` and every PNG, swapping a measured-zero miss for a
+///   live false-positive risk.
+/// * **Vanished paths** are skipped, never panicked on. `git ls-files` reads the
+///   INDEX, so a listed path can be absent from disk, and a sibling agent's
+///   checkout can race one away mid-scan. Measured zero, and deliberately NOT
+///   asserted zero: unlike the others this one is a legitimate race, and a guard
+///   that reds when a neighbour checks out a branch is a guard that gets waived.
 #[test]
 fn no_committed_conflict_markers() {
     let arms = conflict_marker_arms();
@@ -28989,6 +29017,7 @@ fn no_committed_conflict_markers() {
         ("<<<<<<<x", false, "seven `<` then a non-space — pins the `( |$)` alternation"),
         (">>>>>>>x", false, "seven `>` then a non-space — pins the `( |$)` alternation"),
         ("|||||||x", false, "seven `|` then a non-space — pins the `( |$)` alternation"),
+        ("=<<<<<<< x", false, "pins the `^` past the first-byte prefilter"),
         ("| a | b |", false, "markdown table row, against the `|{7,}` arm"),
         ("|-----|-----|", false, "markdown table rule, against the `|{7,}` arm"),
         ("`<<<<<<< HEAD`", false, "backticked prose — the todo/t1066.md shape"),
@@ -29037,7 +29066,7 @@ fn no_committed_conflict_markers() {
     // were reasoned about. Adding a row means bumping the matching side.
     assert_eq!(
         (want_match, want_no_match),
-        (18, 21),
+        (18, 22),
         "the conflict-marker table's row counts changed ({want_match} must-match, \
          {want_no_match} must-not-match). Adding a row is fine — update this pair \
          in the same edit. DELETING one is how the table quietly stops covering a \
@@ -29103,6 +29132,21 @@ fn no_committed_conflict_markers() {
         "the conflict-marker walk scanned only {lines_scanned} lines across {files_read} \
          files — the SCAN is broken, not the tree. Regenerate the real figure with:\n  \
          git ls-files -z | xargs -0 cat | wc -l",
+    );
+
+    // ⊕ AND THE BLIND SPOT, PINNED. A tracked file that is not valid UTF-8 was
+    // skipped above, so this walk cannot speak for its contents — and git will
+    // write markers into a Latin-1 file just as readily as into a UTF-8 one.
+    // Zero today; asserting it keeps the guard's reach from narrowing silently.
+    assert_eq!(
+        non_utf8, 0,
+        "{non_utf8} tracked file(s) are not valid UTF-8, so the conflict-marker walk \
+         SKIPPED them and cannot speak for their contents — and git writes markers \
+         into a Latin-1 file exactly as it does into a UTF-8 one. Either re-encode \
+         them, or re-open this guard's decode strategy with the trade-off stated: \
+         `from_utf8_lossy` closes the hole but newly scans binaries like \
+         `scripts/figures.db`, swapping a measured-zero miss for a false-positive \
+         risk."
     );
 
     assert!(
