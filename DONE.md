@@ -1,3 +1,77 @@
+- [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
+  STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,
+  garbage or empty stdout on BOTH backends. Two producer sites now stamp the View tag; 12 cells RED→GREEN.**
+  **THE DEFECT.** `gorget_str_index` / `gorget_str_slice` / the synthetic `gorget_str_codepoint_at` all
+  return `gorget_str_view_region` — cap=0, alloc=NULL, borrowing the base's buffer — while
+  `gorget_array_slice` allocates and deep-clones. **String was the only container broken BY
+  CONSTRUCTION.** The index/slice place-arm carried NO ownership tag; the for-element carried
+  **FreshOwned**, which is worse — FreshOwned-and-dead is the one shape the Tier 2a consume-site
+  validator green-lights unconditionally, and that is why half the class stayed invisible while the
+  other half was being chased.
+  **THE FIX, at the two producers (Core #1):** `ctx.set_view_of` after the `index_load` in
+  `lower_index_access`, and on `ch_local` in `lower_for_string_with`. The read side's Branch E then
+  clones at every ownership boundary and `cow_before_mutation` severs the alias on realloc.
+  ⭐ **RUST LAGGED THE SELF-HOST ON THE TAG — AND THE SELF-HOST LAGGED RUST ON THE BIND. BOTH LANES
+  WERE BROKEN, IN DIFFERENT HALVES.** The SH already tags both producers `LoView()`, with a comment
+  naming this very UAF — which is why the track was briefed "no port is owed". Measured: FALSE.
+  `decide_svardecl_emission`'s Branch A treats `LoView` and `LoBorrowed` as one state and returns
+  `BorrowAlias()` for both, and its Branch E carried a comment calling itself dead because *"the
+  CoW-default-borrow design intent is to alias, not materialize"*. **A `LoBorrowed` points into an
+  aggregate whose owner outlives the bind; a `LoView` is a cap=0 header over a buffer the source can
+  REALLOCATE.** All four bind cells printed nondeterministic garbage on the SH lane — 7 distinct
+  outputs over 7 runs — and the parity gate caught it as a NEW NONDETERMINISTIC row.
+  **THE SH PORT USES THE SELF-HOST'S OWN TIER-2 IDIOM, so it costs nothing where nothing is
+  mutated:** a view aliases only while BOTH the bound name and the source root are `cow_pristine_after`
+  the bind — the same test the `GtPtr`-to-resource branch 58 lines below already applies — and
+  materializes otherwise. All eight new fixtures now MATCH.
+  **|changed| = 12**, decomposed {producer} × {consuming position} over AGENTS.md's own enumeration —
+  bare-local bind, field-rooted bind, field ASSIGN, `Vector.set`, `v[i] =`, `Vector.insert`,
+  constructor arg, field-rooted source. **A5–A8 and B3–B4 appeared in no earlier enumeration**: the
+  collection-put materialize hooks cover `push`/`put` and field INIT and NOTHING ELSE, so
+  *"boundary clones own it when it escapes"* — asserted in three separate comments — was false for at
+  least five resting positions. Every cell RED-verified against the pre-fix compiler on C and LLVM;
+  ggdef adjudicates 11 of 12 (Core #8 — never a "both backends agree" ambiguity).
+  ⛔ **THAT 11 IS ONLY TRUE BECAUSE THE OUTPUT-REVIEW CAUGHT IT AT 8.** `.insert()` is out of ggdef's
+  phase-0 subset, and an out-of-subset method fails elaboration for the **whole file** — so while A8
+  shared a fixture with A5/A6/A7, ggdef adjudicated NONE of the four, and A5–A8 are the round's most
+  novel finding. Splitting the one `.insert()` cell into `string_view_tag_index_insert.gg` converts
+  three cells from *"both backends agree"* — which Core #8 calls necessary and NOT sufficient — to
+  definition-adjudicated. **A8 is now the single NAMED omitted cell** (Core #12), and the split is
+  load-bearing: re-merging it would cost three adjudications with nothing going red.
+  ⛔ **ASan IS STRUCTURALLY BLIND** to this whole class: the runtime allocates from the custom
+  `__gorget_current_alloc` pool, so a green sanitize sweep is not evidence. stdout and `--clones=stats`
+  are the instruments. And a field probe must be rooted in a HEAP String — a static literal's buffer is
+  never freed, so a literal-rooted probe is green for the wrong reason.
+  ⚡ **THE `CEILING = 0` `.slice()` BAN IS RETIRED, NOT RE-ENABLED** (owner ruling: take the
+  reference-grade option). It enforced a clause D22 Rider 2 withdrew, its clone-reclaim premise
+  measured ZERO once the colon form was made sound, and as a shrink-only ratchet it could never go RED
+  on a shrink (Core #6). **Replaced by `slice_spelling_cost_equivalence`**, which asserts the two
+  ratified ALIASES cost the SAME — `string_clone == 0` at a temp, `== LOOP_N` at a bind — and was seen
+  RED in BOTH directions by dropping one producer tag at a time.
+  ⊕ Five Core #14 invariant comments guarded, corrected or deleted; a sixth found in
+  `emit_call_extern.rs`. The `VIEW_PRODUCERS_INTO_CONSUMERS` ratchet now spans both View-producer
+  families and pins one fixture per cell. FOUR previously-unfiled defects filed with durable repros —
+  the first three `#[ignore]`d against their INTENDED output and RED-verified, the fourth measured by
+  the new equivalence guard's own fixture:
+  `t1048` (the CoW `&`-route leaks every superseded buffer — **and that leak is what
+  made `&`-rooted UAF probes look green**), `t1049` (`.enumerate()` counts BYTES and indexes
+  CODEPOINTS — ASCII accidentally correct, multibyte traps), `t1050` (`for c in s:` reads a TORN string
+  when the source is reassigned — ggdef says `abc`, Rust gg says `aZZ`), and `t1051` (the reference now
+  lags the self-host on COST: Rust clones at every view bind where the SH's pristine test clones at
+  none — 100 vs 0 on the same program).
+  ⊕ **AND THE RETIRED LINT LEFT ROT THIS DIFF OWED AND THE OUTPUT-REVIEW FOUND (Core #15d — grep the
+  correction).** `known_gaps/sh_parent_dir_clones_one_string_per_path_char.gg` explained itself by an
+  allowlist in a lint this diff DELETES, and by *"the colon form materializes NOTHING — 1,002 vs 2"*.
+  Re-measured on that exact loop transcribed to each spelling: **`string_clone` 7 at a 4-char path and
+  67 at a 64-char path, IDENTICAL for `.slice()` and `[a:b]`** — the conclusion is inverted, and the
+  defect the fixture actually holds (one heap String per character SCANNED) was never about the
+  spelling at all. Corrected in place, and `todo/t0316` / `todo/t0850` carry a precedence-ordered
+  addendum saying the lint is GONE rather than suspended and the reclaim is ZERO.
+  ⊕ `t1064` files the class `t0871` exposed: **`todo/` `repro` paths are unguarded.** Re-derived over
+  all 247 — **9 cite a file that exists nowhere** (the real debt) and **8 more are merely mis-spelled**
+  (the file exists; the path omits `tests/fixtures/`). `self_host_cited_fixture_paths_resolve` already
+  IS this guard, aimed only at `tests/fixtures/self_host_*`; widening its population is the fix.
+
 - [2026-09-03] **R49 Track C — `t1017` + `t1019`: the four tag-check names never dispatched, and the
   checker never asked whether the type HAS the method.** One change, two edits, one layer apart.
   `src/ir/lowering/exprs/methods.rs` intercepted `is_some`/`is_none`/`is_ok`/`is_error` for EVERY

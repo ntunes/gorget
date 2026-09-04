@@ -5617,6 +5617,122 @@ fn known_gap_comprehension_over_bytes_narrow_elem_overread() {
     );
 }
 
+/// KNOWN GAP `t1049`: `for i, c in s.enumerate()` bounds the loop on the
+/// String's BYTE length (`lower_for_enumerate` reads the iterator's `.len`
+/// field) while reading the element with a CODEPOINT indexer. "héllo" is 5
+/// codepoints in 6 bytes, so the loop runs a sixth time and traps
+/// `T_Bounds` after printing all five correct pairs.
+///
+/// ACCIDENTALLY CORRECT ON ASCII (SIX Q#6) — byte length equals codepoint
+/// count for every ASCII string, so the whole ASCII `.enumerate()` corpus
+/// is green and says nothing about this. A reference-lags-the-self-host
+/// case: `self_host_lowerer/lower_loops.gg`'s `lower_for_string(…
+/// is_enumerate …)` carries its own codepoint-ordinal counter and is right.
+#[test]
+#[ignore = "known gap (t1049): for i, c in s.enumerate() bounds on the String's \
+BYTE length while indexing by CODEPOINT, so a multibyte source traps T_Bounds \
+(rc 101) after emitting the correct pairs; ASCII is accidentally correct. \
+Un-ignore when the String enumerate path counts codepoints, like the self-host \
+already does."]
+fn known_gap_string_enumerate_byte_bound_codepoint_index() {
+    run_gg(
+        "known_gaps/string_enumerate_byte_bound_codepoint_index.gg",
+        "0\nh\n1\né\n2\nl\n3\nl\n4\no",
+    );
+}
+
+/// KNOWN GAP `t1050`: `for c in s:` reads a TORN string when `s` is
+/// reassigned inside the loop — silent wrong output at exit 0.
+/// `lower_for_string_with` snapshots the byte length once but makes the
+/// iterator a borrow of `s`'s own slot and re-reads `->data` each
+/// iteration, so a reassignment leaves length and buffer describing
+/// different strings. Rust gg prints `aZZ`; ggdef prints `abc` and
+/// adjudicates definitively (Core #8).
+///
+/// SIX Q#4 — the case has NO SUBJECT. `E_MutationWhileBorrowed` guards this
+/// class for collections (`for_loop_iterables` in
+/// `src/semantic/safety/check_expr.rs`) but only inside the
+/// mutating-METHOD-CALL arm; reassignment, the only way to mutate a String,
+/// reaches no rule at all.
+#[test]
+#[ignore = "known gap (t1050): reassigning the source inside `for c in s:` tears \
+the iteration — the length is snapshotted but the buffer pointer is re-read, so \
+Rust gg prints `aZZ` where ggdef prints `abc`, at exit 0 with no diagnostic. \
+Un-ignore when the for-string loop iterates the string it started on (or the \
+check site rejects the reassign, as E_MutationWhileBorrowed does for \
+collections)."]
+fn known_gap_for_string_source_reassign_torn_read() {
+    run_gg(
+        "known_gaps/for_string_source_reassign_torn_read.gg",
+        "abc\n3",
+    );
+}
+
+/// KNOWN GAP `t1048`: the CoW `&`-route leaks EVERY superseded buffer.
+/// `grow(&s)` reallocating 64 times ends at `live_bytes=32704` where the
+/// same appends written inline in `main` end at 0.
+///
+/// ⚠ NOT a stdout test and NOT an ASan test — a leak is invisible in
+/// stdout, and the runtime allocates from the custom
+/// `__gorget_current_alloc` pool, so the sanitizer emits no report. The
+/// clone meter is the only instrument that can see this, which is why this
+/// one reads `live_bytes` instead of calling `run_gg`.
+///
+/// ⚠ IT MASKS OTHER DEFECTS. A dangling view of `s`'s buffer keeps printing
+/// the right answer through the `&` route because the buffer is never
+/// freed — every `&`-rooted probe of a use-after-free class is green for
+/// the wrong reason (SIX Q#6). Fixing this leak is what turns those cells
+/// honest.
+#[test]
+#[ignore = "known gap (t1048): the CoW `&`-route abandons every superseded \
+String buffer — grow(&s) with 64 reallocating appends ends at live_bytes=32704 \
+where the same appends inline end at 0. ASan is blind (custom allocator pool); \
+--clones=stats is the instrument. Un-ignore when the CoW step frees the buffer \
+it supersedes."]
+fn known_gap_cow_amp_route_leaks_superseded_buffers() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/cow_amp_route_leaks_superseded_buffers.gg");
+    let exe = std::env::temp_dir()
+        .join(format!("gg_amp_route_leak_{}", std::process::id()));
+    let build = run_with_deadline(
+        Command::new(gg_binary())
+            .arg("build")
+            .arg("--clones=stats")
+            .arg(&fixture)
+            .arg("-o")
+            .arg(&exe),
+        "cow_amp_route_leaks_superseded_buffers",
+        build_timeout(),
+    );
+    assert!(
+        build.status.success(),
+        "instrumented build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = run_with_timeout(&mut Command::new(&exe), "amp_route_leak");
+    assert!(run.status.success(), "instrumented run failed");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    let live_bytes: u64 = stderr
+        .lines()
+        .rev()
+        .find(|l| l.starts_with("[clone-stats]"))
+        .expect("no [clone-stats] line — was the build missing --clones=stats?")
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("live_bytes="))
+        .expect("no live_bytes= field in the [clone-stats] line")
+        .parse()
+        .expect("live_bytes value not a u64");
+    let _ = std::fs::remove_file(&exe);
+    assert_eq!(
+        live_bytes, 0,
+        "the `&`-route left {live_bytes} bytes live at exit. Each CoW step \
+         inside `grow(&s)` allocates a new buffer and abandons the old one; \
+         the same 64 appends written inline in `main` free as they go and \
+         end at 0."
+    );
+}
+
 /// KNOWN GAP: a comprehension over a `Heap[T]` — the SECOND SHAPE of the
 /// already-filed "no is-it-iterable gate in the front end" class (sibling
 /// repro: `known_gaps/comprehension_over_non_iterable_struct.gg`).
@@ -11622,6 +11738,112 @@ c
 4
 caf
 o",
+    );
+}
+
+// ── t0871: the String-VIEW tag on the index/slice and for-element producers ──
+//
+// `s[a:b]`, `s[i]` and the `for c in s:` element are all cap=0 VIEWS of the
+// source buffer (`gorget_str_index` / `gorget_str_slice` / the synthetic
+// `gorget_str_codepoint_at`, each reaching `gorget_str_view_region` —
+// `src/backend/c/runtime/runtime_string.c`), NOT owned copies.
+// `gorget_array_slice` by contrast allocates + memcpys, so String was the
+// only container broken BY CONSTRUCTION.
+//
+// The index/slice route carried NO ownership tag; the for-element carried
+// `FreshOwned`, which is worse — FreshOwned-and-dead is the one shape the
+// Tier 2a consume-site validator green-lights unconditionally. Both
+// producers now call `ctx.set_view_of` (`exprs/methods.rs`,
+// `stmts/for_loops.rs`), so the read side's Branch E clones at every
+// ownership boundary and `cow_before_mutation` severs the alias when the
+// base reallocates.
+//
+// ⚠ INSTRUMENT: stdout and `--clones=stats`. ASan is STRUCTURALLY BLIND to
+// this class — the runtime allocates from the custom `__gorget_current_alloc`
+// pool, so a use-after-free inside it emits no report. A green
+// `scripts/sanitize_sweep.sh` says nothing about these fixtures.
+//
+// RED-verified against the pre-fix compiler on BOTH backends (Core #12):
+// `index_bind`, `index_consume` and `index_insert` printed garbage bytes,
+// `for_element` printed four empty lines, rc 0 and no diagnostic in every
+// case.
+//
+// ggdef adjudicates 11 of the 12 cells — `index_bind` (A1-A4),
+// `index_consume` (A5-A7), `for_element` (B1-B4) and `already_owned` all
+// run and print the expected output (Core #8: this was never a "both
+// backends agree" ambiguity). ⚠ THE ONE UNADJUDICATED CELL IS A8,
+// `Vector.insert`, and it lives in its OWN fixture for exactly that
+// reason: `.insert()` is out of ggdef's phase-0 subset, and an
+// out-of-subset method fails elaboration for the WHOLE FILE, so while A8
+// shared a file with A5-A7 those three had no adjudication either. The
+// split is load-bearing — re-merging costs three adjudications silently.
+// A8 is the NAMED omitted cell (Core #12).
+//
+// The changed set is {producer} × {consuming position}, the axis AGENTS.md
+// § "Ownership at Consuming Positions" enumerates — NOT the five
+// illustrative boundaries in `docs/internals/cow-transient-view-model.md`,
+// which are a selection.
+#[test]
+fn string_view_tag_index_bind() {
+    run_gg(
+        "string_view_tag_index_bind.gg",
+        "\
+alpha
+o
+carol
+a",
+    );
+}
+
+#[test]
+fn string_view_tag_index_consume() {
+    run_gg(
+        "string_view_tag_index_consume.gg",
+        "\
+echo5
+fox66
+golf7",
+    );
+}
+
+/// Cell A8 alone. Split from `string_view_tag_index_consume` so that
+/// `.insert()` — out of ggdef's phase-0 subset — stops failing elaboration
+/// for the whole file and taking A5/A6/A7's adjudication down with it.
+/// This is therefore the ONE String-view consuming-position cell resting on
+/// the two Rust backends alone; named as the omitted cell per Core #12.
+#[test]
+fn string_view_tag_index_insert() {
+    run_gg("string_view_tag_index_insert.gg", "hotel");
+}
+
+#[test]
+fn string_view_tag_for_element() {
+    run_gg(
+        "string_view_tag_for_element.gg",
+        "\
+1
+2
+3
+4",
+    );
+}
+
+/// NON-CLAIM PIN for the `t0871` class — every cell is GREEN at the pre-fix
+/// compiler, so it is the BOUNDARY of the claim, not coverage of the fix
+/// (Core #12: green on arrival is not coverage). It exists because the
+/// enumeration failed three review passes on sub-axes that have no name in
+/// any design doc: field INIT is sound where field ASSIGN was not, and a
+/// bare-local REASSIGN is sound where the DECL was not.
+#[test]
+fn string_view_tag_already_owned() {
+    run_gg(
+        "string_view_tag_already_owned.gg",
+        "\
+india
+julie
+kil
+l
+9",
     );
 }
 
@@ -18707,6 +18929,141 @@ fn cow_user_mutator_two_types_same_name_clone_count() {
          method NAME (`bump` mutates on Counter, so the union marks it on Buf \
          too) rather than resolved per receiver — see \
          `semantic::safety::ReceiverMutations`."
+    );
+}
+
+/// ⭐ THE SLICE-SPELLING COST EQUIVALENCE GUARD (owner ruling 2026-09-03).
+///
+/// This REPLACES the retired `no_dot_slice_after_d22` ceiling in
+/// `tests/lints.rs`. That lint banned `.slice(` outright, and its premise was
+/// measurably dead three ways: D22 Rider 2 (`docs/define-gorget/decisions.md`)
+/// keeps `.slice()`/`.substring()` as PERMANENT ALIASES, so it banned a
+/// ratified spelling; the clone reclaim it was pushing 205 self-host sites
+/// toward measured ZERO once `s[a:b]` was made sound; and as a shrink-only
+/// ratchet it could never go RED on a shrink, which Core #6 requires.
+///
+/// The invariant that actually matters is that the two spellings COST THE
+/// SAME, and nothing in the tree watched for it. They are aliases, so:
+///
+///   * at a TEMP (`s[0:5].len()` / `s.slice(0, 5).len()`): both materialize
+///     NOTHING — `string_clone == 0`. This is D22 Rider 1's *"materialize
+///     nothing is the correct behavior"*.
+///   * at a BIND (`String t = …`): both materialize exactly once per
+///     execution — `string_clone == LOOP_N`. This is D52's *"soundness
+///     first, at the accepted cost of safe-but-wasteful cloning"*, charged
+///     only at the ownership boundary.
+///
+/// ⚡ IT FAILS IN EITHER DIRECTION — both DEMONSTRATED, not argued (Core #13):
+///   * drop the `index_load` producer tag (`methods.rs`, line-anchored — the
+///     two `set_view_of` calls are near-identical, so a substring anchor
+///     hits the wrong one) ⇒ measured `(colon 0, method 100)`, RED. This is
+///     also exactly what the pre-fix compiler measures: the `t0871`
+///     dangling-view class, back.
+///   * drop the `returns_view` method producer tag instead ⇒ measured
+///     `(colon 100, method 0)`, RED. The mirror.
+///   * a count ABOVE `LOOP_N`, or a non-zero count at a temp, ⇒ a spelling
+///     pays a materialization the other does not — the cost bug D22 Rider 1
+///     names. `assert_eq!` on exact values, never `<=`: a shrink-only
+///     ratchet greens every step of its own drift (Core #6).
+///
+/// ⚠ INSTRUMENT: `--clones=stats`, NOT stdout and NOT ASan. All four
+/// fixtures print `500` whether or not the tag is present — stdout cannot see
+/// this — and the runtime's custom `__gorget_current_alloc` pool makes ASan
+/// structurally blind to the underlying use-after-free.
+///
+/// C-lane only by construction: `Command::new(gg_binary())` bypasses
+/// `gg_command`, so `GG_BACKEND=llvm` does not reach it — the clone meters
+/// are C-backend instrumentation.
+///
+/// ⊕ IF A LEGITIMATE OPTIMIZATION MOVES THE BIND ROW, MOVE IT TOGETHER.
+/// `LOOP_N` at a bind is Rust's current cost: it materializes at EVERY view
+/// bind. The self-host is already cheaper — it aliases when the bound name
+/// and the source root are both provably unmutated after the bind, so this
+/// program costs it zero (filed; the reference lags the self-host on cost,
+/// not on soundness). When Rust adopts that, BOTH spellings drop together
+/// and the right edit is `LOOP_N` → `0` on this row, never one spelling.
+/// The invariant this guard defends is the EQUALITY; the absolute value is
+/// the current cost model, and it is pinned exactly (never `<=`) because a
+/// one-sided band greens every step of its own drift.
+#[test]
+fn slice_spelling_cost_equivalence() {
+    /// The loop trip count spelled in all four fixtures. It doubles as the
+    /// FIRE COUNT: `string_clone == LOOP_N` at a bind proves the
+    /// materialization mechanism actually executed, rather than the program
+    /// having been folded away.
+    const LOOP_N: u64 = 100;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let measure = |stem: &str| -> u64 {
+        let fixture = manifest_dir.join(format!("tests/fixtures/{stem}.gg"));
+        let exe = std::env::temp_dir()
+            .join(format!("gg_slice_cost_{stem}_{}", std::process::id()));
+        let build = run_with_deadline(
+            Command::new(gg_binary())
+                .arg("build")
+                .arg("--clones=stats")
+                .arg(&fixture)
+                .arg("-o")
+                .arg(&exe),
+            stem,
+            build_timeout(),
+        );
+        assert!(
+            build.status.success(),
+            "instrumented build of {stem} failed: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        let run = run_with_timeout(&mut Command::new(&exe), stem);
+        assert!(run.status.success(), "instrumented run of {stem} failed");
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        assert_eq!(
+            stdout.trim_end(),
+            "500",
+            "{stem} printed the wrong total — the fixture stopped exercising \
+             {LOOP_N} five-character slices, so its clone count is not \
+             comparable."
+        );
+        let (_array_clone, string_clone) =
+            parse_clone_stats(&String::from_utf8_lossy(&run.stderr));
+        let _ = std::fs::remove_file(&exe);
+        string_clone
+    };
+
+    let colon_temp = measure("string_slice_cost_colon_temp");
+    let method_temp = measure("string_slice_cost_method_temp");
+    let colon_bind = measure("string_slice_cost_colon_bind");
+    let method_bind = measure("string_slice_cost_method_bind");
+
+    assert_eq!(
+        (colon_temp, method_temp),
+        (0, 0),
+        "TEMP position: `s[0:5].len()` cost {colon_temp} string clones and \
+         `s.slice(0, 5).len()` cost {method_temp}; both must be 0.\n\n\
+         A temp is not an ownership boundary — nothing comes to rest, so \
+         nothing materializes (D22 Rider 1). A NON-ZERO count on either \
+         spelling is a materialization the other does not pay, and the two \
+         are ratified ALIASES (D22 Rider 2): they must cost the same."
+    );
+    assert_eq!(
+        (colon_bind, method_bind),
+        (LOOP_N, LOOP_N),
+        "BIND position: `String t = s[0:5]` cost {colon_bind} string clones \
+         and `String t = s.slice(0, 5)` cost {method_bind}; both must be \
+         {LOOP_N}.\n\n\
+         EITHER value BELOW {LOOP_N} means that spelling handed out a cap=0 \
+         VIEW of the base's buffer at an ownership boundary — the `t0871` \
+         use-after-free, back. Both directions are DEMONSTRATED, each by \
+         deleting ONE producer tag in `src/ir/lowering/exprs/methods.rs` \
+         (line-anchored, never by substring — the two calls are near-\
+         identical): dropping the `index_load` tag gives (0, {LOOP_N}); \
+         dropping the `returns_view` method tag gives ({LOOP_N}, 0). This \
+         guard was seen RED on both.\n\n\
+         EITHER value ABOVE {LOOP_N} means a spelling materializes twice at \
+         one boundary — a cost bug, not a soundness one, but the same \
+         equivalence breaks.\n\n\
+         ⚠ stdout is IDENTICAL (`500`) in both failure directions and ASan is \
+         structurally blind to the pool-allocated UAF. `--clones=stats` is \
+         the only instrument that can see this."
     );
 }
 

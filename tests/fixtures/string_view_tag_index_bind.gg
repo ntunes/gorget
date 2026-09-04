@@ -1,0 +1,60 @@
+# t0871 — `s[a:b]` / `s[i]` return a cap=0 VIEW of the base's buffer
+# (`gorget_str_index` / `gorget_str_slice` -> `gorget_str_view_region`).
+# Before the View tag at `lower_index_access`, a bind captured that view and
+# the 64 reallocating appends below left it reading freed memory: rc 0, no
+# diagnostic, garbage or empty stdout on BOTH backends. ggdef adjudicates
+# every line here (Core #8).
+#
+# THE MUTATION ROUTE IS LOAD-BEARING: an inline `s = s + ...` reassign, NOT
+# `grow(&s)`. The `&` route leaks every superseded buffer, so the stale
+# pointer still reads live memory and the cell goes green for the wrong
+# reason (see the CoW `&`-route leak, filed separately).
+#
+# THE FIELD ROOT IS LOAD-BEARING TOO: `Holder(mk(...))` roots the field in a
+# HEAP String. A static literal's buffer is never freed, so a literal-rooted
+# probe is green at baseline and proves nothing.
+
+struct Holder:
+    String s
+
+String mk(String head, String tail):
+    String s = head
+    s = s + tail
+    return s
+
+void main():
+    # A1 — bare-local bind, SLICE spelling
+    String s1 = mk("alpha", "12345")
+    String t1 = s1[0:5]
+    int i = 0
+    while i < 64:
+        s1 = s1 + "0123456789012345"
+        i = i + 1
+    print(t1)
+
+    # A2 — bare-local bind, INDEX spelling
+    String s2 = mk("bravo", "12345")
+    String t2 = s2[4]
+    int j = 0
+    while j < 64:
+        s2 = s2 + "0123456789012345"
+        j = j + 1
+    print(t2)
+
+    # A3 — field-rooted (HEAP) bind, SLICE spelling
+    Holder h3 = Holder(mk("carol", "12345"))
+    String t3 = h3.s[0:5]
+    int k = 0
+    while k < 64:
+        h3.s = h3.s + "0123456789012345"
+        k = k + 1
+    print(t3)
+
+    # A4 — field-rooted (HEAP) bind, INDEX spelling
+    Holder h4 = Holder(mk("delta", "12345"))
+    String t4 = h4.s[4]
+    int m = 0
+    while m < 64:
+        h4.s = h4.s + "0123456789012345"
+        m = m + 1
+    print(t4)

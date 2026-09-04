@@ -1241,7 +1241,52 @@ The safety argument is executable, not prose:
 
 Every producer of a cap=0 view aliasing another buffer must be covered by a
 materialize hook, provably safe (owned elements, immediate byte reads,
-boundary clones), or unreachable. Before adding any new view-returning
+boundary clones), or unreachable.
+
+There are **two independent axes here, and covering one is not covering the
+other.** The materialize hook answers *"the SOURCE is about to be mutated —
+who else is looking at its buffer?"*. The **ownership tag** answers *"this
+value is coming to rest in a slot that must OWN — is it a view?"*. A producer
+can be fully hooked on the first axis and still hand a dangling view to a
+bind, because the hook fires at the mutation and the bind happened earlier.
+
+So every view producer also stamps `LocalOwnership::View` on its result,
+at the producer, in the same lowering that creates it: the `returns_view`
+method dispatch and the index/slice place-arm in `lower_index_access`, and
+the `for c in s:` element in `lower_for_string`. The tag is what the read
+side's Branch E consults to clone at an ownership boundary, and what
+`views_of_source` walks to sever the alias when the base reallocates.
+
+*Third-hand "the boundary clones own it" is not a covering argument, and
+saying so in a comment is how the gap survives.* The consuming positions
+are the set AGENTS.md § "Ownership at Consuming Positions" enumerates —
+`push`/`put`/`set`/`insert`/`send`, `v[i] = x`, constructors, returns,
+captures, plus a plain local bind and a field assign. The collection-put
+materialize hooks cover `push`/`put` and field INIT. They cover none of the
+rest, so an untagged view reaching `set`, `insert`, `v[i] =`, a field
+assign, a constructor argument or a bare bind was a use-after-free the
+moment the base grew — at exit code 0, with no diagnostic, on both backends.
+The `VIEW_PRODUCERS_INTO_CONSUMERS` ratchet in `tests/lints.rs` pins one
+exercising fixture per {producer, consuming position} cell, and
+`slice_spelling_cost_equivalence` pins that the two ratified spellings of a
+slice cost exactly the same at both a temp and a bind.
+
+⚠ **ASan cannot see this class.** The runtime allocates from the custom
+`__gorget_current_alloc` pool, so a read of a freed view emits no report;
+a green sanitizer run is not evidence here. stdout and `--clones=stats` are
+the instruments.
+
+**A view is not an alias chain, and both compilers had to learn it
+separately.** A *borrow* points into an aggregate whose owner outlives the
+bind, so inheriting the chain is right and free. A *view* is a cap=0 header
+over a buffer its source can reallocate, so inheriting the chain is a
+use-after-free waiting for the next append. Any decision procedure that
+folds the two ownership states into one predicate — "is this a borrow
+alias?" — gets the second case wrong, whichever lane it lives on. The
+self-host keeps the distinction where its position-aware pristine test
+already lives: a view may alias while the bound name and the source root
+are both provably unmutated after the bind, and materializes otherwise, so
+a read-only slice bind still costs zero. Before adding any new view-returning
 path, grep `gorget_str_view_region` across **all of `src/`** — the runtime
 `.c` files AND the backend `.rs` emitters (synthetic callees like
 `gorget_str_codepoint_at` never appear in the runtime source) — and walk

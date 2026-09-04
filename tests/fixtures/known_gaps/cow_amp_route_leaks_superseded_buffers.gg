@@ -1,0 +1,33 @@
+# t1048 — the CoW `&`-route leaks EVERY superseded buffer.
+#
+# `grow(&s)` reallocates `s` 64 times. Each CoW step allocates a new buffer
+# and abandons the old one: `string_cow=64`, `total_frees=65`, and
+# `live_bytes=32704` at exit. The same 64 appends written INLINE
+# (`s = s + "..."` in main) free as they go and end at `live_bytes=0`.
+#
+# NO SLICE IS INVOLVED — this reproduces with a plain String and nothing
+# else, which is what separates it from the `t0871` view-tag class.
+#
+# ⚠ THIS LEAK MASKS OTHER DEFECTS. A dangling view of `s`'s buffer keeps
+# printing the right answer through the `&` route precisely because the
+# buffer it points at is never freed, so an `&`-rooted probe of any
+# use-after-free class is green for the wrong reason (SIX Q#6).
+#
+# ⚠ ASan CANNOT SEE THIS. The runtime allocates from the custom
+# `__gorget_current_alloc` pool. `--clones=stats live_bytes` is the
+# instrument; the wired test reads it. INTENDED: live_bytes=0.
+#
+# The final print is the observable anchor only — the leak is not visible
+# in stdout, which is exactly why this needs the clone meter.
+
+void grow(String &s):
+    int i = 0
+    while i < 64:
+        s = s + "0123456789012345"
+        i = i + 1
+
+void main():
+    String s = "abcde"
+    s = s + "f"
+    grow(&s)
+    print(s.len())

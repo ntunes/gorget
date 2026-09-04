@@ -1,0 +1,42 @@
+# t1050 — `for c in s:` reads a TORN string when `s` is reassigned inside
+# the loop: silent wrong output, exit 0, no diagnostic.
+#
+# `lower_for_string_with` snapshots the byte length ONCE before the loop,
+# but makes the iterator an `emit_borrow` Ptr to `s`'s own slot and
+# re-reads `->data` every iteration. Reassigning `s` swaps the buffer while
+# the loop keeps walking to the OLD length — length and buffer disagree.
+#
+# Rust gg prints `aZZ` / `3`. ggdef prints `abc` / `3` and adjudicates
+# definitively (Core #8): `aZZ` is not the answer under any semantics — the
+# loop must iterate the string it started on.
+#
+# ⚠ THE CASE HAS NO SUBJECT (SIX Q#4). `E_MutationWhileBorrowed` guards
+# exactly this class for collections, via
+# `self.for_loop_iterables.contains(&recv_def_id)` in
+# `src/semantic/safety/check_expr.rs` — but that check lives in the
+# MUTATING-METHOD-CALL arm only. A plain REASSIGNMENT is the only way to
+# mutate a String, and it reaches no rule at all. No widening of the
+# existing rule's subject fixes this; the reassign route needs its own.
+#
+# SECOND-ORDER, same root: with a longer source the stale length walks off
+# the end of the new buffer and reads freed/foreign heap. The two emissions
+# of `gorget_str_codepoint_at` DISAGREE about that — `emit_types.rs` emits a
+# helper WITH a bounds check and a cplen clamp, `emit_call_extern.rs` emits
+# it INLINE with NEITHER, and the inline form is the one used.
+#
+# ⚠ ASan is blind (the custom `__gorget_current_alloc` pool). stdout is the
+# instrument.
+#
+# INTENDED: `abc` then `3`.
+
+void main():
+    String s = "abc"
+    String seen = ""
+    int n = 0
+    for c in s:
+        seen = seen + c
+        if n == 0:
+            s = "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+        n = n + 1
+    print(seen)
+    print(n)

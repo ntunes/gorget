@@ -1,0 +1,36 @@
+# t0871 cell A8 — `Vector.insert` at a consuming position, split out of
+# `string_view_tag_index_consume.gg` and kept separate DELIBERATELY.
+#
+# `.insert()` is outside ggdef's phase-0 subset, and an out-of-subset method
+# fails elaboration for the WHOLE FILE — not just its own statement. While
+# this cell shared a file with A5 (field assign), A6 (`Vector.set`) and A7
+# (`v[i] =`), ggdef adjudicated NONE of the four, and those three are the
+# round's most novel finding. Splitting the one unadjudicable cell out buys
+# ggdef adjudication for the other three (Core #8: "both backends agree" is
+# necessary, not sufficient).
+#
+# So THIS fixture is the one String-view consuming-position cell that rests
+# on the two Rust backends alone. Named as such, per Core #12 — it is not
+# an oversight, and re-merging it would quietly cost three adjudications
+# with nothing going red.
+#
+# Same class and same mutation route as its siblings: `s8[0:5]` is a cap=0
+# view of `s8`'s buffer, `insert` must OWN, and the 64 reallocating appends
+# free the buffer underneath it. Pre-fix: garbage on C and LLVM, rc 0.
+
+from std.collections import Vector
+
+String mk(String head, String tail):
+    String s = head
+    s = s + tail
+    return s
+
+void main():
+    String s8 = mk("hotel", "12345")
+    Vector[String] v8 = ["x"]
+    v8.insert(0, s8[0:5])
+    int m = 0
+    while m < 64:
+        s8 = s8 + "0123456789012345"
+        m = m + 1
+    print(v8[0])

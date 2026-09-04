@@ -1,0 +1,66 @@
+# t0871 NON-CLAIM PIN — every cell here was ALREADY CORRECT before the View
+# tag and is GREEN at the pre-fix compiler. It is NOT coverage of the fix
+# (Core #12: green on arrival is not coverage); it is the boundary of the
+# claim. These are the positions that already materialized, so a future
+# change to the tag cannot quietly turn one of them into the class the
+# sibling fixtures pin.
+#
+# Named explicitly because the enumeration failed three review passes by
+# treating a SELECTION as a total: `Holder(s[0:5])` (field INIT) is sound
+# while `h.s = s[0:5]` (field ASSIGN) was not, and `t = s[0:5]` (REASSIGN)
+# is sound while `String t = s[0:5]` (DECL) was not. Those sub-axes have no
+# name in any design doc; they live here.
+
+from std.collections import Vector
+
+struct Holder:
+    String s
+
+String mk(String head, String tail):
+    String s = head
+    s = s + tail
+    return s
+
+String head3(String x):
+    return x[0:3]
+
+void main():
+    # field INIT — the constructor boundary already cloned
+    String s1 = mk("india", "12345")
+    Holder h1 = Holder(s1[0:5])
+    int i = 0
+    while i < 64:
+        s1 = s1 + "0123456789012345"
+        i = i + 1
+    print(h1.s)
+
+    # bare-local REASSIGN — sound where the DECL was not
+    String s2 = mk("julie", "12345")
+    String t2 = "x"
+    t2 = s2[0:5]
+    int j = 0
+    while j < 64:
+        s2 = s2 + "0123456789012345"
+        j = j + 1
+    print(t2)
+
+    # return of a slice OF A PARAMETER — the return boundary already cloned
+    String s3 = mk("kilo3", "12345")
+    String t3 = head3(s3)
+    int k = 0
+    while k < 64:
+        s3 = s3 + "0123456789012345"
+        k = k + 1
+    print(t3)
+
+    # for-element into `push` — the collection-put hook already materialized
+    String s4 = mk("lima", "..9")
+    Vector[String] v4 = []
+    for c in s4:
+        v4.push(c)
+    int m = 0
+    while m < 64:
+        s4 = s4 + "0123456789012345"
+        m = m + 1
+    print(v4[0])
+    print(v4[6])

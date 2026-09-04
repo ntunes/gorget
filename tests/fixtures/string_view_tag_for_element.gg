@@ -1,0 +1,64 @@
+# t0871, the FOR-STRING-ELEMENT producer. `for c in s:` lowers to a synthetic
+# `gorget_str_codepoint_at`, which both backends emit as a
+# `gorget_str_view_region` — cap=0, borrowing the source buffer. The element
+# was tagged `FreshOwned`, the WORST possible tag: FreshOwned-and-dead is the
+# one shape the Tier 2a consume-site validator green-lights unconditionally,
+# which is why this half of the class stayed invisible while the index/slice
+# half was being chased. The element now carries the View tag its value
+# actually has.
+#
+# The ctor row (B2) is the refutation of "the boundary clones own it":
+# `v.push(c)` materializes, `Holder(c)` did not.
+
+struct Holder:
+    String s
+
+String mk(String head, String tail):
+    String s = head
+    s = s + tail
+    return s
+
+void main():
+    # B1 — element bound to a bare local
+    String s1 = mk("grow", "..1")
+    String held1 = ""
+    for c in s1:
+        held1 = c
+    int i = 0
+    while i < 64:
+        s1 = s1 + "0123456789012345"
+        i = i + 1
+    print(held1)
+
+    # B2 — element into a CONSTRUCTOR argument
+    String s2 = mk("grow", "..2")
+    Holder h2 = Holder("")
+    for c in s2:
+        h2 = Holder(c)
+    int j = 0
+    while j < 64:
+        s2 = s2 + "0123456789012345"
+        j = j + 1
+    print(h2.s)
+
+    # B3 — field-rooted SOURCE
+    Holder h3 = Holder(mk("grow", "..3"))
+    String held3 = ""
+    for c in h3.s:
+        held3 = c
+    int k = 0
+    while k < 64:
+        h3.s = h3.s + "0123456789012345"
+        k = k + 1
+    print(held3)
+
+    # B4 — element into a field ASSIGN
+    String s4 = mk("grow", "..4")
+    Holder h4 = Holder("")
+    for c in s4:
+        h4.s = c
+    int m = 0
+    while m < 64:
+        s4 = s4 + "0123456789012345"
+        m = m + 1
+    print(h4.s)

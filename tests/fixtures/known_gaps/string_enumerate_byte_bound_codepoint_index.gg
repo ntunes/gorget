@@ -1,0 +1,34 @@
+# t1049 — `for i, c in s.enumerate()` bounds the loop on the String's BYTE
+# length while reading the element with a CODEPOINT indexer.
+#
+# "héllo" is 5 codepoints in 6 bytes. `lower_for_enumerate` reads the
+# iterator's `.len` field (`Projection::Field(2)`) — for a String that is
+# the BYTE length — so the loop runs 6 times, and the 6th element read
+# indexes codepoint 5, which does not exist:
+#
+#   trap[T_Bounds]: str index out of bounds   rc=101
+#
+# after having printed all five correct pairs.
+#
+# ⚠ ACCIDENTALLY CORRECT ON ASCII (SIX Q#6). Byte length == codepoint count
+# for every ASCII string, so every ASCII `.enumerate()` fixture in the
+# corpus passes and none of them says anything about this.
+#
+# REFERENCE LAGS THE SELF-HOST: `self_host_lowerer/lower_loops.gg`'s
+# `lower_for_string(… is_enumerate …)` handles enumerate on the STRING path
+# with its own codepoint-ordinal counter and gets this right. Fix Rust as
+# oracle hygiene.
+#
+# SIBLING SHAPE, same root, not separately filed: binding the element
+# (`for (i, c) in s.enumerate(): held = c`) ICEs the compiler at
+# `src/ir/lowering/mod.rs` with a Tier 2a "untracked source consumed"
+# consume-site violation, because the String receiver takes the
+# `infer_collection_element_type` fall-through instead of a String arm.
+#
+# INTENDED: the five pairs, exit 0.
+
+void main():
+    String s = "héllo"
+    for i, c in s.enumerate():
+        print(i)
+        print(c)

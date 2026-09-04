@@ -4687,11 +4687,14 @@ pub(super) fn lower_index_access(
     if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
         // Lazy loop-carried CoW, hook W3c (INDEX/SLICE base): `s[i]` /
         // `s[a..b]` lower to gorget_str_index / gorget_str_slice — cap=0
-        // views into the base's buffer. This route never consults
-        // `returns_view`, so the result carries NO View tag and even a NAMED
-        // bind (`String t = s[0..5]`) would dangle once the source
-        // collection mutates. If the base is a lazy-tagged local,
-        // materialize it in place BEFORE the read captures the buffer.
+        // views into the base's buffer. This route does not consult
+        // `returns_view` (that protocol keys on a METHOD name); the View tag
+        // is stamped explicitly at the `index_load` below, so a bind clones
+        // at the ownership boundary instead of dangling once the source
+        // reallocates. Pinned by `tests/fixtures/string_view_tag_index_*.gg`
+        // and by the `slice_spelling_cost_equivalence` clone-count guard.
+        // If the base is a lazy-tagged local, materialize it in place
+        // BEFORE the read captures the buffer.
         ctx.materialize_lazy_source_if_needed(builder, &obj, object.span);
         // Infer element type from the base collection type
         let base_type = infer_operand_type_full(ctx, &obj, builder);
@@ -4756,8 +4759,16 @@ pub(super) fn lower_index_access(
             Some(GirType::Named(n)) if n.starts_with("Task__"));
         // String character indexing: returns a cap=0 VIEW REGION into the
         // base's buffer (gorget_str_index → gorget_str_view_region), not an
-        // owned copy — collection-put materialize hooks / boundary clones own
-        // it when it escapes; the W3c hook above handles lazy-view bases.
+        // owned copy. This comment used to add "collection-put materialize
+        // hooks / boundary clones own it when it escapes" — MEASURED FALSE.
+        // Those hooks cover `push`/`put` and field INIT; they do NOT cover
+        // `set`, `insert`, `v[i] =`, field ASSIGN, or a plain local bind, and
+        // every one of those positions handed out a dangling view. The
+        // ownership is now carried by an explicit View tag at the
+        // `index_load` below — one axis, one accessor, set at the producer —
+        // and the escape positions are enumerated in the
+        // `VIEW_PRODUCERS_INTO_CONSUMERS` ratchet (`tests/lints.rs`).
+        // The W3c hook above handles lazy-view bases.
         let is_string_base = ctx.type_mapper.is_string_type(resolved_base);
         // Range slicing (`v[a..b]`, `s[a..b]`) returns a fresh container
         // of the same type as the base, NOT an element. Detect via the
@@ -4789,6 +4800,18 @@ pub(super) fn lower_index_access(
         // fault-catch recovery form remains). Plain `index_load` — the runtime
         // trap emitter handles the panic case.
         let dst = builder.index_load(place.clone(), idx, result_type);
+        if is_string_base {
+            // `s[i]` / `s[a..b]` lower to gorget_str_index / gorget_str_slice,
+            // both of which return a `gorget_str_view_region` — cap=0,
+            // alloc=NULL, borrowing the BASE's buffer (runtime_string.c).
+            // Tag the result as a View of the base so the read side's
+            // Branch E (`stmts/mod.rs`) clones at every ownership boundary
+            // and `cow_before_mutation` severs the alias when the base
+            // reallocates. Without this tag the value dangles the moment
+            // the base grows — see the fixture matrix
+            // `tests/fixtures/string_view_tag_*.gg`.
+            ctx.set_view_of(builder, dst, place.local);
+        }
         if elem_read_is_borrow(ctx, elem_type) && !is_task && !is_string_base
         {
             // Use FieldPath provenance when the base is a field access (e.g., s.v[0]).

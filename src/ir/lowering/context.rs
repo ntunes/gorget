@@ -4010,10 +4010,18 @@ impl<'a> LoweringContext<'a> {
     ///     binds: `String x = s`),
     ///   - W3b `returns_view` method receivers, BEFORE the call captures the
     ///     header (`s.substring(..)` as temp or named bind),
-    ///   - W3c `lower_index_access` place-arm (`s[i]` / `s[a..b]` — never
-    ///     consult `returns_view`, carry NO View tag),
+    ///   - W3c `lower_index_access` place-arm (`s[i]` / `s[a..b]` — these do
+    ///     not consult `returns_view`, which keys on a METHOD name; the View
+    ///     tag is stamped explicitly at the `index_load`),
     ///   - W3d `lower_for_string` source (`for c in s:` — synthetic
-    ///     `gorget_str_codepoint_at` views).
+    ///     `gorget_str_codepoint_at` views; the ELEMENT is likewise
+    ///     View-tagged at its producer, overwriting the FreshOwned tag
+    ///     `bind_owned_for_drop` sets for the consume-site validator).
+    /// ⚠ This hook and the View TAG are DIFFERENT AXES and neither substitutes
+    /// for the other: the hook fires when the SOURCE is about to be mutated,
+    /// the tag fires when the VALUE comes to rest in a slot that must own.
+    /// W3c and W3d were hooked here and untagged there for as long as this
+    /// list has existed, and every ownership boundary they reached dangled.
     /// The map entry survives the materialize (see `cow_lazy_mat_flag` doc);
     /// the runtime flag keeps the clone at-most-once.
     pub fn materialize_lazy_source_if_needed(

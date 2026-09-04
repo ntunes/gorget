@@ -722,24 +722,35 @@ fn lower_for_string_with(
     // We'll construct this as a StructInit with computed fields via extern.
     // Both backends emit `gorget_str_codepoint_at` as a cap=0
     // `gorget_str_view_region` view into the source buffer (it does NOT
-    // allocate). Drop-registering the local is still correct — the
-    // cap-driven free no-ops on views — and keeps the slot sound if a
-    // future backend materializes an owned copy here.
+    // allocate). Drop-registering the local is still correct, and the
+    // enforcement is in the runtime, not in this comment:
+    // `gorget_string_free` returns immediately on `cap == 0`
+    // (`src/backend/c/runtime/runtime_string.c`, first line of the fn) and
+    // hard-panics on the only shape that could silently corrupt —
+    // `cap > 0` with `alloc == NULL`. So a view is free-safe by construction
+    // and an owned copy from some future backend is freed exactly once.
     let ch_local = builder.call_extern(
         "gorget_str_codepoint_at",
         vec![FunctionBuilder::copy(iter_local), FunctionBuilder::copy(byte_pos)],
         owned_string_type,
     );
     ctx.register_local(var_name, ch_local, owned_string_type);
-    // The FreshOwned tag lets the consume-site validator see a concrete
+    // Drop-register the local so the consume-site validator sees a concrete
     // state at downstream sinks (e.g. `stack.push(ch)` in
-    // `string_algorithms::is_balanced`); without it the local stays
+    // `string_algorithms::is_balanced`); without a tag the local stays
     // `Untracked`, which the Tier 2a `consume_externs` promotion rejects.
-    // NOTE the value is actually a cap=0 VIEW (see above) — the tag is
-    // run-proven sound because every owning consume site routes through the
-    // collection-put materialize hooks / boundary clones, which upgrade
-    // cap=0 views on entry.
     bind_owned_for_drop(ctx, builder, ch_local, owned_string_type, LoopOwned::Fresh);
+    // …then OVERWRITE the FreshOwned tag with the truth: the value is a
+    // cap=0 VIEW of `iter_local`'s buffer (see the `call_extern` above).
+    // FreshOwned was the worst possible tag here — FreshOwned-and-dead is
+    // the one shape Tier 2a green-lights unconditionally, which is why the
+    // dangling element was invisible. The collection-put materialize hooks
+    // cover `push`/`put`/field-init and NOT `set`/`insert`/`v[i] =`/
+    // field-assign/constructor args, so "the boundary clones own it" was
+    // never true. The View tag routes every owning consume through
+    // Branch E's clone and gives `cow_before_mutation` the alias to sever.
+    // Pinned by `tests/fixtures/string_view_tag_for_*.gg`.
+    ctx.set_view_of(builder, ch_local, iter_local);
 
     // Lower the body
     body_fn(ctx, builder);

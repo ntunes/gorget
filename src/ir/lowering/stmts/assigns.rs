@@ -2086,7 +2086,30 @@ pub(super) fn lower_compound_assign(
                     // → the SAME ICE. See TODO (custom-indexable sibling).
                     (cv, et, false)
                 } else {
-                    // Fallback: string indexing or unknown type
+                    // Fallback: string indexing or unknown type.
+                    //
+                    // Core #14 — the String-BASE arm is DEAD, and here is its
+                    // enforcing guard. `s[i] = v` and `s[i] += v` are both
+                    // rejected at check time with `E_StringIndexAssign`
+                    // (`semantic::typecheck::check_string_index_assign`;
+                    // its sibling `check_index_mut_assign` returns early for
+                    // `String` so the more specific message wins). Reaching
+                    // lowering
+                    // with a String base means that reject regressed — and it
+                    // would matter: the `is_string` concat arm below assumes
+                    // `index_load` handed back an OWNED clone, which is true
+                    // for a resource-typed COLLECTION ELEMENT and false for a
+                    // String base, where `index_load` yields a cap=0 VIEW of
+                    // the base's buffer. Dropping a view unconditionally is
+                    // harmless (the cap-driven free no-ops), but the concat
+                    // would read through an alias the base can invalidate.
+                    debug_assert!(
+                        obj_type != ctx.type_mapper.owned_string_type,
+                        "index-assign lowering reached a String base — \
+                         E_StringIndexAssign must reject `s[i] = v` / \
+                         `s[i] += v` at check time (typecheck.rs \
+                         check_string_index_assign)"
+                    );
                     let elem_type = if obj_type == ctx.type_mapper.owned_string_type {
                         ctx.type_mapper.owned_string_type
                     } else {
@@ -2106,8 +2129,13 @@ pub(super) fn lower_compound_assign(
 
             let result = if is_string && matches!(op, ast::BinaryOp::Add) {
                 // String concatenation via gorget_str_cat. `cur_val` is an OWNED
-                // clone of the old element (`index_load` clones resource-typed
-                // elements to owned), and the runtime `gorget_str_cat` reads both
+                // clone of the old element — `index_load` clones resource-typed
+                // COLLECTION elements to owned. (That is true here and only
+                // here: `index_load` on a STRING base returns a cap=0 view
+                // instead, which is why the arm above carries a `debug_assert!`
+                // that a String base never reaches this lowering — it is
+                // rejected at check time with `E_StringIndexAssign`.)
+                // The runtime `gorget_str_cat` reads both
                 // args BY VALUE without freeing them, so the old-element clone must
                 // be dropped here or it leaks. It is NOT drop-registered
                 // (`builder.index_load` is called directly, not via a

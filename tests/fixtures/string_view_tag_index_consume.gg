@@ -1,0 +1,60 @@
+# t0871, the CONSUMING-POSITION half. AGENTS.md § "Ownership at Consuming
+# Positions" enumerates the set (`push`/`put`/`set`/`insert`/`send`,
+# `v[i] = x`, constructors, returns, captures). The collection-put
+# materialize hooks cover `push`/`put`/field-init — and NOT `set`, `insert`,
+# `v[i] =` or field-assign. Every cell below fed a cap=0 view of `s`'s buffer
+# into a position that must OWN, then reallocated `s`: garbage on both
+# backends, rc 0, no diagnostic.
+#
+# Mutation route: inline reassign, never `grow(&s)` (see the sibling fixture
+# `string_view_tag_index_bind.gg` for why the `&` route fakes a pass).
+#
+# ⚠ THE `Vector.insert` CELL LIVES IN ITS OWN FIXTURE
+# (`string_view_tag_index_insert.gg`) AND THAT SPLIT IS LOAD-BEARING, not
+# tidiness. `.insert()` is outside ggdef's phase-0 subset, and an
+# out-of-subset method fails elaboration for the WHOLE FILE — so while A8
+# shared this file, A5/A6/A7 rested on "both backends agree", which Core #8
+# calls necessary and NOT sufficient. Split out, ggdef runs the three and
+# prints `echo5 / fox66 / golf7`. Keep it split: moving `.insert()` back
+# here silently un-adjudicates three cells and nothing goes red.
+
+from std.collections import Vector
+
+struct Holder:
+    String s
+
+String mk(String head, String tail):
+    String s = head
+    s = s + tail
+    return s
+
+void main():
+    # A5 — field ASSIGN (not field INIT, which already materialized)
+    String s5 = mk("echo5", "12345")
+    Holder h5 = Holder("")
+    h5.s = s5[0:5]
+    int i = 0
+    while i < 64:
+        s5 = s5 + "0123456789012345"
+        i = i + 1
+    print(h5.s)
+
+    # A6 — Vector.set
+    String s6 = mk("fox66", "12345")
+    Vector[String] v6 = ["x"]
+    v6.set(0, s6[0:5])
+    int j = 0
+    while j < 64:
+        s6 = s6 + "0123456789012345"
+        j = j + 1
+    print(v6[0])
+
+    # A7 — index-assign `v[i] = x`
+    String s7 = mk("golf7", "12345")
+    Vector[String] v7 = ["x"]
+    v7[0] = s7[0:5]
+    int k = 0
+    while k < 64:
+        s7 = s7 + "0123456789012345"
+        k = k + 1
+    print(v7[0])

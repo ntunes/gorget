@@ -15749,11 +15749,33 @@ fn recovery_arms_route_through_check_recovery_type() {
 
 // ── Round MEMORY SAFETY / ONE OWNERSHIP BOUNDARY · Track B ratchet ───────
 //
-// View-producer × container-mutator coverage: every {View-tag producer,
-// container-mutator consumer} pair that reached this codebase must own an
-// exercising fixture that will trip the double-free class if the boundary
-// clone regresses. The initial rows correspond one-to-one to the POS cells
-// in `tests/security.rs` (`guard_get_into_*` family).
+// View-producer × consuming-position coverage: every {View-tag producer,
+// consuming position} pair that reached this codebase must own an exercising
+// fixture that trips if the boundary clone regresses. The consuming-position
+// axis is the one AGENTS.md § "Ownership at Consuming Positions" enumerates
+// (`push`/`put`/`set`/`insert`/`send`, `v[i] = x`, constructors, returns,
+// captures) — NOT the five illustrative boundaries in
+// `docs/internals/cow-transient-view-model.md`, which are a SELECTION being
+// read as a total (SIX Q#3). Reading them as a total is precisely how the
+// String rows below stayed missing.
+//
+// Two producer families, two failure modes:
+//   * `*Guard.get` (smart-pointer guards) into container mutators — the
+//     DOUBLE-FREE class. One-to-one with the POS cells in `tests/security.rs`
+//     (`guard_get_into_*` family), fixtures under `security/`.
+//   * String views (`s[a:b]`, `s[i]`, the `for c in s:` element) into any
+//     owning position — the USE-AFTER-FREE-on-realloc class (t0871). The
+//     runtime returns `gorget_str_view_region` — cap=0, alloc=NULL, borrowing
+//     the base's buffer — so a reallocating write to the base leaves the
+//     bound value reading freed memory, at rc 0 with no diagnostic.
+//     ⚠ ASan is STRUCTURALLY BLIND to that half: the runtime allocates from
+//     the custom `__gorget_current_alloc` pool. stdout is the instrument, so
+//     these fixtures live at the TOP LEVEL of `tests/fixtures/` (which also
+//     puts them in the self-host `runtime_parity_corpus`), not under
+//     `security/` where the ASan sweep looks.
+//
+// The fixture field is a path RELATIVE to `tests/fixtures/`, so a row can
+// name either root.
 //
 // KNOWN LIMITATION (documented, deliberately deferred): this ratchet asserts
 // EXISTENCE of the cited fixture, not enumeration of the producer × consumer
@@ -15765,21 +15787,62 @@ fn recovery_arms_route_through_check_recovery_type() {
 // Positive-control (Core #13): rename or delete one referenced fixture,
 // confirm this test goes RED, restore. Recorded in the commit message.
 const VIEW_PRODUCERS_INTO_CONSUMERS: &[(&str, &str, &str)] = &[
-    ("Guard.get",      "Dict.put",       "guard_get_into_dict_put_double_free"),
-    ("Guard.get",      "Vector.push",    "guard_get_into_vector_push_temp_fixed"),
-    ("Guard.get",      "Set.add",        "guard_get_into_set_add_temp"),
-    ("Guard.get",      "Channel.send",   "guard_get_into_channel_send_temp"),
-    ("Guard.get",      "index-assign",   "guard_get_into_index_set_temp"),
-    ("Guard.get",      "Dict.put[Vec]",  "guard_get_vector_int_into_dict_put_temp"),
-    ("ReadGuard.get",  "Dict.put",       "read_guard_get_into_dict_put_double_free"),
-    ("WriteGuard.get", "Dict.put",       "write_guard_get_into_dict_put_double_free"),
+    // ── smart-pointer guard views → container mutators (double-free class) ──
+    ("Guard.get",      "Dict.put",       "security/guard_get_into_dict_put_double_free"),
+    ("Guard.get",      "Vector.push",    "security/guard_get_into_vector_push_temp_fixed"),
+    ("Guard.get",      "Set.add",        "security/guard_get_into_set_add_temp"),
+    ("Guard.get",      "Channel.send",   "security/guard_get_into_channel_send_temp"),
+    ("Guard.get",      "index-assign",   "security/guard_get_into_index_set_temp"),
+    ("Guard.get",      "Dict.put[Vec]",  "security/guard_get_vector_int_into_dict_put_temp"),
+    ("ReadGuard.get",  "Dict.put",       "security/read_guard_get_into_dict_put_double_free"),
+    ("WriteGuard.get", "Dict.put",       "security/write_guard_get_into_dict_put_double_free"),
+    // ── String views → owning positions (UAF-on-realloc class, t0871) ──
+    // 12 cells = {3 producers} × {consuming position}. Every one was RED at
+    // the pre-fix compiler on BOTH backends (Core #12).
+    //
+    // ggdef adjudicates 11 of the 12. ⚠ THE `Vector.insert` ROW CITES ITS
+    // OWN FIXTURE AND THAT IS LOAD-BEARING: `.insert()` is out of ggdef's
+    // phase-0 subset, and an out-of-subset method fails elaboration for the
+    // WHOLE FILE — so while it shared a file with field-assign / Vector.set
+    // / index-assign, those three had no adjudication either and rested on
+    // "both backends agree", which Core #8 calls necessary and NOT
+    // sufficient. Do not re-merge it to save a file: three cells would lose
+    // their adjudication and nothing here would go red. A8 is the NAMED
+    // omitted cell.
+    ("s[a:b] slice",   "bare-local bind",   "string_view_tag_index_bind"),
+    ("s[i] index",     "bare-local bind",   "string_view_tag_index_bind"),
+    ("s[a:b] slice",   "field-rooted bind", "string_view_tag_index_bind"),
+    ("s[i] index",     "field-rooted bind", "string_view_tag_index_bind"),
+    ("s[a:b] slice",   "field-assign",      "string_view_tag_index_consume"),
+    ("s[a:b] slice",   "Vector.set",        "string_view_tag_index_consume"),
+    ("s[a:b] slice",   "index-assign",      "string_view_tag_index_consume"),
+    ("s[a:b] slice",   "Vector.insert",     "string_view_tag_index_insert"),
+    ("for-string elem", "bare-local bind",  "string_view_tag_for_element"),
+    ("for-string elem", "constructor arg",  "string_view_tag_for_element"),
+    ("for-string elem", "field-rooted src", "string_view_tag_for_element"),
+    ("for-string elem", "field-assign",     "string_view_tag_for_element"),
+    // ── NAMED NON-CLAIMS for the String family (Core #12, SIX Q#3) ──
+    // The header above promises a row per {producer, consuming position}
+    // pair, and the consuming-position axis it cites is larger than the
+    // rows: `push`, `put`, `send`, `return`, capture, and field INIT have
+    // NO String rows. That is not a gap — all of them were MEASURED SOUND
+    // at the PRE-fix compiler, so a fixture there would be green on arrival
+    // and green on arrival is not coverage. They are pinned as a group by
+    // `string_view_tag_already_owned.gg`, which asserts they stay sound.
+    // A third shape `t0871` named — bind-then-RETURN — is likewise absent:
+    // measured, the defect fires at the BIND and `return` is only where you
+    // look, so it is the bare-local-bind row again, not a cell of its own.
+    // Stating these here is the point: a selection that does not say what
+    // it omits cannot be told apart from a total (which is how A5-A8 and
+    // B3-B4 went missing for four review passes).
 ];
 
-/// Every {View-tag producer, container-mutator consumer} cell must have an
-/// exercising security fixture. A missing row means a class-regression could
-/// resurrect the "view alias into consumer" double-free without tripping a
-/// test. Adding a new View producer or a new container-mutator surface owes
-/// a new row here + a fixture in `tests/fixtures/security/`.
+/// Every {View-tag producer, consuming position} cell must have an exercising
+/// fixture. A missing row means a class-regression could resurrect the "view
+/// alias reaches an owning position" defect — a double-free for the guard
+/// family, a use-after-free for the String family — without tripping a test.
+/// Adding a new View producer or a new consuming-position surface owes a new
+/// row here + a fixture, cited by its path relative to `tests/fixtures/`.
 ///
 /// See:
 ///   - `src/ir/lowering/context.rs::ensure_owned_at_consuming_arg` — the
@@ -15793,7 +15856,7 @@ fn view_producer_into_consuming_cell_has_coverage() {
     let mut missing: Vec<String> = Vec::new();
     for (producer, dest, fixture) in VIEW_PRODUCERS_INTO_CONSUMERS {
         let path = manifest_dir
-            .join("tests/fixtures/security")
+            .join("tests/fixtures")
             .join(format!("{fixture}.gg"));
         if !path.exists() {
             missing.push(format!(
@@ -18876,153 +18939,32 @@ fn count_bang_move_in_code(roots: &[&str]) -> usize {
     total
 }
 
-/// D22 shrink-only lint (Core #6 executable guard). Retiring `.slice()` on
-/// String/Vector receivers in favor of colon-slice `v[a:b]` (ratified
-/// 2026-07-06). Track C-3a landed the non-SH migration + this ratchet;
-/// Track C-3b (**205 call sites** in `tests/fixtures/self_host_lowerer/` across
-/// 11 files, recounted 2026-08-30 by THIS function — i.e. after strings and
-/// comments are stripped, which is what a migration has to change; a raw
-/// `grep -o '\.slice('` says 211 across 12 because 6 sit inside string
-/// literals and comments. Regenerate rather than quote either) is
-/// hard-blocked on Track A (SH stage-2 memory-safety fix) and defers to
-/// R40 if A stalls. Meanwhile the SH corpora sit in an ALLOWLIST — the
-/// allowlist entry drops out atomically when C-3b lands, ratcheting the
-/// non-SH count down to 0 and the SH count to 0 in one commit.
-///
-/// Positive-control: add `foo.slice(0, 1)` to any non-SH `.gg` under
-/// `tests/fixtures/` → this lint MUST fire with a count above the
-/// ceiling. If it doesn't, the regex or the ceiling has decayed.
-/// ⛔ SUSPENDED 2026-08-31 BY OWNER DIRECTION. Do not re-enable without an
-/// owner ruling. TWO independent reasons, either sufficient:
-///
-/// (1) **ITS RATIONALE WAS WITHDRAWN BY THE OWNER THE SAME DAY IT WAS BEING
-///     ENFORCED.** `docs/define-gorget/decisions.md:1278-1284` — **D22 RIDER 2,
-///     owner 2026-08-31: "THE REMOVAL CLAUSE IS OVERRIDDEN. `.slice()` AND
-///     `.substring()` ARE KEPT."** *"let's not remove .slice/substring as
-///     ratified by D22. we keep it for now, both documented as aliases."*
-///     The colon form stays CANONICAL and the rest of D22 is unchanged — only
-///     the removal is withdrawn. This lint enforced the withdrawn clause.
-///
-/// (2) **THE MIGRATION TARGET IS SILENTLY BROKEN — see `todo/t0871`.**
-///     `s[a:b]` does not tag its result as a view (`index_load` at
-///     `src/ir/lowering/exprs/methods.rs:4394` never calls `set_view_of`), so a
-///     bind whose source later REALLOCATES reads freed memory. Measured at HEAD,
-///     rc 0 and no diagnostic on BOTH backends: `String t = s[0:5]` then 64
-///     reallocating appends to `s` prints garbage on C and LLVM, while
-///     `s.slice(0, 5)` prints correctly. ⚠ Without the reallocation the two
-///     spellings agree, which is how this survived. So the ceiling was pushing
-///     205 self-host sites (`todo/t0850`, `todo/t0316`) from the CORRECT
-///     spelling onto the broken one, advertised as "MEASURED FREE" — free
-///     because it does not do the work.
-///
-/// RESTORE ONLY AFTER the R49 soundness fix lands (owner-scheduled 2026-08-31)
-/// AND an owner ruling on whether a ceiling is wanted at all, given (1).
-#[test]
-#[ignore = "SUSPENDED by owner 2026-08-31: enforces D22's removal clause, which \
-D22 Rider 2 (decisions.md:1278) withdrew, and migrates onto the silently-broken \
-`s[a:b]` bind (todo/t0871). Soundness fix scheduled R49."]
-fn no_dot_slice_after_d22() {
-    /// Non-SH ceiling AFTER C-3a lands = 0 (every non-SH site was
-    /// migrated in the same commit as this lint). The SH corpora sit in
-    /// the allowlist (see the walker below) and do NOT count toward this
-    /// ceiling; when C-3b lands they migrate too and the allowlist entry
-    /// is removed atomically.
-    ///
-    /// Tighten CEILING whenever the count drops (do NOT loosen — a rise
-    /// is a regression during the D22 accept-both window).
-    const CEILING: usize = 0;
-
-    let roots: &[&str] = &[
-        "tests/fixtures",
-        "lib",
-        "examples",
-        "demo",
-        "spectests",
-        "compiler/data",
-    ];
-
-    let count = count_dot_slice_in_code(roots);
-    assert!(
-        count <= CEILING,
-        "D22 shrink-only ratchet: {count} `.slice(...)` sites found in \
-         non-SH corpora (ceiling {CEILING}). D22 (ratified 2026-07-06) \
-         retired `.slice()` in favor of colon-slice `v[a:b]`. A NEW site \
-         is a migration regression — replace with the colon form. If a \
-         NEG fixture DELIBERATELY exercises the retired method, allowlist \
-         its path and bump the ceiling with the rationale.",
-    );
-    if count < CEILING {
-        eprintln!(
-            "[no_dot_slice_after_d22] measured={count} < CEILING={CEILING} — \
-             tighten CEILING to {count} and cite the retired sites.",
-        );
-    }
-}
-
-/// Helper for `no_dot_slice_after_d22`: walk .gg files in `roots`, skip
-/// any path with a `self_host_lowerer` segment (the deferred C-3b
-/// migration site set), strip strings then comments per line, and count
-/// `.slice(` occurrences. `substring(a, b)` is a distinct method
-/// (`gorget_str_slice` routes through the `substring` name too) and is
-/// EXPLICITLY not counted — only literal `.slice(` matches. Fuzz-corpus
-/// and known-gaps fixtures ARE scanned; the migration handles them the
-/// same way as any other fixture.
-fn count_dot_slice_in_code(roots: &[&str]) -> usize {
-    let string_re = regex::Regex::new(
-        r#"(?s)([fFrRbBcC]?"""(?:.*?)""")|([fFrRbBcC]?"(?:[^"\\\n]|\\.)*")|('(?:[^'\\\n]|\\.)*')"#,
-    )
-    .expect("string regex compiles");
-    let comment_re = regex::Regex::new(r"#.*$").expect("comment regex compiles");
-    let slice_re = regex::Regex::new(r"\.slice\(").expect("slice regex compiles");
-
-    let mut total = 0usize;
-    for root in roots {
-        walk_gg_files(Path::new(root), &mut |path: &Path| {
-            // ALLOWLIST: self-host lowerer corpora — the SH `.slice()` sites
-            // are gated on Track A (SH stage-2 memory-safety fix) landing
-            // before Track C-3b can migrate them. Remove this check when C-3b
-            // lands (atomic ceiling ratchet → 0).
-            // ⚠ The count is 205, not the 208 this comment carried: recounted
-            // 2026-08-30 over `self_host_lowerer/*.gg` by the stripping walk
-            // below — 205 CALL SITES across 11 files. A raw `grep -o '\.slice('`
-            // over the same glob says 211 across 12, the difference being 6
-            // occurrences inside string literals and comments, which a migration
-            // does not touch. `self_host_typechecker/*.gg` has none of its own;
-            // the 14 that appear there are the symlink seam. Regenerate the
-            // number rather than quoting either.
-            //
-            // ⚠ R47: THAT MIGRATION IS NOT COSMETIC, AND NOBODY HAD MEASURED
-            // IT. `.slice(a, b)` materializes an OWNED String on every call;
-            // the ratified colon form `s[a:b]` materializes NOTHING. Measured
-            // on one program, 1,000 identical calls returning identical
-            // results: `string_clone` 1,002 vs 2. So every remaining SH
-            // `.slice()` site is a per-call heap materialization the ratified
-            // spelling does not pay — a mechanical clone reclaim sitting
-            // inside a migration that reads like a rename. Recorded on
-            // `todo/t0316`; the live instance that made it visible (a
-            // per-character scan in `loader.gg::parent_dir`) is `todo/t0850`.
-            let s = path.to_string_lossy();
-            if s.contains("self_host_lowerer") {
-                return;
-            }
-            // ALLOWLIST: the `todo/t0850` repro DELIBERATELY spells the retired
-            // method, because the retired spelling is the defect it holds. It
-            // asserts the INTENDED behaviour (a slice scan whose clone count
-            // does not scale with the input length) and graduates to a live
-            // regression fixture when `loader.gg::parent_dir` is fixed.
-            if s.ends_with("known_gaps/sh_parent_dir_clones_one_string_per_path_char.gg") {
-                return;
-            }
-            let Ok(src) = fs::read_to_string(path) else { return };
-            for line in src.lines() {
-                let stripped = string_re.replace_all(line, "\"\"");
-                let stripped = comment_re.replace_all(&stripped, "");
-                total += slice_re.find_iter(&stripped).count();
-            }
-        });
-    }
-    total
-}
+// RETIRED 2026-09-03 (owner ruling): `no_dot_slice_after_d22` — the
+// shrink-only `CEILING = 0` ban on `.slice(` in the non-self-host corpora —
+// AND its `count_dot_slice_in_code` walker are GONE, not merely `#[ignore]`d.
+// Three independent reasons, each sufficient:
+//
+//   1. It enforced a WITHDRAWN clause. D22 Rider 2 keeps `.slice()` and
+//      `.substring()` as PERMANENT ALIASES of the canonical colon form, so
+//      the lint banned a ratified spelling — a guard contradicting the
+//      ledger.
+//   2. Its stated yield was refuted by measurement. The ban existed to push
+//      205 self-host sites off `.slice()` as a CLONE RECLAIM. With `s[a:b]`
+//      made sound (t0871), the two spellings cost the SAME and the reclaim
+//      is ZERO. A guard encoding a refuted premise is worse than none.
+//   3. As a SHRINK-ONLY ratchet it could never go RED on a shrink, which
+//      Core #6 forbids: a one-directional band greens every step of its own
+//      drift.
+//
+// ITS REPLACEMENT IS `slice_spelling_cost_equivalence` in
+// `tests/integration.rs`, which asserts the invariant that actually matters
+// and that nothing in the tree watched for: the two ALIASES must COST THE
+// SAME — `string_clone == 0` at a temp, `== LOOP_N` at a bind, failing in
+// EITHER direction (both demonstrated RED by dropping one producer tag at a
+// time). It lives in `tests/integration.rs` because it is a RUNTIME
+// measurement over four `.gg` fixtures — it needs `--clones=stats`, a cc and
+// an exec, none of which belong in the static-source lint suite, and the
+// `parse_clone_stats` / `run_with_deadline` harness it reuses is there.
 
 fn walk_gg_files(dir: &Path, cb: &mut dyn FnMut(&Path)) {
     let Ok(rd) = fs::read_dir(dir) else { return };

@@ -27,13 +27,32 @@
 # that, by running this program over a short and a long path and requiring the
 # two `string_clone` totals to be EQUAL. Today they differ by the length delta.
 #
-# ⚠ KEEP `.slice()` HERE, DELIBERATELY, EVEN THOUGH D22 RETIRED IT. This
-# fixture is allowlisted in `tests/lints.rs::no_dot_slice_after_d22` because the
-# retired spelling IS the defect: `.slice(a, b)` materializes an owned String on
-# every call and the ratified colon form `s[a:b]` materializes NOTHING —
-# measured 1,002 vs 2 `string_clone` over 1,000 identical calls returning
-# identical results. Rewriting this to the colon form, or to `split`, would make
-# the fixture green and hide the thing it exists to hold.
+# ⚠ KEEP `.slice()` HERE — BUT NOT FOR THE REASON THIS COMMENT USED TO GIVE.
+#
+# It used to say the fixture was allowlisted in
+# `tests/lints.rs::no_dot_slice_after_d22`, and that the colon form `s[a:b]`
+# "materializes NOTHING — measured 1,002 vs 2". Both halves are dead:
+#
+#   * THE LINT IS GONE. `no_dot_slice_after_d22` and its allowlist were
+#     retired (owner ruling 2026-09-03) — see the note where it stood.
+#     `.slice()` and `.substring()` are permanent aliases under D22 Rider 2,
+#     so nothing bans the spelling and nothing needs to exempt this file.
+#   * THE MEASUREMENT IS INVERTED. `s[a:b]` did not materialize because it
+#     handed out a dangling cap=0 VIEW — the `t0871` use-after-free, fixed
+#     2026-09-03. The two spellings now cost exactly the same. Transcribing
+#     THIS loop to the colon form and running both:
+#         path len  4 → string_clone=7  BOTH spellings
+#         path len 64 → string_clone=67 BOTH spellings
+#     Regenerate with `gg build --clones=stats` on the two transcriptions;
+#     `slice_spelling_cost_equivalence` in `tests/integration.rs` is the
+#     standing guard that they stay equal.
+#
+# So the reason to keep `.slice()` is now simply that it is the spelling the
+# self-host actually uses at this site. What the fixture holds is UNCHANGED
+# and is the real point: the clone count SCALES WITH THE PATH LENGTH (7 → 67
+# for 4 → 64 chars), one heap String per character scanned. Switching
+# spellings does not fix that, and never would have. Rewriting to `split`
+# WOULD make it green and hide the thing it exists to hold.
 
 from std.os import args
 

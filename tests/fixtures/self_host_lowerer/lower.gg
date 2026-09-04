@@ -2207,6 +2207,13 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx ctx, GirModule &gmod, int val
         else:
             pass
 
+    bool source_is_runtime_view = false
+    match val_loc.ownership:
+        case LoView():
+            source_is_runtime_view = true
+        else:
+            pass
+
     # Branch A — (live) GorgetString same-type, source IS a borrow alias.
     # Value-aliasing `String b = a` shape where `a` is itself a borrow
     # into another aggregate. Inherit the chain so the root owner's drop
@@ -2215,7 +2222,30 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx ctx, GirModule &gmod, int val
     # because there's no SharedHeap ownership state nor drop tracker
     # that consults it — fresh-Owned String sources continue through
     # MoveDirect, which transfers ownership cleanly.)
+    #
+    # ⚠ A RUNTIME VIEW IS NOT AN ALIAS CHAIN, and the difference is
+    # soundness. `LoBorrowed` points INTO an aggregate whose owner
+    # outlives the bind, so inheriting the chain is right. `LoView` is a
+    # cap=0 header over a buffer the SOURCE can REALLOCATE — `s[a:b]`,
+    # `s[i]` and every `returns_view` method. Alias it and the bind reads
+    # freed memory the moment the source grows: exit 0, no diagnostic,
+    # garbage stdout. So a view binds by the same rule the GtPtr branch
+    # below already uses for a resource element — alias only while BOTH
+    # the bound name and the source root are provably pristine at the
+    # bind, otherwise materialize an independent owner.
+    #
+    # This is CoW-default-borrow honoured, not abandoned: a read-only
+    # slice bind still costs zero. Rust reaches the same place from its
+    # Branch D/E (`emit_clone_to_owned` for a live or View source) and
+    # ggdef adjudicates it; pinned by `string_view_tag_index_bind.gg`.
     if source_is_borrow_alias and is_string_same_type:
+        if source_is_runtime_view and clone_fn != "":
+            if source_root == "":
+                return CloneAndMove(clone_fn)
+            bool bound_pristine = cow_pristine_after(ctx, bound_name, bind_pos)
+            bool source_pristine = cow_pristine_after(ctx, source_root, bind_pos)
+            if not (bound_pristine and source_pristine):
+                return CloneAndMove(clone_fn)
         return BorrowAlias()
 
     # Branch B — Owned + (live) non-resource source, cross-type clone_fn
@@ -2452,15 +2482,14 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx ctx, GirModule &gmod, int val
         # resource path falls through to MoveDirect below.
         pass
 
-    # Branch E — View source, same-type. Rust emits a clone-to-owned
-    # so the alias materializes into an independent owner (captures the
-    # CoW-view's `auto x = s.slice(...)` shape where x must outlive the
-    # underlying buffer's mutation point). Self-host's CoW-safe pragma
-    # routes LoView sources through Branch C above (BorrowAlias) — the
-    # CoW-default-borrow design intent is to alias, not materialize.
-    # If a `cow_after_block` / `is_cow_unsafe_at` wire-up lands later
-    # and flips Branch C off for a specific (local, position) pair,
-    # this branch becomes reachable; for now it's dead.
+    # Branch E — View source, same-type. Rust emits a clone-to-owned so
+    # the view materializes into an independent owner: the
+    # `String x = s.slice(...)` / `String x = s[a:b]` shape where x must
+    # outlive the underlying buffer's mutation point. The self-host
+    # answers this in BRANCH A, which is the earlier of the two and where
+    # the position-aware pristine test already lives — a view aliases only
+    # while both the bound name and the source root stay pristine, and
+    # materializes otherwise. Nothing same-type reaches here.
 
     # Branch F + G — fall through to direct Move. Primitives, FnPtr,
     # non-resource user types, AND fresh-Owned resource sources (per

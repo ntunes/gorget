@@ -128,10 +128,19 @@ pub(super) fn emit_call_extern(
             if name == "gorget_str_codepoint_at" && args.len() == 2 {
                 // gorget_str_codepoint_at(Str s, int64_t byte_pos) → Str: a
                 // cap=0 VIEW REGION into s's buffer (no allocation) — sibling
-                // of the emit_types.rs helper-fn emission. Owning consumers
-                // upgrade the view via the collection-put materialize hooks /
-                // boundary clones; lazy-view sources are materialized first
-                // by lower_for_string's W3d hook.
+                // of the emit_types.rs helper-fn emission. The result is
+                // View-tagged at its GIR producer (`lower_for_string_with`),
+                // so owning consumers clone at the ownership boundary; the
+                // "collection-put materialize hooks / boundary clones upgrade
+                // it" this comment used to claim was MEASURED FALSE for
+                // `set`/`insert`/`v[i] =`/field-assign/ctor-arg/plain bind.
+                // Lazy-view sources are materialized first by
+                // lower_for_string's W3d hook.
+                //
+                // ⚠ DIVERGENCE FROM THE emit_types.rs SIBLING, FILED: that one
+                // bounds-checks `byte_pos` and clamps `cplen` to the remaining
+                // length; this inline form does NEITHER, and this is the form
+                // actually used. See the for-string torn-read item in `todo/`.
                 if let Some(d) = dst {
                     let s = format!("((Str*){})", v(args[0]));
                     let pos = v(args[1]);

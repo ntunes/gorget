@@ -1,0 +1,25 @@
+# t0871 equivalence-guard corpus, cell 3 of 4. `s[a:b]` and `.slice(a, b)` are
+# PERMANENT ALIASES (D22 Rider 2) — the colon form is canonical, the method
+# form is kept. The invariant this corpus pins is that they COST THE SAME:
+# zero materializations at a TEMP, exactly one per BIND. A divergence in
+# EITHER direction is the defect: the colon form dropping to 0 at a bind is
+# the dangling-view class `t0871` fixed; the method form rising above 0 at a
+# temp is a materialization the canonical spelling does not pay.
+#
+# Read by `slice_spelling_cost_equivalence` in `tests/integration.rs`, which
+# is what replaced the retired `no_dot_slice_after_d22` ceiling.
+# Instrument: `--clones=stats`. LOOP_N = 100.
+
+String mk():
+    String s = "the quick brown fox"
+    s = s + " jumps over the lazy dog"
+    return s
+
+void main():
+    String s = mk()
+    int total = 0
+    int i = 0
+    while i < 100:
+        total = total + s[0:5].len()
+        i = i + 1
+    print(total)
