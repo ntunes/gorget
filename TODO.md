@@ -447,7 +447,13 @@ reject** under D27 (`E_MoveWithoutOperator`), so `tests/integration.rs:60651-606
 ⊕ **`t1093`–`t1095` HANDED BACK 2026-09-04** — N2's pass 3 found `t0954` and `t0955` already own both
 halves of its mechanism verbatim, so N2 **CLOSES** them and needs only two fresh ids. **GREP-BEFORE-YOU-FILE
 working as intended: a five-id block met a two-id need.**
-⚡ **FIRST UNISSUED ID IS NOW `t1146`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
+⭐ **TRACK EQL OPENED 2026-09-04 — ID BLOCK `t1147`–`t1156`, WRITTEN HERE IN THE SAME ACTION AS THE SPLIT.**
+**F-G is now the REJECT half only; EQL owns the SEVEN intrinsic structural-equality LOWERINGS** (tuple ·
+`Option` · `Result` · `Vector` · `Set` · `Dict` · `Array`), recursive over element types, on C + LLVM +
+self-host. ⛔ **THE ACCEPT PREDICATE MUST NOT LAND BEFORE ITS LOWERINGS** — an intermediate state where the
+predicate accepts what the lowering answers wrong is **ratified silent-wrong-output** and fights Core #8.
+⊕ **EQL carries its own unruled question: `Set`/`Dict` ORDER-INDEPENDENCE** — not settled by D46.
+⚡ **FIRST UNISSUED ID IS NOW `t1157`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
