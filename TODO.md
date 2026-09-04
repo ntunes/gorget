@@ -675,6 +675,54 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔⛔ **S-a3 PASS 1: I GAVE THE OWNER A COST FIGURE THAT IS FALSE, AND THE CORRECTION IS OWED BACK.**
+I told the owner the env-header shape costs *"8–16 bytes per CAPTURING closure env (non-capturing have a NULL
+env and allocate nothing)"*. **MEASURED FALSE.** Fire count **2**; ASan **16 B / 2 allocs, 8 B each**; the env
+struct for a no-capture closure is `struct __gg___Closure_0 { char __pad; }`. Independent witness:
+`tests/sanitize/LEAK_ALLOWLIST.txt:280-281`, measured by ANOTHER track — *"8 B for a non-capturing closure and
+16 B for a capturing one."*
+⇒ ⛔ **REAL COST ON THE "FREE" PATH IS 8 B → 24 B, 3×, ON EVERY NON-CAPTURING CLOSURE** in a collection / dict
+/ `Option` position. ⚡ **The NULL-env path is the FuncRef-WRAP path (`runtime_string.c:148-150`), which I
+CONFLATED with a closure literal. The owner ruled on a shape whose cost I presented as zero.**
+⊕ **And `242 B in 6 allocations` is UNREPRODUCIBLE** — measured 16/2, 32/2, 56/2 across three cells.
+
+⭐⭐ **TWO REVIEWERS REACHED OPPOSITE CONCLUSIONS AND NEITHER WAS WRONG — BECAUSE THE BRIEF NEVER NAMED THE
+COMMIT ITS PREMISES HOLD AT.** S-a3 pass 1 measured `__Closure_N__drop`/`__Closure_N__clone` **never emitted**
+(RC=1 over 4 cells) at `20b36be22`; S-a pass 1 measured them **emitted and never called** at integration +
+Track L's fold. Orchestrator-verified: at integration HEAD `closures.rs` has **only
+`..TypeMetadata::default()`** ⇒ `DropStrategy::None` ⇒ no body; at L's tip `bc762d0d3` it has
+**`drop_strategy: env_drop`** ⇒ the bodies exist. ⇒ ⚡⚡ **STATE THE BASE COMMIT IN THE BRIEF, NOT JUST IN THE
+REVIEWER'S REPORT.** ⊕ **S-a3 DEPENDS ON TRACK L INTEGRATING, and my brief never said so** — pass 1's
+recommended "synthesize the drop/clone" track **IS Track L, already built**, so its 3-track split collapses
+to 2.
+
+⛔⛔ **AND THE REAL BLOCKER STANDS INDEPENDENT OF ALL THAT: THE ENV DOES NOT OWN ITS CAPTURES.** The capture is
+a **raw `memcpy`, no clone**, and `main` also frees the source. Pass 1 injected the exact naive fix this
+design routes to — **with the order §3 prescribes** — and ASan reported **`attempting double-free`, 50-byte
+region, freed twice by the two clones, NO STDOUT AT ALL.** ⚡⚡ **ORDER IS NECESSARY; OWNERSHIP IS WHAT BITES.**
+⊕ `ensure_owned_at_boundary(… ClosureCapture)` **IS called** at `closures.rs:343-348` and produced **no clone**
+for a live directly-owned `String` local — **a ratified rule whose implementation does not honour it.**
+⊕ **SIX Q#6: my heterogeneity cell does not sample its own axis** — two `int`-capturing closures have
+identical layout and no droppable field, so one `free()` is correct for both and the cell is **green under the
+naive fix AND under a correct one.** **The axis only bites on DIFFERING DROPPABILITY**, and the capture must
+be **heap-forced** (a static literal is a cap=0 view). ⊕ `security/attack_91…` is already this trap.
+
+⭐ **Q PASS 3 = SIGN OFF, STREAK 3, EXECUTOR LAUNCHED — and the matcher set was falsified a THIRD time by the
+same witness.** **`conflict-marker-size` below 7 escapes ALL FOUR arms** (measured `=3` → `<<< HEAD`/`===`/
+`>>> other`; `=1` → `< HEAD`/`=`/`> other`; every line MISS), and Addendum 2's justification — *"under a
+non-default marker size the opener and closer still fire"* — **is true only UPWARD.** The decision stands
+(widening below 7 collides with the guard's own MUST-NOT-MATCH rows); **the REASON is replaced and sub-7 is a
+NAMED OMITTED CELL.**
+⛔ **And my own fold produced a SELF-CONTRADICTORY TABLE: `==========` was in BOTH lists** — `--marker-size=10`
+emits a separator of exactly ten `=`, byte-identical to a MUST-NOT-MATCH setext row. ⚡ **An executor taking
+"exact bytes" literally would write a table that CANNOT BE SATISFIED and must use judgement to escape —
+exactly what readiness #3 forbids.**
+⊕ **My Q1 overclaimed its provenance:** `4d695b14f` deleted all three marker lines together, leaving **zero**
+residue. The shape comes from **PARTIAL** hand-stripping (the `sed` demo). **Conclusion untouched — the
+free-arm argument alone carries it.** ⊕ **SIX Q#6: the tree-wide `findings=0` is green partly because the tree
+has ZERO CRLF files — the CRLF arms are exercised only by the TABLE, never by the walk.** That is the
+strongest argument the table is mandatory rather than ceremony.
+
 ✅ **WORKTREES PRUNED 2026-09-04 (owner ask): 34 → 18, sixteen removed, ZERO loss.** My tree clean, all six
 live agents intact, every unintegrated track commit still reachable (`b1ae8c650` `de20ce344` `bc762d0d3`
 `77efa75d0` `b5356f361`). ⚡ **`git worktree remove` drops the CHECKOUT ONLY — the branch and its commits
