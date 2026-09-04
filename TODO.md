@@ -683,6 +683,37 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **Q OUTPUT-REVIEW = SIGN OFF (4 non-blocking; 2 fold as guard-strengthening, 2 as record fixes).**
+⭐ **It settled the floors question BY MEASUREMENT, not source read:** in the vacuous-walk break
+`tracked_files()` returned **7527** paths, so its memoised `assert!(set.len() > 500)` **passed cleanly while
+the test still went RED**. ⇒ *the shared assert provably cannot stand in for a per-guard fire count.*
+⭐⭐ **ATTEMPT #4 AT FALSIFYING THE MATCHER FAILED — nine shapes, none new** (no-final-newline merges, add/add
+under diff3 and zdiff3, `checkout --conflict=`, marker sizes 8/9/70/1000, tab labels, a bare-`|||||||` hunt,
+lone-CR files, uppercase `CONFLICT-MARKER-SIZE`). ⚡ **A set falsified three times running has now held once.**
+⭐ **AND IT BROKE A LIMIT IN THE *GOOD* DIRECTION:** it built a real **criss-cross (two merge bases)** and
+measured `||||||| merged common ancestors` **byte-for-byte** — *the executor was more conservative than it
+needed to be, and the row's provenance is now witnessed rather than inferred.*
+⭐ **It also closed E9(a) with a WALK-level witness nobody in the chain had:** a CRLF `=======` planted with
+**no final newline** in a real tracked file → **rc 101, caught by the WALK**, not only by the table.
+⊕ **`git ls-files tests/lints.rs | wc -l` → 3 during an unmerged tree ⇒ the guard's `HashSet` dedup is
+load-bearing TODAY**, not hypothetically.
+⛔ **E-1: the non-UTF-8 blind spot has no NAMED consequence** — git **does** write markers into a Latin-1 file,
+the decode fails, `non_utf8` increments, **and nothing asserts it is zero**; the counter appears only inside
+the floor's failure message, which never prints when the floors pass. *Exposure measured 0 — but the omitted
+cells section names sub-7 and BOM and not this one.*
+⛔ **E-2: the `^` anchor on three of four arms is UNPINNED** — dropping it flips **0 of 39 rows** because the
+first-byte prefilter enforces column 0 for the FIRST character, **yet unanchored `=<<<<<<< x` matches**
+(shipped=False, mutated=True). The `=` arm's `^` **is** pinned; the others are not. **One row closes it.**
+⊕ **E-3, and it is quietly funny: `todo_index.py`'s new `removed` counter is structurally always 0 where it
+prints** — `removed > 0` implies an error implies an early return, so the success line never shows it.
+**In a change made to stop a printed number reading like information it isn't.**
+⊕ **E-4: `t1255` quotes "9 of 7463 tracked files"** — the **9** is exactly right (independently re-censused),
+**the 7463 rotted to 7527 in ONE merge.** Core #15(a).
+⊕ **Devbook write-through confirmed NOT dodged:** devbook/25 itself rules that *"any count quoted here would
+rot"*, so naming a new lint there would violate that chapter; devbook/27's stale sentence was **already false
+before this commit** (two pre-existing `tracked_files()` callers), and `t1256` discriminates from `t0829`
+cleanly — **rotted CLAIM vs rotted CITATIONS, same chapter.**
+
 ⭐⭐⭐ **W PASS 1 INDEPENDENTLY ARRIVED AT THE OWNER-APPROVED S-a3 DESIGN, WITH A MEASURED PROTOTYPE — AND
 FOUND THE RUNTIME'S OWN DISMISSAL OF IT IS A CONFLATION.** `runtime_string.c:180-183` rejects the idea as
 *"a vtable slot the 16-byte layout does not have"* — ⚡⚡ **BUT THE HEADER IS NOT THE HANDLE, AND IT HAS
