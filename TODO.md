@@ -111,13 +111,25 @@ owes a note + a filed subset gap.
   ⇒ **SHARPENED IN AGENTS.md Core #15(a) THIS ROUND: a `file:line` IS a load-bearing claim, so it carries the
   GREP THAT REGENERATES IT, never a bare number.** ⊕ Orchestrator duty: **re-anchor a brief at HEAD at LAUNCH
   time, and message any in-flight reviewer the moment a sibling track integrates into its files.**
-- ⛔⛔ **A WITNESS THAT CANNOT FIRE IS NOT A WITNESS — AND THE ROUND SHIPPED ONE INTO THREE BRIEFS.**
-  The HOF path-witness command derived `method=${name%%__*}`, so a cell named `flat_map__local__noimp`
-  yielded `flat` and the regex became `__flat__`, **which can never match `__flat_map__`.** ⇒ **every
-  `flat_map` `wit=0` was STRUCTURALLY GUARANTEED, NOT MEASURED**, and the required `wit>0` NEGATIVE CONTROL
-  **could not exist under it.** (Same defect for `sort_by*`→`sort`, `sorted_by*`→`sorted` — and a
-  sort-family ACQUITTAL was resting on those cells.) ⚡ **SIX Q#2 APPLIED TO THE INSTRUMENT ITSELF: before
-  trusting any `wit=0`, SEE THE SAME COMMAND PRODUCE A `wit>0` on a cell you know bypasses the mechanism.**
+- ⛔⛔ **A WITNESS THAT CANNOT FIRE IS NOT A WITNESS — AND THE ROUND SHIPPED *TWO DIFFERENT WRONG VERSIONS*
+  OF THE SAME CORRECTION. ⚠ CORRECTED 2026-09-04; THE FIRST TELLING OF THIS LESSON WAS ITSELF FALSE.**
+  N2's pass 1 reported that the HOF path-witness command's `method=${name%%__*}` turned `flat_map__local__noimp`
+  into `flat`, making every `flat_map` `wit=0` vacuous. **I recorded that here and pushed it to a second
+  reviewer in flight. It is WRONG, and one line of shell refutes it:** `flat_map` contains a **single** `_`,
+  so the first `__` falls after `map` and the expansion yields **`flat_map`** — verified by hand.
+  ⇒ **the scout's instrument was CORRECT and DID fire (`map__local__imp` → `wit=3`).** Worse, pass 1's
+  proposed replacement was **greedy** and scored 0 on *every* cell **including the one that must fire** —
+  **shipping it would have installed the only genuinely-vacuous witness of the three.**
+  ⭐ **THE LESSON THAT SURVIVES IS STRONGER THAN THE ONE I WROTE: two independent agents each shipped a
+  filename-derivation bug on this one instrument, in opposite directions. THE DERIVATION IS THE DEFECT CLASS
+  — pass the method EXPLICITLY (`name:method` pairs), never parse it out of the cell name.** The one real
+  defect in the original is the `dq` prefix (`dqfilter` → `dqfilter`, never matches `__filter__`).
+  ⊕ **And SIX Q#2 still binds the instrument: before trusting any `wit=0`, SEE THE SAME COMMAND PRODUCE A
+  `wit>0` on a cell known to bypass the mechanism.** That check is what settled this, both times.
+  ⊕ Second blind witness found the same way: **user-site array hooks are `memcpy(base+40, …)`, so a
+  `.elem_drop =` column reads 0 on code that installs them.** The witness that works is
+  `grep -c '(void\*)<elem-drop-fn>'`, positive-controlled against a push-built array.
+
 - ⛔ **AN ACCESSOR CAN BE TOTAL OVER THE TYPE AND PARTIAL OVER THE ANSWER.** N2's brief prescribed reading
   `StructDef.elem_drop_fn`. **It is `Some` only for `DropStrategy::Trivial`** — `Recursive` and `Custom` map
   to `None` (`lir/lower/mod.rs:1117-1120`). ⇒ **the prescription installs NOTHING for a user struct, and a
@@ -129,6 +141,23 @@ owes a note + a filed subset gap.
   SIBLINGS.** `insts.rs:2264-2295` installs all three array hooks at offsets 40/48/56 and **cannot be found
   by `grep elem_drop`** — the sentinel-with-no-string shape, third instance this round. **When counting
   writers on an axis, enumerate by the STRUCT LAYOUT or the CONSUMER, never by the field NAME.**
+- ⛔⛔ **A DIFF OF TWO *PROGRAMS* CANNOT SHOW WHETHER TWO *PATCHES* COMPOSE — and that category error is how
+  R49 cut a split that could not land.** Track M's brief argued: the crashing and passing GIRs differ in two
+  lines, neither is the pack, **therefore** M1's and M2's fixes are independent. Measured, **M1's half alone
+  reds three committed green fixtures**, because the two halves are coupled through a shared runtime
+  invariant — **who owns the allocation** — while being genuinely disjoint as file zones.
+  ⇒ **SHARPENED IN AGENTS.md MA-5 THIS ROUND: file-zone disjointness is about EDIT COLLISION and says
+  nothing about INVARIANT COUPLING.** ⭐ **The cheap standard test, which is what found it: APPLY EACH HALF
+  ALONE TO PRISTINE HEAD AND RUN THE OTHER HALF'S FIXTURES.** One build each.
+- ⭐ **A `params()`-STYLE FUNCTION POINTER CAN BE ENUMERATED *DIFFERENTIALLY*, WHICH BEATS EVERY TEXT
+  CENSUS.** `BuiltinMethodDecl::params` is a fn pointer: call it twice with sentinel `BuiltinTypeArgs`
+  differing only in elem/key/val and diff the returned `Vec<TypeId>`. **Any position whose TypeId changes is
+  a typed-param position — BY CONSTRUCTION immune to inline closures, helper renames and
+  alias-by-reference**, all three of which defeated the text census that preceded it.
+- ⚠ **"TWO DEFECTS CANCEL" IS A DISTINCT SIX-Q#6 SHAPE FROM "IT LEAKS."** `box_trait_struct_field.gg` is
+  green at HEAD with `total_allocs=2 total_frees=2 live_bytes=0` — **the mint under-registers AND the pack
+  under-consumes, netting exactly one owner.** ⇒ **fixing EITHER alone breaks it**, which is invisible to any
+  instrument that only measures the net.
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.

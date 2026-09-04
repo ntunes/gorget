@@ -255,7 +255,7 @@ When you launch sub-agents via the `Agent` tool, the following rules are **non-n
 
 4. **Parent drives the integration sweep, not agents.** Agents run `cargo build` + `--lib` + targeted tests only; the 15-20 min full sweep is the parent's job.
 
-5. **Brief file zones when running agents in parallel — disjointness is cheap insurance, NOT a hard requirement.** Tell each agent which files the others are touching; do not defer a worthwhile parallel track to avoid overlap. When two tracks must touch one file, brief EACH on the other's exact edit regions. Scout the overlap first.
+5. **Brief file zones when running agents in parallel — disjointness is cheap insurance, NOT a hard requirement.** Tell each agent which files the others are touching; do not defer a worthwhile parallel track to avoid overlap. When two tracks must touch one file, brief EACH on the other's exact edit regions. Scout the overlap first. ⚠ **BUT FILE-ZONE DISJOINTNESS IS ABOUT EDIT COLLISION AND SAYS NOTHING ABOUT INVARIANT COUPLING** — two halves in non-adjacent regions still share who OWNS an allocation. **A diff of two PROGRAMS cannot show whether two PATCHES compose.** ⇒ **before cutting a split, APPLY EACH HALF ALONE TO PRISTINE HEAD AND RUN THE OTHER HALF'S FIXTURES** plus the committed suite; one build each.
 
 6. **Prune a track's worktrees the moment it INTEGRATES — not at round close.** They do not dispose of themselves; prune only when CLEAN (`git status --porcelain`); `scripts/round_cleanup.sh` dry-run first (a live agent needs a keep-list); sweep `/tmp`.
 
