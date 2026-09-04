@@ -33,35 +33,29 @@ verify that after merging rather than assuming it.**
 `t0953`) — its leak is measured irreducible, since a named callee with the same body sizes correctly, so the
 closure literal IS the defect's entry condition.
 
-⛔ **ROUND-CLOSE BLOCKERS — ⚠ THE PREVIOUS TEXT HERE WAS WRONG ON BOTH FIGURES, corrected 2026-09-04 by
-re-reading the tree.** It said the `T1`+`L` merge needs `PHASE_D_PROXY_BUDGET` and `ALLOWED_UNWIRED` set to
-values "on NEITHER side". Measured:
-- **`PHASE_D_PROXY_BUDGET`: base 91, N2 UNCHANGED at 91, HEAD 90 → three-way merge yields 90. DO NOT TOUCH.**
-  ⚠ **THE PREVIOUS VERSION OF THIS BULLET SAID "identical on HEAD and L" AND THAT WAS FALSE** — I checked
-  HEAD and L and **did not check N2**, which sits at 91. The conclusion survived by accident; the premise was
-  a SELECTION presented as a census, which is the exact failure this round has now hit twice. Regenerate ALL
-  branches with `for r in HEAD 832a3039d 0d9f9cebe 2f7eb9b58 36e9f57eb bcf703ee1; do git show
-  "${r}:tests/lints.rs" | grep "const PHASE_D_PROXY_BUDGET"; done`. **An executor who sees 91 vs 90 and
-  "resolves" to 91 reds an EXACT ratchet.**
-  ⊕ ⚠ **zsh APPLIES `:t` AS A HISTORY MODIFIER** — `"$r:tests/lints.rs"` silently becomes `HEADests/...`.
-  **Always write `"${r}:path"`.** This produced three convincing wrong results this round before it was
-  caught, including the one that made the bullet above wrong.
-- **`ALLOWED_UNWIRED` DOES differ** (`git show <rev>:tests/lints.rs | grep -n "const ALLOWED_UNWIRED"`), but
-  it is **NOT a value to hand-pick** — it is a LIST, and its lint is **BIDIRECTIONAL** (`tests/lints.rs`
-  `arrivals` fails on an unwired `.gg` missing from the list; `departed` fails on a listed row that is now
-  wired or gone, SHRINK-ONLY). ⭐ **SO THE RESOLUTION IS MECHANICAL: take HEAD's list, run
-  `cargo test --test lints`, and the failure message NAMES the exact rows to add or delete.** Iterate to
-  green. Do not reason about the count; the gate computes it.
-⚠ **THE LESSON, NOT THE FIGURES:** this bullet sat in the handover for a round telling the next session to
-make a careful judgement call at a merge where one constant needed no decision and the other has a gate that
-decides it for you. **A handover figure is a claim; re-read the tree before acting on one (Core #5).**
-✅ **The sanitize blocker is addressed pending review:** `bcf703ee1` re-seeds the 27 rows the `b5356f361`
-rename broke (`gorget_array_push` → `__gorget_array_reserve_one`, counts unchanged), taking the sweep from 28
-red rows to **one** — `string_enum_variants`, which **goes green the moment L's `t1290` admission lands**.
-⚠ So the sweep CANNOT reach rc 0 on any branch that has the re-seed without L. Do not read that as a failure.
-⊕ **The rename fooled the sweep in BOTH directions** — the retirement verdict would have called it a *fix*.
-The advisory half is reworded; **the fatal half is `t1295`, still open.** A frame rename is indistinguishable
-from a fixed leak to this gate, which is the reusable finding, not the 27 rows.
+⛔ **THE TWO MERGE CONSTANTS — RESOLVED BY T1 ITSELF, AND MY "CORRECTION" OF THEM WAS THE ERROR.**
+Measured at `fd7d3d413`: **`PHASE_D_PROXY_BUDGET = 89`** and **`ALLOWED_UNWIRED: [&str; 23]`**, against
+HEAD's 90/24 and L's 90/28. **T1 moves both** — it removes a proxy read and wires a fixture.
+`git show "fd7d3d413:tests/lints.rs" | grep -E "const PHASE_D_PROXY_BUDGET|const ALLOWED_UNWIRED"`.
+⚠ **THE ORIGINAL HANDOVER FIGURES (89 / 23) WERE RIGHT ALL ALONG. I "corrected" them to 90 / take-HEAD's-list
+by censusing HEAD, L and N2 — a SELECTION THAT EXCLUDED T1 BECAUSE T1 HAD NOT COMMITTED YET.** That is the
+**third** instance of this error class in one round. ⭐ **THE RULE THAT FALLS OUT OF IT: any enumeration over
+"the pending branches" is INCOMPLETE UNTIL EVERY EXECUTOR HAS COMMITTED — and the handover figure you are
+about to overwrite may be describing the POST-merge value, not a pre-merge one.**
+⊕ `ALLOWED_UNWIRED`'s *procedure* is unchanged and still right — take a side, run the lint, let it name the
+rows; 23 is the value it converges to and a cross-check, not a hand-written value. ⚠ The array LENGTH changes
+too, which is a **rustc** error before the lint message prints.
+⊕ **`PHASE_D_PROXY_BUDGET` is NOT "do not touch"** — it must land at T1's value; taking HEAD's 90 reds an
+exact ratchet.
+
+⚠ **T1 CARRIES ONLY A PARTIAL L.** `git merge-base --is-ancestor bc762d0d3 2f7eb9b58` → rc 0 but
+`… 2f7eb9b58 fd7d3d413` → rc 1: T1 merged an L fold and is **missing L's last two commits**
+(`3ad101364`, `2f7eb9b58`) — **precisely the two that touch the leak allowlist.** So "T1+L together" is a
+smaller merge than it sounds, the allowlist delta comes from L's TIP alone, and **T1's parity number was
+measured on a tree that is NOT the tree that will integrate** (its output-review is re-measuring it on the
+real merge, in `--release` with a forced driver rebuild).
+⊕ **T1 does not touch `LEAK_ALLOWLIST.txt`** — of the contended files it touches only `scripts/figures.db`
+(three parity mirrors + a `PHASE_D_PROXY_BUDGET` mirror), which gives `figures.db` a FOURTH writer.
 
 🛑 **`tests/sanitize/LEAK_ALLOWLIST.txt` MUST NOT BE MERGED TEXTUALLY — IT IS A MEASUREMENT ARTIFACT, NOT
 SOURCE.** Three pending branches rewrite it and **their rows were measured against DIFFERENT COMPILERS**:
