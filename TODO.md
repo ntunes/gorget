@@ -1105,7 +1105,7 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   ⚠ **Cross-track checked and CLEAR:** no other agent branch has touched `todo/t0018.md` since
   `74fc27705`; H's edit is a 2-line append, and the annotation is honest — **18 repros, one wired, 17 owed.**
 
-- **🆕 A1-I · SCOUT LAUNCHED (the Core #2 half; A1-M's `t0937` half already shipped as `dc29f0faf`).**
+- **A1-I · SCOUT LAUNCHED (the Core #2 half; A1-M's `t0937` half already shipped as `dc29f0faf`).**
   Three carriers, each with **shipped precedent in the file it touches**: a typed field on GIR `Local`
   (precedent `deref_of_owning_param`) · **`StructDef.closure_call_fn`**, populated exactly as `elem_drop_fn`
   and `elem_clone_fn` already are — **both documented as "Replaces the c_lir `elem_drop_fn_for_c_type`
