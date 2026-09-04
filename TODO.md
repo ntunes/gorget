@@ -254,6 +254,29 @@ executor should be told to REPORT.**
 - ⛔ **§9 could not brief INT-B** — a reviewer tried and listed seven unanswerable questions, now required
   report contents. ⊕ **The report goes to `/tmp`**: it must quote a figures-DB-covered spelling, which no
   COMMITTED file may contain, and `/tmp` is outside the scan roots.
+🚀 **INT-A's EXECUTOR IS LAUNCHED on `/tmp/brief_INTA_v5.md` after FOUR sequential brief-reviews.** Passes 3
+AND 4 both signed off the DESIGN; pass 4's own verdict was *"after this addition it goes to the executor"*.
+🚨 **PASS 4 BUILT A SECOND WRONG TREE — and it built it by DOING WHAT THE BRIEF SAID.** `git checkout --ours
+tests/lints.rs`, which is what a natural reading of *"take L's side"* produces, scores **IDENTICALLY on all
+seven acceptance lines** — same allowlist identity, same deletion check, same census, same `+2` red, same
+green mirrors — while **silently deleting N2's 29-line census block AND the re-seed's 16-line frame-rename
+block**, the latter being the very text §3 says INT-B needs in order not to "fix" `t0951`. ⛔ **That is fold
+#1's failure mode one section over: a REPORT OBLIGATION where an rc was needed.**
+⭐ **CLOSED by running §2's added-line preservation criterion over `tests/lints.rs` COMMENT LINES** — MISSING
+0 for every branch except one legitimately-superseded doc line (correct tree total **1**, the `--ours` tree
+**46**). **Strictly stronger than grepping for the three known blocks: it catches a fourth nobody has named.**
+⊕ **And the conflict sides INTERLEAVE `const` DECLARATIONS WITH THE COMMENTS**, so "keep all three prose
+blocks" and "take L's constants" cannot both be done at marker level. The rule: **take L's `const` lines; from
+each other side keep ONLY the `//` lines, prefixed with a precedence header.** Both naive resolutions are
+compile errors, so nothing ships — but each costs a cycle.
+⚠ **AT T1's LIVE TIP, MERGE 1 NOW CONFLICTS** (one generated-index line in `TODO.md`) — the conflict set is
+**EIGHT path-instances, not seven, and conflicts start at merge 1.** §2's rule already covers the resolution.
+⊕ **Six errata folded**, incl.: the `t0951` rationale was FALSE (its positive control sits AFTER the `uncited`
+assert, so **on a tree that reds at `uncited` it never runs** — and **four asserts execute for the FIRST TIME
+when INT-B reaches its end state**); `ALLOWED_UNWIRED` is a **SECOND expected red**, not a surprise; and
+**every fixture count in the brief was unreproducible** — the executor is told outright to distrust them and
+re-derive from the stated filter.
+
 ✅ **PASS 3 SIGNED OFF THE DESIGN** — it merged all five branches again and reported *"v3's corrections are
 individually correct — none overshoots"*, verifying the acceptance inversion, the `DONE.md` rule TO THE DIGIT
 (T1 missing exactly 46 lines, all inside the paragraph L rewrote, zero outside), the frame staleness, the
