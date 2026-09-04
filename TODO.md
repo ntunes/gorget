@@ -683,6 +683,41 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔⛔ **T1 PASS 3 — THE DEEPEST ERROR OF THE ROUND WAS MINE: MY RE-SCOPE ORDER WAS ON THE WRONG AXIS
+ENTIRELY.** Addendum 2's data were right; its **arm labels** were not. Pass 3's probe C is the discriminator:
+**`(String e): e` — the IDENTICAL body shape that SURVIVES at a builtin-method argument — is CLOSED at a
+direct free-call argument.** ⇒ *"arm (a) closed / arm (b) survives"* is true **only of the two positions the
+prior pass happened to probe.**
+⛔⛔ **AND THE CONSEQUENCE IS EXACTLY THE FAILURE THE RE-SCOPE EXISTS TO PREVENT: an executor following my
+wording would write that ARM (b) IS LIVE while this round ships an arm-(b) cell as a GRADUATED MATCH** — a
+filed item calling its own fix's cell live.
+⭐ **SIX Q#4, and it is the crux: `t0877`'s subject is BODY SHAPE, and the surviving case HAS NO SUBJECT IN
+THAT TAXONOMY, because the same shape passes elsewhere. No widening of a body-shape rule reaches it.**
+⇒ **DECIDED: re-scope BY POSITION — arms (a)–(d) are closed wherever ambient `expected_type` is a
+`Callable`/FnPtr; all four survive at a builtin-METHOD argument, which is T2's subject.** ⊕ Mechanism
+corrected once more: at a method argument `expected_type` is the **RECEIVER's** Option/Result type, not the
+closure's return type — the operative fact (**not a FnPtr ⇒ the peel declines**) survives. ⊕ And my *"call
+arguments ⇒ `expected_type = -1`"* is false — **`-1` is only the initial clear, immediately overwritten.**
+⭐⭐ **THREE INDEPENDENT COUNTS NOW AGREE ON THE CEILING** (T1 p2, L's reviewer, the orchestrator): **L adds
+11 top-level rows and deletes ZERO corpus rows** — its 4 deletions are in `known_gaps/`, never enrolled.
+**L alone = 150 > 147. L + T1 = 146.** ⊕ `todo/t0924` goes further than I recorded: it censuses **SIX**
+skipped assertions, not three.
+⛔ **AND THE ARM-(a) GAIN LANDS UNPINNED — a 7th pin is owed.** The only fixture exercising that shape stays
+CC-FAIL on its other half, so it stays `#[ignore]`d **asserting nothing**. ⚠ **And a 7th top-level fixture
+must MATCH on the SH lane or it RE-BREACHES the ceiling.**
+⛔ **`PHASE_D_PROXY_BUDGET` = 89 and `ALLOWED_UNWIRED` = 23 — BOTH ON NEITHER SIDE.** ⭐ *The 89 was reached
+INDEPENDENTLY by Track L's reviewer and by T1's — two agents, same number, from the lint's own logic.*
+⊕ **`ALLOWED_UNWIRED`: my "24-vs-28" framing invites reading L as ADDING four; it removes one.**
+⛔ **AND MY OWN REGENERATION GREP RETURNS NOTHING:** `grep -n 'fn compute_closure_sig'` — **Gorget is
+type-first; there is no `fn`.** ⚡⚡ **A REGENERATION COMMAND THAT RETURNS NOTHING IS WORSE THAN A BARE LINE
+NUMBER — IT LOOKS CHECKABLE AND IS NOT.** Working form: `grep -n 'ClosureSig compute_closure_sig'`.
+⭐ **Better grounding for the split than any addendum gave:** Rust **registers closure params as locals
+immediately BEFORE inference** — that is Tier-1c — and **carries BOTH the fallback and the override. T1 ports
+the override, T2 the fallback, and probe B is the witness.**
+⊕ **Measurement trap worth keeping: the self-host driver binary was BYTE-IDENTICAL IN SIZE across pristine and
+fixed builds. SIZE IS NOT A REBUILD WITNESS** — use behaviour or the emitted `.c`.
+⇒ ✅ **All four decisions made in Addendum 3; T1's EXECUTOR LAUNCHED. It is the round's critical path.**
+
 ⛔⛔⛔ **L's CONFIRMING REVIEW — DECISIVE. L ALONE BREACHES THE CEILING, MEASURED IN `--release`: rc 101,
 non-MATCH 150 against a ceiling of 147, backlog +3.** The 8/3 split measured directly: the three non-MATCH
 cells are `closure_capture_param_bare_identifier_body`, `…string_then_reassign_source`,
