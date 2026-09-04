@@ -19,17 +19,25 @@ T1 turns exactly the three offending cells CC-FAIL → MATCH, landing at 146. **
 fixture breaches — **and all three parity gates SKIP EVALUATION under `cfg!(debug_assertions)` (`todo/t0924`),
 so only `--release` with `GG_RUNTIME_DIFF=1` can see it.**
 
-**UNINTEGRATED WORK, all commits verified reachable:** T1 executor (live) · L `2f7eb9b58` (done, waits for T1)
-· N2 `0d9f9cebe` (done) · S-a2 `55323d628` (output-review live) · a leak-class re-seed executor (live).
+**UNINTEGRATED WORK, all commits verified reachable:** T1 executor (live, the round's critical path) · L
+`2f7eb9b58` (done, waits for T1) · N2 `0d9f9cebe` (done) · S-a2 `55323d628` — **output-review SIGNED OFF the
+CODE**, one BLOCKING correction to filed TEXT only, being applied on branch `sa2-fixup`; **merge `sa2-fixup`,
+not the bare commit** · leak-class re-seed `bcf703ee1` (done, output-review live).
 **→ R50:** W + S-a3 (merged, brief measured against source three times) · U1 · U2 · S-a1 · S-b · T2.
 
 ⚖ **ONE OWNER ASK OPEN:** admit `vector_hof_result_element_sizing` (`__gorget_closure_env_alloc*5`, cite
 `t0953`) — its leak is measured irreducible, since a named callee with the same body sizes correctly, so the
 closure literal IS the defect's entry condition.
 
-⛔ **ROUND-CLOSE BLOCKERS KNOWN IN ADVANCE:** the sanitize sweep is red at HEAD on **27 rows, all one renamed
-frame** (`__gorget_array_reserve_one`, from `b5356f361` — a rename, NOT a leak; a track is fixing it); and the
-`T1`+`L` merge needs **`PHASE_D_PROXY_BUDGET` = 89** and **`ALLOWED_UNWIRED` = 23**, values on NEITHER side.
+⛔ **ROUND-CLOSE BLOCKERS:** the `T1`+`L` merge needs **`PHASE_D_PROXY_BUDGET` = 89** and **`ALLOWED_UNWIRED`
+= 23**, values on NEITHER side — resolve them AT the merge, they are not a conflict to take a side on.
+✅ **The sanitize blocker is addressed pending review:** `bcf703ee1` re-seeds the 27 rows the `b5356f361`
+rename broke (`gorget_array_push` → `__gorget_array_reserve_one`, counts unchanged), taking the sweep from 28
+red rows to **one** — `string_enum_variants`, which **goes green the moment L's `t1290` admission lands**.
+⚠ So the sweep CANNOT reach rc 0 on any branch that has the re-seed without L. Do not read that as a failure.
+⊕ **The rename fooled the sweep in BOTH directions** — the retirement verdict would have called it a *fix*.
+The advisory half is reworded; **the fatal half is `t1295`, still open.** A frame rename is indistinguishable
+from a fixed leak to this gate, which is the reusable finding, not the 27 rows.
 
 ⚠ **DISK IS A STANDING CONSTRAINT** — the box crashed on it. **Every agent builds its own compiler**; prune
 finished **reviewers'** scratch too, not just executors'. Keep pending agents' worktrees AND their `/tmp`.
