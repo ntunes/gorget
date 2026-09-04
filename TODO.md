@@ -683,6 +683,25 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+✅ **TRACK L's FOLD IS COMPLETE — three commits, sweep `BARE_RC=0`, confirming review running its own sweep
+now.** Ratchets regenerated from the file; the row arithmetic reconciles end to end.
+
+⛔⛔ **AND IT FOUND A LIVE CROSS-AGENT DEADLOCK IN THE WATCHDOG PATTERN — A GENERALISATION OF MA-9 THAT THE
+RULE DOES NOT YET STATE.** Its Monitor loops used `until ! pgrep -f 'sanitize_sweep.sh'`, which **on this
+shared box matches ANY agent's sweep, not its own.** ⇒ **they could never exit**: one timed out after an hour,
+both held zsh processes, and one produced a stale notification I acted on. **Track N2x carried the identical
+loop**, which could not exit while the reviewer's sweep ran, **and vice versa — a mutual hold.**
+⚡⚡ **THE RULE, and it is MA-9's sibling: AGENTS.md MA-9 says NAMESPACE EVERY `/tmp` ARTIFACT BY AGENT. THE
+SAME HAZARD EXISTS IN PROCESS SPACE — `pgrep -f <shared script name>` IS THE PROCESS-SPACE EQUIVALENT OF A
+FIXED `/tmp` FILENAME.** ⇒ **any watchdog predicate must be OWNER-SCOPED — a PID file, or a match on the
+agent's own `OUT=` path — never on a script name every agent runs.**
+⊕ **Resolved: L killed its two; `ps` now shows only the reviewer's legitimate sweep.** ⊕ It also **freed
+2.2 GB of `/tmp`** (three sweeps × ~1.1 GB of built binaries) while **preserving the final `verdicts.tsv`,
+`retire_due` and `shrunk_class` as flat files** — *evidence kept, bulk discarded.*
+⊕ **Two threads explicitly left open rather than guessed:** `t1290` needs **a bisect, not a guess** (its
+hypothesis stays marked unproven), and the 21 over-declaring rows are **real burn-down available row by row**
+to whoever wants it.
+
 ⛔⛔⛔ **T1 PASS 1 — AND ITS L4 REACHES THE ROUND-CLOSE BATTERY ITSELF: THE RUNTIME-DIFF CEILING NO-OPS IN
 DEBUG BUILDS.** The ceiling's own comment says it **prints a note instead of evaluating** in debug, and that
 **"R48 Track C SHIPPED TWO FIXTURES THAT WOULD HAVE BREACHED IT AND ITS DEBUG FAMILY RUN WAS GREEN."**
