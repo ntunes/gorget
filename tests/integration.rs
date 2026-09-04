@@ -6982,20 +6982,279 @@ fn callable_clone_value_form_axis() {
     );
 }
 
-// `todo/t0937` — CRITICAL: a closure LITERAL at a CONSTRUCTOR / enum-init
-// argument position is never constructed. The emitted `main` carries no
-// `__gorget_closure_env_alloc` and no `.fn_ptr =` designator, and the field init
-// memcpys `sizeof(GorgetClosure)` (16 bytes) out of a 1-byte env placeholder —
-// ASan reports `stack-buffer-overflow ... READ of size 16`. Both backends, rc
-// 139, with `gg check` clean. Reproduces at `Some(...)` as well as `S(...)`,
-// i.e. at both consuming boundaries AGENTS.md names. Distinct from t0936: there
-// the closure IS constructed and fails to clone; here it is never built.
+/// A closure LITERAL written DIRECTLY at a declared-type consuming position is
+/// materialized into a real `GorgetClosure`. Graduates `todo/t0937`'s repro
+/// (`known_gaps/callable_literal_at_ctor_arg_overflows.gg`, whose 3-line body is
+/// cell 1 here) and widens it to the whole matrix the defect lived on.
+///
+/// The LIR's packer is reachable only from an assignment into a projection-free
+/// LOCAL, so every destination that is a FIELD, a PAYLOAD, an ELEMENT or a
+/// PROJECTION stored the raw 1-byte capture env and then read
+/// `sizeof(GorgetClosure)` back out of it. Six write sites now pack against
+/// the destination's own declared TypeId.
+///
+/// ⚠ RED-VERIFIED against the pre-fix compiler: rc 139 on C AND LLVM. The cells
+/// do not fault uniformly, which is why the matrix is two-dimensional rather
+/// than a list of positions:
+///   * struct / tuple / enum / nested, `int(int)`      — rc 139 both backends
+///   * capturing `int(int)` at a ctor                  — rc 135 (SIGILL) on C
+///   * arity-0 and arity-2 at a ctor                   — rc 132 on C, 139 on LLVM
+///   * `s.f = <literal>` and `o.i.f = <literal>`       — rc 139 on C, but rc 0
+///     printing the STALE field value on LLVM (a silent wrong answer, not a fault)
+///   * `Ok(<literal>)` returned from a function        — rc 0 with EMPTY OUTPUT
+///
+/// ⚠ THE SIGNATURE AXIS IS THE POINT. Every `Callable[int(int)]` cell can read
+/// back correctly through the `params: [], return_type: I64` fallback, so
+/// `int(int)` alone cannot distinguish a materialized closure from a recovered
+/// one; `String(String)`, `String(String, int)`, arity-0 and arity-2 are what
+/// make the cells load-bearing (Core #12).
+///
+/// SCOPE, stated so the name cannot overclaim: the literal is the DIRECT
+/// operand at the destination. Inside a CONTAINER LITERAL in the same position
+/// it is a third mechanism and still RED — `todo/t0873(a)`, pinned by
+/// `known_gaps/callable_literal_in_container_literal.gg`.
+#[test]
+fn callable_literal_at_consuming_positions() {
+    run_gg(
+        "callable_literal_at_consuming_positions.gg",
+        "2\n11\n7\n5\n2\n9\n2\n2\n2\n2\n4\n3\n6\n2\n2\n2\n2\n2\n12\n3",
+    );
+}
+
+/// The SIGNATURE half of the matrix above — `String(String)` and
+/// `String(String, int)` at the same write sites.
+///
+/// ⭐ IT IS THE HALF THAT DISCRIMINATES. Every `Callable[int(int)]` cell can
+/// read back correctly through the read path's `params: [], return_type: I64`
+/// fallback, so a materialization fix could be wrong at three of its four sites
+/// and every `int(int)` cell would still be green (Core #12).
+///
+/// ⚠ Lives in `tests/fixtures/self_host_gaps/`, NOT at top level, for the same
+/// mechanical reason as its two `cow_*` neighbours: every top-level fixture is
+/// auto-scanned into `runtime_parity_corpus`, the self-host lane SEGVs on a
+/// `Callable[String(String)]` struct field (`todo/t0969`), and Core #9 ⊕ forbids
+/// raising `RUNTIME_DIFF_NONMATCH_CEILING` for a round's own inflow. Rust-lane
+/// coverage (C and LLVM) is identical to a top-level fixture. The intended
+/// self-host behaviour is asserted by `sh_gap_callable_string_sig_struct_field`.
+///
+/// RED-verified against the pre-fix compiler: rc 139 on C and LLVM.
+#[test]
+fn callable_literal_signature_axis() {
+    run_gg(
+        "self_host_gaps/callable_literal_signature_axis.gg",
+        "hi!\nhi5\nhi!\nhi!\nhi!",
+    );
+}
+
+/// KNOWN SELF-HOST GAP (`todo/t0969`) — the self-host lane SEGVs on a
+/// `Callable[String(String)]` struct field where Rust gg prints `hi!`.
+///
+/// The Rust lane runs the same file correctly on both backends
+/// (`callable_literal_signature_axis` above), so this is a self-host-only lag,
+/// not a language question. Discriminated by signature, not by position: the
+/// `int(int)`, `int()` and `int(int, int)` cells of the same matrix all MATCH on
+/// the self-host lane (`callable_literal_at_consuming_positions`).
+#[test]
+#[ignore = "todo/t0969 — self-host: a Callable[String(String)] struct field SEGVs (rc 139) \
+where Rust gg prints the string on both backends; the int(int)/int()/int(int,int) cells of the \
+same matrix MATCH. Asserts the intended output on the self-host lane."]
+#[serial(self_host_lowerer_driver)]
+fn sh_gap_callable_string_sig_struct_field() {
+    assert_self_host_stdout(
+        "self_host_gaps/callable_literal_signature_axis.gg",
+        "sh_gap_callable_string_sig",
+        "hi!\nhi5\nhi!\nhi!\nhi!",
+    );
+}
+
+/// `todo/t0970` — the self-host typechecker types a closure PARAMETER from a
+/// LATER same-named local in the enclosing function.
+///
+/// Rust gg prints `5` then `2`. The self-host driver REJECTS the program:
+/// `error[E_UnsupportedOperator]: operator `+` is not defined for type `S`` —
+/// `S` being the type of `S p`, declared further down in `main`, while the
+/// closure's own parameter is `int p`.
+///
+/// ⚠ THE DISCRIMINATOR IS ORDER, which is what makes it a scoping defect rather
+/// than a shadowing rule: move the outer `S p` ABOVE the closure and the
+/// self-host lane compiles and MATCHES. The outer binding is not shadowing the
+/// parameter, it is overwriting it after the fact.
+///
+/// ⚠ Lives in `tests/fixtures/self_host_gaps/` for the Core #9 ⊕ reason its
+/// neighbours do. This test asserts the RUST lane, which is green; the
+/// self-host claim is `sh_gap_closure_param_shadowed_by_later_local`.
+#[test]
+fn sh_closure_param_shadowed_by_later_local() {
+    run_gg("self_host_gaps/sh_closure_param_shadowed_by_later_local.gg", "5\n2");
+}
+
+/// KNOWN SELF-HOST GAP (`todo/t0970`) — asserts the intended self-host output
+/// for the closure-parameter shadowing defect above.
+#[test]
+#[ignore = "todo/t0970 — self-host: a closure parameter's type is overwritten by a LATER \
+same-named local in the enclosing function, so the driver rejects `p + q` with \
+`operator + is not defined for type S`. Order-dependent: declaring the outer local FIRST \
+compiles and matches. Asserts the intended output on the self-host lane."]
+#[serial(self_host_lowerer_driver)]
+fn sh_gap_closure_param_shadowed_by_later_local() {
+    assert_self_host_stdout(
+        "self_host_gaps/sh_closure_param_shadowed_by_later_local.gg",
+        "sh_gap_closure_param_shadow",
+        "5\n2",
+    );
+}
+
+// `todo/t0873(a)` — a closure literal inside a CONTAINER LITERAL at a
+// declared-type position is still never materialized: the element lowers
+// through `materialize_for_slot`'s `SlotType::FromOperand`, which sizes the
+// accumulator from the ENV operand instead of the declared element type. rc 139
+// on both backends, at HEAD and with the consuming-position materialization
+// landed — it is a THIRD mechanism, not a missed position. Closing it is
+// sequenced behind `todo/t0406`'s signature-erased `Callable` mangle: a fix
+// that stops at the sizing gives a `String(String)` element that reads back
+// through the zero-parameter fallback (rc 0 garbage on C, rc 139 on LLVM).
+// This fixture is the stated BOUNDARY of `callable_literal_at_consuming_positions`
+// above: `S(<literal>)` is green, `S([<literal>])` is not.
 // Asserts the INTENDED output. Un-ignore + move out of known_gaps/ when graduating.
 #[test]
-#[ignore = "todo/t0937 — a closure literal at a constructor / enum-init argument is never \
-constructed; ASan stack-buffer-overflow, rc 139 on both backends. Asserts the intended output."]
-fn callable_literal_at_ctor_arg_overflows() {
-    run_gg("known_gaps/callable_literal_at_ctor_arg_overflows.gg", "2");
+#[ignore = "todo/t0873(a) — a closure literal inside a container literal at a declared-type \
+position is never materialized; rc 139 on both backends. Asserts the intended output."]
+fn known_gap_callable_literal_in_container_literal() {
+    run_gg("known_gaps/callable_literal_in_container_literal.gg", "2\n2");
+}
+
+// `todo/t0406` — the signature-ERASED `Callable` mangle, reached from the
+// Option payload rather than from a container element.
+// `mangle_type_for_name(Type::Function)` yields `"GorgetClosure"` with no
+// signature, so `Option[Callable[int(int)]]` and `Option[Callable[String(String)]]`
+// are ONE type (`Option__Callable__GorgetClosure`, one key per program) and the
+// second instantiation reads the first one's layout: rc 139 on C and LLVM.
+// ⚠ NO CLOSURE LITERAL IS INVOLVED — both payloads are NAMED functions, which
+// is what separates this from the materialization class and why it reproduces
+// unchanged at HEAD and with that fix landed.
+// Asserts the INTENDED output. Un-ignore + move out of known_gaps/ when graduating.
+#[test]
+#[ignore = "todo/t0406 — two different Callable signatures under the same generic enum share \
+one signature-erased mangled name; the second faults, rc 139 on both backends. Asserts the \
+intended output."]
+fn known_gap_option_callable_two_signatures_collide() {
+    run_gg("known_gaps/option_callable_two_signatures_collide.gg", "2\nhi!");
+}
+
+// `todo/t0704` — a closure captures a collection and a SIBLING argument of the
+// same aggregate init reallocs it, so the capture dangles.
+// ⚠ THE RESULT GOT WORSE-LOOKING, NOT BETTER, AND THAT IS THE POINT. Before
+// closure literals were materialized at consuming positions this shape was rc
+// 139 on both backends — it died on `todo/t0937` before the capture could be
+// read. It is now rc 0 printing `7` then `70`, where the definition and
+// `ggdef run` both say `7` then `7`, over a `heap-use-after-free` in
+// `__Closure_0__call` freed by `gorget_array_push`. A crash becoming a silently
+// wrong number is not an improvement (Core #8), so it is pinned here rather
+// than shipped unremarked.
+// ⚠ The instrument is C + ASan: under `--backend=llvm --sanitize` the same
+// program reports only a leak (`todo/t0731`, the sweep's second-lane gap).
+// `t0704` is explicit that the fix belongs at the CAPTURE boundary and not in
+// the prescan, and that the same program with no aggregate at all UAFs
+// identically — so this spelling is evidence for that item, not a new one.
+// Asserts the INTENDED output. Un-ignore + move out of known_gaps/ when graduating.
+#[test]
+#[ignore = "todo/t0704 — a closure's captured collection handle is a borrow bound at capture \
+time, so a sibling argument's realloc severs it; rc 0 printing 70 instead of 7 over a \
+use-after-free. Asserts the intended output."]
+fn known_gap_callable_capture_overlap_aggregate_init_uaf() {
+    run_gg("known_gaps/callable_capture_overlap_aggregate_init_uaf.gg", "7\n7");
+}
+
+// `todo/t0968` — COMPILER ICE (panic, not a diagnostic): an
+// `Option[Callable[T]]` nested inside a `Result` payload has no registered drop
+// fn and `src/lir/validate.rs:137` panics with "Drop completeness: enum
+// Result__Option__Callable__GorgetClosure__GorgetString has droppable variant
+// payload Ok_0 ... missing from type_drop_fns enum_variants".
+// ⚠ The discriminator is `Callable`, not nesting: `Result[Option[String], String]`
+// with the same shape builds and prints `hi`, and both one-level forms build and
+// run. Reproduces identically at HEAD and with the consuming-position
+// materialization landed, and never reaches codegen — the write site is drop-fn
+// REGISTRATION, the same family as `todo/t0948`.
+// ⚠⚠ THE TWO COMPILER PROFILES DISAGREE. `assert_module_valid` runs the LIR
+// validators unconditionally under `cfg!(debug_assertions)` and is a NO-OP in
+// release, so a DEBUG `gg` ICEs while a RELEASE `gg` builds this and prints the
+// correct `2` — LEAKING the payload the validator named (8 bytes in 1
+// allocation). This test is therefore RED in debug and GREEN under `--release`;
+// the known-gaps census runs `target/debug/deps/`, so it reads RED and owes no
+// `PASSING_ALLOWLIST` row. A `--release --ignored` pass here means nothing.
+// Asserts the INTENDED output. Un-ignore + move out of known_gaps/ when graduating.
+#[test]
+#[ignore = "todo/t0968 — Option[Callable] inside a Result payload has no registered drop fn \
+and the LIR drop-completeness check ICEs. Asserts the intended output."]
+fn known_gap_result_option_callable_drop_completeness_ice() {
+    run_gg("known_gaps/result_option_callable_drop_completeness_ice.gg", "2");
+}
+
+// `todo/t0971` — `Option[Option[Callable[T]]]` leaks its captured env because
+// the OUTER generic enum's drop fn is NEVER EMITTED. Counted in the emitted C:
+// `Option__Callable__GorgetClosure__drop` (inner) has 2 hits and is correct;
+// `Option__Option__Callable__GorgetClosure__drop` (outer) has ZERO. The program
+// prints the CORRECT `true` on both backends — the value is right, the memory
+// is not.
+// ⭐ The discriminator is `Callable`, and it is earned by a HEAP-FORCED twin:
+// the same shape with `Option[Option[String]]` whose VALUE is 42 characters (a
+// 41-char literal plus a runtime-concatenated digit, so it cannot sit in the
+// small-string buffer) is ASan-CLEAN on C and LLVM, and its outer drop
+// `Option__Option__GorgetString__drop` has 3 hits (declared, defined, CALLED).
+// ⚠⚠ THE FIXTURE CONTAINS NO `match`, DELIBERATELY. An earlier revision matched
+// on the value and CONFLATED this with `todo/t0972` (a match arm's moved-out
+// binding), which is NOT `Callable`-specific — with a match, the heap-forced
+// String twin leaks too, so the conflated fixture could not support this item's
+// central claim. `.is_some()` touches no arm.
+// ⚠ It owns one of the records `callable_literal_at_consuming_positions`
+// tolerates in the leak allowlist — measured by deleting that cell in situ
+// (16 -> 15) — so that row does NOT retire on `todo/t0948` alone.
+// Asserts the INTENDED ASan-clean run, so it is RED at HEAD.
+#[test]
+#[ignore = "todo/t0971 — the OUTER enum's drop fn is never emitted for \
+Option[Option[Callable[T]]], so the captured env leaks (8 bytes in 1 allocation) while the \
+program prints the correct value. Asserts the intended ASan-clean run."]
+fn known_gap_nested_option_callable_outer_drop_never_emitted() {
+    assert_gg_sanitize_clean("known_gaps/nested_option_callable_outer_drop_never_emitted", "true");
+}
+
+// `todo/t0972` — matching a CALL RESULT never drops the moved-out payload;
+// matching the same value through a LOCAL does.
+// ⭐ THE WHOLE DEFECT IS ONE TOKEN: hoisting `match make_ok():` to
+// `Result[T, String] r = make_ok()` + `match r:` is ASan-CLEAN. That control is
+// what fixes the axis as CALL-RESULT-vs-LOCAL. In the arm the payload is copied
+// out and the enum slot is `memset` to zero, so the enum's drop frees nothing;
+// the local form additionally emits a free for the moved-out BINDING and the
+// call-result form does not.
+// ⚠⚠ SCOPE CORRECTED, AND THE NAME WITH IT — THIS IS NOT A `Callable` DEFECT.
+// It was filed as one on the strength of a `String` control that read CLEAN;
+// that control used a SHORT String literal, which never leaves the small-string
+// buffer and allocates nothing. With a HEAP-FORCED String — a 42-character
+// VALUE, a 41-char literal plus a runtime-concatenated digit, so 43 bytes is
+// 42 + NUL — the `Result[String, String]` twin on the call result leaks 43
+// bytes in 1 allocation on C AND LLVM, while its LOCAL twin is clean.
+// The fixture now carries BOTH payload types so it cannot drift back, and it is
+// named `..._payload_...` rather than `..._callable_...` because a fixture's
+// name is a claim about scope (Core #12).
+// ⚠⚠ THE CLEAN LOCAL-SCRUTINEE CONTROL IS A CELL, NOT PROSE. Without it a
+// future fix could free the call-result binding while REGRESSING the local form
+// and this fixture would still go green (Core #12). The two control cells add
+// ZERO leak records — 51 B / 2 allocations before and after — so the RED is
+// exactly the two call-result cells.
+// ⚠ Also one of the records `callable_literal_at_consuming_positions` tolerates.
+// Asserts the INTENDED ASan-clean run, so it is RED at HEAD.
+#[test]
+#[ignore = "todo/t0972 — a match on a CALL RESULT never drops the moved-out binding while the \
+same match on a LOCAL scrutinee is clean; 51 bytes in 2 allocations here (a Callable env and a \
+heap-forced String). Asserts the intended ASan-clean run."]
+fn known_gap_match_call_result_payload_binding_never_dropped() {
+    assert_gg_sanitize_clean(
+        "known_gaps/match_call_result_payload_binding_never_dropped",
+        concat!(
+            "2\nabcdefghijklmnopqrstuvwxyz0123456789ABCD_1\n",
+            "3\nabcdefghijklmnopqrstuvwxyz0123456789ABCD_2",
+        ),
+    );
 }
 
 // `todo/t0938` — COMPILER ICE on ratified syntax. Moving a `Callable` local with

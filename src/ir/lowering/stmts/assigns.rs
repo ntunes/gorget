@@ -1063,6 +1063,13 @@ fn emit_field_store_with_cleanup(
     // — see `LoweringContext::coerce_null_to_option_none`. No-op for
     // non-Null operands and non-Option target types.
     let rhs_owned = ctx.coerce_null_to_option_none(builder, rhs.clone(), field_type);
+    // A1M-PACK-SITE (4/6): projected field store (`s.f = <closure literal>`).
+    // The LIR packer is gated on a projection-free destination
+    // (`lir/lower/insts.rs`), so a projected store never packs — do it here at
+    // the write site instead (Core #1).
+    let rhs_owned = crate::ir::lowering::exprs::pack_closure_at_dest_type(
+        ctx, builder, rhs_owned, field_type,
+    );
     let rhs = &rhs_owned;
     emit_field_drop_if_needed(ctx, builder, target_place, field_type);
     maybe_unregister_string_temp(ctx, builder, rhs, field_type);

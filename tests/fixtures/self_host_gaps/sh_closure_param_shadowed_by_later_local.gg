@@ -1,0 +1,44 @@
+# `todo/t0970` — the SELF-HOST typechecker types a closure PARAMETER from a
+# LATER same-named local in the ENCLOSING function.
+#
+# The closure below declares `int p`, so `p + q` is `int + int`. The self-host
+# lane instead reports
+#   error[E_UnsupportedOperator]: operator `+` is not defined for type `S`
+# — the type of `S p`, a local declared FURTHER DOWN in `main`. No binary is
+# produced. Rust gg compiles and runs it.
+#
+# ⚠ THE DISCRIMINATOR IS ORDER, WHICH IS WHAT MAKES IT A SCOPING BUG RATHER
+# THAN A SHADOWING RULE. Move `S p = S(inc)` ABOVE the closure and the
+# self-host lane compiles and MATCHES. So the outer binding is not shadowing
+# the parameter, it is OVERWRITING it after the fact — a function-wide type
+# environment where the last writer wins, rather than a scope the closure's own
+# parameters close over.
+# ⊕ It is not specific to a constructor argument either: the same closure
+# passed as a plain CALL argument fails the same way with the same message.
+#
+# ⚠ LIVES IN `tests/fixtures/self_host_gaps/`, NOT AT TOP LEVEL: every top-level
+# `tests/fixtures/*.gg` is auto-scanned into `runtime_parity_corpus`, this one is
+# a DRIVER-FAIL row on the self-host lane, and Core #9 ⊕ forbids raising
+# `RUNTIME_DIFF_NONMATCH_CEILING` for a round's own inflow. The Rust-lane
+# coverage is unchanged (`run_gg` runs it like any fixture); the self-host claim
+# is asserted by the `#[ignore]`d `sh_gap_closure_param_shadowed_by_later_local`,
+# which drives the lane directly.
+#
+# INTENDED (both lanes): prints 5 then 2.
+struct Ar2:
+    Callable[int(int, int)] f
+
+struct S:
+    Callable[int(int)] f
+
+int inc(int x):
+    return x + 1
+
+void main():
+    Ar2 g = Ar2((int p, int q): p + q)
+    Callable[int(int, int)] gg = g.f.clone()
+    print(gg(2, 3))
+
+    S p = S(inc)
+    Callable[int(int)] gp = p.f.clone()
+    print(gp(1))

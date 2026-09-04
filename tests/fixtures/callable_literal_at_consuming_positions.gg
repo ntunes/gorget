@@ -1,0 +1,182 @@
+# A closure LITERAL written DIRECTLY at a declared-type consuming position.
+#
+# The capture ENV a closure literal lowers to is not the two-word
+# `GorgetClosure` that `Callable[T]` denotes; something has to materialize it.
+# The LIR packer is reached only from an assignment whose destination is a
+# projection-free LOCAL, so every position whose destination is a FIELD, a
+# PAYLOAD, an ELEMENT or a PROJECTION stored the raw env and then read
+# `sizeof(GorgetClosure)` bytes back out of it. This fixture pins the
+# materialization at each of those positions.
+#
+# ⚠ SCOPE — read the name precisely: the literal is the DIRECT operand at the
+# destination. A literal inside a CONTAINER LITERAL in the same declared-type
+# position (`S([lit])`, `Vector[Callable[T]] fs = [lit]`) is a third
+# materialization mechanism and is NOT covered here — see
+# `known_gaps/callable_literal_in_container_literal.gg`.
+#
+# ⚠ THE SIGNATURE AXIS LIVES NEXT DOOR, AND IT IS NOT OPTIONAL COVERAGE. A
+# `Callable[int(int)]` cell can read back correctly through a
+# `params: [], return_type: I64` fallback, so `int(int)` alone cannot tell a
+# materialized closure from a recovered one. The `String(String)` and
+# `String(String, int)` cells that DO discriminate are in
+# `self_host_gaps/callable_literal_signature_axis.gg` — same Rust-lane
+# coverage, parked out of the auto-scanned parity corpus because the self-host
+# lane SEGVs on a `Callable[String(String)]` struct field (`todo/t0969`).
+# Arity-0 and arity-2 stay here: they discriminate too (they faulted with a
+# DIFFERENT signal, SIGILL rather than SIGSEGV) and the self-host handles them.
+#
+# ⚠ EVERY READ BINDS THE CLONE TO A TYPED LOCAL FIRST. Calling straight through
+# `s.f.clone()(x)` is a DIFFERENT defect (`todo/t0406(b)`: a method-call result
+# used as the callee loses its signature) and it still faults for a
+# `String(String)` closure. Binding keeps this fixture measuring materialization.
+
+struct S:
+    Callable[int(int)] f
+
+struct Ar0:
+    Callable[int()] f
+
+struct Ar2:
+    Callable[int(int, int)] f
+
+struct Inner:
+    Callable[int(int)] f
+
+struct Outer:
+    Inner i
+
+int inc(int x):
+    return x + 1
+
+S make_s():
+    return S((int x): x + 1)
+
+Result[Callable[int(int)], String] make_ok():
+    return Ok((int x): x + 1)
+
+# The `throws` auto-`Ok` wrap, BOTH body forms — and they are two DIFFERENT
+# write sites, which is the whole reason both are here. A RETURN STATEMENT
+# wraps with a raw `enum_init` (it does its own ownership transfer), while an
+# EXPRESSION BODY wraps through `emit_enum_init_owned`. The second was green
+# while the first was rc 139 on both backends, so the position looked covered
+# and was not.
+Callable[int(int)] mk_block() throws String:
+    return (int x): x + 1
+
+Callable[int(int)] mk_expr() throws String: (int x): x + 3
+
+void main():
+    # ---- 1. struct-field init -------------------------------------------
+    S a = S((int x): x + 1)
+    Callable[int(int)] ga = a.f.clone()
+    print(ga(1))                                # 2
+
+    int base = 10
+    S b = S((int x): x + base)                  # capturing (heap-forced env)
+    Callable[int(int)] gb = b.f.clone()
+    print(gb(1))                                # 11
+
+    Ar0 e = Ar0((): 7)
+    Callable[int()] ge = e.f.clone()
+    print(ge())                                 # 7
+
+    # ⚠ The parameters are `u`/`w` and not `p`/`q` for a REASON, and it is a
+    # filed defect rather than taste: the self-host typechecker types a closure
+    # PARAMETER from a LATER same-named local in the enclosing function, so
+    # spelling this `(int p, int q)` while `S p` is declared further down makes
+    # the self-host lane reject `p + q` with "operator `+` is not defined for
+    # type `S`" — order-dependent, and only when the outer local comes AFTER.
+    # `todo/t0970`, pinned by `self_host_gaps/sh_closure_param_shadowed_by_later_local.gg`.
+    Ar2 g = Ar2((int u, int w): u + w)
+    Callable[int(int, int)] gg = g.f.clone()
+    print(gg(2, 3))                             # 5
+
+    # ---- 2. tuple-element init ------------------------------------------
+    (int, Callable[int(int)]) t = (7, (int x): x + 1)
+    Callable[int(int)] gt = t._1.clone()
+    print(gt(1))                                # 2
+
+    (int, Callable[int()]) t3 = (7, (): 9)
+    Callable[int()] gt3 = t3._1.clone()
+    print(gt3())                                # 9
+
+    # ---- 3. enum-payload init -------------------------------------------
+    Option[Callable[int(int)]] o = Some((int x): x + 1)
+    match o:
+        case Some(h):
+            print(h(1))                         # 2
+        else:
+            print(0)
+
+    # Nested: the INNER `Some` must resolve to the INNER Option. When the
+    # payload was lowered against the OUTER `Option[Option[Callable]]`, the
+    # inner enum_init was emitted with the OUTER enum's type.
+    Option[Option[Callable[int(int)]]] o3 = Some(Some((int x): x + 1))
+    match o3:
+        case Some(mid):
+            match mid:
+                case Some(h3):
+                    print(h3(1))                # 2
+                else:
+                    print(0)
+        else:
+            print(0)
+
+    # `Ok(<literal>)` returned across a function boundary. At HEAD this one is
+    # not a fault at all: it exits 0 and prints NOTHING.
+    match make_ok():
+        case Ok(h4):
+            print(h4(1))                        # 2
+        case Error(msg):
+            print(msg)
+
+    Callable[int(int)] gtb = mk_block()! catch (why): inc
+    print(gtb(1))                               # 2
+
+    Callable[int(int)] gte = mk_expr()! catch (why2): inc
+    print(gte(1))                               # 4
+
+    # ---- 4. projected field store ---------------------------------------
+    S p = S(inc)
+    p.f = (int x): x + 2
+    Callable[int(int)] gp = p.f.clone()
+    print(gp(1))                                # 3
+
+    Outer q = Outer(Inner(inc))
+    q.i.f = (int x): x + 5
+    Callable[int(int)] gq = q.i.f.clone()
+    print(gq(1))                                # 6
+
+    # ---- 5. the same positions, one level down --------------------------
+    Outer r = Outer(Inner((int x): x + 1))
+    Callable[int(int)] gr = r.i.f.clone()
+    print(gr(1))                                # 2
+
+    S s = make_s()
+    Callable[int(int)] gs = s.f.clone()
+    print(gs(1))                                # 2
+
+    Vector[S] v = []
+    v.push(S((int x): x + 1))
+    Callable[int(int)] gv = v.get(0).unwrap().f.clone()
+    print(gv(1))                                # 2
+
+    Dict[String, S] m = {}
+    m.put("k", S((int x): x + 1))
+    Callable[int(int)] gm = m.get("k").unwrap().f.clone()
+    print(gm(1))                                # 2
+
+    # ---- CONTROLS: these were already correct and must stay correct ------
+    S ctl1 = S(inc)                             # a NAMED function, not a literal
+    Callable[int(int)] g1 = ctl1.f.clone()
+    print(g1(1))                                # 2
+
+    Callable[int(int)] named = (int x): x + base
+    S ctl2 = S(^named)                          # an already-packed local, moved
+    Callable[int(int)] g2 = ctl2.f.clone()
+    print(g2(2))                                # 12
+
+    Vector[Callable[int(int)]] fs = []
+    fs.push(inc)
+    fs[0] = (int x): x + 2                      # an INDEX store: a call, already packed
+    print(fs[0](1))                             # 3

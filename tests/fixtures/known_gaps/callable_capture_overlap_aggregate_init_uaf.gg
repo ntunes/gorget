@@ -1,0 +1,43 @@
+# `todo/t0704` — a closure captures a collection, a SIBLING argument of the
+# same aggregate init reallocs it, and the capture dangles.
+#
+# ⚠ WHY THIS FIXTURE EXISTS AND WHAT CHANGED. Before closure literals were
+# materialized at consuming positions, this shape was rc 139 on both backends —
+# it died on `todo/t0937`'s never-constructed closure before the capture could
+# be read at all. It is now rc 0, and it prints a WRONG ANSWER over a
+# use-after-free: `7` then `70`, where both the language definition and
+# `ggdef run` say `7` then `7`. A crash becoming a silently wrong number is
+# NOT an improvement (Core #8), which is why this is pinned here rather than
+# left unremarked.
+#
+# MECHANISM (`todo/t0704`, CRITICAL, filed 2026-08-27): a closure's captured
+# collection handle is a BORROW bound at capture time, so any realloc of the
+# source severs it — wherever the realloc is spelled. `t0704` is explicit that
+# this is NOT a prescan gap and that the fix belongs at the capture boundary.
+# The aggregate-init spelling below adds a sibling-evaluation-order dimension
+# (`docs/define-gorget/decisions.md` D10(b) Addendum 3: reason about emission
+# ORDER, not merely emission) but does not change the root: the same program
+# with NO aggregate at all UAFs identically.
+#
+# ⚠ THE REALLOC IS LOAD-BEARING — 5000 pushes, not one. ⚠ AND THE INSTRUMENT
+# IS C+ASan: under `--backend=llvm --sanitize` this reports only a leak, no
+# use-after-free (`todo/t0731`, the sweep's second-lane gap).
+#
+# INTENDED: prints 7 then 7, ASan-clean.
+struct Pair:
+    Callable[int(int)] f
+    int n
+
+int mutate(Vector[int] &v):
+    int i = 0
+    while i < 5000:
+        v.push(i)
+        i = i + 1
+    return 0
+
+void main():
+    Vector[int] v = [1]
+    Pair p = Pair((int x): x + v.get(0).unwrap(), mutate(&v))
+    Callable[int(int)] g = p.f.clone()
+    print(6 + v.get(0).unwrap())
+    print(g(6))

@@ -1,0 +1,39 @@
+# `todo/t0406` — the signature-ERASED `Callable` mangle, at the Option payload.
+#
+# `mangle_type_for_name(Type::Function)` yields `"GorgetClosure"` with no
+# signature in it, so `Option[Callable[int(int)]]` and
+# `Option[Callable[String(String)]]` are ONE type — `Option__Callable__GorgetClosure`,
+# one key per program. The second instantiation reads the first one's layout
+# and the program faults on the second call.
+#
+# ⚠ NO CLOSURE LITERAL ANYWHERE. Both payloads are NAMED functions, which is
+# what separates this from the closure-materialization class
+# (`tests/fixtures/callable_literal_at_consuming_positions.gg`): that one is
+# about a literal never being packed, this one is about two different types
+# sharing a name. Measured rc 139 on C and LLVM at HEAD and with the
+# materialization fix landed — the two are independent.
+#
+# The same erasure is what `todo/t0406` records for container elements
+# (`Vector[Callable[…]]`'s element resolving as `fn() -> i64`); this is the same
+# write site reached from the Option payload instead.
+#
+# INTENDED: prints 2 then hi!
+int inc(int x):
+    return x + 1
+
+String bang(String x):
+    return x + "!"
+
+void main():
+    Option[Callable[int(int)]] o = Some(inc)
+    Option[Callable[String(String)]] o2 = Some(bang)
+    match o:
+        case Some(h):
+            print(h(1))
+        else:
+            print(0)
+    match o2:
+        case Some(h2):
+            print(h2("hi"))
+        else:
+            print("none")

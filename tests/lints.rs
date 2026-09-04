@@ -9308,15 +9308,25 @@ fn sanitize_allowlists_shrink_only() {
     // `callable_callee_shape_axis`, is CLEAN and owes no row. Both counts taken
     // from the sweep's own `verdicts.tsv` column 4 under a restricted `FIXLIST`.
     // See the `⚖ ADMITTED (R48 Track U)` block in the allowlist.
-    // ⚖ And 307 -> 293 -> back through this round: R49 Track E DELETED that row
-    // and its block. The fixture it covered, `hof_implicit_it_collection_axis`,
-    // was a regression net for a construct the language no longer has — the
-    // implicit-`it` closure parameter — so the row retires with the fixture, not
-    // with `todo/t0953`, which still owns the class and still has its own rows.
+    // ⚖ And 307 -> 293 with R49 Track E: it DELETED that row and its block. The
+    // fixture it covered was a regression net for a construct the language no
+    // longer has — the implicit-`it` closure parameter — so the row retires with
+    // the fixture, not with `todo/t0953`, which still owns the class.
     // ⛔ NOT A BURN-DOWN. Nothing was fixed; a leaking program stopped being
-    // spellable. Read the drop as corpus shrinkage, and do not count it toward
-    // the debt trend.
-    const LEAK_CEILING: usize = 293;
+    // spellable. Read the drop as corpus shrinkage, not debt paid.
+    // ⚠⚖ Then 293 -> 294 with R49 Track A1-M's ONE row,
+    // `callable_literal_at_consuming_positions`. ⛔ THAT ONE IS FLAGGED AS AN
+    // OWNER ASK IN THE ALLOWLIST, NOT SLIPPED IN UNDER A STANDING RULING. It is a
+    // graduation (`todo/t0937`'s repro, widened out of `known_gaps/`), which is
+    // the shape R48's extension covers — but the honest reading is that the
+    // BYTES are NEW: at HEAD those positions never constructed the closure at
+    // all, so they allocated nothing and could not leak. Fixing the
+    // memory-unsafety is what makes the allocation happen.
+    // ⚠ The class is NOT single, and the first two attempts to say so were
+    // falsified by measurement: the row retires only when ALL THREE of
+    // `todo/t0948`, `todo/t0971` and `todo/t0972` land. See the two marked
+    // CORRECTION blocks in the allowlist — they are kept deliberately.
+    const LEAK_CEILING: usize = 294;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -9484,8 +9494,15 @@ fn sanitize_allowlists_shrink_only() {
     // numbers R48 Track U added. ⛔ Again NOT a burn-down — the fixture was
     // deleted because the construct was removed from the language, so the
     // records did not stop leaking, they stopped being reachable.
-    const LEAK_CLASS_PAIRS: usize = 500;
-    const LEAK_RECORDS: usize = 2286;
+    // ⚠⚖ Then both rise with R49 Track A1-M's ONE row: +1 (fixture, class) pair
+    // tolerating +16 leak records, class `__gorget_closure_env_alloc`, count
+    // EXACT (no `*N+` marker, so LEAK_LOOSE_SIGNATURES is unchanged). Measured
+    // on BOTH lanes by hand because the sweep is C-only (`todo/t0731`):
+    // `gg build --sanitize` and `--backend=llvm --sanitize` each report the same
+    // 16 allocations, all `__gorget_closure_env_alloc`, and no corruption.
+    // See the `⚠⚠ OWNER ASK` block in the allowlist.
+    const LEAK_CLASS_PAIRS: usize = 501;
+    const LEAK_RECORDS: usize = 2302;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────
@@ -28128,6 +28145,118 @@ fn done_md_round_close_shapes_are_pinned() {
          drifted past. ⚠ A round CLOSE moves both counts and will land here: that is the \
          records commit's own chore, and it is the moment to confirm the anchors get re-seeded \
          at the next round open.\n\n{text}"
+    );
+}
+
+/// Ratchet (Core #4 "one fix, all siblings" / Layering-discipline "Sibling-site
+/// drift"): every AST-lowering site that writes a value into a destination with
+/// a DECLARED `Callable` type must route the operand through the single packer
+/// `pack_closure_at_dest_type`, so a new consuming position cannot silently
+/// store the raw capture env again.
+///
+/// The six sites, each holding its destination's TypeId at the write:
+///   1. `exprs/mod.rs`   — struct-field init  (`lower_struct_literal`)
+///   2. `exprs/mod.rs`   — tuple-element init (`Expr::TupleLiteral`)
+///   3. `context.rs`     — enum-variant payload (`emit_enum_init_owned`)
+///   4. `stmts/assigns.rs` — projected field store (`emit_field_store_with_cleanup`)
+///   5. `exprs/mod.rs`   — prelude-enum payload (`lower_prelude_variant_payload`,
+///      shared by `Some` / `Ok` / `Error`; it packs BEFORE the enum's own type
+///      is inferred from the operand)
+///   6. `stmts/mod.rs`   — the `throws` auto-`Ok` wrap on a RETURN STATEMENT,
+///      the one Ok-wrap that calls `builder.enum_init` directly instead of
+///      routing through site 3 (it does its own ownership transfer)
+///
+/// ⚠ SITES 3 AND 6 ARE THE SAME POSITION REACHED TWO WAYS, AND THE ASYMMETRY IS
+/// WHY THE ENUMERATION LOOKED TOTAL WHEN IT WAS NOT. A `throws` function with an
+/// EXPRESSION body wraps through `wrap_expr_tail_in_ok` -> site 3 and was green;
+/// the same function with a `return` statement wraps with a raw `enum_init` and
+/// was rc 139 on both backends. Both body forms are cells in
+/// `callable_literal_at_consuming_positions.gg`; the expression form is also the
+/// ONLY cell that covers site 3, verified by deleting site 3 and watching it go
+/// rc 139.
+///
+/// ⭐ **THIS LINT IS THE ONLY THING PINNING SITE 5, AND THAT IS DELIBERATE.**
+/// Neutralised one at a time, sites 1, 2, 3, 4 and 6 each take
+/// `callable_literal_at_consuming_positions.gg` to rc 139. **Site 5 does not**,
+/// and no fixture can make it: every `lower_prelude_variant_payload` caller
+/// goes on to `emit_enum_init_owned`, so site 3 packs whatever site 5 did not,
+/// and the operand-derived Option-name lookup that site 5's pack feeds is
+/// rescued by the peeled-`expected_type` fallback (probed with
+/// `auto o = Some(<lit>)` and with `Some(<lit>)` at a call argument — both
+/// green with site 5 neutralised). Its pack is kept so the prelude payload is
+/// materialized AT its own position rather than by a downstream site; this
+/// count is what stops it being deleted silently. ⚠ Do NOT read that as "site 5
+/// is redundant, drop it": the PEEL in the same helper is load-bearing, and
+/// removing it puts `Some(Some(<literal>))` back to rc 139.
+///
+/// ⚠ WHAT THIS GUARD CANNOT SEE, SAID PLAINLY (Core #15e Q2). It counts CALLS,
+/// so it catches a site being deleted, renamed or duplicated — but a brand-new
+/// consuming position that never calls the packer at all has no call to count,
+/// and this lint stays green while that position stores a raw env. Two known
+/// positions are in exactly that state today and are pinned by fixtures
+/// instead: container-literal elements (`todo/t0873(a)`,
+/// `known_gaps/callable_literal_in_container_literal.gg`) and `Box[Callable]`'s
+/// ctor spelling (`todo/t0681`). The witness that WOULD catch its own class is
+/// a type-pair check below the position layer — at the LIR store boundary, a
+/// destination slot of `Struct(GorgetClosure)` fed by a value whose slot is a
+/// TypeDef with `is_closure_env: true` and no `ClosurePack` emitted — and it is
+/// unbuilt.
+///
+/// **If this fails because the count went UP:** a new site was added. Confirm it
+/// passes the DESTINATION's declared TypeId (never the source's inferred type),
+/// give it an `A1M-PACK-SITE (n/N)` marker, and bump both constants with the
+/// position named.
+/// **If it went DOWN:** a consuming position stopped materializing. That is the
+/// `todo/t0937` class coming back — do not lower the constant to match; find
+/// which site went away.
+#[test]
+fn closure_pack_at_dest_type_call_sites() {
+    /// Baseline 2026-09-03 (R49 Track A1-M): 6 call sites, 6 markers.
+    /// 5 -> 6 the same day, on the output review's B1: `return <closure literal>`
+    /// from a `throws` function was a live, unfiled member of the class.
+    const EXPECTED_CALLS: usize = 6;
+    const EXPECTED_MARKERS: usize = 6;
+
+    let mut calls: Vec<String> = Vec::new();
+    let mut markers: Vec<String> = Vec::new();
+    for path in walkdir_rs("src") {
+        let Ok(text) = fs::read_to_string(&path) else { continue };
+        for (i, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") || trimmed.starts_with("///") {
+                if trimmed.contains("A1M-PACK-SITE (") {
+                    markers.push(format!("{}:{}", path.display(), i + 1));
+                }
+                continue;
+            }
+            // The definition itself is `fn pack_closure_at_dest_type(`.
+            if line.contains("pack_closure_at_dest_type(") && !line.contains("fn pack_closure_at_dest_type(") {
+                calls.push(format!("{}:{}", path.display(), i + 1));
+            }
+        }
+    }
+
+    assert_eq!(
+        calls.len(),
+        EXPECTED_CALLS,
+        "`pack_closure_at_dest_type` call-site count changed: {} vs expected {EXPECTED_CALLS}.\n\
+         Sites found:\n  {}\n\n\
+         UP: a new consuming position appeared — verify it passes the DESTINATION's declared \
+         TypeId, mark it `A1M-PACK-SITE (n/N)`, and bump both constants.\n\
+         DOWN: a position stopped materializing its closure literal — that is `todo/t0937` \
+         reopening. Find the removed site; do NOT lower the constant to match.",
+        calls.len(),
+        calls.join("\n  "),
+    );
+    assert_eq!(
+        markers.len(),
+        EXPECTED_MARKERS,
+        "`A1M-PACK-SITE` marker count changed: {} vs expected {EXPECTED_MARKERS}.\n\
+         Markers found:\n  {}\n\n\
+         Every call site carries one so a reader can tell WHICH position moved when the count \
+         above trips.",
+        markers.len(),
+        markers.join("\n  "),
     );
 }
 

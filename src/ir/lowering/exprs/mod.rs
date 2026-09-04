@@ -646,9 +646,14 @@ fn lower_expr_inner(
             let mut operands: Vec<Operand> = elems.iter()
                 .enumerate()
                 .map(|(i, e)| {
-                    ctx.func_state.expected_type = dest_tuple
+                    let elem_ty = dest_tuple
                         .map(|tup| resolve_tuple_field_type(ctx, tup, i));
-                    let op = lower_expr(ctx, builder, e);
+                    ctx.func_state.expected_type = elem_ty;
+                    let mut op = lower_expr(ctx, builder, e);
+                    // A1M-PACK-SITE (2/6): tuple-element init.
+                    if let Some(t) = elem_ty {
+                        op = pack_closure_at_dest_type(ctx, builder, op, t);
+                    }
                     ctx.func_state.expected_type = saved_expected;
                     op
                 })
@@ -1808,6 +1813,39 @@ fn lower_expr_inner(
     }
 }
 
+/// Lower a prelude-variant payload (`Some(x)` / `Ok(x)` / `Error(x)`) against
+/// its OWN declared payload type instead of against the enclosing enum's type.
+///
+/// Two things depend on that, and both were wrong before (Core #4 — the three
+/// variants are an enumerated sibling set; one helper, not three copies):
+/// - the payload expression sees the type it is actually stored into, so a
+///   nested `Some(Some(x))` resolves the INNER Option rather than inheriting
+///   the outer one (devbook/24 rule 4 — resolve once, write through);
+/// - a closure literal is materialized at the payload boundary, which is what
+///   makes `Some(<literal>)` store a real `GorgetClosure` rather than the raw
+///   capture env — see `pack_closure_at_dest_type`.
+///
+/// `payload_ty` is `None` only when the destination type is genuinely unknown,
+/// in which case this is exactly the previous behaviour.
+fn lower_prelude_variant_payload(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    arg: &Spanned<Expr>,
+    payload_ty: Option<TypeId>,
+) -> Operand {
+    let saved = ctx.func_state.expected_type;
+    if let Some(pt) = payload_ty {
+        ctx.func_state.expected_type = Some(pt);
+    }
+    let op = lower_expr(ctx, builder, arg);
+    ctx.func_state.expected_type = saved;
+    match payload_ty {
+        // A1M-PACK-SITE (5/6): prelude-enum payload (`Some`/`Ok`/`Error`).
+        Some(pt) => pack_closure_at_dest_type(ctx, builder, op, pt),
+        None => op,
+    }
+}
+
 /// Lower a struct literal (constructor call).
 /// Resolve Option/Result variant constructors (Some, None, Ok, Error) with type-aware logic.
 /// Returns Some(operand) if the call is a recognized built-in variant, None otherwise.
@@ -1820,7 +1858,20 @@ fn resolve_option_result_variant(
     match name {
         "Some" if args.len() == 1 => {
             let arg_span = args[0].span;
-            let field_op = lower_expr(ctx, builder, &args[0]);
+            // The Option type below is resolved from the OPERAND
+            // (`Option__<inferred>`), falling back to the ambient
+            // `expected_type` when that name is unregistered. A closure
+            // literal's operand is the raw capture env, so `Option____Closure_N`
+            // never resolves and the fallback fires — and for a NESTED
+            // `Some(Some(<literal>))` the ambient expected type is the OUTER
+            // `Option[Option[Callable]]`, so the INNER enum_init was emitted
+            // with the OUTER enum's type. Lowering the payload against its own
+            // declared type fixes both halves. (With an `int` payload the bug
+            // is invisible: `Option__int64_t` is pre-registered, so the
+            // operand-derived name resolves and the fallback never runs.)
+            let payload_ty = ctx.func_state.expected_type
+                .and_then(|et| option_some_payload_type(ctx, et));
+            let field_op = lower_prelude_variant_payload(ctx, builder, &args[0], payload_ty);
             let inner_type = infer_operand_type_full(ctx, &field_op, builder);
             let mangled = format!("Option__{}", format_type_for_mangle(inner_type, &ctx.type_registry));
             let type_id = ctx.type_mapper.lookup_named(&mangled)
@@ -1874,7 +1925,8 @@ fn resolve_option_result_variant(
                 let name = ctx.type_registry.type_name(et).unwrap_or_default();
                 let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result);
                 if is_result {
-                    let field_op = lower_expr(ctx, builder, &args[0]);
+                    let payload_ty = Some(extract_result_field_types(ctx, et).0);
+                    let field_op = lower_prelude_variant_payload(ctx, builder, &args[0], payload_ty);
                     let dst = ctx.emit_enum_init_owned(builder, &name, "Ok", et, vec![field_op], Some(vec![Some(arg_span)]));
                     return Some(FunctionBuilder::copy(dst));
                 }
@@ -1884,7 +1936,8 @@ fn resolve_option_result_variant(
                 let name = ctx.type_registry.type_name(rt).unwrap_or_default();
                 let is_result = ctx.type_registry.enum_category(rt) == Some(EnumCategory::Result);
                 if is_result {
-                    let field_op = lower_expr(ctx, builder, &args[0]);
+                    let payload_ty = Some(extract_result_field_types(ctx, rt).0);
+                    let field_op = lower_prelude_variant_payload(ctx, builder, &args[0], payload_ty);
                     let dst = ctx.emit_enum_init_owned(builder, &name, "Ok", rt, vec![field_op], Some(vec![Some(arg_span)]));
                     return Some(FunctionBuilder::copy(dst));
                 }
@@ -1900,7 +1953,8 @@ fn resolve_option_result_variant(
                 let name = ctx.type_registry.type_name(et).unwrap_or_default();
                 let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result);
                 if is_result {
-                    let field_op = lower_expr(ctx, builder, &args[0]);
+                    let payload_ty = Some(extract_result_field_types(ctx, et).1);
+                    let field_op = lower_prelude_variant_payload(ctx, builder, &args[0], payload_ty);
                     let dst = ctx.emit_enum_init_owned(builder, &name, "Error", et, vec![field_op], Some(vec![Some(arg_span)]));
                     return Some(FunctionBuilder::copy(dst));
                 }
@@ -1909,7 +1963,8 @@ fn resolve_option_result_variant(
                 let name = ctx.type_registry.type_name(rt).unwrap_or_default();
                 let is_result = ctx.type_registry.enum_category(rt) == Some(EnumCategory::Result);
                 if is_result {
-                    let field_op = lower_expr(ctx, builder, &args[0]);
+                    let payload_ty = Some(extract_result_field_types(ctx, rt).1);
+                    let field_op = lower_prelude_variant_payload(ctx, builder, &args[0], payload_ty);
                     let dst = ctx.emit_enum_init_owned(builder, &name, "Error", rt, vec![field_op], Some(vec![Some(arg_span)]));
                     return Some(FunctionBuilder::copy(dst));
                 }
@@ -2279,6 +2334,10 @@ fn lower_struct_literal(
                     let n = n.clone();
                     op = pack_trait_object_for_smart_ptr_ctor(ctx, builder, op, &n);
                 }
+                // A1M-PACK-SITE (1/6): struct-field init. A closure LITERAL
+                // here arrives as the raw capture env; the field expects a
+                // `GorgetClosure`. See `pack_closure_at_dest_type`.
+                op = pack_closure_at_dest_type(ctx, builder, op, ft);
             }
             ctx.func_state.expected_type = prev;
             op
@@ -4426,6 +4485,22 @@ fn extract_result_ok_type(ctx: &LoweringContext, result_type: TypeId) -> TypeId 
     extract_result_field_types(ctx, result_type).0
 }
 
+/// The declared payload TypeId of an `Option[T]`'s `Some` variant, or `None`
+/// when `ty` is not an Option (or its `Some` carries no payload).
+fn option_some_payload_type(ctx: &LoweringContext, ty: TypeId) -> Option<TypeId> {
+    if ctx.type_registry.enum_category(ty) != Some(EnumCategory::Option) {
+        return None;
+    }
+    let name = ctx.type_registry.type_name(ty)?;
+    let td = ctx.type_registry.get_type_def(&name)?;
+    let crate::ir::types::TypeDefKind::Enum(ref edef) = td.kind else { return None };
+    edef.variants
+        .iter()
+        .find(|v| v.name == "Some")
+        .and_then(|v| v.fields.first())
+        .map(|f| f.type_id)
+}
+
 /// Snag #11 — emit a `From[CalleeE]` conversion on a propagated error value.
 /// Given the loaded callee-error operand (`err_val` of type `callee_err_type`)
 /// and the caller's error type (`caller_err_type`), call the equipped
@@ -4504,7 +4579,7 @@ pub fn result_ok_payload_type(ctx: &LoweringContext, result_type: TypeId) -> Typ
 }
 
 /// Extract Ok and Error field types from a Result type definition.
-fn extract_result_field_types(ctx: &LoweringContext, result_type: TypeId) -> (TypeId, TypeId) {
+pub(in crate::ir::lowering) fn extract_result_field_types(ctx: &LoweringContext, result_type: TypeId) -> (TypeId, TypeId) {
     let type_name = ctx.type_registry.type_name(result_type);
     if let Some(ref name) = type_name {
         if let Some(td) = ctx.type_registry.get_type_def(name) {

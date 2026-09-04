@@ -1,0 +1,86 @@
+# `todo/t0972` — matching a CALL RESULT never drops the moved-out payload;
+# matching the same value through a LOCAL does.
+#
+# ⭐ THE WHOLE DEFECT IS ONE TOKEN. `match make_ok():` leaks; hoisting to
+# `Result[T, String] r = make_ok()` and writing `match r:` is ASan-CLEAN. Same
+# function, same payload, same arms.
+#
+# ⚠⚠ BOTH HALVES OF THAT DISCRIMINATOR ARE CELLS BELOW, NOT PROSE. The two
+# CLEAN local-scrutinee forms are what make the axis provable: without them a
+# future fix could free the call-result binding while REGRESSING the local form
+# and this fixture would still go green (Core #12 — the control is what makes
+# the claim checkable). They contribute no leak records today, so the fixture's
+# RED is exactly the two call-result cells.
+#
+# ⚠⚠ THE NAME SAYS `payload`, NOT `callable`, AND THAT IS A CORRECTION. This was
+# filed as a `Callable`-specific defect on the strength of a `String` control
+# that read CLEAN. That control was WRONG: it used a short String literal, which
+# never leaves the small-string buffer and allocates nothing. With a heap-forced
+# String — a 42-character VALUE, built as a 41-character literal plus a
+# runtime-concatenated digit so it cannot sit in the buffer — the twin leaks
+# 43 bytes (42 + NUL) in 1 allocation on C AND LLVM, while the LOCAL-scrutinee
+# twin of THAT is clean. So the axis is CALL-RESULT-vs-LOCAL and the defect is
+# general. Both payload types are cells below, so the fixture cannot drift back
+# to the narrower claim.
+#
+# MECHANISM, read off the emitted C. Both scrutinee forms emit the enum's drop
+# fn. In the arm the payload is COPIED OUT into the binding and the enum's slot
+# is `memset` to zero, so the drop then frees a zeroed slot:
+#   __s5 = *(GorgetClosure *)(__v48);            // move out
+#   memset(__v15, 0, sizeof(GorgetClosure));     // slot zeroed
+#   ...
+#   Result__…__drop(&__s2);                      // frees nothing
+# The LOCAL-scrutinee form additionally emits a free for the moved-out BINDING —
+# where the value actually lives after the arm runs — and the CALL-RESULT form
+# does not.
+#
+# ⚠ NOT the materialization class (`todo/t0937`, closed): every cell prints the
+# CORRECT value on both backends.
+#
+# INTENDED: prints 2, the 42-character string, then 3 and the string again from
+# the two local-scrutinee controls — and is ASan-clean.
+String mk(int n):
+    String s = "abcdefghijklmnopqrstuvwxyz0123456789ABCD_"
+    return s + f"{n}"
+
+Result[Callable[int(int)], String] make_callable():
+    return Ok((int x): x + 1)
+
+Result[String, String] make_string():
+    return Ok(mk(1))
+
+Result[Callable[int(int)], String] make_callable2():
+    return Ok((int x): x + 2)
+
+Result[String, String] make_string2():
+    return Ok(mk(2))
+
+void main():
+    # ---- THE DEFECT: the scrutinee is a CALL RESULT. Both cells leak. -----
+    match make_callable():
+        case Ok(h):
+            print(h(1))                     # 2
+        case Error(msg):
+            print(msg)
+
+    match make_string():
+        case Ok(s):
+            print(s)                        # …ABCD_1
+        case Error(msg2):
+            print(msg2)
+
+    # ---- THE CONTROL: the same values through a LOCAL. Both CLEAN. --------
+    # One token apart from the cells above, and that token is the whole axis.
+    Result[Callable[int(int)], String] rc = make_callable2()
+    match rc:
+        case Ok(h2):
+            print(h2(1))                    # 3
+        case Error(msg3):
+            print(msg3)
+
+    Result[String, String] rs = make_string2()
+    match rs:
+        case Ok(s2):
+            print(s2)                       # …ABCD_2
+        case Error(msg4):
+            print(msg4)

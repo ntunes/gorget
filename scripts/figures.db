@@ -914,7 +914,7 @@ parity.runtime_diff.ggdef_adjudicated_floor.input = none
 # value has not — but only for someone who RUNS it. See each row's caveat.
 
 row = sanitize.leak.rows.pin
-sanitize.leak.rows.pin.value = 293
+sanitize.leak.rows.pin.value = 294
 sanitize.leak.rows.pin.unit = rows in tests/sanitize/LEAK_ALLOWLIST.txt (one per leaking fixture)
 sanitize.leak.rows.pin.polarity = exact-pin
 sanitize.leak.rows.pin.provenance = derived
@@ -952,7 +952,7 @@ sanitize.leak.rows.round_open.mirror = none
 sanitize.leak.rows.round_open.input = none
 
 row = sanitize.leak.records.pin
-sanitize.leak.records.pin.value = 2286
+sanitize.leak.records.pin.value = 2302
 sanitize.leak.records.pin.unit = leak records the allowlist tolerates in total
 sanitize.leak.records.pin.polarity = exact-pin
 sanitize.leak.records.pin.provenance = derived
@@ -965,7 +965,6 @@ sanitize.leak.records.pin.instrument = the awk census over tests/sanitize/LEAK_A
 sanitize.leak.records.pin.measured_at = 74fc27705
 sanitize.leak.records.pin.home = tests/lints.rs:LEAK_RECORDS
 sanitize.leak.records.pin.scan = standard
-sanitize.leak.records.pin.waiver = tests/lints.rs 1 declared the re-seed ledger line directly above the constant, which spells this value as R48 Track T-a1's landing figure — the number this round returns to after deleting Track U's admitted row
 sanitize.leak.records.pin.caveat = the `*N+` signatures are counted at their FLOOR — a `+` means at-least-N and switches that row's count check off, so this total is a lower bound on what the concurrency rows may actually leak; see sanitize.leak.loose_signatures.pin for how many rows are in that state
 sanitize.leak.records.pin.cost_secs = 30
 sanitize.leak.records.pin.mirror = tests/lints.rs:LEAK_RECORDS
@@ -991,7 +990,7 @@ sanitize.leak.records.round_open.mirror = none
 sanitize.leak.records.round_open.input = none
 
 row = sanitize.leak.class_pairs.pin
-sanitize.leak.class_pairs.pin.value = 500
+sanitize.leak.class_pairs.pin.value = 501
 sanitize.leak.class_pairs.pin.unit = (fixture, leak-class) pairs the allowlist names
 sanitize.leak.class_pairs.pin.polarity = exact-pin
 sanitize.leak.class_pairs.pin.provenance = derived

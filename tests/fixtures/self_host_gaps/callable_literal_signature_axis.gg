@@ -1,0 +1,72 @@
+# The SIGNATURE axis of `callable_literal_at_consuming_positions.gg`: a closure
+# LITERAL at a declared-type consuming position whose type is NOT
+# `Callable[int(int)]`.
+#
+# ⭐ THIS IS THE HALF THAT DISCRIMINATES, WHICH IS WHY IT IS A SEPARATE FILE AND
+# NOT A DELETED CELL. Every `Callable[int(int)]` cell can read back correctly
+# through the read path's `params: [], return_type: I64` fallback — `int(int)`
+# is the ONE signature where the fallback is indistinguishable from truth. A
+# materialization fix could be wrong at three of its four write sites and every
+# `int(int)` cell would still be green. `String(String)` and
+# `String(String, int)` are what make the matrix mean something (Core #12).
+#
+# ⚠ LIVES IN `tests/fixtures/self_host_gaps/`, NOT AT TOP LEVEL, and the reason
+# is mechanical: every top-level `tests/fixtures/*.gg` is auto-scanned into
+# `runtime_parity_corpus`, the SELF-HOST lane SEGVs on a
+# `Callable[String(String)]` struct field, and Core #9 ⊕ forbids raising
+# `RUNTIME_DIFF_NONMATCH_CEILING` for a round's own inflow. The self-host gap is
+# filed as `todo/t0969` and asserted by `sh_gap_callable_string_sig_struct_field`.
+# The Rust-lane coverage (C and LLVM) is unchanged — `run_gg` runs this file
+# exactly like a top-level fixture.
+#
+# ⚠ EVERY READ BINDS THE CLONE TO A TYPED LOCAL FIRST: calling straight through
+# `s.f.clone()(x)` loses the signature (`todo/t0406(b)`) and faults for a
+# `String(String)` closure at HEAD and after. Binding keeps this file measuring
+# materialization rather than that.
+#
+# ⚠ THE ENUM-PAYLOAD CELL IS SPELLED WITH `Result`, NOT A SECOND `Option`. Two
+# different `Callable` signatures under the SAME generic enum collide on one
+# signature-ERASED mangled name (`Option__Callable__GorgetClosure`, one key per
+# program) and the second faults — with NAMED functions and no closure literal
+# anywhere. That is `todo/t0406`'s erasure, pinned at
+# `known_gaps/option_callable_two_signatures_collide.gg`.
+
+struct Str1:
+    Callable[String(String)] f
+
+struct Str2:
+    Callable[String(String, int)] f
+
+String same(String x):
+    return x
+
+Result[Callable[String(String)], String] make_ok():
+    return Ok((String x): x + "!")
+
+void main():
+    # ---- struct-field init ----------------------------------------------
+    Str1 c = Str1((String x): x + "!")
+    Callable[String(String)] gc = c.f.clone()
+    print(gc("hi"))                             # hi!
+
+    Str2 d = Str2((String x, int n): x + f"{n}")
+    Callable[String(String, int)] gd = d.f.clone()
+    print(gd("hi", 5))                          # hi5
+
+    # ---- tuple-element init ---------------------------------------------
+    (int, Callable[String(String)]) t2 = (7, (String x): x + "!")
+    Callable[String(String)] gt2 = t2._1.clone()
+    print(gt2("hi"))                            # hi!
+
+    # ---- enum-payload init, across a function boundary -------------------
+    match make_ok():
+        case Ok(h4):
+            print(h4("hi"))                     # hi!
+        case Error(msg):
+            print(msg)
+
+    # ---- projected field store -------------------------------------------
+    Str1 p2 = Str1(same)
+    p2.f = (String x): x + "!"
+    Callable[String(String)] gp2 = p2.f.clone()
+    print(gp2("hi"))                            # hi!

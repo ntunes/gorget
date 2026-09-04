@@ -1738,10 +1738,34 @@ impl<'a> LoweringContext<'a> {
                     }
                 })
                 .unwrap_or_default();
+            // The variant's field TypeIds. The `Named`-name list above cannot
+            // see a `Callable` payload at all: it lowers to a structural
+            // `GirType::FnPtr`, which has no name and no TypeDef.
+            let field_tids: Vec<TypeId> = self
+                .type_registry
+                .get_type_def(enum_name)
+                .and_then(|td| {
+                    if let crate::ir::types::TypeDefKind::Enum(ref edef) = td.kind {
+                        edef.variants
+                            .iter()
+                            .find(|v| v.name == variant_name)
+                            .map(|v| v.fields.iter().map(|f| f.type_id).collect())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
             for (i, op) in args.iter_mut().enumerate() {
                 if let Some(Some(name)) = field_type_names.get(i) {
+                    let name = name.clone();
                     *op = crate::ir::lowering::exprs::pack_trait_object_for_smart_ptr_ctor(
-                        self, builder, std::mem::replace(op, Operand::Constant(Constant::Unit)), name,
+                        self, builder, std::mem::replace(op, Operand::Constant(Constant::Unit)), &name,
+                    );
+                }
+                // A1M-PACK-SITE (3/6): enum-variant payload init.
+                if let Some(&tid) = field_tids.get(i) {
+                    *op = crate::ir::lowering::exprs::pack_closure_at_dest_type(
+                        self, builder, std::mem::replace(op, Operand::Constant(Constant::Unit)), tid,
                     );
                 }
             }

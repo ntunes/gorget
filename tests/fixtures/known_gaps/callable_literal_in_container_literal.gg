@@ -1,0 +1,35 @@
+# `todo/t0873(a)` — a closure literal inside a CONTAINER LITERAL at a
+# declared-type position is still never materialized.
+#
+# ⚠ THIS IS THE BOUNDARY OF THE MATERIALIZATION FIX, STATED AS A FIXTURE.
+# `tests/fixtures/callable_literal_at_consuming_positions.gg` pins every
+# position where the literal is the DIRECT operand at a destination that
+# carries a declared `Callable` type — struct field, tuple element, enum
+# payload, projected field store. A container literal is a THIRD mechanism:
+# elements lower through `materialize_for_slot` with `SlotType::FromOperand`,
+# which sizes the accumulator from the closure ENV operand rather than from the
+# declared element type, so `gorget_array_new` is built for a 1-byte env and
+# 16 bytes are read back out of it.
+#
+# Both spellings below are the same defect; the struct-field one is the
+# discriminator that keeps the scope sentence honest — `S(<literal>)` is
+# GREEN, `S([<literal>])` is not, and the difference is only the brackets.
+#
+# ⚠ Closing this is sequenced behind `todo/t0406`: the container path's
+# element type mangles to the signature-ERASED `Callable__GorgetClosure`, so a
+# fix that stops at the sizing produces a `String(String)` element that reads
+# back through a `params: [], return_type: I64` fallback — measured as rc 0
+# printing a garbage integer on C and rc 139 on LLVM.
+#
+# INTENDED: prints 2 then 2.
+struct S:
+    Vector[Callable[int(int)]] fs
+
+void main():
+    Vector[Callable[int(int)]] direct = [(int x): x + 1]
+    Callable[int(int)] g0 = direct.get(0).unwrap().clone()
+    print(g0(1))
+
+    S s = S([(int x): x + 1])
+    Callable[int(int)] g1 = s.fs.get(0).unwrap().clone()
+    print(g1(1))

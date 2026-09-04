@@ -2053,6 +2053,30 @@ fn lower_return(
                         }
                     }
                 }
+                // A1M-PACK-SITE (6/6): the `throws` auto-`Ok` wrap on a RETURN
+                // STATEMENT. This is the one Ok-wrap that does NOT route
+                // through `emit_enum_init_owned` — it calls
+                // `builder.enum_init` directly, because it does its own
+                // ownership transfer below (`assign_mode(Move)` +
+                // `move_zero_and_mark`) rather than the chokepoint's. So it
+                // never reached site 3/5, and `return <closure literal>` from a
+                // `throws` function stored the raw capture env: the emitted
+                // `mk` carried no `__gorget_closure_env_alloc` and no
+                // `.fn_ptr =` at all — `todo/t0937`'s exact signature, rc 139
+                // on both backends. The EXPRESSION-body twin
+                // (`Callable[T] mk() throws E: <literal>`) is green because
+                // `wrap_expr_tail_in_ok` DOES use the chokepoint; that
+                // asymmetry is why the position looked covered.
+                let operand = {
+                    let ok_payload_ty =
+                        super::exprs::extract_result_field_types(ctx, result_type).0;
+                    super::exprs::pack_closure_at_dest_type(ctx, builder, operand, ok_payload_ty)
+                };
+                if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                    if p.projections.is_empty() {
+                        returned_local = Some(p.local);
+                    }
+                }
                 // Wrap value in Result.Ok — the operand's local is consumed (moved into Result)
                 let ok_dst = {
                     let type_name = ctx.type_registry.type_name(result_type).unwrap_or_else(|| "Result".to_string());

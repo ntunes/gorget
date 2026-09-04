@@ -1,0 +1,34 @@
+# `todo/t0971` — an `Option[Option[Callable[T]]]` leaks its captured env: the
+# OUTER generic enum's drop fn is never emitted at all.
+#
+# ⚠⚠ THERE IS NO `match` IN THIS FIXTURE, AND THAT IS THE POINT. An earlier
+# revision matched on the value, which CONFLATED this defect with a second one
+# (`todo/t0972`, the moved-out binding a match arm never drops). That one is NOT
+# `Callable`-specific, so the conflated fixture could not support this item's
+# central claim. Reading the value with `.is_some()` touches no arm and isolates
+# the drop-emission mechanism on its own.
+#
+# THE MECHANISM, read off the emitted C:
+#   grep -c 'Option__Callable__GorgetClosure__drop'         -> 2   (inner: emitted, and correct)
+#   grep -c 'Option__Option__Callable__GorgetClosure__drop' -> 0   (outer: DOES NOT EXIST)
+# so the outer value's scope exit reaches nothing at all.
+#
+# ⭐ THE DISCRIMINATOR IS `Callable`, AND HERE IT IS EARNED. The heap-forced
+# `String` twin of this exact program — `Option[Option[String]]` whose value is
+# 42 characters (a 41-char literal plus a runtime-concatenated digit, so it
+# cannot sit in the small-string buffer), `.is_some()`, no match — is
+# ASan-CLEAN on C and LLVM, and `grep -c 'Option__Option__GorgetString__drop'`
+# is 3 (declared, defined, CALLED). Same nesting, same shape, different payload:
+# the outer drop is synthesised for `String` and not for `Callable`.
+# ⚠ THE TWIN MUST BE HEAP-FORCED OR IT PROVES NOTHING. A short String literal
+# never leaves the small-string buffer, allocates nothing, and reads CLEAN for
+# reasons that have nothing to do with drop emission. That mistake is exactly
+# how this item's first control was falsified.
+#
+# ⚠ NOT the materialization class (`todo/t0937`, closed): this program prints
+# the CORRECT `true` on both backends. The value is right; the memory is not.
+#
+# INTENDED: prints true and is ASan-clean.
+void main():
+    Option[Option[Callable[int(int)]]] o3 = Some(Some((int x): x + 1))
+    print(o3.is_some())

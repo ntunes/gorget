@@ -263,6 +263,99 @@ box_trait_vector_lit	__gorget_box_alloc_Robot*1,str_alloc_copy*1
 # `self_whole_move_ok`, `vector_hof_cross_type_map`).
 callable_clone_value_form_axis	__gorget_closure_env_alloc*4
 callable_vector_element_plain_sig_call_segv	__gorget_closure_env_alloc*2
+# ⚠⚠ OWNER ASK, NOT AN ADMISSION ALREADY COVERED — READ THIS BEFORE THE ROW.
+# R49 Track A1-M adds ONE row, `callable_literal_at_consuming_positions`, and it
+# does NOT fit either standing ruling cleanly. The R47 ruling covers four named
+# rows and ONLY those; the R48 extension covers PRE-EXISTING leaks made visible
+# by a GRADUATION out of `known_gaps/`. This row is a graduation — the fixture
+# is `todo/t0937`'s repro, moved out of `known_gaps/` and widened, and its
+# 3-line body is cell 1 — but the honest reading is that the bytes are NEW:
+# at HEAD those positions never CONSTRUCTED the closure at all (that WAS the
+# defect), so they allocated nothing and could not leak. Fixing the
+# memory-unsafety is what makes the allocation happen.
+# ⇒ **The class is old, the ALLOCATIONS are new.** Recorded here as inflow so
+# nobody later reads it as a graduation that needed no decision.
+#
+# THE MECHANISMS ARE THREE ITEMS, NOT ONE. Measured 2026-09-03: **144 bytes in
+# 16 allocations**, every record `__gorget_closure_env_alloc`, 8 B for a
+# non-capturing closure and 16 B for a capturing one.
+#   * the MAJORITY -> `todo/t0948`. A `Callable` in a STRUCT FIELD (or a tuple
+#     element, same predicate) is classified `[drop: None, copy: Copy]`, so
+#     nothing ever calls `gorget_closure_free` on it.
+#   * ONE record -> `todo/t0971`. The `Some(Some(<literal>))` cell: the OUTER
+#     generic enum's drop fn is NEVER EMITTED (grep the emitted C for
+#     `Option__Option__Callable__GorgetClosure__drop` -> zero hits) while the
+#     inner one is emitted and correct.
+#   * ONE record -> `todo/t0972`. The `Ok(<literal>)` cell matched on the CALL
+#     RESULT: the arm copies the payload out and `memset`s the enum slot, so the
+#     enum's drop frees nothing, and the moved-out binding is dropped only when
+#     the scrutinee is a LOCAL. ⚠ That one is NOT `Callable`-specific — see the
+#     second correction below — it simply lands here because this fixture's
+#     `Ok` cell has a `Callable` payload.
+#
+# ⚠⚠ THIS PARAGRAPH HAS BEEN WRONG TWICE, IN THE SAME WAY, AND BOTH VERSIONS ARE
+# KEPT RATHER THAN QUIETLY DELETED — they are the reasoning the owner would
+# otherwise have been ruling on, and the pattern is the point.
+#
+# CORRECTION 1. The block first said "THE MECHANISM IS ONE ITEM, `todo/t0948`",
+# on the control that "the ENUM-payload cells are ASan-CLEAN". FALSIFIED.
+# Measured in isolation, one cell at a time:
+#     Option[Callable] o = Some(<lit>)                       -> CLEAN
+#     Some(Some(<lit>))                                      -> 8 B / 1 record
+#     Ok(<lit>) matched on the CALL RESULT                   -> 8 B / 1 record
+#     the same match on a LOCAL scrutinee                    -> CLEAN
+# The control held for exactly ONE of the enum cells and was generalised to all
+# of them. Deleting the `Some(Some(<lit>))` cell in situ takes the fixture
+# 16 -> 15, which is how the second record was attributed rather than assumed.
+#
+# CORRECTION 2, one review later. The replacement control — "both new mechanisms
+# are `Callable`-specific, because their `String` twins are CLEAN" — was
+# FALSIFIED THE SAME WAY: generalised from a control that could not see the
+# thing. **The `String` twins used a SHORT literal, which never leaves the
+# small-string buffer and allocates nothing**, so they read CLEAN for reasons
+# unrelated to drops. Re-measured with a HEAP-FORCED String — a 42-character
+# VALUE, built as a 41-character literal plus a runtime-concatenated digit, so
+# the 43 bytes each twin leaks are 42 + NUL (⚠ ERRATUM 2026-09-04: an earlier
+# revision of this paragraph called the VALUE 41 characters; 41 is the LITERAL.
+# Cosmetic anywhere else, but this block's authority IS its measurements) — on
+# C AND LLVM:
+#     Option[Option[String]] + nested match                  -> 43 B / 1 record
+#     Result[String,String] on the CALL RESULT               -> 43 B / 1 record
+#     Result[String,String] on a LOCAL                       -> CLEAN
+#     flat Option[String] = Some(s)                          -> CLEAN
+# ⇒ **`todo/t0972` is GENERAL, not `Callable`-specific**; its item and fixture
+# are re-scoped and renamed accordingly. **`todo/t0971`'s MECHANISM survives as
+# `Callable`-specific** — but only once the match is removed from its repro: the
+# clean discriminator is the NO-MATCH form (`Some(Some(<lit>))` +
+# `.is_some()`), which is 8 B for `Callable` and CLEAN for a heap-forced
+# `String`, with `Option__Option__GorgetString__drop` emitted AND CALLED (3
+# hits) where `Option__Option__Callable__GorgetClosure__drop` has ZERO.
+# ⚠ THE LESSON, SINCE IT COST TWO REVIEWS: a `String` control for a leak claim
+# must be HEAP-FORCED, exactly as `todo/t0948`'s repro says a closure control
+# must CAPTURE. A control that allocates nothing cannot acquit anything.
+# ⚠ AND ON BOTH LANES: `scripts/sanitize_sweep.sh` is C-only (`todo/t0731`), so
+# the LLVM lane was checked by hand — `gg build --backend=llvm --sanitize`
+# reports the IDENTICAL 16 records / 144 bytes and no corruption.
+# WHY THE ROW EXISTS AT ALL: the leaking cells ARE the coverage. They are the
+# position x signature x arity matrix of a CRITICAL memory-unsafety defect that
+# faulted with FOUR different signals (rc 139, rc 135, rc 132 SIGILL, and rc 0
+# with a stale value on LLVM), and every `Callable[int(int)]` cell can read back
+# correctly through a `params: [], return_type: I64` fallback — so trimming to
+# shrink this count would delete exactly the cells that make the fixture mean
+# anything (Core #11/#12). The alternative the owner has already ruled against
+# is hiding it in a subdirectory the sweep does not walk.
+# RETIREMENT: this row goes when ALL THREE of `todo/t0948`, `todo/t0971` and
+# `todo/t0972` have landed. Landing `t0948` alone TIGHTENS the count to *2 and
+# leaves the row standing — the same correction `callable_clone_value_form_axis`
+# needed one round earlier, for the same reason: a majority mechanism was read
+# as the only one.
+# ⛔ `t0948` in particular carries a HARD GATE this round measured — flipping
+# `field_is_transitively_droppable` for FnPtr arms a DOUBLE-FREE on every plain
+# `Callable g = <aggregate>.f` read, and this round took that surface from ONE
+# spelling to FOUR (the other three were MASKED at HEAD because ASan halted on
+# the earlier stack-buffer-overflow). `t0948` does not land without a read-side
+# materializer landing with it.
+callable_literal_at_consuming_positions	__gorget_closure_env_alloc*16	__gorget_closure_env_alloc=t0948,__gorget_closure_env_alloc=t0971,__gorget_closure_env_alloc=t0972
 builtin_oracle_sync_deque	__gorget_closure_env_alloc*2
 builtin_oracle_sync_dict	__gorget_closure_env_alloc*6
 builtin_oracle_sync_hashmap	__gorget_closure_env_alloc*2

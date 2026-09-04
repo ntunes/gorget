@@ -893,6 +893,97 @@ pub(super) fn pack_closure_for_smart_ptr_ctor(
     FunctionBuilder::copy(tmp)
 }
 
+/// Materialize a raw closure ENV into a real `GorgetClosure` fat pointer when
+/// the DESTINATION's declared GIR type is closure-shaped.
+///
+/// **Why this exists (Core #1 — fix at the write site).**
+/// `ClosureLowering::lower_closure` returns the capture ENV local
+/// (`GirType::Named("__Closure_N")`, one byte when nothing is captured), not
+/// the two-word `GorgetClosure` that `Callable[T]` denotes. Packing is left to
+/// consumers, and the LIR's own packer (`try_closure_pack`, `lir/lower/operands.rs`)
+/// is reached from exactly one place — an `Assign` whose destination is a
+/// projection-free LOCAL (`lir/lower/insts.rs`). So a declared-type destination
+/// that is NOT such a local — a struct field, an enum payload, a tuple element,
+/// a projected field store — never packs, and the backend then copies
+/// `sizeof(GorgetClosure)` bytes out of the 1-byte env. That is the
+/// `todo/t0937` class: `gg check` is clean and both backends fault.
+///
+/// This helper closes it at the six AST-lowering write sites that own a
+/// declared destination TypeId, by binding the operand into a temp typed as
+/// the DESTINATION type. That temp *is* a projection-free local, so the
+/// existing LIR packer fires — one packing mechanism, reached from the
+/// positions that could not reach it before (devbook/24 rule 3).
+///
+/// **Both predicates are typed metadata, never names** (Core #2):
+/// - destination: `GirType::FnPtr` (what a declared `Callable[T]` field /
+///   payload / element actually carries), plus a `Named` alias whose TypeDef
+///   sets `c_runtime_alias == "GorgetClosure"` (what the smart-pointer inner
+///   types get — the shape `pack_closure_for_smart_ptr_ctor` above keys on).
+/// - source: the operand's local is a TypeDef with `metadata.is_closure_env`,
+///   set on the env struct at its birth in `closures.rs`.
+///
+/// **The temp is registered as owned at its birth** (Core #3). Without the
+/// `set_owned_fresh` the freshly-materialized `GorgetClosure` is an untracked
+/// source at the consume site and the Tier 2a validator panics — i.e. the fix
+/// degrades into `todo/t0938`'s ICE.
+///
+/// ⚠ Scope: the literal must be the DIRECT operand at the destination. A
+/// container literal in a declared-type position (`S([lit])`,
+/// `Vector[Callable[T]] fs = [lit]`) lowers through `materialize_for_slot`'s
+/// `SlotType::FromOperand` and is a third mechanism this does not reach —
+/// `todo/t0873(a)`, still open.
+pub(in crate::ir::lowering) fn pack_closure_at_dest_type(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    val_op: Operand,
+    dest_ty: TypeId,
+) -> Operand {
+    // Destination predicate — typed, not name-matched.
+    let dest_is_closure = match ctx.type_registry.get(dest_ty) {
+        Some(GirType::FnPtr { .. }) => true,
+        Some(GirType::Named(n)) => {
+            let n = n.clone();
+            ctx.type_registry
+                .get_type_def(&n)
+                .and_then(|td| td.metadata.c_runtime_alias.as_deref())
+                == Some("GorgetClosure")
+        }
+        _ => false,
+    };
+    if !dest_is_closure {
+        return val_op;
+    }
+    // Source predicate — the operand is a raw capture ENV, read off the
+    // `is_closure_env` flag the closure-lowering pass sets at the env's birth
+    // (`src/ir/types.rs` / `src/ir/lowering/closures.rs`). An already-packed
+    // `GorgetClosure`, a named function reference, or anything else passes
+    // through untouched.
+    let src_is_raw_env = match &val_op {
+        Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+            let lt = builder.local_type(place.local);
+            match ctx.type_registry.get(lt) {
+                Some(GirType::Named(n)) => {
+                    let n = n.clone();
+                    ctx.type_registry
+                        .get_type_def(&n)
+                        .map(|td| td.metadata.is_closure_env)
+                        .unwrap_or(false)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    };
+    if !src_is_raw_env {
+        return val_op;
+    }
+    let tmp = builder.add_local(dest_ty, None);
+    builder.assign(Place::local(tmp), val_op);
+    // Core #3: register the freshly-materialized packed closure at its birth.
+    ctx.set_owned_fresh(builder, tmp);
+    FunctionBuilder::copy(tmp)
+}
+
 /// Track N2 general-call-arg entry: peel the callee's declared param TypeId
 /// down to its Box[Trait] alias name and dispatch to
 /// `pack_trait_object_for_smart_ptr_ctor`. Callee params come typed as either

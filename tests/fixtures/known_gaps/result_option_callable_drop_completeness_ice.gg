@@ -1,0 +1,41 @@
+# A COMPILER ICE, not a diagnostic: an `Option[Callable[T]]` nested inside a
+# `Result` payload has no registered drop fn, and the LIR's drop-completeness
+# check panics.
+#
+#   thread 'gg-main' panicked at src/lir/validate.rs:137:
+#     in @: Drop completeness: enum "Result__Option__Callable__GorgetClosure__GorgetString"
+#     has droppable variant payload "Ok_0" (type "Option__Callable__GorgetClosure")
+#     missing from type_drop_fns enum_variants — scope-exit drop will leak the payload
+#
+# ⚠ THE DISCRIMINATOR IS `Callable`, NOT NESTING. `Result[Option[String], String]`
+# with the same shape builds and runs (`Ok(Some("hi"))` prints `hi`), and the
+# one-level `Result[Callable[T], String]` and `Option[Callable[T]]` both build
+# and run. Only the `Option[Callable]`-inside-`Result` combination has no
+# `type_drop_fns` entry.
+#
+# ⚠ NOT the closure-materialization class: it panics at HEAD and with the
+# materialization fix landed, with the SAME message, and it never reaches
+# codegen at all. The write site is drop-fn REGISTRATION for a nested
+# `Callable`-carrying payload — the same family as `todo/t0948`'s
+# `field_is_transitively_droppable`.
+#
+# ⚠⚠ THE TWO COMPILER PROFILES DISAGREE, SO CHECK WHICH ONE YOU RAN.
+# `assert_module_valid` runs the LIR validators unconditionally under
+# `cfg!(debug_assertions)` and is a NO-OP in release. A DEBUG `gg` ICEs; a
+# RELEASE `gg` builds this and prints the correct `2` — while LEAKING the
+# payload the validator named (8 bytes in 1 allocation, `__gorget_closure_env_alloc`,
+# under `--sanitize`). So the validator is RIGHT and both halves are owed:
+# the ICE on legal source, and the missing drop fn behind it.
+#
+# INTENDED: prints 2, ASan-clean, on both backends and both compiler profiles.
+void main():
+    Result[Option[Callable[int(int)]], String] r = Ok(Some((int x): x + 1))
+    match r:
+        case Ok(inner):
+            match inner:
+                case Some(g):
+                    print(g(1))
+                else:
+                    print(0)
+        case Error(e):
+            print(e)
