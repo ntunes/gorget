@@ -683,6 +683,16 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+📋 **CONVERGENCE DRY RUN (owner's standing instruction: run it FIRST, before burning sweep time).**
+`scripts/convergence.sh 23 819 64` → **`known_gaps 23→17 · TODO items 819→870 · net +45`**, declared filed 64,
+implied closed 19. **rc 0 — and convergence MEASURES, it does not gate** (the strict 2× rule is retired).
+⭐ **The signal worth reading: `known_gaps` FELL by 6.** That is the graduations — L's four, R's one, and
+S-a2's `t0943` — **the known-gaps backlog SHRANK in a round that filed 64 items.** *Discovery-heavy and
+still net-reducing the gap corpus is the shape a round should have.*
+⚠ **DRY RUN ONLY — regenerate at close.** T1, L, N2, S-a2 and the re-seed are all still unlanded, and each
+moves both numbers. **The `Convergence:` line quoted in the `DONE.md` entry must come from a run at the FINAL
+tree**, per the round-lifecycle rule.
+
 ⛔⛔⛔ **T1 PASS 3 — THE DEEPEST ERROR OF THE ROUND WAS MINE: MY RE-SCOPE ORDER WAS ON THE WRONG AXIS
 ENTIRELY.** Addendum 2's data were right; its **arm labels** were not. Pass 3's probe C is the discriminator:
 **`(String e): e` — the IDENTICAL body shape that SURVIVES at a builtin-method argument — is CLOSED at a
