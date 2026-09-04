@@ -1,0 +1,50 @@
+# KNOWN GAP — a single-owner value arriving as a BARE PARAMETER cannot be
+# boxed, and the compiler now REFUSES to mint rather than minting a wrong box.
+#
+#     Box[Box[String]] wrap(Box[String] s):
+#         return Box[Box[String]](s)
+#
+# `s` is a `Box[String]` param, so it arrives as a POINTER. The ownership
+# boundary asks `ptr_materialization_kind` what to do with it and gets
+# `PassThrough`: `Box[T]` is a single-owner carve-out with no clone fn, so
+# there is no owning representation to materialize into. The operand therefore
+# survives the boundary STILL POINTER-TYPED, and the mint has no C name for a
+# pointer — it would fall to its residue arm and mint `Box__int64_t`, the same
+# element-type collapse `tests/fixtures/box_ctor_primitive_element_types.gg`
+# pins for primitives, reached by a route no primitive fixture can see.
+#
+# ⚠ THIS IS A REAL PROGRAM, NOT A CONSTRUCTED IMPOSSIBILITY. It builds today
+# and it does the wrong thing: before the refusal it built rc 0 and SEGV'd at
+# `rc 139` on the deref; with the collapse un-refused it built rc 0 and printed
+# `(null)`. A crash converted into a silent wrong answer is worse, not better.
+#
+# ⛔ THE REFUSAL IS A LOWERING-LAYER STOPGAP, cited to `todo/t0682`. The
+# reference-grade rejection is a `gg check` diagnostic — `E_MoveWithoutOperator`
+# at constructor positions and for field sources — in `src/semantic/safety/`.
+# `gg check` on this program is rc 0 TODAY, which is exactly `t0682`. When
+# `t0682` lands, this program is rejected before lowering and the mint's
+# `panic!` becomes an unreachable backstop; this fixture then moves to a
+# `check_gg_fails` assertion and out of `known_gaps/`.
+#
+# ⊕ ALSO LIVE AND SEPARATELY FILED (`todo/t1077`): writing the move the
+# diagnostic would ask for — `^` at the parameter and at the ctor — does NOT
+# rescue the program. Nested `Box[Box[T]]` is broken independently of the
+# ownership question.
+#
+# EXPECTED (today, and asserted by the LIVE test that cites this file):
+#   `gg build` FAILS, naming the refusal and citing `todo/t0680`.
+# EXPECTED (once `todo/t0682` lands):
+#   `gg check` FAILS with `E_MoveWithoutOperator`.
+
+from std.collections import Box
+
+String mk(String a, String b):
+    return a + b
+
+Box[Box[String]] wrap(Box[String] s):
+    return Box[Box[String]](s)
+
+void main():
+    Box[String] b = Box[String](mk("aaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbb"))
+    Box[Box[String]] w = wrap(b)
+    print((*(*w)))

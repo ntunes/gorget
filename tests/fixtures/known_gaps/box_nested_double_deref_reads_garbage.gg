@@ -1,0 +1,41 @@
+# KNOWN GAP — READING THROUGH A NESTED `Box[Box[T]]` IS BROKEN ON BOTH LANES,
+# AND THE TWO LANES ARE BROKEN DIFFERENTLY.
+#
+# Construction is fine. `Box[Box[String]](Box[String](mk(...)))` builds, runs
+# and prints `built` if you never read it — the mint produces a correct
+# `Box__Box__GorgetString` typedef and drop chain. It is the DOUBLE DEREF that
+# fails:
+#
+#     C lane     build rc 0, run rc 139 (SIGSEGV)
+#     LLVM lane  build rc 0, run rc 0, prints a raw pointer as an integer
+#                (e.g. `187650672837424`) instead of the string
+#
+# ⚠ THE LLVM FACE IS THE WORSE ONE: a silent wrong answer with a clean exit.
+# Core #8 — "both backends agree" would not have been a pass here either, and
+# they do not even agree.
+#
+# ⛔ DISCRIMINATORS, so this is not lumped with its neighbours:
+#   * NOT `todo/t0096` — that is a C-emit SYMBOL COLLISION
+#     (`Box__R__drop` defined twice) for a Box that is a COLLECTION ELEMENT,
+#     and it is a COMPILE break. This program compiles.
+#   * NOT `todo/t0682` — no ownership operator is missing here. The source is a
+#     fresh expression temp, move-eligible by construction, and no diagnostic
+#     is owed.
+#   * NOT the element-type collapse: the emitted C names the element correctly
+#     (`Box__Box__GorgetString`, with its `__drop`).
+#   * The payload is a heap-forced `String`, so this is not the `.rodata`
+#     immortal-view trap either.
+#
+# The single-deref sibling `(*inner)` on a plain `Box[String]` is correct
+# everywhere, so the axis is the SECOND deref through a box whose pointee is
+# itself a box.
+#
+# EXPECTED OUTPUT (what the language SHOULD do): aaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbb
+# EXPECTED EXIT: 0 on BOTH backends.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Box[Box[String]] w = Box[Box[String]](Box[String](mk("aaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbb")))
+    print((*(*w)))

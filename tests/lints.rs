@@ -299,7 +299,11 @@ fn no_growth_in_name_prefix_routing() {
     /// [`assert_exact_ratchet`] for why this is an equality, not a ceiling.
     /// Reseeded 259 → 205 (R48 Track D2): the band carried 54 sites of slack,
     /// enough that a probe adding twenty fresh sites still passed the gate.
-    const NAME_PREFIX_BUDGET: usize = 205;
+    /// Lowered 205 → 204 (R49 Track M1): the `Box` mint in
+    /// `lower_struct_literal` carried a `name.starts_with("Box__")` and was
+    /// unreachable — `rewrite_struct_calls` returns early for every name in
+    /// `COLLECTION_TYPES`, which contains `"Box"`. Arm deleted, site gone.
+    const NAME_PREFIX_BUDGET: usize = 204;
 
     let count = count_name_prefix_sites();
     assert_exact_ratchet(
@@ -661,7 +665,10 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// of catch-bound payloads). Skip avoids double-enrolling the already-
     /// tracked `throws String` resource-temp path. Drop-accountant state, not
     /// `LocalOwnership` — same class as the 64→…→95 bumps.
-    const PHASE_D_PROXY_BUDGET: usize = 91;
+    /// Lowered 91 → 90 (R49 Track M1): the deleted unreachable `Box` mint in
+    /// `lower_struct_literal` carried a `drops.is_registered` guard before its
+    /// `register_local`. The live mint's copy stays.
+    const PHASE_D_PROXY_BUDGET: usize = 90;
 
     let count = count_phase_d_proxy_reads();
     assert_exact_ratchet(
@@ -24408,16 +24415,14 @@ fn staging_move_burndown_shrink_only() {
 #[test]
 fn known_gaps_repros_are_wired_to_a_test() {
     /// Baseline regenerated 2026-08-27 by running this test. SHRINK-ONLY.
-    const ALLOWED_UNWIRED: [&str; 29] = [
+    const ALLOWED_UNWIRED: [&str; 27] = [
         "box_callable_call_through_box_undefined_function",
         "box_enum_payload_c_wont_compile_llvm_double_frees",
-        "box_from_field_owning_boxes_double_free",
         "box_get_bound_to_local_double_free",
         "box_get_non_primitive_llvm_llc_type_error",
         "box_move_without_operator_missing_at_ctor_and_field",
         "box_new_discarded_trait_pack_leak",
         "box_optional_payload_incomplete_type_both_lanes",
-        "box_primitive_element_types_collapse",
         "box_trait_bare_ctor_struct_field_uaf",
         "closure_capture_then_mutate_source_uaf",
         "dict_index_assign_during_iteration_ice",
@@ -25074,7 +25079,12 @@ const RAW_PRODUCER_CENSUS: &[(&str, &str, usize)] = &[
     ("builder.call_extern(", "src/ir/lowering/exprs/calls.rs", 16),
     ("builder.call_extern(", "src/ir/lowering/exprs/collections.rs", 11),
     ("builder.call_extern(", "src/ir/lowering/exprs/methods.rs", 9),
-    ("builder.call_extern(", "src/ir/lowering/exprs/mod.rs", 9),
+    // 9 → 8 (R49 Track M1): the unreachable `Box` mint in
+    // `lower_struct_literal` emitted `__gorget_box_alloc_<elem>` through a
+    // raw `call_extern`; the arm is deleted. Out of class by removal, not
+    // by exemption -- the live `Box` mint in `exprs/calls.rs` still
+    // registers its result at birth, which is why `calls.rs` stays at 16.
+    ("builder.call_extern(", "src/ir/lowering/exprs/mod.rs", 8),
     ("builder.call_extern(", "src/ir/lowering/exprs/operators.rs", 4),
     ("builder.call_extern(", "src/ir/lowering/stmts/assigns.rs", 1),
     ("builder.call_extern(", "src/ir/lowering/stmts/for_loops.rs", 9),
@@ -28590,4 +28600,119 @@ fn no_growth_in_self_host_closure_identity_name_matching() {
          To list the sites:\n  \
          grep -rnE --include='*.gg' '(starts_with|contains)\\(\"(__Closure_|__call|__callable_|__gorget_closure_call_|__adapt_)' tests/fixtures/self_host_*",
     );
+}
+
+/// The Box-TypeDef axis is written from FOUR places, and the doc comment that
+/// enumerates them (`ensure_box_type_def` in
+/// `src/ir/lowering/exprs/type_reg.rs`) is the roster. This is that comment's
+/// enforcing guard — AGENTS.md Core #14: *an invariant-asserting comment needs
+/// an enforcing guard, or it gets DELETED*.
+///
+/// It exists because the prose alone was measurably wrong in three different
+/// ways at once: one comment said the metadata was written from "the TWO
+/// paths", a second said "one of THREE", the real count was FOUR, and both of
+/// the second comment's line-number cites had drifted (by 200 and by 111
+/// lines). Nothing noticed, because nothing was counting.
+///
+/// **If this fails and the count GREW**: a fifth registration path now writes
+/// a Box TypeDef. Add it to the roster on `ensure_box_type_def` — by FUNCTION
+/// name, never by line number — confirm it writes the same
+/// `copy_semantics` / `drop_strategy` / `is_box` triple as the other four, and
+/// raise `EXPECTED` in this same commit.
+///
+/// **If it SHRANK**: paths were unified (the win). Delete the retired entry
+/// from the roster and lower `EXPECTED` here in the same commit.
+///
+/// ## What this does NOT check (Core #12: name the omitted cells)
+///
+/// It counts the literal `is_box: true` spelling. A registration that reaches
+/// the same field through a variable, a `..spread` of another `TypeMetadata`,
+/// or a builder is invisible to it — this is bookkeeping, not a class-retiring
+/// guard (see [`assert_exact_ratchet`]). It also says nothing about whether
+/// the four agree on the OTHER metadata fields; that is the roster's claim and
+/// review's job.
+#[test]
+fn box_typedef_registration_sites_count() {
+    /// Baseline 2026-09-04: 4 — `ensure_box_type_def`
+    /// (`ir/lowering/exprs/type_reg.rs`), `TypeMapper::map_ast_type_mut`'s Box
+    /// arm and `register_collection_alias`'s Box branch (both
+    /// `ir/lowering/types.rs`), and `monomorphize_struct`'s Box metadata arm
+    /// (`ir/lowering/generics/mod.rs`).
+    const EXPECTED: usize = 4;
+
+    let mut sites: Vec<String> = Vec::new();
+    let mut files = walkdir_rs("src");
+    files.sort();
+    for f in &files {
+        let Ok(content) = fs::read_to_string(f) else { continue };
+        for (i, line) in content.lines().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with("//") {
+                continue;
+            }
+            if t.starts_with("is_box: true") {
+                sites.push(format!("{}:{}", f.display(), i + 1));
+            }
+        }
+    }
+
+    assert_exact_ratchet(
+        "Box-TypeDef `is_box: true` registration sites in src/",
+        sites.len(),
+        EXPECTED,
+        &format!(
+            "The roster these must match lives on `ensure_box_type_def` in \
+             `src/ir/lowering/exprs/type_reg.rs`. Sites found:\n  {}\n\n\
+             Regenerate with:\n  \
+             grep -rn --include='*.rs' 'is_box: true' src/",
+            sites.join("\n  "),
+        ),
+    );
+}
+
+/// The `Box(value)` constructor is minted in ONE place —
+/// `src/ir/lowering/exprs/calls.rs`. A second, unreachable copy of that mint
+/// sat in `lower_struct_literal` (`src/ir/lowering/exprs/mod.rs`) for a long
+/// time, drifting away from the live one and carrying its own copy of the
+/// element-type collapse the live mint had. Deleting it was safe for exactly
+/// one reason: `rewrite_struct_calls` — the sole producer of
+/// `Expr::StructLiteral` — returns early for every name in its
+/// `COLLECTION_TYPES` list, and that list contains `"Box"`, so a `Box(x)` call
+/// is still an `Expr::Call` when lowering sees it.
+///
+/// This pins that reason. Drop `"Box"` from `COLLECTION_TYPES` and `Box(x)`
+/// silently becomes a generic struct literal with no mint behind it; nothing
+/// else in the tree asserts the membership.
+///
+/// **If this fails**: either restore `"Box"` to `COLLECTION_TYPES`, or, if the
+/// rewrite genuinely should produce a `StructLiteral` for `Box`, give
+/// `lower_struct_literal` a real Box arm that DELEGATES to the `exprs/calls.rs`
+/// mint — do not hand-copy it back.
+#[test]
+fn rewrite_collection_types_excludes_struct_literal() {
+    let content = fs::read_to_string("src/semantic/rewrite.rs")
+        .expect("src/semantic/rewrite.rs must be readable");
+
+    let start = content
+        .find("const COLLECTION_TYPES:")
+        .expect("`COLLECTION_TYPES` must exist in src/semantic/rewrite.rs — it is \
+                 the reason `lower_struct_literal` has no Box arm");
+    let end = start
+        + content[start..]
+            .find("];")
+            .expect("`COLLECTION_TYPES` must be a terminated slice literal");
+    let list = &content[start..end];
+
+    for name in ["\"Box\"", "\"Vector\"", "\"Dict\""] {
+        assert!(
+            list.contains(name),
+            "`COLLECTION_TYPES` in src/semantic/rewrite.rs no longer contains \
+             {name}. That list is what keeps collection constructors out of \
+             `Expr::StructLiteral`, and it is the whole safety argument for \
+             `lower_struct_literal` having no {name} arm (see its doc comment \
+             in src/ir/lowering/exprs/mod.rs). Restore it, or give \
+             `lower_struct_literal` an arm that DELEGATES to the \
+             `exprs/calls.rs` mint.\n\nList as found:\n{list}"
+        );
+    }
 }

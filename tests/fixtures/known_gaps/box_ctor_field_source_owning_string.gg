@@ -1,0 +1,47 @@
+# REGRESSION (Rust lane) — `Box[T](struct.field)` where the field owns heap
+# memory and the struct is STILL LIVE must give the box its OWN copy, not a
+# shallow one that shares the field's interior pointers with a struct that will
+# drop them again.
+#
+# CoW's rule at a consuming position is clone-if-the-source-is-live. `w1` is
+# live past this line, so the box must clone. The mint used to hand-roll its
+# own `Ptr(T)` unwrap BEFORE the ownership boundary ran, which handed the
+# boundary an unnamed temp; the boundary read that as an expression temp and
+# took the move-if-dead branch instead. Two owners, one allocation, and
+# `free(): double free detected in tcache 2` at scope exit — on both backends,
+# with `gg check` clean.
+#
+# ⛔ WHY THIS LIVES IN `known_gaps/` DESPITE BEING A PASSING REGRESSION FIXTURE
+# (the `box_ctor_closure_matches_box_new` precedent): the SELF-HOST lane cannot
+# compile the emitted C for this shape. It types the field read of a `String`
+# field as `void*` and hands that to `__gorget_box_alloc_GorgetString(Str)`, so
+# `cc` rejects it — pre-existing, unrelated to the Rust-lane fix, and filed.
+# A top-level fixture is auto-scanned into `runtime_parity_corpus`, so it must
+# stay out of that directory until the self-host lane can build it. The test
+# that cites this file is LIVE, not `#[ignore]`d.
+#
+# ⛔ THE STRING MUST BE HEAP-FORCED. `W("literal")` is a `.rodata` view with
+# `cap = 0`, and `gorget_string_free` no-ops on it: the same program written
+# with a literal exits 0 under the DEFECT and acquits nothing (Core #12 — a
+# control that cannot allocate acquits nothing). `mk` concatenates at runtime
+# so the field owns a real allocation.
+#
+# ⚠ SCOPE THIS FIXTURE DOES NOT COVER, said plainly: the `Box.new(w1.s)`
+# spelling of the same operation. It is a SEPARATE mint that still
+# double-frees — pinned by
+# `known_gaps/box_new_field_source_owning_string_double_free.gg`.
+#
+# EXPECTED OUTPUT: built
+# EXPECTED EXIT: 0, and clean under ASan.
+
+String mk(String a, String b):
+    return a + b
+
+struct W:
+    String s
+
+int main():
+    W w1 = W(mk("aaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbb"))
+    Box[String] b = Box[String](w1.s)
+    print("built")
+    return 0

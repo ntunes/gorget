@@ -42,7 +42,11 @@ int prim_name_to_type(String name):
     match name:
         case "int":
             return I64_TYPE
+        case "int64":
+            return I64_TYPE
         case "float":
+            return F64_TYPE
+        case "float64":
             return F64_TYPE
         case "bool":
             return BOOL_TYPE
@@ -55,6 +59,8 @@ int prim_name_to_type(String name):
         case "int32":
             return I32_TYPE
         case "uint":
+            return U64_TYPE
+        case "uint64":
             return U64_TYPE
         case "uint8":
             return U8_TYPE
@@ -214,11 +220,21 @@ void bind_trait_type_params(GirModule &gmod, Vector[String] trait_params, Vector
         gmod.type_subs.put(trait_params.get(bj).unwrap(), bt_tids.get(bj).unwrap())
         bj += 1
 
+# Every primitive SPELLING the language accepts must appear here and in
+# `prim_name_to_type` above. The width aliases `int64` / `uint64` / `float64`
+# are separate keywords from `int` / `uint` / `float`, not sugar the parser
+# folds away, so each needs its own arm in BOTH functions -- a missing arm
+# falls through to the `else` and returns the Gorget spelling as if it were a
+# C type name, and the emitted C then names a type that does not exist.
 String prim_to_c_name(String name):
     match name:
         case "int":
             return "int64_t"
+        case "int64":
+            return "int64_t"
         case "float":
+            return "double"
+        case "float64":
             return "double"
         case "bool":
             return "bool"
@@ -233,6 +249,8 @@ String prim_to_c_name(String name):
         case "int32":
             return "int32_t"
         case "uint":
+            return "uint64_t"
+        case "uint64":
             return "uint64_t"
         case "uint8":
             return "uint8_t"
