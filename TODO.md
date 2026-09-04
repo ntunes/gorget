@@ -144,13 +144,35 @@ and `t1053` unchanged and still A1-I's. ⚡ **THE LESSON, WHICH IS NOT THE ONE M
 is not enough if the brief that the executor reads is stale.**
 ⚡ **WAVE-3 BLOCKS (the owner lifted the sizing hold 2026-09-04 to bring more CRITICALs in):**
 
-| L — closure-capture | M — Box/trait-object | N — `t0988` | P — drop side |
-|---|---|---|---|
-| **`t1066`–`t1075`** | **`t1076`–`t1085`** | **`t1086`–`t1095`** | **`t1096`–`t1105`** |
+| L — closure-capture | **M1 — Box mint** | **M2 — trait-obj pack** | N — `t0988` | P — drop side | Q — `t1066` guard |
+|---|---|---|---|---|---|
+| **`t1066`–`t1075`** | **`t1076`–`t1080`** | **`t1081`–`t1085`** | **`t1086`–`t1095`** | **`t1106`–`t1115`** | **`t1096`–`t1105`** |
+
+⛔⛔ **I ALMOST REPEATED THE COLLISION, TWO SCREENS BELOW ITS OWN LESSON — and the near-miss is worth more
+than the lesson was.** I wrote this table giving **P** `t1096`–`t1105`, **which Q's brief had ALREADY been
+issued** and is in an agent's hands right now. ⚡ **THE LEDGER IS NOT THE ALLOCATOR — THE BRIEF IS.** An id
+becomes SPENT the moment a brief carrying it is LAUNCHED, and at that instant the ledger is already stale.
+⇒ **WRITE THE BLOCK INTO THE LEDGER IN THE SAME ACTION THAT LAUNCHES THE BRIEF, never afterwards** — the
+window between the two is precisely where both this near-miss and the K/A1-I collision lived.
+⊕ Resolved by moving the UNLAUNCHED track: **Q holds `t1096`–`t1105` as issued; P holds `t1106`–`t1115`.**
+
+⭐ **TRACK M SPLIT INTO M1 + M2 (2026-09-04), BY MEASUREMENT.** M was briefed as ONE class; **its scout
+TESTED that and it is FALSE — three classes, five live write sites.** The strongest disproof: for `t0697`
+**the pack fires IDENTICALLY in the crashing spelling and in the committed PASSING fixture** — the two GIRs
+differ in exactly two lines, `call` vs `call_extern` and which local is `drop_if_alive`d, **neither of them
+the pack.** ⇒ the recorded root cause is TRUE but **DOES NOT DISCRIMINATE**, and `t0697`'s two faces are two
+independent write sites, not "one root, two mirror faces". **M1 = the Box MINT** (`t0680`, `t0011`,
+`t0697`-leak); **M2 = the trait-object PACK** (`t0697`-crash, `t0709`). They overlap in `exprs/calls.rs` only,
+at **non-adjacent ~1226-1240 vs ~1130-1135**. ⚠ **The M block NARROWING was pushed to both holders AT ISSUE
+TIME — that is the collision lesson above, applied.**
+⚠ **`t0709`'s PRIMARY REPRO IS STALE:** `vec_box_trait_pushed_escapes_helper.gg:45` is now a **check-time
+reject** under D27 (`E_MoveWithoutOperator`), so `tests/integration.rs:60651-60654`'s `#[ignore]` reason
+*"is rc 139 at HEAD"* is **FALSE**. The live repro is `vec_box_trait_pushed_no_helper.gg`, and its signal is
+**rc 135 (SIGBUS)**, not the recorded 139 — **an executor gating on `139` mis-gates.**
 
 ⊕ **`t1053` RETURNED TO THE POOL** — A1-I refused to file it because `todo/t0774` already owned the subject,
 **following GREP-BEFORE-YOU-FILE over my instruction.** It is free.
-⚡ **FIRST UNISSUED ID IS NOW `t1106`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
+⚡ **FIRST UNISSUED ID IS NOW `t1116`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
