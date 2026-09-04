@@ -206,14 +206,17 @@ def main(argv):
                               '    have: %s\n    want: %s' % (i + 1, ident, lines[i], want))
 
     missing = [k for k in sorted(items) if k not in seen]
+    inserted = removed = 0
     if missing and not write:
         errors.append('not indexed in TODO.md: %s (run `python3 scripts/todo_index.py --write`)'
                       % ', '.join(missing))
     if write:
         # Drop pointers whose file is gone, then append the unindexed ones at
         # the end of their (area, priority) region.
-        lines = [l for l in lines
-                 if not (POINTER_RE.match(l) and POINTER_RE.match(l).group(1) not in items)]
+        kept = [l for l in lines
+                if not (POINTER_RE.match(l) and POINTER_RE.match(l).group(1) not in items)]
+        removed = len(lines) - len(kept)
+        lines = kept
         for ident in missing:
             f = items[ident]
             area = f['areas'][0] if f['areas'] else None
@@ -226,6 +229,7 @@ def main(argv):
                               % (ident, f['areas'], f['priority']))
                 continue
             lines.insert(at + 1, pointer_for(ident, f))
+            inserted += 1
         open(TODO, 'w', encoding='utf-8').write('\n'.join(lines))
 
     if errors:
@@ -233,8 +237,27 @@ def main(argv):
         for e in errors:
             sys.stderr.write('  %s\n' % e)
         return 1
-    print('todo_index: OK — %d item(s), %d pointer(s), index current'
-          % (len(items), len(seen)))
+    # ⚠ THE COUNTS DIFFER BY DESIGN, AND THE OLD MESSAGE LET THAT READ AS A
+    # NEAR-MISS. `pointer(s) found` is counted BEFORE insertion, so a `--write`
+    # that files k new items prints k fewer pointers than items and always did —
+    # `OK — N item(s), N-k pointer(s)` is the ROUTINE signature of a normal
+    # filing, not a symptom. Printed bare next to the word OK it looks exactly
+    # like rows the index lost, and a reader who takes it for one goes hunting
+    # for a phantom. Naming the two moves closes the arithmetic on the page:
+    #     item(s) == pointer(s) found + inserted
+    # On the success path that identity is exact, so it is CHECKED rather than
+    # merely claimed: every id in `seen` is distinct and present in `items` (any
+    # violation is already an error above), so `missing` is exactly the
+    # difference and every one of them is inserted or errors out.
+    if len(items) != len(seen) + inserted:
+        sys.stderr.write(
+            'todo_index: INTERNAL — %d item(s) but %d pointer(s) found + %d inserted. '
+            'These are equal by construction on the success path; a mismatch means '
+            'the index walk and the item loader disagree.\n'
+            % (len(items), len(seen), inserted))
+        return 1
+    print('todo_index: OK — %d item(s), %d pointer(s) found, %d inserted, %d removed, '
+          'index current' % (len(items), len(seen), inserted, removed))
     return 0
 
 

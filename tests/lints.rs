@@ -28765,3 +28765,376 @@ fn no_growth_in_self_host_closure_identity_name_matching() {
          grep -rnE --include='*.gg' '(starts_with|contains)\\(\"(__Closure_|__call|__callable_|__gorget_closure_call_|__adapt_)' tests/fixtures/self_host_*",
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMMITTED GIT CONFLICT MARKERS — the tree-wide guard (todo/t1066)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The FINAL matcher set. **Strip ONE trailing `\r` from the line, then test
+/// these four arms**, each anchored at column 0.
+///
+/// The three bracket arms are widened UPWARD (`{7,}`) because widening them is
+/// FREE — measured 0 false positives over the whole tracked tree. The `=` arm
+/// stays at EXACTLY seven, because `^={7,}$` costs 4 false positives, all of
+/// them `============`. To regenerate that set (Core #15a — cite the grep, not
+/// a line number, because these move):
+///
+/// ```text
+/// grep -rn "^============" $(git ls-files)
+/// ```
+///
+/// ⚠ **The `=` arm's zero-false-positive property is CONTINGENT, not
+/// structural**: it holds only because those occurrences happen to be TWELVE
+/// `=` characters. A future snapshot or table rule emitting exactly SEVEN gives
+/// this arm its first false positive. When that day comes the answer is to
+/// change the emitter, not to weaken the arm — a lone `=======` at column 0 is
+/// the residue that partial hand-stripping of a conflict block leaves behind
+/// (see `no_committed_conflict_markers`' doc-comment).
+const CONFLICT_MARKER_ARMS: [&str; 4] =
+    [r"^<{7,}( |$)", r"^>{7,}( |$)", r"^\|{7,}( |$)", r"^=======$"];
+
+fn conflict_marker_arms() -> Vec<regex::Regex> {
+    CONFLICT_MARKER_ARMS.iter().map(|p| regex::Regex::new(p).unwrap()).collect()
+}
+
+/// Test ONE line against the matcher set.
+///
+/// ⚠ **THE `\r` STRIP IS EXPLICIT ON PURPOSE — DO NOT "SIMPLIFY" IT AWAY.**
+/// `str::lines()` strips `\r\n` for free, but on a CRLF file whose LAST line
+/// carries no final newline it yields `"=======\r"`, which `^=======$` misses.
+/// That is exactly one uncovered cell, and it is a real one: a plain `git merge`
+/// in a repo with `eol=crlf`, or any contributor running `core.autocrlf=true`
+/// (git's Windows default), produces CRLF conflict markers. Measured at the
+/// time of writing: no `.gitattributes` in the tree and `core.autocrlf` /
+/// `core.eol` both unset, so NOTHING in-repo pins line endings. The opener and
+/// closer arms survive CRLF on their own only because the label space precedes
+/// the `\r`; the `=` arm does not.
+fn line_is_conflict_marker(arms: &[regex::Regex], raw_line: &str) -> bool {
+    let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+    // Prefilter: every arm requires the first byte to be one of these four, so
+    // this cannot change the verdict — it only keeps 1M+ lines off the regexes.
+    if !matches!(line.as_bytes().first(), Some(b'<' | b'>' | b'|' | b'=')) {
+        return false;
+    }
+    arms.iter().any(|a| a.is_match(line))
+}
+
+/// **NOTHING IN THIS TREE DETECTED COMMITTED GIT CONFLICT MARKERS, AND ONE GOT
+/// IN.** Commit `ef171a34a` carried `<` × 7 / `=` × 7 / `>` × 7 marker lines in
+/// `TODO.md`'s generated index, on the integration branch. It passed a full
+/// `cargo test --test lints` run and `scripts/todo_index.py --write` at the
+/// time. `grep -rn "<<<<<<<\|conflict marker" tests/lints.rs scripts/*.sh`
+/// returned nothing: no lint, no script, no CI step looked for markers in any
+/// file type.
+///
+/// **WHY IT MATTERS BEYOND TIDINESS — the file-type argument is the whole
+/// severity case.** A marker in a `.rs` file fails the build loudly and is
+/// self-correcting. In `.md`, `.tsv`, `.txt` or `.db` it is SILENT, and the
+/// files that carry this repo's state are all of the second kind and all parsed
+/// leniently: `TODO.md` (the handover the next session reads), `DONE.md`,
+/// `tests/fixtures/robustness_map/MANIFEST.tsv`,
+/// `tests/sanitize/LEAK_ALLOWLIST.txt`, `tests/sanitize/CORPUS_MANIFEST.txt`,
+/// `scripts/figures.db`.
+///
+/// # RED-VERIFICATION — the planted-marker procedure
+///
+/// The guard must be shown FAILING on the class it was written to catch, in at
+/// least two file types, and GREEN again after restore:
+///
+/// ```text
+/// printf '<<<<<<< HEAD\n' >> TODO.md
+/// cargo test --test lints no_committed_conflict_markers     # expect FAIL
+/// git checkout -- TODO.md
+///
+/// printf '=======\n' >> tests/fixtures/robustness_map/MANIFEST.tsv
+/// cargo test --test lints no_committed_conflict_markers     # expect FAIL
+/// git checkout -- tests/fixtures/robustness_map/MANIFEST.tsv
+///
+/// cargo test --test lints no_committed_conflict_markers     # expect PASS
+/// ```
+///
+/// # ZERO EXCLUSIONS — and why there is no allowlist to grow
+///
+/// An exclusion list is exactly how guards go blind. This one has none, and it
+/// does not need one: the scan is over `git ls-files`, so `target/`, `.git/`
+/// and untracked scratch are out BY CONSTRUCTION rather than by list; and every
+/// legitimate prose quotation of a marker in this tree — `todo/t1066.md`,
+/// `TODO.md`, this very doc-comment — is backticked, indented, or behind a
+/// `///`, never at column 0.
+///
+/// ⚠ **IF AN EXCLUSION EVER BECOMES NECESSARY, THE SHAPE IS WRONG, NOT THE LIST
+/// TOO SHORT.** In practice there is exactly one way to acquire the first
+/// entry, so it is called out as a standing constraint:
+///
+/// ⛔ **NEVER PUT A CONFLICT MARKER AT COLUMN 0 INSIDE A RAW MULTI-LINE STRING
+/// LITERAL.** `git ls-files` lists `tests/lints.rs`, so this guard scans its own
+/// source. Writing the corpus below in the natural Rust form
+/// (`const C: &str = r#"…"#` with the markers at column 0) makes the guard fail
+/// on itself — measured, 4 findings and rc 1. Escaped one-line literals and
+/// `&[&str]` tables place the marker at column 0 *inside the string*, so
+/// detection is exercised faithfully while the FILE line starts with
+/// whitespace. Doc-comments are safe by construction: `/// <<<<<<< HEAD` starts
+/// with a slash.
+///
+/// # THE TWO HALVES ARE COMPLEMENTARY — ship both or ship neither
+///
+/// The inline table tests the MATCHER. The fire-count floors test the WALK. A
+/// perfect table proves the regexes and proves NOTHING about whether the walk
+/// opened a single file; without the floors this test would ship a beautiful
+/// table over a walk that reads zero files — and a vacuous walk is precisely
+/// this guard's own failure class.
+///
+/// ⚠ `tracked_files()`' own `assert!(set.len() > 500)` does NOT stand in for the
+/// floors. It lives inside a `OnceLock::get_or_init` closure shared with every
+/// other lint, so whichever lint arrives first consumes it; it proves git
+/// enumerated paths, not that THIS test opened one.
+///
+/// ⭐ The table is mandatory for a second reason: the tree currently contains
+/// ZERO CRLF files, so the walk NEVER exercises the CRLF cell. Verifying this
+/// guard by the tree sweep alone gives vacuous CRLF coverage.
+///
+/// # THE MARKER SET'S WITNESS
+///
+/// The spellings pinned below are not a hand-written list — they are the bytes
+/// git actually emits, reproduced with `git merge-file` under four
+/// configurations plus real `git merge` runs:
+///
+/// ```text
+/// git merge-file -p o b t                       # <<<<<<< L / ======= / >>>>>>> L
+/// git merge-file --diff3 -p o b t               # adds ||||||| L
+/// git merge-file -L "" -L "" -L "" -p o b t     # <<<<<<< and >>>>>>> with a
+///                                               #   TRAILING SPACE and no label
+/// git merge-file --marker-size=10 -p o b t      # 10-character markers
+/// ```
+///
+/// ⚠ `git merge-file` IGNORES `merge.conflictStyle`: `-c merge.conflictStyle=zdiff3
+/// git merge-file` emits no `|||||||`. Only the `--diff3` / `--zdiff3` FLAGS, a
+/// REAL `git merge` with the config set, or `git checkout --conflict=` honour it.
+/// A real merge under `merge.conflictStyle=zdiff3` emits `||||||| <sha>`; on a
+/// multi-base recursive merge git labels that line with its virtual merge base
+/// instead. `git rerere`'s preimage normalises BOTH ends to a BARE `<<<<<<<`
+/// and `>>>>>>>` with no trailing space — which is why every bracket arm needs
+/// the `( |$)` alternation and not a required trailing space. For the `|` arm no
+/// producer emits a bare form: `--diff3 -L ""` still gives `||||||| ` WITH the
+/// space, so that arm's `$` branch is pinned by construction, not by a witness.
+///
+/// # NAMED OMITTED CELLS (Core #12 — state what is not covered)
+///
+/// * **`conflict-marker-size` BELOW 7.** git accepts it, and it escapes ALL FOUR
+///   arms: with `conflict-marker-size=3` a real merge writes `<<< HEAD` / `===`
+///   / `>>> other`; with `=1`, `< HEAD` / `=` / `> other`. This is NOT closable
+///   by shape — those bytes are indistinguishable from a Python REPL transcript,
+///   a shell heredoc, and a setext underline, all of which occur legitimately
+///   and are pinned as MUST-NOT-MATCH below. It requires a non-default
+///   `conflict-marker-size` attribute, of which this tree has none; the
+///   `.gitattributes` assertion at the end of this test keeps that true for
+///   TRACKED attribute files. ⚠ Its limit, measured: an UNTRACKED
+///   `.gitattributes` is absent from `git ls-files` and still drives marker size
+///   through `git check-attr`, and so does `$GIT_DIR/info/attributes`. A
+///   tracked-file scan cannot see either.
+/// * **A UTF-8 BOM before the marker.** `"\u{feff}<<<<<<< HEAD"` does not match —
+///   after decoding, the marker is no longer at column 0. Exposure: zero tracked
+///   BOM files.
+/// * **Non-UTF-8 and vanished paths** are skipped, never panicked on. Measured:
+///   zero of each. `git ls-files` reads the INDEX, so a listed path can be absent
+///   from disk, and a sibling agent's checkout can race a path away mid-scan.
+#[test]
+fn no_committed_conflict_markers() {
+    let arms = conflict_marker_arms();
+
+    // ── PART 1 · THE MATCHER, table-driven ───────────────────────────────────
+    // Every MUST-MATCH row is bytes a git producer really emits; every
+    // MUST-NOT-MATCH row is a shape that occurs legitimately in this tree or in
+    // ordinary prose, so the guard can never become a false-positive generator.
+    //
+    // ⚠ MARKER SIZE 10 GETS A PER-LINE DISPOSITION, and it is deliberate: its
+    // opener and closer are MUST-MATCH, but its separator is exactly
+    // `==========` — BYTE-IDENTICAL to a markdown setext underline. That row is
+    // therefore MUST-NOT-MATCH on purpose. Under a non-default marker size the
+    // opener and closer still fire, so the block is still caught; the `=` arm
+    // does not have to carry it, and widening `=` to carry it would cost real
+    // false positives.
+    //
+    // ⛔ NO RAW MULTI-LINE STRING LITERALS HERE — see the doc-comment. Each row
+    // is a single escaped literal on an indented source line, so the marker sits
+    // at column 0 of the STRING while the FILE line starts with whitespace.
+    let table: &[(&str, bool, &str)] = &[
+        // ── MUST MATCH ──────────────────────────────────────────────────────
+        ("<<<<<<< o.txt", true, "default merge-file opener, with label"),
+        ("=======", true, "default separator"),
+        (">>>>>>> t.txt", true, "default merge-file closer, with label"),
+        ("<<<<<<< HEAD", true, "real `git merge` opener"),
+        (">>>>>>> worktree-agent-a4bf7e887d7183eef", true, "the live escape's closer"),
+        ("||||||| b.txt", true, "--diff3 base line, with label"),
+        ("||||||| 3cda1d1", true, "real merge, merge.conflictStyle=zdiff3"),
+        ("||||||| merged common ancestors", true, "multi-base recursive merge label"),
+        ("||||||| ", true, "--diff3 -L \"\": trailing space, NO label"),
+        ("<<<<<<< ", true, "empty-label opener: trailing space, NO label"),
+        (">>>>>>> ", true, "empty-label closer: trailing space, NO label"),
+        ("<<<<<<<", true, "rerere preimage: BARE opener, no trailing space"),
+        (">>>>>>>", true, "rerere preimage: BARE closer, no trailing space"),
+        ("=======\r", true, "CRLF separator — the cell `.lines()` alone misses"),
+        ("<<<<<<< HEAD\r", true, "CRLF opener"),
+        (">>>>>>> other\r", true, "CRLF closer"),
+        ("<<<<<<<<<< ours", true, "--marker-size=10 opener (per-line disposition)"),
+        (">>>>>>>>>> theirs", true, "--marker-size=10 closer (per-line disposition)"),
+        // ── MUST NOT MATCH ──────────────────────────────────────────────────
+        ("==========", false, "--marker-size=10 SEPARATOR — deliberately not matched"),
+        ("============", false, "the live tree occurrences — the highest-value row"),
+        ("===", false, "setext underline / marker-size-3 separator (omitted cell)"),
+        ("=", false, "marker-size-1 separator (omitted cell)"),
+        ("------", false, "setext underline, the other spelling"),
+        ("======= ", false, "seven `=` plus a trailing space — pins the `$` anchor"),
+        ("=======x", false, "seven `=` plus content — pins the `$` anchor"),
+        ("<<<<<<<x", false, "seven `<` then a non-space — pins the `( |$)` alternation"),
+        (">>>>>>>x", false, "seven `>` then a non-space — pins the `( |$)` alternation"),
+        ("|||||||x", false, "seven `|` then a non-space — pins the `( |$)` alternation"),
+        ("| a | b |", false, "markdown table row, against the `|{7,}` arm"),
+        ("|-----|-----|", false, "markdown table rule, against the `|{7,}` arm"),
+        ("`<<<<<<< HEAD`", false, "backticked prose — the todo/t1066.md shape"),
+        ("  <<<<<<< HEAD", false, "indented prose"),
+        ("- **`<<<<<<< HEAD`**", false, "list-item prose"),
+        (">>> import os", false, "Python REPL transcript"),
+        ("<<< foo", false, "marker-size-3 opener (omitted cell) / shell"),
+        ("<<EOF", false, "shell heredoc at column 0"),
+        ("> quoted line", false, "diff / patch / mail-quote line"),
+        ("< removed line", false, "diff line"),
+        ("", false, "empty line"),
+    ];
+
+    let mut table_failures: Vec<String> = Vec::new();
+    let (mut want_match, mut want_no_match) = (0usize, 0usize);
+    for (line, must_match, why) in table {
+        if *must_match {
+            want_match += 1;
+        } else {
+            want_no_match += 1;
+        }
+        let got = line_is_conflict_marker(&arms, line);
+        if got != *must_match {
+            table_failures.push(format!(
+                "  {:?} — expected {}, got {} ({why})",
+                line,
+                if *must_match { "MATCH" } else { "NO MATCH" },
+                if got { "MATCH" } else { "NO MATCH" },
+            ));
+        }
+    }
+    assert!(
+        table_failures.is_empty(),
+        "the conflict-marker MATCHER changed behaviour on {} of {} pinned rows:\n{}\n\n\
+         Every MUST-MATCH row is bytes a git producer really emits; every \
+         MUST-NOT-MATCH row occurs legitimately in this tree or in ordinary prose. \
+         Do not edit a row to match what the matcher now does — that is the \
+         hand-written-literal failure this table exists to prevent. Re-derive the \
+         MUST-MATCH bytes from the witness commands in the doc-comment.",
+        table_failures.len(),
+        table.len(),
+        table_failures.join("\n"),
+    );
+    // The table is a SET, and a set that shrinks silently stops covering. These
+    // are not ratchets to raise — they are the row counts the dispositions above
+    // were reasoned about. Adding a row means bumping the matching side.
+    assert_eq!(
+        (want_match, want_no_match),
+        (18, 21),
+        "the conflict-marker table's row counts changed ({want_match} must-match, \
+         {want_no_match} must-not-match). Adding a row is fine — update this pair \
+         in the same edit. DELETING one is how the table quietly stops covering a \
+         spelling git still emits."
+    );
+
+    // ── PART 2 · THE WALK, over everything git tracks ────────────────────────
+    let mut paths: Vec<&PathBuf> = tracked_files().iter().collect();
+    paths.sort();
+
+    let mut files_read = 0usize;
+    let mut lines_scanned = 0usize;
+    let mut missing_on_disk = 0usize;
+    let mut non_utf8 = 0usize;
+    let mut findings: Vec<String> = Vec::new();
+
+    for path in paths {
+        // Skip, never panic: `git ls-files` reads the index, so a listed path
+        // can be gone from disk, and a sibling worktree's checkout can race one
+        // away mid-scan.
+        let Ok(bytes) = fs::read(path) else {
+            missing_on_disk += 1;
+            continue;
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            non_utf8 += 1;
+            continue;
+        };
+        files_read += 1;
+        // `split('\n')` rather than `.lines()`, paired with the explicit `\r`
+        // strip inside the matcher — see `line_is_conflict_marker`. (This counts
+        // ~1 more "line" per file than `.lines()` would, from the trailing empty
+        // segment after a final newline; the floor below is nowhere near tight
+        // enough for the difference to matter, and nobody should chase it.)
+        for (i, raw) in text.split('\n').enumerate() {
+            lines_scanned += 1;
+            if line_is_conflict_marker(&arms, raw) {
+                findings.push(format!(
+                    "  {}:{}: {}",
+                    path.display(),
+                    i + 1,
+                    raw.strip_suffix('\r').unwrap_or(raw),
+                ));
+            }
+        }
+    }
+
+    // ── FIRE COUNTS · assert the walk actually RAN, before judging its result ─
+    // A path-resolution bug that makes every `fs::read` fail-and-skip leaves
+    // `findings` empty and greens this test vacuously. These two floors are the
+    // only thing standing between "no markers in the tree" and "no files were
+    // opened". They are FLOORS, deliberately far below the live figures, so
+    // ordinary tree growth and pruning never touch them.
+    assert!(
+        files_read > 5_000,
+        "the conflict-marker walk opened only {files_read} files ({missing_on_disk} missing \
+         on disk, {non_utf8} non-UTF-8) — the SCAN is broken, not the tree. A guard that \
+         reads nothing reports no findings. Regenerate the real figure with:\n  \
+         git ls-files | wc -l",
+    );
+    assert!(
+        lines_scanned > 500_000,
+        "the conflict-marker walk scanned only {lines_scanned} lines across {files_read} \
+         files — the SCAN is broken, not the tree. Regenerate the real figure with:\n  \
+         git ls-files -z | xargs -0 cat | wc -l",
+    );
+
+    assert!(
+        findings.is_empty(),
+        "{} committed git conflict marker line(s) in tracked files:\n{}\n\n\
+         These are merge residue, not content. Resolve the conflict and delete ALL of \
+         the block's marker lines — a partial strip that removes the `<` and `>` lines \
+         leaves a lone `=======` behind, which this guard also rejects, on purpose.\n\
+         A marker in a `.rs` file breaks the build loudly; in `.md`, `.tsv`, `.txt` or \
+         `.db` it is silent, which is why this scan is tree-wide.",
+        findings.len(),
+        findings.join("\n"),
+    );
+
+    // ── PART 3 · keep the sub-7 omitted cell CLOSED where it is closable ─────
+    // Marker sizes below 7 escape all four arms and are not closable by shape.
+    // They require a `conflict-marker-size` attribute. This tree has no tracked
+    // `.gitattributes` at all, so the omitted cell is currently unreachable —
+    // pin that, so introducing one is a decision rather than an accident.
+    for path in tracked_files() {
+        if path.file_name().and_then(|n| n.to_str()) != Some(".gitattributes") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(path) else { continue };
+        assert!(
+            !text.contains("conflict-marker-size"),
+            "{} sets `conflict-marker-size`. Marker sizes below 7 escape ALL FOUR arms of \
+             the conflict-marker matcher (`<<< HEAD` / `===` / `>>> other` at size 3), and \
+             they are NOT closable by shape — those bytes are indistinguishable from a \
+             Python REPL transcript, a shell heredoc and a setext underline. Either drop \
+             the attribute or re-open the matcher design with that trade-off on the table.",
+            path.display(),
+        );
+    }
+}
