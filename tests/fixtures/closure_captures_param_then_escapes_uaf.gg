@@ -1,36 +1,35 @@
-# KNOWN GAP — a closure that CAPTURES A PARAMETER and then ESCAPES its
-# defining function reads freed memory. `AddressSanitizer: heap-use-after-free`
-# under `--sanitize`; on a plain build rc 0 with SILENTLY WRONG OUTPUT, which
-# is the worse outcome. Deterministic, 3/3 runs, at `f3feea79` and unchanged by
-# R47 Track B.
+# CLOSURE-ESCAPE CAPTURE AXIS, cell (param × literal). See
+# `closure_escape_capture_axis_param_named.gg` for the full 2×2.
 #
-# MECHANISM. `make_adder` takes `String p`, builds a closure capturing `p`, and
-# returns it. `p` is a parameter — a BORROW — and the capture stores the
-# borrowed handle rather than an owned copy, so `make_adder`'s scope exit frees
-# `p` while the escaping closure environment still points at it:
+# `make_adder` takes `String p`, builds a closure capturing it, and RETURNS the
+# closure. `p` is a parameter, so it binds a BORROW — the caller keeps
+# ownership — and the environment outlives `make_adder`'s frame by construction.
+# The capture is an ownership boundary, so a live borrow clones: the escaping
+# environment holds its own `String`, and `make_adder`'s scope exit frees only
+# the caller's value.
 #
-#     freed by:   gorget_string_free  <- make_adder  <- main
-#     read by:    gorget_str_cat      <- mk          <- __Closure_0__call
+# Without the rule the environment stored the borrowed handle:
 #
-# A closure capture IS an ownership boundary — "Clones happen only at ownership
-# boundaries, where the destination must own (… returns, closure captures)" —
-# so the capture must clone-if-the-source-is-live / move-if-it-is-dead. Here it
-# does neither.
+#     freed by:   gorget_string_free  ← make_adder  ← main
+#     read by:    gorget_str_cat      ← mk          ← __Closure_0__call
 #
-# ⚠ FAMILY, AND WHAT DISCRIMINATES THIS MEMBER. `t0704` is the same boundary
-# (closure capture) but its trigger is MUTATION of the captured collection
-# (64 pushes force a realloc under a captured element view) and the value is a
-# local. `t0108`(c) is the same boundary for a refcount `Shared` handle. THIS
-# one needs no mutation and no collection: the captured thing is a PARAMETER,
-# and the deallocation is the DEFINING FUNCTION'S OWN scope exit, reached
-# purely by the closure outliving its frame via `return`. So a fix aimed at the
-# mutation prescan or at refcount incref closes neither of the others nor this.
+# ⚠ NEITHER MUTATION NOR A COLLECTION IS NEEDED. The sibling cells trigger
+# through a realloc of a captured collection; this one needs only the closure
+# outliving its frame via `return`. The deallocation is the defining function's
+# own scope exit.
 #
-# ⚠ THE CAPTURE MUST BE A PARAMETER. `Callable[String()] make(): return (): mk("hel","lo")`
-# — same escape, no capture — is CLEAN at HEAD, so the escape alone is not the
-# defect.
+# ⚠ AND THE CAPTURE NEED NOT BE A PARAMETER — that claim was false. A captured
+# LOCAL escapes identically (`closure_escape_capture_axis_local_literal.gg`);
+# what used to save the local case was the SPELLING, since
+# `check_expr_for_escaping_closures` never inspects a returned closure literal.
+# The control that IS meaningful is `Callable[String()] make(): return ():
+# mk("hel","lo")` — same escape, no capture — which was always clean.
 #
-# INTENDED: prints `hello`, rc 0, on C and LLVM, ASan-clean.
+# ⚠ A plain build was rc 0 with SILENTLY WRONG OUTPUT, which is worse than the
+# crash the collection cells give; `--sanitize` reports
+# `AddressSanitizer: heap-use-after-free`.
+#
+# Prints `hello`, rc 0, both backends, ASan-clean.
 String mk(String a, String b):
     return a + b
 

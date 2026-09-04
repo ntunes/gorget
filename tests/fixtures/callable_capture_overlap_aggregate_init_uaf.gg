@@ -1,29 +1,29 @@
-# `todo/t0704` — a closure captures a collection, a SIBLING argument of the
-# same aggregate init reallocs it, and the capture dangles.
+# CAPTURE OWNERSHIP — the SIBLING-EVALUATION-ORDER cell. A closure captures a
+# collection in one argument of an aggregate init while a SIBLING argument of
+# the same init reallocates that collection.
 #
-# ⚠ WHY THIS FIXTURE EXISTS AND WHAT CHANGED. Before closure literals were
-# materialized at consuming positions, this shape was rc 139 on both backends —
-# it died on `todo/t0937`'s never-constructed closure before the capture could
-# be read at all. It is now rc 0, and it prints a WRONG ANSWER over a
-# use-after-free: `7` then `70`, where both the language definition and
-# `ggdef run` say `7` then `7`. A crash becoming a silently wrong number is
-# NOT an improvement (Core #8), which is why this is pinned here rather than
-# left unremarked.
+# The capture and the realloc happen inside one `Pair(…)` construction, so this
+# cell adds an emission-ORDER dimension (D10(b): reason about when a thing
+# happens relative to its siblings, which is only visible in the IR) on top of
+# the capture-boundary rule. It does not change the root: the same program with
+# no aggregate at all behaves identically, and both are answered by the
+# environment holding its own value.
 #
-# MECHANISM (`todo/t0704`, CRITICAL, filed 2026-08-27): a closure's captured
-# collection handle is a BORROW bound at capture time, so any realloc of the
-# source severs it — wherever the realloc is spelled. `t0704` is explicit that
-# this is NOT a prescan gap and that the fix belongs at the capture boundary.
-# The aggregate-init spelling below adds a sibling-evaluation-order dimension
-# (`docs/define-gorget/decisions.md` D10(b) Addendum 3: reason about emission
-# ORDER, not merely emission) but does not change the root: the same program
-# with NO aggregate at all UAFs identically.
+# ⚠ WHAT THE WRONG ANSWER LOOKS LIKE HERE. Without the rule this is not a crash
+# — it is rc 0 printing `7` then `70`, a silently wrong number over a
+# use-after-free, where both the language definition and `ggdef run` say `7`
+# then `7`. A crash becoming a wrong number is not an improvement (Core #8),
+# which is why the second line is asserted rather than the exit code.
 #
-# ⚠ THE REALLOC IS LOAD-BEARING — 5000 pushes, not one. ⚠ AND THE INSTRUMENT
-# IS C+ASan: under `--backend=llvm --sanitize` this reports only a leak, no
-# use-after-free (`todo/t0731`, the sweep's second-lane gap).
+# ⚠ THE REALLOC IS LOAD-BEARING — 5000 pushes, not one.
 #
-# INTENDED: prints 7 then 7, ASan-clean.
+# ⚠ AND THE INSTRUMENT IS C + ASan: under `--backend=llvm --sanitize` this shape
+# reports only a leak, no use-after-free (`todo/t0731`, the sweep's second-lane
+# gap). `p.f.clone()` is deliberately live — `gorget_closure_clone_to_owned`
+# shallow-copies the 16-byte `{fn_ptr, env}` handle, so the clone and the
+# original share one environment and the cell also covers that aliasing.
+#
+# Prints `7` then `7`, both backends.
 struct Pair:
     Callable[int(int)] f
     int n
