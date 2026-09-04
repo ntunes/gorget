@@ -512,6 +512,36 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **✅ A1-M · CONFIRMING REVIEW: INTEGRATE. THE LEAK BLOCK IS FIT FOR THE OWNER.** Two closing errata sent;
+  merge on their return.
+  ⭐ **THE REVIEWER RE-MEASURED ALL SIX SHAPES FROM SCRATCH, ON BOTH LANES, WITHOUT USING THE EXECUTOR'S
+  NUMBERS — every v3 row EXACT.** ⭐⭐ **AND IT REPRODUCED THE FALSE ACQUITTAL ITSELF:** short-literal twins
+  of **both** leaking shapes read **CLEAN** on C. **So the stated mechanical cause was not merely plausible
+  — it was SEEN FIRING.**
+  ⚡ **ITS VERDICT ON WHY THIS VERSION IS DIFFERENT, and it is the reason the ask can go up:** *"the previous
+  two versions read as authoritative because they asserted a SCOPE on the strength of a CONTROL NOBODY
+  RE-DERIVED. v3 does not do that … it now carries the FALSIFIER — the short-literal control — as a STATED
+  RULE rather than an anecdote, so the specific failure mode that produced v1 and v2 is CLOSED rather than
+  merely apologised for."* ⊕ And on keeping both corrections visible: *"the owner is ruling on inflow
+  attribution, and the reasoning's HISTORY is part of what he is ruling on."*
+  ✅ **ALL SIX PACK SITES NEUTRALISED BY LINE:** 1, 2, 3, 4, 6 → rc 139; **site 5 → rc 0, stdout
+  byte-identical, LEAK PROFILE UNCHANGED** ⇒ **neither stdout, exit code NOR allowlist pins it** — *"the
+  lint is the only thing pinning site 5"* is exactly true. ⭐ **The PEEL warning is LOAD-BEARING** —
+  neutralising the `expected_type` override takes the fixture to rc 139.
+  ⭐ **AND IT BACKS THE EXECUTOR'S REFUSAL TO DELETE SITE 5, in stronger terms:** deleting it would trade a
+  real invariant for a cosmetic one, because **relying on site 3 to catch the prelude payload is PRECISELY
+  THE DOWNSTREAM-REPAIR SHAPE CORE #1 EXISTS TO FORBID**, leaving the class one refactor from silent
+  regression.
+  ⛔ **ERRATUM 1 · "41 characters" IS OFF BY ONE** — the literal is 41; the **runtime value is 42** (43 B =
+  42 + NUL), in **six** places. **Cosmetic anywhere else; not in a block whose entire authority is
+  measurement precision, on its third revision, that the owner is about to rule on.**
+  ⛔ **ERRATUM 2 (real coverage) · `t0972`'s CLEAN LOCAL-SCRUTINEE CONTROL LIVES ONLY IN PROSE.** It is the
+  discriminator that makes the item's axis meaningful and **it is not a cell** — **wire it, or a future fix
+  that regresses the local form goes uncaught** (Core #12).
+  ⚠ **AND MY OWN SCOPE INSTRUCTION TO THAT REVIEWER WAS WRONG** — I gave the range one commit too early, so
+  `src/` is **not** empty over the span I named. The reviewer caught it, checked the **actual** range, and
+  proceeded. **A scoping instruction is a load-bearing claim too.**
+
 - **⚡ K · EXECUTOR RETURNED (`a4f63e55a`, `96f88408b`) — OUTPUT-REVIEW LAUNCHED. AND THE BRIEF WAS WRONG
   ABOUT THE BIGGEST THING.**
   ⛔⛔ **"SELF-HOST: ALREADY CORRECT … NO PORT IS OWED" IS FALSE — and §5, ADDENDUM 4 S-E and ADDENDUM 5 ALL
