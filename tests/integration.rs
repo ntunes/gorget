@@ -2464,6 +2464,41 @@ fn box_trait_closure_return() {
     run_gg("box_trait_closure_return.gg", "R2");
 }
 
+/// KNOWN GAP `t1084`, SELF-HOST lane — the CLOSURE-RETURN cell of the missing
+/// GIR-level trait-object pack.
+///
+/// The closure's declared return type is `Box[Speaker]`, so its result slot is
+/// a `{data, vtable}` pair; the body builds a `Box[Robot]` and nothing packs
+/// the concrete box into the pair. The emitted body does not even memcpy an
+/// unpacked box the way the collection cells do — it returns a ZEROED
+/// `__gg_Box__Speaker`, and `.speak()` dispatches through a NULL vtable.
+///
+/// ⚠ THIS CELL USED TO FAIL AT LINK, AND NOW FAILS AT RUN TIME. While the
+/// self-host typed the closure `int64_t` the dynamic call emitted
+/// `int64_t__speak` and the build died with `undefined reference`. Typing the
+/// closure from its declaration is correct and is what let the program link;
+/// the link error had been masking the missing pack, not preventing it. The
+/// severity rise is real and belongs to `t1084`, whose other cells are
+/// `known_gaps/` repros — this one is a live top-level fixture.
+///
+/// ⚠ NOTHING ELSE OBSERVES IT: the robustness map has no entry here,
+/// `sanitize_sweep.sh` has no self-host lane, and the parity ledger is
+/// bucket-neutral (non-MATCH as CC-FAIL before, non-MATCH as CRASH now). This
+/// pin is the durable record.
+#[test]
+#[ignore = "KNOWN GAP t1084 (closure-return cell): the self-host has no \
+GIR-level trait-object pack, so a closure declared to return Box[Trait] returns \
+a zeroed trait box and the dynamic call SEGVs (rc 139). Asserts the INTENDED \
+R2 on the self-host lane; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn box_trait_closure_return_self_host() {
+    sh_known_gap_expect(
+        "box_trait_closure_return.gg",
+        "sh_box_trait_closure_return",
+        "R2",
+    );
+}
+
 // Track G regression (2026-07-28): a CROSS-MODULE trait imported via
 // `from mod import Trait` types `Box[Trait]` as `Generic(Box, [Import(...)])`
 // rather than `TraitObject(...)` (the same-file shape). Pre-E1 that fell
@@ -6347,20 +6382,36 @@ fn fstring_interp_match_scrutinee_binding() {
 /// ⚠ Deliberately asserts the OUTPUT: `grep -c lower_fail` on the emitted C
 /// gives 1 for the Vector/Dict arms and 0 for the String/bytes arms, so a
 /// marker-grep guard is structurally blind to half the class.
-/// KNOWN GAP `t0877`, SELF-HOST lane — a closure LITERAL whose body
-/// `guess_return_type` cannot type falls to `I64_TYPE`, so the closure is
-/// emitted `int64_t`-returning. Two arms of the same helper: an `Ok(..)` /
-/// `Error(..)` body with no `expected_type` in scope (the `Some(x)` sibling arm
-/// MINTS `Option__U`; the Result constructors are gated on `expected_type`,
-/// which is `-1` at a closure-argument site), and a body that is a bare
-/// PARAMETER identifier (the EIdentifier arm reads `fn_sigs` only — the
-/// self-host does not register closure params as locals the way Rust gg's
-/// `lower_closure` does). Rust gg compiles and runs both. NOT `t0770`: nothing
-/// is erased here, the inference simply has no arm. NOT `t0230`(b), which is
-/// the same helper's `SMatch`/`SIf`-tail arm returning UNIT.
+/// KNOWN GAP `t0877`, SELF-HOST lane — a closure LITERAL at a BUILTIN-METHOD
+/// ARGUMENT, where nothing ambient names its return type and
+/// `guess_return_type` has to answer alone. It has no arm for this body, so it
+/// falls to `I64_TYPE` and the closure is emitted `int64_t`-returning.
+///
+/// ⚠ THE SUBJECT IS THE POSITION, NOT THE BODY SHAPE — and the fixture holds
+/// the body shape FIXED to say so. Its two halves are the same
+/// `String`-returning bare-parameter body: at a direct free-call argument
+/// (`result_and_then((String s): Ok(mk(s, "?")))`) the callee's declared
+/// `Callable[R(..)]` parameter type IS the ambient expected type, the
+/// `GtFnPtr` peel answers, and that half compiles and runs. At
+/// `o.unwrap_or_else((String e): e)` the ambient expected type is the
+/// RECEIVER's own `Result` (regenerate: `grep -n 'ctx.expected_type =
+/// _combinator_et' tests/fixtures/self_host_lowerer/lower_expr.gg`), which
+/// names no return type, so the peel correctly declines and the body inference
+/// is on its own.
+///
+/// ⇒ No widening of a BODY-SHAPE rule reaches this. It needs the arms
+/// themselves: Tier-1c closure-param registration, a `lookup_local` in the
+/// `EIdentifier` arm beside the `fn_sigs` read, and element-type propagation
+/// through `EMethodCall`. Rust gg carries BOTH the ambient override and that
+/// fallback; the self-host now carries only the override.
+///
+/// NOT `t0770`: nothing is erased here. NOT `t0230`(b), which is the same
+/// helper's `SMatch`/`SIf`-tail arm returning UNIT.
 #[test]
-#[ignore = "KNOWN GAP t0877: self-host guess_return_type types an Ok(..)-bodied \
-or bare-param-bodied closure literal as int64_t; TODO.md."]
+#[ignore = "KNOWN GAP t0877: at a BUILTIN-METHOD argument the ambient expected \
+type is the receiver's own Option/Result rather than a Callable, so the FnPtr \
+peel declines and self-host guess_return_type still types the closure literal \
+int64_t. The same body shape at a direct-call argument now works; TODO.md."]
 #[serial(self_host_lowerer_driver)]
 fn sh_closure_literal_ok_body_typed_int() {
     sh_known_gap_expect(
@@ -6461,40 +6512,44 @@ fn sh_closure_clone_escape_env_field_leak() {
     assert_eq!(stdout, "2", "self-host lane printed the wrong value");
 }
 
-/// KNOWN GAP `t0877`, ARMS (c) AND (d) — the same helper, two more body shapes.
+/// SELF-HOST LANE — a closure literal's return type at a declared
+/// `Callable[R(...)]` DESTINATION, over two body shapes the body inference
+/// alone cannot type: a bare LOCAL identifier (`(): s`) and a METHOD CHAIN
+/// (`(): v.get(0).unwrap()`).
 ///
-/// (c) a bare LOCAL identifier body (`(): s`) — `guess_return_type` has no
-/// `EIdentifier` arm AT ALL, only `ECall(EIdentifier(fname), …)`, so a bare
-/// identifier falls off the end of the match to `I64_TYPE`. Arm (b) names the
-/// closure-PARAMETER spelling and diagnoses it as "the EIdentifier arm consults
-/// `fn_sigs` only"; that arm does not exist, and the LOCAL spelling fails
-/// identically, so the subject is wider than (b) states.
+/// Neither shape has an answer in `guess_return_type`: its `EIdentifier` arm
+/// consults `gmod.fn_sigs` and nothing else, so it is INERT for a bare local or
+/// a closure parameter (regenerate: `grep -n 'case EIdentifier(name):'
+/// tests/fixtures/self_host_lowerer/lower_closures.gg` — the first hit is the
+/// one inside `guess_return_type`), and its `EMethodCall` arm does not carry a
+/// collection's element type back out. Both used to fall through to the
+/// `I64_TYPE` default and emit an `int64_t`-returning closure.
 ///
-/// (d) a METHOD-CHAIN body over a `Vector[String]` (`(): v.get(0).unwrap()`) —
-/// the `EMethodCall` arm does not carry the element type out of the collection.
+/// The DECLARATION already names the return type, so neither has to be
+/// re-derived: `compute_closure_sig` peels the ambient expected type's
+/// `GtFnPtr` and that answer wins (regenerate: `grep -n 'int amb_peeled =
+/// peel_ptr_tid' tests/fixtures/self_host_lowerer/lower_closures.gg`).
 ///
-/// ⚠ THE DISCRIMINATOR IS THE BODY SHAPE, NOT THE RETURN TYPE: the same
-/// `String`-returning closure with a plain CALL body compiles and runs on the
-/// self-host, which is why this is `guess_return_type` and not a lost
-/// `Callable[…]` annotation. It is also why three capture-ownership cells
-/// (`closure_capture_then_mutate_source_uaf`,
-/// `closure_capture_string_then_reassign_source`,
-/// `closure_capture_param_bare_identifier_body`) cannot run on the self-host
-/// lane — their body shape is the thing under test.
+/// ⚠ THE DISCRIMINATOR IS THE POSITION, NOT THE BODY SHAPE. These very shapes
+/// still fail at a BUILTIN-METHOD argument, where the ambient expected type is
+/// the receiver's own `Option`/`Result` rather than a callable, so the peel
+/// finds no `GtFnPtr` and correctly declines. `sh_closure_literal_ok_body_typed_int`
+/// pins that residual; `todo/t0877` is its item.
 #[test]
-#[ignore = "KNOWN GAP t0877 (c)+(d): the self-host's guess_return_type has an \
-EIdentifier arm that consults fn_sigs ONLY (inert for a bare local or param) and \
-no element-type propagation through a method chain, so a String-returning \
-closure with a bare-local or method-chain body falls through to the I64_TYPE \
-default, is emitted int64_t-returning, and the C build fails. Rust gg runs \
-both. TODO.md."]
 #[serial(self_host_lowerer_driver)]
 fn sh_closure_string_body_local_and_method_chain() {
-    sh_known_gap_expect(
-        "known_gaps/sh_closure_string_body_local_and_method_chain.gg",
+    sh_lane_expect(
+        "sh_closure_string_body_local_and_method_chain.gg",
         "sh_closure_string_body_local_and_method_chain",
-        "hello\nworld\n",
+        "hello\nworld",
     );
+}
+
+/// The RUST lane on the same source, so the graduated fixture is pinned on both
+/// lanes rather than only on the one that used to fail.
+#[test]
+fn sh_closure_string_body_local_and_method_chain_rust() {
+    run_gg("sh_closure_string_body_local_and_method_chain.gg", "hello\nworld");
 }
 
 /// KNOWN GAP `t0959`, SELF-HOST lane — an INDIRECT call with a `&`-sigil
@@ -6809,7 +6864,24 @@ fn sh_callable_local_var_consuming_arg() {
 /// the self-host lowerer driver, emit C for the fixture, compile and run it,
 /// and assert the CORRECT output — the output Rust gg already produces. Each
 /// caller is `#[ignore]`d until its lane gap closes.
+///
+/// A gap that closes graduates to `sh_lane_expect`, the same body under a name
+/// that does not claim the cell is broken. One implementation, two
+/// dispositions — so a graduation is an `#[ignore]` and a call name away, never
+/// a re-derivation of the assertion.
 fn sh_known_gap_expect(fixture_rel: &str, tag: &str, expected: &str) {
+    sh_lane_expect(fixture_rel, tag, expected)
+}
+
+/// Shared body for the LIVE self-host-lane pins: build (cached) the self-host
+/// lowerer driver, emit C for the fixture, compile and run it, and assert the
+/// output Rust gg produces on the same source.
+///
+/// ⚠ `self_host_emit_cc_run` returns `trim_end()`ed stdout, so an `expected`
+/// carrying a trailing newline can never match. The `#[ignore]`d assertion this
+/// helper's first live caller graduated from carried exactly that, and being
+/// ignored is why nobody found out.
+fn sh_lane_expect(fixture_rel: &str, tag: &str, expected: &str) {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -19620,6 +19692,113 @@ fn closure_escape_capture_axis_param_named() {
 #[test]
 fn closure_escape_capture_axis_local_literal() {
     run_gg("closure_escape_capture_axis_local_literal.gg", "hello!");
+}
+
+// ── THE SAME CELLS ON THE SELF-HOST LANE ──
+//
+// Every cell above asserts the RUST lane. Four of them the self-host could not
+// compile at all: their closure bodies are bare identifiers and method chains,
+// the shapes `guess_return_type` has no arm for, so the closure came out
+// `int64_t`-returning and the C build failed. The body shape is the thing under
+// test in each one, so none could be respelled around it (AGENTS.md, "Don't
+// redesign around compiler gaps").
+//
+// `compute_closure_sig` now prefers the AMBIENT expected type: at a declared
+// `Callable[R(...)]` destination the declaration already names the return type,
+// so the inference does not get to disagree with it. These pins are what make
+// that a fact about the LANE. Without them, reverting the port reddens nothing
+// a run can see — `self_host_runtime_diff` is diagnostic-always-pass, and all
+// three of its parity assertions take an `eprintln!` branch under
+// `cfg!(debug_assertions)` instead of evaluating (`todo/t0924`), so the whole
+// ledger is silent in the profile a developer runs.
+
+/// SELF-HOST lane, captured COLLECTION with a METHOD-CHAIN body.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn closure_capture_then_mutate_source_uaf_self_host() {
+    sh_lane_expect(
+        "closure_capture_then_mutate_source_uaf.gg",
+        "sh_cap_mutate_uaf",
+        "hello",
+    );
+}
+
+/// SELF-HOST lane, captured SCALAR RESOURCE with a bare-LOCAL body.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn closure_capture_string_then_reassign_source_self_host() {
+    sh_lane_expect(
+        "closure_capture_string_then_reassign_source.gg",
+        "sh_cap_reassign",
+        "helloworld",
+    );
+}
+
+/// SELF-HOST lane, captured PARAMETER with a bare-identifier body.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn closure_capture_param_bare_identifier_body_self_host() {
+    sh_lane_expect(
+        "closure_capture_param_bare_identifier_body.gg",
+        "sh_cap_param_bare",
+        "hello",
+    );
+}
+
+/// The ALLOW cell for a move-sigil closure-body tail — a `Callable[String()]`
+/// destination whose body is a direct top-level move of a local.
+///
+/// ⚠ IT HAD NO TEST AT ALL until this pin. The fixture was committed as the
+/// positive control for an ALLOW list, its intent stated only in its header,
+/// and nothing ever ran it: a fixture's INTENT is not coverage, and the wiring
+/// lint that would have caught this governs `known_gaps/` only.
+#[test]
+fn sound_move_operand_closure_tail_allowed() {
+    run_gg("sound_move_operand_closure_tail_allowed.gg", "hello");
+}
+
+/// The same cell on the SELF-HOST lane, which could not compile it either.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sound_move_operand_closure_tail_allowed_self_host() {
+    sh_lane_expect(
+        "sound_move_operand_closure_tail_allowed.gg",
+        "sh_move_tail_allowed",
+        "hello",
+    );
+}
+
+/// ⭐ THE OTHER POSITION — a closure literal passed straight to a function
+/// whose parameter is declared `Callable[R(...)]`.
+///
+/// The four cells above all sit at a declared `Callable[...]` DESTINATION.
+/// This one sits at a direct-call ARGUMENT, and it is a separate cell of the
+/// rule rather than a restatement: the ambient expected type arrives from the
+/// CALLEE's parameter type (regenerate: `grep -n 'int prev_expected_arg =
+/// ctx.expected_type' tests/fixtures/self_host_lowerer/lower_expr.gg` — the
+/// `-1` there is an initial clear, immediately overwritten with the peeled
+/// param type), not from a local's declared type.
+///
+/// It carries three body shapes — `Ok(..)`, `Error(..)` and a bare parameter —
+/// because the position is what the rule keys on, so the shapes must vary for
+/// the claim to be about the position at all.
+#[test]
+fn closure_literal_ambient_return_at_call_arg() {
+    run_gg(
+        "closure_literal_ambient_return_at_call_arg.gg",
+        "hello?\nbad!\nworld",
+    );
+}
+
+/// The same cell on the SELF-HOST lane.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn closure_literal_ambient_return_at_call_arg_self_host() {
+    sh_lane_expect(
+        "closure_literal_ambient_return_at_call_arg.gg",
+        "sh_ambient_call_arg",
+        "hello?\nbad!\nworld",
+    );
 }
 
 /// ⭐ THE CAPTURE-COST AXIS — the capture site pays the hand-written count, and
@@ -42355,7 +42534,13 @@ fn self_host_runtime_diff() {
     // in `infer_stmt_return_type`, Vector-slice arm in `lower_expr.gg`, and
     // the `??` divergent-tail R1+R2 fold) that let ~12 previously-UNADJ
     // fixtures cleanly adjudicate.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 443;
+    // Ratcheted 2026-09-04 (R49 Track T1's re-seed run, gates ARMED): ADJ-MATCH
+    // 496 of MATCH 1564, BOTH-WRONG 2 (held). ⚠ THE GAIN IS NOT T1's ALONE —
+    // the floor had not been re-seeded since before this round's earlier
+    // landings, so most of the +53 is theirs; it is locked in here because a
+    // floor 53 below the measurement gates nothing, and this is the canonical
+    // armed invocation that produces it.
+    const GGDEF_ADJUDICATED_FLOOR: usize = 496;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -42652,7 +42837,16 @@ fn self_host_runtime_diff() {
     // parity run shows the non-MATCH backlog went up, fix the SH and the
     // non-Match"*) Track U fixed the self-host and ported the rows rather than
     // raising it. See the ceiling's own block below for the composition.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1527;
+    //
+    // Re-seeded 2026-09-04 (R49 Track T1, landing on Track L). The canonical
+    // --release invocation above, run with all three gates ARMED (no SKIPPED
+    // line in the output), measured:
+    //   PARITY = MATCH/(MATCH+WRONG+CC-FAIL+CRASH+DRIVER-FAIL) = 1564/1710
+    //   WRONG-OUTPUT 29 + CC-FAIL 65 + CRASH 37 + DRIVER-FAIL 15 = 146
+    //   ADJ-MATCH 496, UNADJ-MATCH 1066, BOTH-WRONG 2, RUST-CRASH 0.
+    // Floor = 1564 - 5 (the same measured timeout jitter the 56 -> 5 tightening
+    // above settled on), so the slack stays exactly as tight as it was.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1559;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
@@ -42806,7 +43000,29 @@ fn self_host_runtime_diff() {
     // self-inflicted RED. Only a deleted NON-matching row moves it.
     // The track's own new top-level fixture `it_ordinary_identifier.gg` MATCHes
     // — measured, not asserted: it appears in no non-MATCH bucket of that run.
-    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 147;
+    //
+    // 2026-09-04 (R49 Track L + Track T1, which integrate together or not at
+    // all): 147 -> 146, and the two tracks are why it is one number and not two.
+    // Track L adds ELEVEN top-level fixtures and deletes ZERO corpus rows (its
+    // four deletions are under `known_gaps/`, which this non-recursive scan
+    // never enrolled), and THREE of the eleven are CC-FAIL on the self-host
+    // lane — L alone measures 150, a BREACH by 3 against a branch that was
+    // sitting at EXACTLY the ceiling with zero slack. T1's ambient-return port
+    // turns those same three CC-FAIL -> MATCH, and takes
+    // `sound_move_operand_closure_tail_allowed` (a pre-existing corpus row)
+    // CC-FAIL -> MATCH as well: 147 + 3 - 3 - 1 = 146.
+    // Re-MEASURED at that landing, --release, gate ARMED:
+    //   WRONG-OUTPUT 29 + CC-FAIL 65 + CRASH 37 + DRIVER-FAIL 15 = 146,
+    //   MATCH 1564 of 1710 non-excluded (PARITY 91.5%).
+    // (Was 29/67/36/15 = 147.) The bucket move is `box_trait_closure_return`
+    // leaving CC-FAIL for CRASH: with its closure typed from the declaration
+    // the program now LINKS, and the self-host has no trait-object pack at a
+    // closure return, so it SEGVs instead of failing to build (`todo/t1084`).
+    // Count-neutral, severity NOT neutral — that is recorded there, because no
+    // gate in the round-close battery observes the rise.
+    // T1's own two new top-level fixtures added ZERO inflow: both are in this
+    // auto-scanned corpus and both MATCH — measured, not asserted.
+    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 146;
     // ⛔ THIS GATE NO-OPS IN THE PROFILE PEOPLE ACTUALLY RUN, AND THAT IS A
     // COVERAGE HOLE, NOT A DESIGN. `cargo test --test integration self_host` is
     // a DEBUG build, so every executor's own gauntlet run takes the branch

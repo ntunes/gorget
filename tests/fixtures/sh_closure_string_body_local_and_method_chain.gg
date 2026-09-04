@@ -1,0 +1,39 @@
+# A closure LITERAL's return type comes from the ambient expected type, at a
+# declared `Callable[R(...)]` DESTINATION — over two body shapes the body
+# inference alone cannot type.
+#
+# A bare identifier body (`(): s`) and a method-chain body
+# (`(): v.get(0).unwrap()`) are both shapes `guess_return_type` has no answer
+# for: its `EIdentifier` arm consults `gmod.fn_sigs` only, so it is INERT for a
+# bare local or a closure parameter, and its `EMethodCall` arm does not carry a
+# collection's element type back out. Both used to fall through to the
+# `I64_TYPE` default and emit an `int64_t`-returning closure —
+#
+#     error: incompatible types when returning type 'Str' but 'int64_t' was expected
+#
+# — but the DECLARATION `Callable[String()]` already names the return type, so
+# neither shape has to be re-derived. `compute_closure_sig` peels the ambient
+# expected type's `GtFnPtr` and that answer wins (regenerate:
+# `grep -n 'int amb_peeled = peel_ptr_tid' \
+# tests/fixtures/self_host_lowerer/lower_closures.gg`).
+#
+# ⚠ THE DISCRIMINATOR IS THE POSITION, NOT THE BODY SHAPE. These same two body
+# shapes still fail at a BUILTIN-METHOD argument (`o.unwrap_or_else((String e):
+# e)`), where the ambient expected type is the receiver's own `Option`/`Result`
+# type rather than a callable, so the peel finds no `GtFnPtr`, correctly
+# declines, and the body inference has to answer alone. That residual is
+# `todo/t0877`.
+#
+# Both lanes print `hello` then `world`, rc 0.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("hel", "lo")
+    Callable[String()] f = (): s
+    print(f())
+
+    Vector[String] v = [mk("wor", "ld")]
+    Callable[String()] g = (): v.get(0).unwrap()
+    print(g())

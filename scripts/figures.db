@@ -513,7 +513,7 @@ lint.typed_metadata.sidecars.mirror = tests/lints.rs:TYPED_METADATA_SIDECAR_BUDG
 lint.typed_metadata.sidecars.input = none
 
 row = lint.phase_d.proxy_reads
-lint.phase_d.proxy_reads.value = 90
+lint.phase_d.proxy_reads.value = 89
 lint.phase_d.proxy_reads.unit = Phase-D ownership proxy reads in src/
 lint.phase_d.proxy_reads.polarity = exact-pin
 lint.phase_d.proxy_reads.provenance = derived
@@ -811,7 +811,7 @@ spec_conformance.corpus.fixtures.note = the three compile-time `const _: () = as
 # `cfg!(debug_assertions)`, so a debug run captures numbers no gate evaluated;
 # `--release` is in the command and the debug notices are in regen_forbids.
 row = parity.runtime_diff.match_floor
-parity.runtime_diff.match_floor.value = 1527
+parity.runtime_diff.match_floor.value = 1559
 parity.runtime_diff.match_floor.unit = corpus fixtures whose self-host run matches Rust gg byte-for-byte
 parity.runtime_diff.match_floor.polarity = grow-only
 parity.runtime_diff.match_floor.provenance = measured
@@ -827,11 +827,10 @@ parity.runtime_diff.match_floor.scan = standard
 parity.runtime_diff.match_floor.caveat = the floor discounts 5 of measured jitter — this test's counts are timeout-flip sensitive under load (todo/t0924) — so a MISS is more likely real than noise but a QUIET tree is still the precondition for triaging one; C backend + linux only (parity_floor_active skips when GG_BACKEND is set)
 parity.runtime_diff.match_floor.cost_secs = 3600
 parity.runtime_diff.match_floor.mirror = tests/integration.rs:RUNTIME_DIFF_MATCH_FLOOR
-parity.runtime_diff.match_floor.waiver = tests/integration.rs 2 declared the two R48-close re-seed lines the constant cites as its evidence
 parity.runtime_diff.match_floor.input = none
 
 row = parity.runtime_diff.nonmatch_ceiling
-parity.runtime_diff.nonmatch_ceiling.value = 147
+parity.runtime_diff.nonmatch_ceiling.value = 146
 parity.runtime_diff.nonmatch_ceiling.unit = corpus fixtures the self-host does NOT reproduce (WRONG-OUTPUT + CC-FAIL + CRASH + DRIVER-FAIL)
 parity.runtime_diff.nonmatch_ceiling.polarity = shrink-only
 parity.runtime_diff.nonmatch_ceiling.provenance = measured
@@ -850,7 +849,7 @@ parity.runtime_diff.nonmatch_ceiling.mirror = tests/integration.rs:RUNTIME_DIFF_
 parity.runtime_diff.nonmatch_ceiling.input = none
 
 row = parity.runtime_diff.ggdef_adjudicated_floor
-parity.runtime_diff.ggdef_adjudicated_floor.value = 443
+parity.runtime_diff.ggdef_adjudicated_floor.value = 496
 parity.runtime_diff.ggdef_adjudicated_floor.unit = MATCH fixtures ggdef also elaborates, runs and AGREES with
 parity.runtime_diff.ggdef_adjudicated_floor.polarity = grow-only
 parity.runtime_diff.ggdef_adjudicated_floor.provenance = measured

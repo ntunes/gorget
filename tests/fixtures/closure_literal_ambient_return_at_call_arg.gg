@@ -1,0 +1,57 @@
+# A closure LITERAL's return type comes from the ambient expected type, at the
+# DIRECT-CALL ARGUMENT position.
+#
+# When a closure literal is passed straight to a function whose parameter is
+# declared `Callable[R(...)]`, the parameter's `R` is the answer — the body does
+# not have to be re-inferred, and a body shape the inference has no arm for is
+# not a reason to guess. This is the same rule that applies at a declared
+# `Callable[R(...)]` destination; the POSITION does not change it.
+#
+# THE AXIS THIS PINS is the pairing (position x body shape). Its siblings
+# (`closure_capture_param_bare_identifier_body`,
+# `closure_capture_string_then_reassign_source`,
+# `closure_capture_then_mutate_source_uaf`,
+# `sound_move_operand_closure_tail_allowed`) all sit at a declared
+# `Callable[...]` DESTINATION. This one sits at a direct-call ARGUMENT, over
+# three body shapes:
+#
+#   Ok(..)      — a Result constructor, whose payload type the body alone does
+#                 not fix;
+#   Error(..)   — its sibling constructor, so the pair is covered rather than
+#                 sampled;
+#   bare param  — a body that is nothing but the parameter identifier.
+#
+# The omitted cell of that axis is a BUILTIN-METHOD argument
+# (`o.unwrap_or_else((String e): e)`), where the ambient expected type is the
+# receiver's own `Result`/`Option` type rather than a `Callable`, so it names no
+# return type to honour and the body inference has to answer alone. That cell is
+# `todo/t0877` and is deliberately not exercised here.
+
+String mk(String a, String b):
+    return a + b
+
+String and_then_arg(Callable[Result[String, String](String)] f):
+    Result[String, String] o = Ok(mk("hel", "lo"))
+    Result[String, String] r = o.and_then(f)
+    match r:
+        case Ok(v):
+            return v
+        case Error(e):
+            return e
+
+String or_else_arg(Callable[Result[String, String](String)] f):
+    Result[String, String] o = Error(mk("b", "ad"))
+    Result[String, String] r = o.or_else(f)
+    match r:
+        case Ok(v):
+            return v
+        case Error(e):
+            return e
+
+String apply(Callable[String(String)] f, String arg):
+    return f(arg)
+
+void main():
+    print(and_then_arg((String s): Ok(mk(s, "?"))))
+    print(or_else_arg((String e): Error(mk(e, "!"))))
+    print(apply((String e): e, mk("wor", "ld")))

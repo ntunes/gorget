@@ -1,21 +1,34 @@
-# KNOWN GAP, SELF-HOST lane — a closure LITERAL whose body the self-host's
-# `guess_return_type` cannot type falls through to `I64_TYPE`, and the closure
-# is then emitted `int64_t`-returning whatever it actually returns.
+# KNOWN GAP (`todo/t0877`), SELF-HOST lane — a closure LITERAL at a
+# BUILTIN-METHOD ARGUMENT, where nothing ambient names its return type and
+# `guess_return_type` has to answer alone. It has no arm for the body, so the
+# closure falls through to `I64_TYPE` and is emitted `int64_t`-returning
+# whatever it actually returns:
 #
-# TWO ARMS, one helper (`self_host_lowerer/lower_closures.gg::guess_return_type`):
-#   (a) `Ok(...)` / `Error(...)` body with no `expected_type` in scope — the
-#       `Some(x)` sibling arm MINTS `Option__U` from the payload, but the
-#       Result constructors are gated on `expected_type` being a Result, which
-#       is `-1` at a closure-argument site. Result of the miss: `int64_t`.
-#   (b) a body that is a bare PARAMETER identifier — `(String e): e`. The
-#       EIdentifier arm consults `fn_sigs` only; the self-host does not
-#       temporarily register closure params as locals the way Rust gg's
-#       `lower_closure` does ("Tier 1c"), so the param is invisible.
+#     error: incompatible types when returning type 'Str' but 'int64_t' was expected
 #
-# Both surface as `error: incompatible types when returning type 'Str' but
-# 'int64_t' {aka 'long int'} was expected` in the self-host's emitted C.
-# Rust gg compiles and runs both spellings correctly, so this is a self-host
-# lag, not a language question.
+# ⚠ THE SUBJECT IS THE POSITION, NOT THE BODY SHAPE — and this fixture is built
+# to say so. Its two halves are closure literals in two POSITIONS:
+#
+#   `result_and_then((String s): Ok(mk(s, "?")))` — a direct free-call
+#       ARGUMENT. The callee's declared `Callable[Result[..](..)]` parameter
+#       type IS the ambient expected type here (regenerate: `grep -n 'int
+#       prev_expected_arg = ctx.expected_type' \
+#       tests/fixtures/self_host_lowerer/lower_expr.gg` — the `-1` beside it is
+#       an initial clear, immediately overwritten with the peeled param type).
+#       `compute_closure_sig` peels its `GtFnPtr` and answers. THIS HALF WORKS.
+#
+#   `o.unwrap_or_else((String e): e)` — a BUILTIN-METHOD argument. The ambient
+#       expected type here is the RECEIVER's own `Result` (regenerate: `grep -n
+#       'ctx.expected_type = _combinator_et' \
+#       tests/fixtures/self_host_lowerer/lower_expr.gg`), which names no return
+#       type at all, so the peel correctly DECLINES and the body inference is on
+#       its own. THIS HALF IS THE GAP.
+#
+# ⇒ No widening of a body-shape rule reaches it. It needs the arms themselves:
+# Tier-1c closure-param registration, a `lookup_local` beside the `EIdentifier`
+# arm's `fn_sigs` read, and element-type propagation through `EMethodCall`.
+# Rust gg carries BOTH the ambient override and that fallback and compiles both
+# halves; the self-host now carries only the override.
 #
 # DISCRIMINATE FROM `t0230` (b), which is the same helper's OTHER
 # fall-through: a closure whose body's last statement is `SMatch`/`SIf` returns

@@ -1797,6 +1797,33 @@ ClosureSig compute_closure_sig(int cid, Vector[Param] params, Vector[Stmt] body,
     if ret_type == STRING_MARKER:
         ret_type = lookup_or_register_named(&gmod, "GorgetString")
 
+    # The AMBIENT expected type outranks everything inferred above. Where the
+    # destination is declared `Callable[R(...)]` — a typed local, or a callee
+    # parameter at a direct call — the declaration already NAMES the return
+    # type, and re-deriving it from the body is a read site disagreeing with
+    # its writer. Peel the Ptr layers (callables are passed ByPtr) and read the
+    # `GtFnPtr` return, exactly as `combinator_closure_ret_type` does for a
+    # callable passed by name.
+    #
+    # GUARD on `!= UNIT_TYPE`, same reason as that sibling: only a real
+    # `GtFnPtr` return may override, never a recovered `void`. At a BUILTIN
+    # method argument `expected_type` is the receiver's own Option/Result type
+    # rather than a callable, so the peel finds no `GtFnPtr`, correctly
+    # declines, and the body inference above still answers.
+    #
+    # Mirrors Rust gg `src/ir/lowering/closures.rs` (regenerate:
+    # `grep -n 'ambient' src/ir/lowering/closures.rs`).
+    if expected_type >= 0:
+        int amb_peeled = peel_ptr_tid(&gmod, expected_type)
+        if amb_peeled >= 0 and amb_peeled < gmod.type_table.len():
+            GirType amb_gt = gmod.type_table.get(amb_peeled).unwrap()
+            match amb_gt:
+                case GtFnPtr(_, amb_ret):
+                    if amb_ret != UNIT_TYPE:
+                        ret_type = amb_ret
+                else:
+                    pass
+
     return ClosureSig(!abi_param_types, self_ptr, !body_param_types, !body_param_names, ret_type)
 
 

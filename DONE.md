@@ -1,3 +1,86 @@
+- [2026-09-04] **`t0877` RE-SCOPED BY POSITION, NOT CLOSED (R49 Track T1) — the self-host inferred a closure's
+  return type from its BODY while the DECLARATION already named it, and a read site does not get to disagree
+  with its writer. 13 lines; seven cells CC-FAIL → MATCH; and the one cell it does NOT fix is the one whose
+  identical body shape passes three lines away.**
+  **THE DEFECT AND ITS LAYER.** `compute_closure_sig` (`grep -n 'ClosureSig compute_closure_sig'
+  tests/fixtures/self_host_lowerer/lower_closures.gg`) derived a closure literal's return type from its body
+  even where the ambient expected type was already a `Callable[R(...)]`. Rust gg prefers the ambient `R`
+  (`grep -n 'ambient' src/ir/lowering/closures.rs`). That is Core #1 and Layering rule 4 — the declaration is
+  the write site — and the RATIFIED record names the class: the type-directed-propagation holes *"all sat at
+  positions where the expected type wasn't threaded inward"* (`grep -n "expected type wasn't threaded inward"
+  docs/define-gorget/decisions.md`). The fix peels the ambient `GtFnPtr` and lets it win, guarded on
+  `!= UNIT_TYPE` exactly as the sibling `combinator_closure_ret_type` already did.
+  **⭐ THE DISCRIMINATOR IS THE POSITION, NOT THE BODY SHAPE — and getting that backwards would have shipped a
+  filed item calling a fixed cell live.** Three probes, each RED-verified against a driver built from pristine
+  committed source:
+
+  | probe | position | body | pre | post |
+  |---|---|---|---|---|
+  | `result_and_then((String s): Ok(mk(s,"?")))` | direct free-call arg | `Ok(..)` | CC-FAIL | rc 0 |
+  | `o.unwrap_or_else((String e): e)` | builtin-**METHOD** arg | bare param | CC-FAIL | **CC-FAIL** |
+  | `apply((String e): e, …)` | direct free-call arg | **same shape as row 2** | CC-FAIL | rc 0 |
+
+  The same body shape that survives at a builtin-method argument is closed at a direct-call argument, so an
+  arm-shaped re-scope would have named the wrong half. The mechanism, read off the two writers: at a direct
+  call `ctx.expected_type` is the CALLEE's declared param type (`grep -n 'int prev_expected_arg =
+  ctx.expected_type' tests/fixtures/self_host_lowerer/lower_expr.gg` — the `-1` beside it is an initial clear,
+  **immediately overwritten**, so the long-standing *"call arguments carry `-1`"* claim was false); at a
+  builtin-method argument it is the **RECEIVER's** own `Option`/`Result` (`grep -n 'ctx.expected_type =
+  _combinator_et' <same file>`), which is not a `GtFnPtr`, so the peel correctly DECLINES.
+  ⇒ `t0877` now reads: arms (a)–(d) are closed WHEREVER ambient `expected_type` is a `Callable`/FnPtr — a
+  declared destination or a direct-call argument — and all four survive at a BUILTIN-METHOD argument.
+  **SIX Q#4 is the crux: the surviving case has NO SUBJECT in a body-shape taxonomy**, so no widening of that
+  rule reaches it. Closing it needs the other half Rust carries — Tier-1c closure-param registration, a
+  `lookup_local` beside the `EIdentifier` arm's `fn_sigs` read, and element-type propagation through
+  `EMethodCall`.
+  **SEVEN PINS FOR SEVEN CHANGED CELLS**, `|pinned| == |changed|`. Three new self-host pins for Track L's
+  capture-ownership cells; a Rust `run_gg` **and** a self-host pin for `sound_move_operand_closure_tail_allowed`,
+  which had **no test whatsoever** — a committed positive control whose intent lived only in its header, and
+  the wiring lint that would have caught it governs `known_gaps/` only; the graduation of
+  `sh_closure_string_body_local_and_method_chain` out of `known_gaps/` onto both lanes; and a new top-level
+  fixture for the position the other six do not cover. ⚠ Its ignored assertion had carried a trailing newline
+  that `self_host_emit_cc_run`'s `trim_end()` could never match — **an ignored test can assert the
+  impossible and nobody finds out**; `sh_lane_expect` now records that in one line beside the helper.
+  **THE NEW FIXTURE PINS THE POSITION AXIS, NOT A SECOND SAMPLE OF THE OLD ONE.** All six existing cells sit at
+  a declared `Callable[...]` destination; `closure_literal_ambient_return_at_call_arg.gg` sits at a direct-call
+  argument over three body shapes (`Ok(..)`, `Error(..)`, bare param), because the rule keys on the position and
+  a one-shape fixture could not say so. Both new top-level fixtures COMPILE and MATCH on the self-host lane the
+  same round.
+  **⚠ ONE CELL'S SEVERITY ROSE, AND IT IS OWNED, NOT ABSORBED.** `box_trait_closure_return.gg` — a live,
+  top-level, non-`#[ignore]`d fixture — went CC-FAIL → **SEGV**. While the closure was mistyped `int64_t` the
+  dynamic call emitted `int64_t__speak` and the program died at LINK; typed correctly it links, and the
+  self-host has no GIR-level trait-object pack at a closure return, so the body returns a **ZEROED**
+  `__gg_Box__Speaker` and `.speak()` dispatches through a NULL vtable. The link error was masking the missing
+  pack, not preventing it. Filed as a new axis cell on **`t1084`** (the already-open item for exactly that
+  missing pack) rather than as a fresh item, with an `#[ignore]`d self-host pin asserting the intended `R2`.
+  ⚠ **NO GATE IN THE ROUND-CLOSE BATTERY OBSERVES THE RISE** — the robustness map has no entry, `sanitize_sweep.sh`
+  has no self-host lane, and the ledger is bucket-neutral — so that item and its pin are the only durable record.
+  ⊕ A brief-review pass had recorded the self-host as mirroring `try_trait_object_construct` "at 4 sites";
+  measured, it is **one** definition and **one** call site, which is why the missing GIR-level pack is a whole
+  absent layer rather than a sibling-site omission.
+  **⊕ THE EIGHTH ANSWER-CHANGE, NAMED BECAUSE IT IS INVISIBLE.** `dataframe_nulls` also changes answer and is
+  **CC-FAIL in both columns**, so nothing observes it: its closure-return error disappears and a second,
+  unrelated error (`assigning to type 'Str' from type 'size_t'`) still fails the build. It is not a pin
+  candidate and it is not a regression; it is the cell that would otherwise look like an unexplained delta.
+  **MERGE.** Landed on Track L's tip. `PHASE_D_PROXY_BUDGET` and `ALLOWED_UNWIRED` were each on NEITHER side —
+  both branches removed independently, so the merged truth is the union of the removals, and the ratchet's own
+  site census confirms the proxy figure. Both `PHASE_D_PROXY_BUDGET` doc paragraphs are kept.
+  **GATES, bare rc.** `cargo build` 0 · `--lib` 0 (1186 passed) · `--test lints` 0 (229) ·
+  `--test spec_conformance` 0 (3) · `--test integration self_host` (C, minus `runtime_diff`,
+  `GG_STAGE1_TIMEOUT_SECS=1800`) 0 — **83 passed, 0 failed**, `self_host_bootstrap` and
+  `self_host_bootstrap_fixed_point` both ok · integration `closure`·`sh_closure`·`box_trait`·`sound_move`
+  all 0 on **both** backends · `todo_index.py --check` 0 · the `--release` parity regen 0 with all three
+  gates **ARMED** (zero SKIPPED lines — the profile hole `todo/t0924` describes is why that had to be
+  checked rather than assumed). `RUNTIME_DIFF_NONMATCH_CEILING`, `RUNTIME_DIFF_MATCH_FLOOR` and
+  `GGDEF_ADJUDICATED_FLOOR` were REGENERATED from that one run, never deltaed, and their `scripts/figures.db`
+  mirrors moved with them. ⚠ The ggdef floor's rise is mostly this round's EARLIER landings, not T1's —
+  said so at the constant.
+  ⚠ **AND A MEASUREMENT HAZARD WORTH THE LINE:** a `cargo test` that exceeds its foreground timeout keeps
+  RUNNING in the background. A first self-host gate raced a stale sibling on the SHARED
+  `tests/fixtures/self_host_lowerer/driver` binary — `#[serial]` only serializes WITHIN a process — so both
+  runs were discarded and the gate re-run alone. ⊕ The driver binary was **byte-identical in SIZE** across
+  the pristine and fixed builds; only the emitted `driver.c` md5 distinguishes them, so size is not a
+  rebuild witness.
 - [2026-09-04] **`t0729` RE-SCOPED, NOT CLOSED (R49 Track R) — THE THREE ROUND-CLOSE GATES THAT WERE RED AT
   PRISTINE HEAD ARE ONE ADJUDICATION, NOT THREE: the fixture GRADUATES, both `security_safe_except_on`
   annotations come OUT, and the class is live at HEAD in a green, non-`#[ignore]`d, top-level fixture.**
