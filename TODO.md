@@ -277,6 +277,23 @@ owes a note + a filed subset gap.
   CLONES INTERNALLY**, so a single "only route" accessor would **double-clone** there.
   ⇒ **THREE ROLES, OR A RATCHET ON THE SINK. A type-level guard needs the roles to be genuinely disjoint at
   the type level — count them before designing it.**
+- ⛔⛔ **"THAT GATE IS ALREADY RED, IT IS NOT YOURS" IS AN INSTRUCTION THAT HIDES A SECOND FAILURE.** R49 has
+  three gates red at pristine HEAD, and every executor brief has been told so. ⚡ **That phrasing invites the
+  executor to rc-CHECK the gate and stop — missing a NEW row that IS theirs.** ⇒ ⭐ **BRIEF THE *DIFF*, NOT
+  THE rc: capture the pristine baseline to a file and tell the executor to diff against it.** F-G's pass 3
+  captured `roster 215 · PASS 7 · FAIL 208`, sole row `llvm_nested_option_match_no_memcpy_overlap`; that
+  baseline is the instruction, not the sentence "rc 1 is expected".
+- ⛔ **A DECISION'S *RATIONALE* CAN BE FALSE WHILE THE DECISION IS RIGHT — AND THE RATIONALE IS WHAT GETS
+  FILED.** F-G chose remedy (b) because remedy (a) *"requires a parser change"*. **Measured: it does not.**
+  `equip [T: Equatable]` is **RUST** syntax; **Gorget spells bounds `[Trait ParamName]`, and
+  `struct Pair[Eq2 T]:` parses at pristine HEAD.** What actually blocks (a) is a smaller pre-existing bug —
+  **a type parameter failing ITS OWN declared bound inside the derive expansion.**
+  ⇒ ⚡ **The decision survived; the filing would have cited a gap that does not exist.** **Before filing a
+  gap as the GATE for a decision, reproduce the gap.**
+- ⭐ **A SYNTAX PROBE IN THE WRONG LANGUAGE'S SPELLING PROVES NOTHING.** The parser claim came from testing
+  Rust's `[T: Trait]` against a **type-first** language whose form is `[Trait T]`. ⇒ **when a probe says
+  "this does not parse", CHECK THE SPELLING AGAINST THE GRAMMAR before concluding the feature is absent** —
+  `grep` the parser for what it *does* accept.
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
