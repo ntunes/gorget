@@ -223,6 +223,21 @@ owes a note + a filed subset gap.
   ⚠ **AND A HYGIENE ASSUMPTION IS FALSE: five long-idle CLEAN worktrees are ALL harness-LOCKED and cannot be
   pruned by hand either. Disk does NOT fall at round close the way the rule assumes** (stable at 17%);
   **any "worktrees reclaimed" count that does not separate LOCKED from DIRTY over-reports.**
+- ⭐⭐ **THE TREE OFTEN STATES THE HAZARD ITSELF, IN A NEIGHBOURING MODULE, FOR A DIFFERENT PURPOSE — AND
+  THAT IS THE BEST INDEPENDENT WITNESS THERE IS.** A2-α needed evidence that the synthetic `__callable_N`
+  name is unsafe as a bare map key. **`src/ir/abi.rs:15-19` already says so, in the tree's own words:**
+  *"Those synthetic names embed a per-function local id, so they are NOT UNIQUE MODULE-WIDE … a bare-name key
+  would let the last writer's ABI decide the other's call site."* ⚡ **It DEFENDS ITS OWN channel by
+  qualifying with the enclosing function — while `fn_sigs` and `fn_param_ownerships` stay BARE-KEYED.**
+  ⇒ **before writing a census, grep for a module that ALREADY solved the same hazard: its comment is a
+  witness no enumerator of yours can match, and it converts "delete or enforce" from opinion into a cited
+  in-tree contradiction.**
+- ⛔ **A CELL THAT VARIES TWO THINGS PROVES NEITHER — and a round-old "emission order matters" finding was
+  exactly that.** A2-α's `collide4_order` changed **declaration order AND statement order** at once. The
+  missing third cell was built, and the discriminator is **DECLARATION (lowering) order**, not statement
+  order: lowering the callee-holding function first overwrites `fn_sigs` with `UNIT_TYPE`, so a later direct
+  call reads `call_void`. ⇒ **an executor reading the two-variable cell's leading `42` would have MIS-READ IT
+  AS A FIX.** ⭐ **When a finding is "X matters", build the cell that holds everything but X.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
