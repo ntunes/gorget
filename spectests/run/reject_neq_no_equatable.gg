@@ -1,0 +1,27 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [equality, traits]
+# doc: |
+#   The `!=` sibling of reject_eq_struct_no_equatable.gg. `!=` is a SEPARATE
+#   lowering (the `==` result under a `not`), so a gate wired only to `==`
+#   leaves it accepted and silently wrong; this pins both halves of the
+#   operator axis rather than sampling one (Core #12).
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_UnsupportedOperator
+#!end
+
+struct Point:
+    int x
+    int y
+
+void main():
+    Point a = Point(1, 2)
+    Point b = Point(3, 4)
+    if a != b:
+        print("different")
+    else:
+        print("same")

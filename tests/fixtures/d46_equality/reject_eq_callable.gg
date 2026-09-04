@@ -1,0 +1,14 @@
+# D46 rider — `Callable[T]` (and `Box[Trait]`) REJECT, and they are named
+# explicitly so the aggregate axis has no unnamed cell. A closure and a trait
+# object have no structural equality to give: there is no element to recurse
+# into and no impl anyone could write.
+#
+# The diagnostic for this cell must NOT say "add `@derive(Equatable)` to
+# `Callable[int(int)]`" — that is advice the author cannot take. The reject site
+# reads the resolved type, so the message it selects is a typed decision, not a
+# guess made from the spelling of the type's name.
+
+void main():
+    Callable[int(int)] f = (int x): x + 1
+    Callable[int(int)] g = (int x): x + 2
+    print(f == g)

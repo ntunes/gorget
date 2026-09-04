@@ -1,0 +1,65 @@
+# D46's ACCEPT side, RUN — the rows that answer correctly today, so the accept
+# path is exercised end to end and not merely observed to pass `gg check`.
+#
+# A `gg check` exit code is not evidence that a comparison works: the checker can
+# accept an expression whose answer is wrong, which is the entire defect D46
+# exists to retire. These six rows are the CONTROLS — a primitive, a heap
+# `String`, a float, a bool, a `@derive(Equatable)` struct and a user
+# `equip … with Equatable` — and every one of them is already correct on all
+# lanes. If the gate ever starts refusing one of them, or the derive/equip
+# dispatch stops reaching a real implementation, this goes red with a wrong
+# VALUE rather than a missing diagnostic.
+#
+# The non-declarable aggregates (tuple, `Option`, `Result`, `Vector`) are
+# DELIBERATELY ABSENT: they are accepted, but they still answer by address
+# identity, so asserting their output here would pin the wrong answer into the
+# suite. They live in `accept_eq_still_legal.gg`, asserted only as accepted.
+#
+# The `String` operands are built by concatenation so the two values are
+# distinct heap allocations rather than one interned literal — an address
+# comparison would answer `false` where structural equality answers `true`,
+# which is exactly the discrimination this control is for.
+
+@derive(Equatable)
+struct Derived:
+    int a
+
+struct Equipped:
+    int a
+
+equip Equipped with Equatable:
+    bool eq(self, Equipped other):
+        return self.a == other.a
+
+void main():
+    int i1 = 1
+    int i2 = 1
+    print(i1 == i2)
+
+    String s1 = "ab" + "cd"
+    String s2 = "ab" + "cd"
+    print(s1 == s2)
+    String s3 = "ab" + "ce"
+    print(s1 == s3)
+
+    float f1 = 1.5
+    float f2 = 1.5
+    print(f1 == f2)
+
+    bool b1 = true
+    bool b2 = true
+    print(b1 == b2)
+
+    Derived d1 = Derived(7)
+    Derived d2 = Derived(7)
+    Derived d3 = Derived(8)
+    print(d1 == d2)
+    print(d1 == d3)
+    print(d1 != d3)
+
+    Equipped e1 = Equipped(7)
+    Equipped e2 = Equipped(7)
+    Equipped e3 = Equipped(8)
+    print(e1 == e2)
+    print(e1 == e3)
+    print(e1 != e3)

@@ -85,6 +85,38 @@ impl DerefWrapperKind {
     }
 }
 
+/// D46 + its 2026-09-04 rider: does a BUILTIN generic aggregate carry INTRINSIC
+/// structural equality — `==` legal whenever every element is itself comparable
+/// — rather than requiring the author to write `@derive(Equatable)`?
+///
+/// The rider's rationale is ANNOTATABILITY: *"there is nowhere to write
+/// `@derive(Equatable)`"* is a statement about the USER's reach, and it is
+/// equally true of every prelude/builtin container below. The line the language
+/// draws is **declarable ⇒ require `@derive`; non-declarable ⇒ intrinsic when
+/// the elements are comparable**.
+///
+/// This is the registration-time name-match, mirroring
+/// `DerefWrapperKind::for_builtin_name` verbatim: callers seed
+/// `DefInfo.has_intrinsic_equality` from it ONLY for definitions in the builtin
+/// registry / builtin modules, so a USER `struct Vector` gets a distinct DefId
+/// with `false` and still needs its derive. Every downstream read is the TYPED
+/// flag (layering rule 2) — never the name.
+///
+/// NOT listed, deliberately, and each for the rider's own reason:
+/// `Box` / `Callable` (a trait object and a closure have no structural equality
+/// to give — the rider names both as REJECT); `Shared` / `Weak` / `Mutex` /
+/// `Guard` / `Task` / `TaskGroup` / `Channel` / `Future` / `FxHasher`
+/// (single-owner handles — D53's carve-out family, where the only equality
+/// available is the identity one D46 exists to refuse). Tuples and
+/// `Array[T,N]` need no entry: they are `ResolvedType` variants with no def
+/// name at all, handled structurally at the predicate.
+pub fn builtin_has_intrinsic_equality(name: &str) -> bool {
+    matches!(
+        name,
+        "Option" | "Result" | "Vector" | "Deque" | "Set" | "HashSet" | "Dict" | "HashMap"
+    )
+}
+
 /// Metadata for a definition.
 #[derive(Debug, Clone)]
 pub struct DefInfo {
@@ -126,6 +158,15 @@ pub struct DefInfo {
     /// is-a-wrapper predicate; the `Some(kind)` carries the 3-way split.
     /// Retires the `is_field_deref_wrapper` name-match (layering rule 2).
     pub deref_wrapper_kind: Option<DerefWrapperKind>,
+    /// D46 + rider: true iff this DefId is a BUILTIN aggregate whose `==` is
+    /// INTRINSIC structural equality gated on element comparability, rather
+    /// than a declarable type that must carry `@derive(Equatable)`. Seeded ONCE
+    /// at registration via `builtin_has_intrinsic_equality`
+    /// (`BUILTIN_GENERIC_TYPES` imports, the prelude `Option`/`Result` enums,
+    /// and builtin-module structs/enums); a USER type shadowing one of those
+    /// names gets a distinct DefId with `false`. Read through the typed flag at
+    /// the `==` gate — never re-derived from the name (layering rule 2).
+    pub has_intrinsic_equality: bool,
 }
 
 /// A lexical scope.
@@ -289,6 +330,7 @@ impl ScopeTable {
             variant_field_types: None,
             is_drop_tainted: false,
             deref_wrapper_kind: None,
+            has_intrinsic_equality: false,
         });
         def_id
     }
@@ -381,6 +423,15 @@ impl ScopeTable {
         } else {
             None
         };
+        // D46 + rider: the same inherit for the intrinsic-equality flag, on the
+        // same `DefKind::Import`-only gate and for the same reason — a user
+        // `from std.collections import Vector` must keep the builtin's typed
+        // metadata, while a USER `struct Dict` must not acquire it.
+        let inherited_intrinsic_eq = kind == DefKind::Import
+            && existing_ids.iter().copied().flatten().any(|id| {
+                let d = &self.definitions[id.0 as usize];
+                d.span == Span::dummy() && d.has_intrinsic_equality
+            });
         let def_id = DefId(self.definitions.len() as u32);
         self.name_index.entry(name.clone()).or_default().push(def_id);
         self.definitions.push(DefInfo {
@@ -397,6 +448,7 @@ impl ScopeTable {
             variant_field_types: None,
             is_drop_tainted: false,
             deref_wrapper_kind: inherited_deref_kind,
+            has_intrinsic_equality: inherited_intrinsic_eq,
         });
         let scope = &mut self.scopes[self.current.0 as usize];
         match ns {

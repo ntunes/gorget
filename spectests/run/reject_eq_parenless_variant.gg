@@ -1,0 +1,35 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [equality, traits, enum]
+# doc: |
+#   THE PARENLESS VARIANT PATH — the shape that caught a SILENT ACCEPT in D46's
+#   own gate, and the one cell the rest of the corpus does not reach.
+#
+#   `Direction.North` without parentheses is a legal nullary-variant
+#   construction (the Book teaches both spellings), but it leaves `unify` with
+#   an inference-poisoned result type. A gate that judges only the UNIFIED type
+#   therefore reads "no opinion", accepts, and the comparison answers address
+#   identity — while `d == e` on the SAME enum, one line away, is refused. The
+#   defect is position-dependent, which is what makes it invisible: every other
+#   reject seed in this corpus stays red under it.
+#
+#   So the gate judges the OPERANDS whenever the unified type carries no verdict.
+#   Revert that fallback and this seed goes green while all the others stay red;
+#   it is the only witness for that arm. Do not let it be "covered" by a
+#   parenthesised sibling — the parentheses are the whole variable.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_UnsupportedOperator
+#!end
+
+enum Direction:
+    North
+    South
+
+void main():
+    Direction d = Direction.North
+    bool a = d == Direction.North
+    print(f"{a}")

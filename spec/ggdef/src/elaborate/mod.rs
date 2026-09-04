@@ -31,8 +31,9 @@ use gorget::parser::ast;
 use gorget::span::{Span, Spanned};
 
 use crate::ggc::{
-    BinOp, BuiltinMethod, CastTarget, ClosureDef, ConstructKind, D29Reject, EnumDef, Expr, ExprArm,
-    FPart, Function, Mode, Param, Pattern, Program, Source, Stmt, StmtArm, StructDef, UnOp,
+    BinOp, BuiltinMethod, CastTarget, ClosureDef, ConstructKind, EnumDef, Expr, ExprArm,
+    FPart, Function, Mode, Param, Pattern, Program, Source, StaticReject, Stmt, StmtArm,
+    StructDef, UnOp,
 };
 
 /// A faithful-elaboration failure: a surface construct outside the A subset,
@@ -63,6 +64,7 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
         match item {
             ast::Item::Struct(sd) => {
                 let name = sd.name.node.clone();
+                el.register_derives(&name, &sd.attributes);
                 let fields: Vec<String> = sd.fields.iter().map(|f| f.node.name.node.clone()).collect();
                 let field_types: Vec<(String, Ty)> = sd
                     .fields
@@ -75,6 +77,7 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
             }
             ast::Item::Enum(ed) => {
                 let name = ed.name.node.clone();
+                el.register_derives(&name, &ed.attributes);
                 let mut payloads: Vec<Ty> = Vec::new();
                 let variants = ed
                     .variants
@@ -157,9 +160,10 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
         closures: el.closures,
         drop_fns: el.drop_fns,
         display_fns: el.display_fns,
-        // D29: the first bare-fallible-mark violation (if any), surfaced by `run`
-        // as an `IllFormed` + `E_MissingFallibleMark` reject BEFORE eval.
-        d29_reject: el.d29_reject,
+        // The first ratified static rejection (if any) — D29's bare fallible
+        // mark or D46's `==` without `Equatable` — surfaced by `run` as an
+        // `IllFormed` carrying that rejection's own `E_` code, BEFORE eval.
+        static_reject: el.static_reject,
     })
 }
 
@@ -355,6 +359,20 @@ struct Elaborator {
     fn_param_modes: HashMap<String, Vec<Mode>>,
     /// `(type-name, method-name) → MethodInfo` for user `equip` methods.
     equip_methods: HashMap<(String, String), MethodInfo>,
+    /// `type-name → derived trait names`, read from the `@derive(...)`
+    /// attribute already on the AST (`StructDef.attributes` /
+    /// `EnumDef.attributes`). D46's gate needs to know WHETHER an `Equatable`
+    /// impl exists; it does not need production's expansion of one.
+    ///
+    /// ⚠ DELIBERATELY NOT production's own derive EXPANDER, which is `pub` and
+    /// callable from here. Borrowing it would make PRODUCTION the definition of
+    /// `@derive`, so ggdef would agree with it by construction — the Core #8
+    /// trap, on the one axis (the truth axis) where ggdef exists to be able to
+    /// disagree. It is also what the ggdef import ratchet forbids: the
+    /// definition may read the shared lexer/parser/AST and nothing downstream of
+    /// them. `values_eq` stays ggdef's own definition of derived equality,
+    /// field-by-field, per `docs/book/appendix-traits.md`.
+    derived_traits: HashMap<String, HashSet<String>>,
     /// `equip T with Drop` registry: `(type-name, drop-fn-name)`.
     drop_fns: Vec<(String, String)>,
     /// `equip T with Displayable` registry: `(type-name, display-fn-name)`.
@@ -406,11 +424,12 @@ struct Elaborator {
     /// that IS the destination's value, never a literal nested in a call arg
     /// (the p5 leak) or any other unrelated position.
     dest_ty_hint: Option<Ty>,
-    /// D29: the FIRST bare-fallible-mark violation seen while elaborating (first
-    /// wins, mirroring the liveness gate's first-Halt). Carried onto the emitted
-    /// `Program` and surfaced by `run` as an `IllFormed` + `E_MissingFallibleMark`
-    /// reject code. `None` when the program is D29-clean.
-    d29_reject: Option<D29Reject>,
+    /// The FIRST ratified static rejection seen while elaborating (first wins,
+    /// mirroring the liveness gate's first-Halt) — D29's bare fallible mark,
+    /// D46's `==` without `Equatable`. Carried onto the emitted `Program` and
+    /// surfaced by `run` as an `IllFormed` + that rejection's own `E_` code.
+    /// `None` when the program is clean.
+    static_reject: Option<StaticReject>,
     /// D29 mark one-shot (the ggdef analog of the Rust checker's
     /// `fallible_call_marked`): set true by the `ast::Expr::Propagate` arm just
     /// before its inner elaborates, TAKEN by the DIRECT call it wraps (so the
@@ -444,16 +463,22 @@ impl Elaborator {
         format!("__{hint}_{n}")
     }
 
-    /// D29: record a bare-fallible-mark violation (first wins). Elaboration
-    /// CONTINUES after recording — the reject is surfaced by `run` (as
-    /// `IllFormed` + `E_MissingFallibleMark`) which short-circuits before eval,
-    /// so the placeholder the recording site returns is never evaluated. This is
-    /// the ratified-static-rejection channel (a coded `IllFormed`), distinct from
-    /// an `ElabError` (an out-of-subset `FrontendError`).
-    fn record_d29_reject(&mut self, message: impl Into<String>, span: Span) {
-        if self.d29_reject.is_none() {
-            self.d29_reject = Some(D29Reject { message: message.into(), span });
+    /// Record a ratified static rejection (first wins). Elaboration CONTINUES
+    /// after recording — the reject is surfaced by `run` (as `IllFormed` + the
+    /// recorded `E_` code) which short-circuits before eval, so the placeholder
+    /// the recording site returns is never evaluated. This is the
+    /// ratified-static-rejection channel (a coded `IllFormed`), distinct from an
+    /// `ElabError` (an out-of-subset `FrontendError`).
+    fn record_static_reject(&mut self, code: &'static str, message: impl Into<String>, span: Span) {
+        if self.static_reject.is_none() {
+            self.static_reject = Some(StaticReject { code, message: message.into(), span });
         }
+    }
+
+    /// D29 shorthand — the bare-fallible-mark family, whose sole code is
+    /// `E_MissingFallibleMark`.
+    fn record_d29_reject(&mut self, message: impl Into<String>, span: Span) {
+        self.record_static_reject(StaticReject::D29_MISSING_FALLIBLE_MARK, message, span);
     }
 
     /// A free function: elaborate its body, keeping its own name.
@@ -562,7 +587,74 @@ impl Elaborator {
         Ok((params, body))
     }
 
-    // ── Pass-1 collection helpers (equip + taint) ──────────────────────────
+    // ── Pass-1 collection helpers (equip + derive + taint) ─────────────────
+
+    /// Record the traits an item's `@derive(...)` attribute names.
+    ///
+    /// Eight lines, and they are the whole of ggdef's `@derive` knowledge: the
+    /// attribute is already parsed onto the AST, so this reads a typed field
+    /// rather than re-parsing a directive or borrowing production's expander.
+    /// Non-`derive` attributes are ignored — they are not this pass's business.
+    fn register_derives(&mut self, type_name: &str, attributes: &[Spanned<ast::Attribute>]) {
+        for attr in attributes {
+            if attr.node.name.node != "derive" {
+                continue;
+            }
+            for arg in &attr.node.args {
+                if let ast::AttributeArg::Identifier(trait_name) = arg {
+                    self.derived_traits
+                        .entry(type_name.to_string())
+                        .or_default()
+                        .insert(trait_name.clone());
+                }
+            }
+        }
+    }
+
+    /// D46 (+ its 2026-09-04 rider): the FIRST type in `ty`'s element graph
+    /// that `==` cannot compare, or `None` when the whole thing is comparable.
+    ///
+    /// The rule is DECLARABILITY, mirroring production: a user struct or enum
+    /// can carry `@derive(Equatable)` or a user `equip … with Equatable`, so
+    /// `==` without one is REJECTED; a tuple or a prelude container has nowhere
+    /// to write the derive, so its equality is intrinsic when its elements are
+    /// comparable. `Ty::Unknown` never rejects — an un-inferable operand must
+    /// not manufacture a diagnostic.
+    fn eq_comparable_blame(&self, ty: &Ty, depth: usize) -> Option<String> {
+        if depth > 16 {
+            return None;
+        }
+        match ty {
+            Ty::Prim | Ty::Str | Ty::Unknown => None,
+            Ty::Vector(e) | Ty::Set(e) | Ty::Option(e) => self.eq_comparable_blame(e, depth + 1),
+            Ty::Dict(k, v) => self
+                .eq_comparable_blame(k, depth + 1)
+                .or_else(|| self.eq_comparable_blame(v, depth + 1)),
+            Ty::Result(t, e) => self
+                .eq_comparable_blame(t, depth + 1)
+                .or_else(|| self.eq_comparable_blame(e, depth + 1)),
+            Ty::Tuple(ts) => ts.iter().find_map(|t| self.eq_comparable_blame(t, depth + 1)),
+            // The rider names closures explicitly as REJECT: a closure has no
+            // structural equality to give.
+            Ty::Callable { .. } => Some("Callable".to_string()),
+            Ty::Named(n) => {
+                // Only a type this elaborator actually SAW declared can be
+                // judged. An unknown `Named` is out of the phase-0 subset, and
+                // rejecting it would invent a verdict.
+                let known = self.struct_names.contains(n)
+                    || self.enums.iter().any(|e| &e.name == n);
+                if !known {
+                    return None;
+                }
+                let derived = self
+                    .derived_traits
+                    .get(n)
+                    .is_some_and(|ts| ts.contains("Equatable"));
+                let equipped = self.equip_methods.contains_key(&(n.clone(), "eq".to_string()));
+                if derived || equipped { None } else { Some(n.clone()) }
+            }
+        }
+    }
 
     /// Register an `equip` block's methods into the signature/method registries
     /// and (for `equip T with Drop`) the custom-drop registry + taint seed.
@@ -765,13 +857,58 @@ impl Elaborator {
                 }
             }
             ast::Expr::StructLiteral { name, .. } => Ty::Named(name.node.clone()),
-            ast::Expr::Call { callee, .. } => {
+            ast::Expr::Call { callee, args, .. } => {
                 if let ast::Expr::Identifier(name) = &callee.node {
                     if self.struct_names.contains(name) {
                         return Ty::Named(name.clone());
                     }
+                    // The BARE prelude-enum constructors. `Some(x)` / `Ok(x)`
+                    // carry their payload's type; `Error(e)` is the error arm.
+                    // Without these, `Some(P(1)) == Some(P(2))` infers Unknown
+                    // and D46's gate has nothing to judge.
+                    //
+                    // Gated on the name NOT being a declared function: a user
+                    // free function called `Ok` would otherwise be inferred as
+                    // the prelude constructor, and a wrong type here becomes a
+                    // wrong equality verdict. A real declaration wins.
+                    if !self.func_names.contains(name) {
+                        let arg0 = || {
+                            args.first()
+                                .map(|a| self.infer_ast_ty(&a.node.value.node))
+                                .unwrap_or(Ty::Unknown)
+                        };
+                        match name.as_str() {
+                            "Some" => return Ty::Option(Box::new(arg0())),
+                            "Ok" => {
+                                return Ty::Result(Box::new(arg0()), Box::new(Ty::Unknown));
+                            }
+                            "Error" => {
+                                return Ty::Result(Box::new(Ty::Unknown), Box::new(arg0()));
+                            }
+                            _ => {}
+                        }
+                    }
                     if let Some(t) = self.fn_ret.get(name) {
                         return t.clone();
+                    }
+                }
+                Ty::Unknown
+            }
+            // `(a, b)` — without this arm a tuple literal infers Unknown, and
+            // D46's element gate cannot see a tuple whose element is a struct
+            // with no `Equatable`.
+            ast::Expr::TupleLiteral(elems) => {
+                Ty::Tuple(elems.iter().map(|e| self.infer_ast_ty(&e.node)).collect())
+            }
+            // `Direction.North()` parses as a METHOD CALL on the identifier
+            // `Direction`, not as a call — so the qualified enum-variant
+            // constructor, which is `t0013`'s own headline shape, was invisible
+            // to this function. Resolved through the TYPED variant registry
+            // (`enum_variant_arity`), never a name prefix.
+            ast::Expr::MethodCall { receiver, method, .. } => {
+                if let ast::Expr::Identifier(type_name) = &receiver.node {
+                    if self.enum_variant_arity(type_name, method.node.as_str()).is_some() {
+                        return Ty::Named(type_name.clone());
                     }
                 }
                 Ty::Unknown
@@ -1730,6 +1867,32 @@ impl Elaborator {
 
             ast::Expr::BinaryOp { left, op, right } => {
                 let mapped = map_binop(*op, span)?;
+                // D46 (+ rider): `==` / `!=` on a declarable type with no
+                // `Equatable` impl is a ratified STATIC rejection — recorded as
+                // typed metadata here and surfaced by `run` with its `E_` code
+                // before eval, never as an `ElabError` (which this lane records
+                // as GGDEF-SKIP, comparing nothing). Blame the innermost
+                // offending element, matching production's diagnostic.
+                if matches!(mapped, BinOp::Eq | BinOp::Neq) {
+                    let lt = self.infer_ast_ty(&left.node);
+                    let operand_ty = if matches!(lt, Ty::Unknown) {
+                        self.infer_ast_ty(&right.node)
+                    } else {
+                        lt
+                    };
+                    if let Some(blame) = self.eq_comparable_blame(&operand_ty, 0) {
+                        let glyph = if matches!(mapped, BinOp::Eq) { "==" } else { "!=" };
+                        self.record_static_reject(
+                            StaticReject::D46_UNSUPPORTED_OPERATOR,
+                            format!(
+                                "operator `{glyph}` is not defined for type `{blame}` — add \
+                                 `@derive(Equatable)` to `{blame}`, or write `equip {blame} with \
+                                 Equatable:` and implement `eq`, to compare values with `{glyph}`"
+                            ),
+                            span,
+                        );
+                    }
+                }
                 // D26 (Round XXXIII Batch C1): a fallible-arith BinOp evaluates
                 // to `Result[T, ArithError]`. In a propagating context — the
                 // enclosing fn is `throws` and the destination is NOT a Result

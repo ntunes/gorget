@@ -75,7 +75,29 @@ use ggdef::{parse_frontmatter, run_source, Outcome, DEFAULT_FUEL};
 /// Bump-on-improvement: when MATCH rises — a new run seed lands, or P1-A
 /// coverage retires a GGDEF-SKIP — raise this in the SAME commit that lands the
 /// gain, so the improvement is locked in.
-const GGDEF_MATCH_FLOOR: usize = 216;
+const GGDEF_MATCH_FLOOR: usize = 225;
+
+/// SHRINK-ONLY CEILING on GGDEF-SKIP — the second direction the floor above
+/// cannot see (Core #6: a ratchet needs BOTH directions).
+///
+/// A `FrontendError` from parse/elaborate makes a seed GGDEF-SKIP, and a skipped
+/// seed's committed `expect:` block is **never compared** — not its exit, not
+/// its stdout, not its `E_` code. So a ratified static rejection implemented as
+/// an `ElabError` instead of typed `Program.static_reject` metadata lands as
+/// SKIP, does NOT lower `matched`, and turns NOTHING red while its whole
+/// definitional claim goes unverified. That is precisely the trap D46's ggdef
+/// half would have fallen into.
+///
+/// The ceiling forces the typed-metadata shape: implement a reject as an
+/// `ElabError` and this goes RED. Like the MATCH floor it ratchets on
+/// improvement — when P1-A coverage retires a SKIP, LOWER this in the same
+/// commit. Never raise it to make a new seed fit; that is the drift it exists
+/// to stop.
+///
+/// Regenerate with:
+///   cargo test -p ggdef --test spec_conformance_ggdef -- --nocapture
+/// and read the `GGDEF-SKIP=` field of the summary line.
+const GGDEF_SKIP_CEILING: usize = 18;
 
 fn ws_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
@@ -199,6 +221,18 @@ fn spec_conformance_ggdef() {
              Emergency escape hatch (loud, temporary): GG_GGDEF_CONFORMANCE_FLOOR_OFF=1.",
             mismatches.len(),
             mismatches.join("\n")
+        );
+        assert!(
+            skipped <= GGDEF_SKIP_CEILING,
+            "spec_conformance_ggdef GGDEF-SKIP ceiling exceeded: GGDEF-SKIP {skipped} > ceiling \
+             {GGDEF_SKIP_CEILING}.\n\n\
+             A skipped seed's committed `expect:` block is NEVER COMPARED — not exit, not stdout, \
+             not the `E_` code — so a new SKIP hides a definitional claim rather than checking \
+             it. The usual cause is a ratified static rejection raised as an `ElabError` (a \
+             FrontendError) instead of being recorded as typed `Program.static_reject` metadata \
+             and surfaced by `run` with its `E_` code. Fix the SHAPE, not this number.\n\n\
+             The table above names every GGDEF-SKIP row. If a skip was genuinely retired, LOWER \
+             this ceiling in the same commit."
         );
         assert!(
             matched >= GGDEF_MATCH_FLOOR,

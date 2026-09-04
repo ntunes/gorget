@@ -1,0 +1,56 @@
+# D46's ACCEPT side, pinned as a NON-REJECTION. Every comparison below must
+# still pass `gg check` — the gate is a reject for declarable types with no
+# impl, and it must not become a reject for anything else.
+#
+# ⚠ THIS FIXTURE DELIBERATELY ASSERTS ONLY THAT THE PROGRAM IS ACCEPTED, NOT
+# WHAT IT PRINTS. The tuple, `Option`, `Vector` and `Result` rows still answer
+# by address identity today: `(1,2) == (1,2)` prints `false`. That is the
+# INTRINSIC STRUCTURAL EQUALITY LOWERING the rider owes, tracked separately —
+# pinning today's output here would ratify the wrong answer. The primitive,
+# `@derive` and user-`equip` rows below already answer correctly and are the
+# controls that prove the accept path reaches a real implementation.
+
+@derive(Equatable)
+struct Derived:
+    int a
+
+struct Equipped:
+    int a
+
+equip Equipped with Equatable:
+    bool eq(self, Equipped other):
+        return self.a == other.a
+
+void main():
+    # Controls — correct today.
+    int i1 = 1
+    int i2 = 2
+    print(i1 == i2)
+    String s1 = "a" + "b"
+    String s2 = "a" + "c"
+    print(s1 == s2)
+    float f1 = 1.5
+    float f2 = 2.5
+    print(f1 == f2)
+    bool b1 = true
+    bool b2 = false
+    print(b1 == b2)
+    Derived d1 = Derived(1)
+    Derived d2 = Derived(1)
+    print(d1 == d2)
+    Equipped e1 = Equipped(1)
+    Equipped e2 = Equipped(1)
+    print(e1 == e2)
+    # Non-declarable aggregates of comparable elements — ACCEPTED, answer owed.
+    auto t1 = (1, 2)
+    auto t2 = (1, 2)
+    print(t1 == t2)
+    Option[int] o1 = Some(1)
+    Option[int] o2 = Some(1)
+    print(o1 == o2)
+    Vector[int] v1 = [1, 2]
+    Vector[int] v2 = [1, 2]
+    print(v1 == v2)
+    Result[int, String] r1 = Ok(1)
+    Result[int, String] r2 = Ok(1)
+    print(r1 == r2)

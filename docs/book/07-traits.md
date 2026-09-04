@@ -275,6 +275,48 @@ void main():
         print("equal")    # equal
 ```
 
+**`==` on a struct or enum requires the implementation.** Without either
+`@derive(Equatable)` or an `equip` block, the comparison is refused at check
+time:
+
+```gorget
+struct Point:
+    float x
+    float y
+
+void main():
+    Point a = Point(1.0, 2.0)
+    Point b = Point(1.0, 2.0)
+    print(a == b)    # error: operator `==` is not defined for type `Point`
+                     # — add `@derive(Equatable)` to `Point`
+```
+
+The alternative would be to compare such values anyway and guess what equality
+means for them, and a guess is exactly what a compiler should not make: a type
+with an identity — a handle, a connection, a cache — is not equal to another
+just because its fields match. Deriving is one line; being asked for it is the
+language declining to invent your semantics.
+
+Tuples and the built-in containers are the exception, and for a reason you can
+check: there is nowhere to write `@derive(Equatable)` on a tuple. So a tuple, an
+`Option`, a `Result`, a `Vector`, a `Set`, a `Dict` and an array compare
+structurally whenever their elements do — and refuse when an element cannot be
+compared, naming the element rather than the container:
+
+```gorget
+struct Point:
+    float x
+    float y
+
+void main():
+    print((1, 2) == (1, 2))                   # a tuple of comparable elements
+    Option[Point] p = Some(Point(1.0, 2.0))
+    print(p == p)    # error: operator `==` is not defined for type `Point`
+```
+
+The line the language draws is declarability: if you can annotate the type, it
+asks you to; if you cannot, it does the structural thing.
+
 ### Comparable
 
 Enables `<`, `>`, `<=`, `>=` by returning -1, 0, or 1:

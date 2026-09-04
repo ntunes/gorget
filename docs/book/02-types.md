@@ -288,7 +288,7 @@ the full specification.
 | Arithmetic | `+`, `-`, `*`, `/`, `%`, `.mod()` | `x + y`, `x.mod(3)` |
 | Wrapping arithmetic | `+%`, `-%`, `*%` | `a +% b` (never traps) |
 | Fallible arithmetic | `+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!` | `a +! b` → `Result[T, ArithError]` |
-| Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=` | `x == y` |
+| Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=` | `x == y` (on a struct or enum, `==` needs `@derive(Equatable)` — ch07) |
 | Logical | `and`, `or`, `not` | `a and b` |
 | Bitwise | `&`, `\|`, `^`, `~`, `<<`, `>>` | `x & 0xFF` |
 | String interpolation | `f"{expr}"` | `f"x is {x}"` |

@@ -715,7 +715,7 @@ done_md.round_close.roundish_headlines.note = when this moves and anchor_age_mat
 # anchored one returns 237. Anchor on the lane banner AND on `total=…`, never on
 # a bare `MATCH=`.
 row = parity.spec_conformance.c.match_floor
-parity.spec_conformance.c.match_floor.value = 237
+parity.spec_conformance.c.match_floor.value = 243
 parity.spec_conformance.c.match_floor.unit = spectests/run seeds whose C-backend run matches the committed expect:
 parity.spec_conformance.c.match_floor.polarity = grow-only
 parity.spec_conformance.c.match_floor.provenance = measured
@@ -725,7 +725,7 @@ parity.spec_conformance.c.match_floor.regen_fires = ══ spec_conformance_[a-z
 parity.spec_conformance.c.match_floor.regen_env = GG_PARITY_FLOOR_OFF=unset
 parity.spec_conformance.c.match_floor.regen_forbids = MATCH-count floor (skipped|DISABLED)
 parity.spec_conformance.c.match_floor.instrument = tests/spec_conformance.rs::spec_conformance_c
-parity.spec_conformance.c.match_floor.measured_at = dc0b0024b
+parity.spec_conformance.c.match_floor.measured_at = 6de989a1c
 parity.spec_conformance.c.match_floor.home = tests/spec_conformance.rs:C_MATCH_FLOOR
 parity.spec_conformance.c.match_floor.scan = none
 parity.spec_conformance.c.match_floor.caveat = scan = none — 237 has 14 unmasked spellings (11 in tests/spec_conformance.rs's own re-seed log, which is not a scan root), so figures_db_mirrors_agree plus this regen are the whole enforcement; linux-only (floor_active skips off-linux); and CO-MOVEMENT OF THE QUARTET IS NOT ENFORCED BY THIS DB — a shared regen shares the RUN, not the VERDICT, and rows are checked independently. What enforces it is the three `const _: () = assert!` relations in tests/spec_conformance.rs, which fail at COMPILE time
@@ -734,7 +734,7 @@ parity.spec_conformance.c.match_floor.mirror = tests/spec_conformance.rs:C_MATCH
 parity.spec_conformance.c.match_floor.input = none
 
 row = parity.spec_conformance.llvm.match_floor
-parity.spec_conformance.llvm.match_floor.value = 237
+parity.spec_conformance.llvm.match_floor.value = 243
 parity.spec_conformance.llvm.match_floor.unit = spectests/run seeds whose LLVM-backend run matches the committed expect:
 parity.spec_conformance.llvm.match_floor.polarity = grow-only
 parity.spec_conformance.llvm.match_floor.provenance = measured
@@ -744,7 +744,7 @@ parity.spec_conformance.llvm.match_floor.regen_fires = ══ spec_conformance_[
 parity.spec_conformance.llvm.match_floor.regen_env = GG_PARITY_FLOOR_OFF=unset
 parity.spec_conformance.llvm.match_floor.regen_forbids = MATCH-count floor (skipped|DISABLED)
 parity.spec_conformance.llvm.match_floor.instrument = tests/spec_conformance.rs::spec_conformance_llvm
-parity.spec_conformance.llvm.match_floor.measured_at = dc0b0024b
+parity.spec_conformance.llvm.match_floor.measured_at = 6de989a1c
 parity.spec_conformance.llvm.match_floor.home = tests/spec_conformance.rs:LLVM_MATCH_FLOOR
 parity.spec_conformance.llvm.match_floor.scan = none
 parity.spec_conformance.llvm.match_floor.caveat = same scan = none reason and the same co-movement reading as the C row: the quartet is held together by the compile-time `const _: () = assert!` relations in tests/spec_conformance.rs, NOT by these rows sharing a regen command. ⚠ this lane does NOT read GG_BACKEND — spec_conformance pins the backend per lane on the build command, which is why regen_env declares only GG_PARITY_FLOOR_OFF
@@ -753,7 +753,7 @@ parity.spec_conformance.llvm.match_floor.mirror = tests/spec_conformance.rs:LLVM
 parity.spec_conformance.llvm.match_floor.input = none
 
 row = parity.spec_conformance.selfhost.match_floor
-parity.spec_conformance.selfhost.match_floor.value = 236
+parity.spec_conformance.selfhost.match_floor.value = 242
 parity.spec_conformance.selfhost.match_floor.unit = spectests/run seeds whose self-host emit+cc+run matches the committed expect:
 parity.spec_conformance.selfhost.match_floor.polarity = grow-only
 parity.spec_conformance.selfhost.match_floor.provenance = measured
@@ -763,7 +763,7 @@ parity.spec_conformance.selfhost.match_floor.regen_fires = ══ spec_conforman
 parity.spec_conformance.selfhost.match_floor.regen_env = GG_PARITY_FLOOR_OFF=unset
 parity.spec_conformance.selfhost.match_floor.regen_forbids = MATCH-count floor (skipped|DISABLED)
 parity.spec_conformance.selfhost.match_floor.instrument = tests/spec_conformance.rs::spec_conformance_selfhost
-parity.spec_conformance.selfhost.match_floor.measured_at = dc0b0024b
+parity.spec_conformance.selfhost.match_floor.measured_at = 6de989a1c
 parity.spec_conformance.selfhost.match_floor.home = tests/spec_conformance.rs:SELFHOST_MATCH_FLOOR
 parity.spec_conformance.selfhost.match_floor.scan = none
 parity.spec_conformance.selfhost.match_floor.caveat = scan = none for the same reason as its two siblings. ⚠ THIS FLOOR SITS ONE BELOW THE CORPUS BY DESIGN — d22_slice_clamp.gg needs Range-in-index lowering in the self-host lowerer — so its compile-time relation is `<=`, not `==`: it may never EXCEED the corpus, and a rise here is a lane catching up, not a gate loosening
@@ -781,7 +781,7 @@ parity.spec_conformance.selfhost.match_floor.input = none
 # the registry. NO BAND: corpus size is a file count, deterministic, so there is
 # no jitter for a band to absorb.
 row = spec_conformance.corpus.fixtures
-spec_conformance.corpus.fixtures.value = 237
+spec_conformance.corpus.fixtures.value = 243
 spec_conformance.corpus.fixtures.unit = .gg seeds in spectests/run
 spec_conformance.corpus.fixtures.polarity = exact-pin
 spec_conformance.corpus.fixtures.provenance = measured
@@ -790,7 +790,7 @@ spec_conformance.corpus.fixtures.regen_extract = ^\s*(?P<value>[0-9]+)
 spec_conformance.corpus.fixtures.regen_fires = ^\s*[0-9]+\s*$
 spec_conformance.corpus.fixtures.regen_env = none
 spec_conformance.corpus.fixtures.instrument = ls over spectests/run — the command tests/spec_conformance.rs's own assert message prescribes
-spec_conformance.corpus.fixtures.measured_at = dc0b0024b
+spec_conformance.corpus.fixtures.measured_at = 6de989a1c
 spec_conformance.corpus.fixtures.home = tests/spec_conformance.rs:MIN_FIXTURES
 spec_conformance.corpus.fixtures.scan = none
 spec_conformance.corpus.fixtures.caveat = scan = none — 237 collides 14 times, three of them coincidences (a fixture's expected stdout, two todo/ items). ⚠ THIS IS A COUNT OF SEEDS, NOT OF PASSES: it says the corpus did not silently shrink OR grow, and nothing about whether any lane reproduces them

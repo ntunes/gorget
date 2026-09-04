@@ -164,6 +164,11 @@ pub fn collect_top_level(
             if let Some(kind) = DerefWrapperKind::for_builtin_name(type_name) {
                 scopes.get_def_mut(did).deref_wrapper_kind = Some(kind);
             }
+            // D46 + rider: seed the typed intrinsic-equality flag on the same
+            // builtin defs, from the same one-allowed registration name-match.
+            if crate::semantic::scope::builtin_has_intrinsic_equality(type_name) {
+                scopes.get_def_mut(did).has_intrinsic_equality = true;
+            }
         }
     }
     // Register built-in Option[T] and Result[T,E] enum types with their variants.
@@ -172,6 +177,11 @@ pub fn collect_top_level(
         ("Result", vec!["Ok", "Error"]),
     ] {
         if let Ok(enum_def_id) = scopes.define(enum_name.to_string(), DefKind::Enum, Span::dummy()) {
+            // D46 rider: `Option`/`Result` ARE enums, so half 2's literal text
+            // would have rejected `Some(1) == Some(1)` forever. The rider
+            // settles that collision — they are prelude types the user cannot
+            // annotate, so their equality is intrinsic on element comparability.
+            scopes.get_def_mut(enum_def_id).has_intrinsic_equality = true;
             let mut variant_infos = Vec::new();
             for vname in variant_names {
                 if let Ok(variant_def_id) = scopes.define(vname.to_string(), DefKind::Variant, Span::dummy()) {
@@ -625,6 +635,20 @@ fn collect_item(
                         );
                         if in_builtin {
                             scopes.get_def_mut(def_id).deref_wrapper_kind = Some(kind);
+                        }
+                    }
+                    // D46 + rider: the real `Vector`/`Dict`/`Set` STRUCTS in
+                    // std.collections resolve to THIS def, not the Import
+                    // placeholder, so the intrinsic-equality flag needs the
+                    // same builtin-module-gated seed (the `Box` precedent
+                    // directly above).
+                    if crate::semantic::scope::builtin_has_intrinsic_equality(s.name.node.as_str()) {
+                        let in_builtin = matches!(
+                            scopes.scope_kind(scopes.current_scope()),
+                            ScopeKind::FileModule { path } if crate::stdlib::is_builtin_module(path)
+                        );
+                        if in_builtin {
+                            scopes.get_def_mut(def_id).has_intrinsic_equality = true;
                         }
                     }
                 }

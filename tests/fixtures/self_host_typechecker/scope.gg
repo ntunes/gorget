@@ -141,6 +141,21 @@ bool def_kind_is_variant(DefKind k):
         else:
             return false
 
+# A DECLARABLE type-def: a struct, enum or newtype the author can annotate with
+# `@derive(Equatable)`. D46 draws its line here — a declarable type must carry an
+# `Equatable` impl before `==` is legal on it, while a tuple or a prelude
+# container has nowhere to write the derive and gets intrinsic equality instead.
+bool def_kind_is_declarable_type(DefKind k):
+    match k:
+        case DkStruct():
+            return true
+        case DkEnum():
+            return true
+        case DkNewtype():
+            return true
+        else:
+            return false
+
 # The ordered variant-name list for an enum def_id, or an EMPTY vector when
 # `def_id` is not a registered enum. The ONE accessor for
 # `ScopeTable.enum_variant_names` — readers never index the Dict directly.

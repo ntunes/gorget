@@ -1,0 +1,29 @@
+# D46 — the PARENLESS variant path, pinned in the fast suite.
+#
+# `Direction.North` without parentheses constructs the same nullary variant as
+# `Direction.North()`, but it leaves `unify` with an inference-poisoned result
+# type. A gate that judges only the unified type reads "no opinion" and ACCEPTS,
+# so `d == Direction.North` compiled and answered address identity while
+# `d == e` on the same enum, one line away, was refused. The equality gate
+# therefore falls back to the OPERAND types whenever the unified type carries no
+# verdict at all.
+#
+# ⚠ THE PARENTHESES ARE THE WHOLE VARIABLE. Every other reject fixture here
+# stays red with the fallback removed; this one does not. Do not "simplify" it
+# by adding the parens, and do not fold it into a sibling.
+#
+# The cross-lane half is `spectests/run/reject_eq_parenless_variant.gg` (ggdef +
+# C + LLVM + self-host, all four MATCH). This copy exists so the shape is also
+# caught by `cargo test --test integration d46_`, which is what anyone editing
+# `eq_comparable_blame` actually runs.
+#
+# Asserted by `d46_eq_parenless_variant_rejects` in tests/integration.rs.
+
+enum Direction:
+    North
+    South
+
+void main():
+    Direction d = Direction.North
+    bool a = d == Direction.North
+    print(f"{a}")

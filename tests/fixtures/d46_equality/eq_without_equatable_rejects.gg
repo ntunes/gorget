@@ -1,0 +1,33 @@
+# D46 — `==` on a type with NO `Equatable` implementation is a CHECK-TIME
+# REJECTION naming `Equatable` and suggesting `@derive`.
+#
+#     enum Direction:
+#         North()
+#         South()
+#     Direction.North() == Direction.North()      # -> error[E_UnsupportedOperator]
+#
+# This fixture GRADUATED out of `tests/fixtures/known_gaps/`. What it recorded
+# there was the accept-then-answer-wrong behaviour: the comparison was accepted
+# with no diagnostic and answered ADDRESS IDENTITY — `a == a` true, `a == b`
+# false — identically on C, LLVM and ASan, while the definitional interpreter
+# answered structurally. Three engines agreeing on a wrong answer is exactly
+# what "matches the reference" cannot certify.
+#
+# Adding `@derive(Equatable)` still makes it correct, so the discriminator is
+# the MISSING-IMPL path, not the comparison; structs behave identically. The
+# rejection is at CHECK time, not eval time, so a comparison on a branch that
+# never runs is refused too (`reject_eq_no_equatable_dead_branch.gg`).
+#
+# Asserted by `d46_eq_without_equatable_rejects` in tests/integration.rs.
+
+enum Direction:
+    North()
+    South()
+
+void main():
+    Direction a = Direction.North()
+    Direction b = Direction.North()
+    if a == b:
+        print("equal")
+    else:
+        print("NOT-equal")

@@ -1,16 +1,30 @@
 # docs/book/06-structs-enums.md:116 § "Variant Construction" (verbatim)
 # The doc's own comments: "no parens needed for nullary" / "parens also accepted".
 # Expected: true / true
+#
+# The two constructed values are observed through `match`, not `==`. The book
+# snippet this mirrors is the two DECLARATIONS; the comparison was only ever
+# scaffolding to make them printable, and under D46 `==` on an enum with no
+# `Equatable` implementation is a check-time rejection. The equality axis has
+# its own cells (`doc_b06_enum_eq_derive_equatable`, `doc_b06_struct_eq_no_derive`);
+# this cell is about CONSTRUCTION and now stays on that axis.
 enum Direction:
     North
     South
     East
     West
 
+bool is_north(Direction d):
+    match d:
+        case North:
+            return true
+        else:
+            return false
+
 void main():
     Direction d = Direction.North     # no parens needed for nullary
     Direction e = Direction.North()   # parens also accepted
-    bool a = d == Direction.North
-    bool b = e == Direction.North
+    bool a = is_north(d)
+    bool b = is_north(e)
     print(f"{a}")
     print(f"{b}")

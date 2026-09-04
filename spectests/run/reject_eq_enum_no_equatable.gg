@@ -1,0 +1,30 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [equality, traits, enum]
+# doc: |
+#   D46's ENUM row, in the QUALIFIED-VARIANT-CONSTRUCTOR spelling
+#   (`Direction.North() == Direction.North()`) — the exact shape `todo/t0013`
+#   was filed about, and the one the Book's own chapter 6 demonstrated. It is
+#   worth its own seed because the spelling parses as a METHOD CALL on the
+#   identifier `Direction`, not as a call, so a lane that resolves equality
+#   operands only through call/identifier inference silently misses it and
+#   accepts. Unit variants are not exempt: before D46 the comparison answered
+#   ADDRESS IDENTITY here too, so two distinct `North()` objects compared
+#   unequal — it was never even a tag comparison.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_UnsupportedOperator
+#!end
+
+enum Direction:
+    North()
+    South()
+
+void main():
+    if Direction.North() == Direction.North():
+        print("equal")
+    else:
+        print("NOT-equal")

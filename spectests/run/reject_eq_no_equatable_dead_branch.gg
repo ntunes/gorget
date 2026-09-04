@@ -1,0 +1,34 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [equality, traits]
+# doc: |
+#   THE DISCRIMINATOR BETWEEN A CHECK-TIME AND AN EVAL-TIME IMPLEMENTATION OF
+#   D46. The offending `==` sits on a branch guarded by a function that always
+#   returns false, so it NEVER EXECUTES. An eval-time fix — a trap raised when
+#   the comparison runs — leaves this program exiting 0 and printing its marker
+#   on every lane, i.e. GREEN while the defect ships. D46 is a rejection at
+#   CHECK time, so the program is refused whether or not the branch is taken.
+#   Keep this seed: it is the only one in the corpus that goes red for the
+#   right reason under the wrong implementation.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_UnsupportedOperator
+#!end
+
+struct Point:
+    int x
+    int y
+
+bool never_true():
+    return false
+
+void main():
+    Point a = Point(1, 2)
+    Point b = Point(1, 2)
+    if never_true():
+        if a == b:
+            print("equal")
+    print("no-eq-executed")
