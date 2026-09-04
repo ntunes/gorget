@@ -1,3 +1,25 @@
+- [2026-09-04] **`t1306` CLOSED BY AN OWNER RULING — the R49 inflow fixture that leaked `t0953`'s mechanism with no allowlist row is ADMITTED, one line, temporary, cited (R49 Track INT-B). It reached the owner as a DECISION because a five-build pre-flight ran before the reconciliation instead of a corpus sweep after it.**
+  **WHAT IT WAS.** `closure_literal_ambient_return_at_call_arg` (R49 inflow, `030d4d2d7`) leaks
+  `__gorget_closure_env_alloc*3` — one record per closure literal at a call-argument position, which is
+  `todo/t0953`, filed 2026-09-03 by R48 Track T-a1 and older than the round. It had NO row, so
+  `scripts/sanitize_sweep.sh` reported `❌ NEW LEAK` and exited 1. The fixture is one of five top-level
+  additions Track L's tree never carried, and therefore one the merged allowlist had never been swept against.
+  **WHY NO AGENT COULD CLEAR IT.** `tests/sanitize/LEAK_ALLOWLIST.txt`'s owner-attributed header reserves a
+  genuinely-NEW-INFLOW row to an OWNER ASK, and this round's earlier ruling on
+  `vector_hof_result_element_sizing` admits THAT ROW and is explicitly not extensible by analogy. Extending it
+  would have been an agent deciding an owner question — the exact move R49 had already had to retract once.
+  So it was filed with its three options rather than absorbed.
+  **THE RULING (2026-09-04), recorded verbatim in the row's `⚖ ADMITTED` block:** *"(a) admit one line,
+  temporary, cited t0953, retiring when t0953 lands"*. Second such ruling this round; both admit exactly one
+  row, and neither is a rule about future new-inflow rows.
+  **WHY NOT "FIX IT INSTEAD".** The fixture's declared axis is (position × body shape) for a closure LITERAL
+  at a DIRECT-CALL ARGUMENT; its five siblings all sit at a declared `Callable[...]` DESTINATION, so the
+  literal-at-an-argument spelling IS the cell. Respelling the callees as named functions deletes the case
+  rather than the leak — the opposite of `vector_hof_result_element_drop`, where the respelling DOES remove
+  the defect and which correctly ships with no row.
+  **THE COST, STATED.** rows 300→301 (the THIRD upward move of that ceiling, and the second this round),
+  pairs 497→498, records 2262→2265. `UNCITED_LEAK_CLASS_PAIRS` does NOT move: the pair is cited to `t0953`,
+  so admission and filing were the same act. `⚖ ADMITTED` inventory 11→12.
 - [2026-09-04] **`t1305` CLOSED — THE R49 FIVE-BRANCH LEAK ALLOWLIST RECONCILED FROM MEASUREMENT (R49 Track INT-B), not from either branch's blob: 37 of 46 examined stems changed, three constants moved, and the row count held at 300 as a COMPENSATING WASH the ceiling structurally cannot see.**
   **WHAT THE MERGE HAD DONE.** INT-A took Track L's `tests/sanitize/LEAK_ALLOWLIST.txt` blob whole — the right
   call, since the blob is the census L's constants pin — and the cost was three discarded edits by two other

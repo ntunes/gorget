@@ -478,6 +478,44 @@ closure_escape_capture_axis_param_named	str_alloc_copy*1	str_alloc_copy=t1210
 closure_float_ret	__gorget_closure_env_alloc*1
 closure_fstring_capture	__gorget_closure_env_alloc*1,str_alloc_copy*1	str_alloc_copy=t1210
 closure_higher_order_chain	__gorget_closure_env_alloc*3
+# ⚖ ADMITTED (R49 Track INT-B, 2026-09-04). This row's leak is genuinely NEW
+# INFLOW — the fixture is this round's, added by `030d4d2d7` — which this file's
+# own header reserves to an OWNER ASK. The ask was MADE, as `todo/t1306`, and it
+# was ANSWERED. The header clause is SATISFIED here, not overridden.
+# ⚖⚖ OWNER RULING (2026-09-04), recorded verbatim:
+#     "(a) admit one line, temporary, cited t0953, retiring when t0953 lands"
+# THE OPTION SET WAS THE R49 ORCHESTRATOR'S FRAMING, not the owner's words:
+# (a) as quoted; (b) amend this file's header to permit extension-by-analogy
+# under standing autonomy; (c) fix `todo/t0953` instead.
+# ⭐ THE RULING ADMITS THIS ROW. It is the SECOND such ruling this round and both
+# admit exactly one row; neither is a rule about future new-inflow rows, and
+# nothing here may be extended to a neighbouring one. The next new-inflow row is
+# the next owner ask.
+#
+# ⭐ THE REASONING BELOW IS R49 TRACK INT-B'S, recorded in `todo/t1306`:
+# The FIXTURE is this round's; the MECHANISM is not. Every record is
+# `__gorget_closure_env_alloc`, one per closure literal at a call-argument
+# position, which is `todo/t0953` — filed 2026-09-03 by R48 Track T-a1, older
+# than this round, with two durable heap-forced `known_gaps` repros and an
+# `#[ignore]`d clean-run assertion. Three literals in `main`, three records:
+# `(String s): Ok(mk(s, "?"))`, `(String e): Error(mk(e, "!"))` and
+# `(String e): e`.
+# ⭐ THE LEAK IS IRREDUCIBLE WITHOUT DELETING THE COVERAGE, and that is what
+# distinguishes it from a fixture that should simply be fixed. This fixture's
+# declared axis is (position × body shape) for a closure LITERAL at a DIRECT-CALL
+# ARGUMENT, over three body shapes; its five named siblings all sit at a declared
+# `Callable[...]` DESTINATION, so the literal-at-an-argument spelling IS the cell.
+# Respelling the three callees as named functions would not reduce the leak, it
+# would delete the case the fixture exists to pin — the same shape of argument
+# R49 Track N2 measured for `vector_hof_result_element_sizing`, and the opposite
+# of `vector_hof_result_element_drop`, whose leak was FIXED and which therefore
+# correctly ships with no row.
+# ⊜ HOW IT WAS FOUND, because the instrument matters: a five-build pre-flight
+# over the top-level fixtures Track L's tree never carried, run BEFORE the
+# reconciliation rather than after it. A full corpus sweep would have found it
+# too — at round-close, as a surprise, with no time to ask.
+# RETIRES: t0953
+closure_literal_ambient_return_at_call_arg	__gorget_closure_env_alloc*3	__gorget_closure_env_alloc=t0953
 closure_mixed_implicit_explicit_wiring	__gorget_closure_env_alloc*1
 closure_multiline_return	__gorget_closure_env_alloc*2,gorget_string_format*2
 closure_mutable_capture	__gorget_closure_env_alloc*3

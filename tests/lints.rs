@@ -9947,7 +9947,25 @@ fn sanitize_allowlists_shrink_only() {
     // (`str_alloc_copy*3`) against a compiler built from Track L's base, and
     // ASan-CLEAN after. A pre-existing row this round's fix RETIRED, removed by
     // the round that earned it rather than left for a later reader.
-    const LEAK_CEILING: usize = 300;
+    // ⚖ 300 -> 301 (R49 Track INT-B, OWNER RULING 2026-09-04, recorded verbatim
+    // in the row's `⚖ ADMITTED` block). THE THIRD UPWARD MOVE OF THIS CEILING,
+    // and the second this round. `closure_literal_ambient_return_at_call_arg`
+    // is R49 inflow (`030d4d2d7`) that leaks `todo/t0953`'s mechanism — a
+    // closure LITERAL at a call-argument position, three literals, three
+    // records — and t0953 is OLDER than this round, filed 2026-09-03 with two
+    // durable repros. New inflow is an owner ask by this file's header; the ask
+    // was made as `todo/t1306` and answered. It is NOT a rule for the next such
+    // row: both of this round's rulings admit exactly one row each.
+    // ⚠ THE ROW EXISTS BECAUSE THE FIXTURE'S AXIS REQUIRES THE LEAKING SPELLING.
+    // Its cell is a closure LITERAL at a DIRECT-CALL ARGUMENT; its five siblings
+    // all sit at a declared `Callable[...]` DESTINATION. Respelling the callees
+    // as named functions would delete the case rather than fix the leak — which
+    // is exactly why its own sibling `vector_hof_result_element_drop`, where the
+    // respelling DOES remove the defect, ships with no row at all.
+    // ⊜ FOUND BY A FIVE-BUILD PRE-FLIGHT before the reconciliation, not by the
+    // round-close battery after it — which is the difference between an owner
+    // decision and an owner surprise.
+    const LEAK_CEILING: usize = 301;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -10221,8 +10239,17 @@ fn sanitize_allowlists_shrink_only() {
     // inventory below sees the `+1`; NOTHING sees the `-1` (an uncited row whose
     // fixture goes clean lands in the sweep's advisory `fixed_leak` bucket and
     // sets no rc), which is why both are written out here rather than netted.
-    const LEAK_CLASS_PAIRS: usize = 497;
-    const LEAK_RECORDS: usize = 2262;
+    // ⚖ 497 -> 498 pairs, 2262 -> 2265 records (the same 2026-09-04 ruling as
+    // `LEAK_CEILING` above): one row, one class, three records. `todo/t0953`
+    // names `__gorget_closure_env_alloc`, so the new pair is CITED and
+    // `UNCITED_LEAK_CLASS_PAIRS` does NOT move with these two — admission and
+    // filing were the same act, which is the only shape the owner's 2026-09-02
+    // burn-down instruction accepts.
+    // ⚠ AND THIS TIME THE ROW COUNT REALLY MOVES. The +1/-1 wash recorded above
+    // was the reconciliation; this is pure inflow with nothing retiring against
+    // it, so all three of rows, pairs and records step together.
+    const LEAK_CLASS_PAIRS: usize = 498;
+    const LEAK_RECORDS: usize = 2265;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────
