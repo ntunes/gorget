@@ -33,8 +33,20 @@ verify that after merging rather than assuming it.**
 `t0953`) — its leak is measured irreducible, since a named callee with the same body sizes correctly, so the
 closure literal IS the defect's entry condition.
 
-⛔ **ROUND-CLOSE BLOCKERS:** the `T1`+`L` merge needs **`PHASE_D_PROXY_BUDGET` = 89** and **`ALLOWED_UNWIRED`
-= 23**, values on NEITHER side — resolve them AT the merge, they are not a conflict to take a side on.
+⛔ **ROUND-CLOSE BLOCKERS — ⚠ THE PREVIOUS TEXT HERE WAS WRONG ON BOTH FIGURES, corrected 2026-09-04 by
+re-reading the tree.** It said the `T1`+`L` merge needs `PHASE_D_PROXY_BUDGET` and `ALLOWED_UNWIRED` set to
+values "on NEITHER side". Measured:
+- **`PHASE_D_PROXY_BUDGET` IS IDENTICAL ON HEAD AND L — there is NOTHING TO RESOLVE.**
+  `git show HEAD:tests/lints.rs | grep -n PHASE_D_PROXY_BUDGET` vs the same on `2f7eb9b58`.
+- **`ALLOWED_UNWIRED` DOES differ** (`git show <rev>:tests/lints.rs | grep -n "const ALLOWED_UNWIRED"`), but
+  it is **NOT a value to hand-pick** — it is a LIST, and its lint is **BIDIRECTIONAL** (`tests/lints.rs`
+  `arrivals` fails on an unwired `.gg` missing from the list; `departed` fails on a listed row that is now
+  wired or gone, SHRINK-ONLY). ⭐ **SO THE RESOLUTION IS MECHANICAL: take HEAD's list, run
+  `cargo test --test lints`, and the failure message NAMES the exact rows to add or delete.** Iterate to
+  green. Do not reason about the count; the gate computes it.
+⚠ **THE LESSON, NOT THE FIGURES:** this bullet sat in the handover for a round telling the next session to
+make a careful judgement call at a merge where one constant needed no decision and the other has a gate that
+decides it for you. **A handover figure is a claim; re-read the tree before acting on one (Core #5).**
 ✅ **The sanitize blocker is addressed pending review:** `bcf703ee1` re-seeds the 27 rows the `b5356f361`
 rename broke (`gorget_array_push` → `__gorget_array_reserve_one`, counts unchanged), taking the sweep from 28
 red rows to **one** — `string_enum_variants`, which **goes green the moment L's `t1290` admission lands**.
