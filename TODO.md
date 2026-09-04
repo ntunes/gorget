@@ -683,6 +683,51 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⛔⛔⛔ **L's CONFIRMING REVIEW — DECISIVE. L ALONE BREACHES THE CEILING, MEASURED IN `--release`: rc 101,
+non-MATCH 150 against a ceiling of 147, backlog +3.** The 8/3 split measured directly: the three non-MATCH
+cells are `closure_capture_param_bare_identifier_body`, `…string_then_reassign_source`,
+`…then_mutate_source_uaf`, **all failing with ONE error** — *"incompatible types when returning type `Str`
+but `int64_t` was expected"* — **exactly `t0877`'s `guess_return_type` mechanism, arms b/c/d.**
+⚡⚡ **AND THE ATTRIBUTION IS AIRTIGHT: against the ceiling's last recorded composition, WRONG-OUTPUT, CRASH
+and DRIVER-FAIL are UNCHANGED and CC-FAIL moved 67→70. The entire breach is L's own inflow — AND IT PROVES
+THE PRE-L BRANCH SITS AT EXACTLY THE CEILING WITH ZERO SLACK.** ⇒ ⛔ **FOR THE REST OF THIS ROUND AND R50:
+ANY TRACK ADDING ONE NON-MATCH TOP-LEVEL FIXTURE BREACHES.**
+⇒ ✅ **L + T1 IS CEILING-LEGAL — ON THE BOUNDARY** (T1 turns exactly those three CC-FAIL→MATCH, adding and
+removing nothing, so non-MATCH lands on the ceiling and the assert is `<=`). **INTEGRATE L AND T1 TOGETHER;
+L MUST NOT LAND ALONE.**
+⭐⭐ **AND `t0877`'s step-5 OWNER ASK IS DISCHARGED, NOT ESCALATED — BECAUSE THE OWNER ALREADY RULED THIS EXACT
+SITUATION.** The MATCH-floor comment records that when Track R's own fixtures pushed non-MATCH to 149 the
+ruling was ***"fix the SH and the non-Match"***, and Track U **ported rather than raising**. **T1 doing the
+same IS the ruled remedy. No new owner ask.** ⊕ MATCH floor is not at risk either way — slack is wide at this
+base, and L's 8 MATCH rows RAISE it.
+
+⛔⛔ **B2 — A PARALLEL-TRACK EXACT-PIN COLLISION THAT IS INVISIBLE TO EITHER TRACK ALONE.**
+`no_growth_in_phase_d_proxy_reads` expects 90 and finds **89**: **M1 and L each removed a DIFFERENT
+`drops.is_registered` site** (M1 `…is_registered(dst)`, L `…is_registered(cap.local_id)`) and **each correctly
+pinned 91→90; together the true count is 89.** ⚡ **THE EXACT HAZARD MULTI-AGENT RULE 5 NAMES — two patches
+that each verify alone and collide on a shared COUNT.** ⊕ Fix both `tests/lints.rs` and the `figures.db`
+mirror **in ONE commit — moving only one reds `figures_db_mirrors_agree`.** *Orchestrator's own hands: it is a
+merge artifact no track can see.*
+
+⛔ **AND A ROUND-CLOSE BLOCKER THAT IS NOT L's: THE SANITIZE SWEEP IS RED AT HEAD, 27 ROWS, ALL ONE SYMBOL.**
+`__gorget_array_reserve_one`, introduced by **`b5356f361` (N1's `t0988` fix)** — **a RENAME, not a new leak**:
+the helper extraction **pushed the top frame one level inward without re-seeding the class keys**, same bytes,
+same allocation. **Proven by two counterfactuals** — red against the pre-L allowlist too, and **green with
+only that rename re-seeded** (`new_leak 0 · new_class 0 · retire_due 0`). ⇒ **a 27-row class-key re-seed is
+OWED BEFORE ROUND CLOSE.**
+⚠ **AND THE RETIREMENT MECHANISM'S FIRST REAL FIRING IS A FALSE VERDICT:** both `⛔` rows say the cited defect
+is fixed; **it is not — the frame was renamed and the leaks are live.** Usually harmless because a rename also
+trips `❌` and forces a re-seed — **but if the renamed class is already tolerated at exactly the resulting
+count, `⛔` fires ALONE and its text invites deleting a row for a LIVE defect.** ⇒ **reword to "this class no
+longer appears" and require checking for a paired `❌` before deleting.**
+⊕ **Everything else in L verified EXACT:** all four ratchets re-derived independently; the retired row clean
+across **7 runs in 3 option sets**; **both polarities of the retirement driven with synthetic inputs** through
+the extracted `adjudicate_leaks`; the `FIXLIST` scoping **more precise than the fold claimed** (only the
+whole-row half is dropped; the per-class half stays fatal in both modes); `t1290`'s admission stands on a
+**structural** argument stronger than the measurement it substitutes for.
+⊕ **L's `t0729` addendum is STALE — take HEAD's side at the merge** (HEAD already did the graduation and the
+annotation removal L's addendum recommends).
+
 ⭐ **THIRD INDEPENDENT COUNT OF L's CORPUS DELTA (orchestrator, raw `git diff --name-status`) — THE
 CONCLUSION HOLDS, AN INTERMEDIATE STEP DID NOT.** Measured from L's tip against its merge base:
 **top-level ADDED 11 · top-level DELETED 0 · `known_gaps/` deleted 4** (the graduations). And
