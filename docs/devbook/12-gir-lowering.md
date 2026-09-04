@@ -438,14 +438,14 @@ still aliases the buffer. The Tier 1c coherence validator sees closure envs
 like any other struct and flags that mismatch.
 
 One narrow carve-out remains, in the consume-site validator's `StructInit`
-arm (`validate.rs:2596-2613`): a capture whose type
-`lacks_materialization_path` (`types.rs:790`). That predicate is derived,
-never listed — `needs_drop && !is_resource_type && !is_refcount_clone_type`
-— and it selects the single-owner-by-design handles, `Callable[T]` above
-all, which lowers to `GirType::FnPtr` and has neither a deep clone nor an
-incref. Every materializing pass already skips those operands because there
-is nothing they know how to copy, so ownership at such a capture genuinely
-is undecided. It is carved out rather than flagged because none of the three
+arm: a capture whose type `lacks_materialization_path` (`types.rs:777`).
+That predicate is derived, never listed — `needs_drop && !is_resource_type
+&& !is_refcount_clone_type` — and it selects the single-owner-by-design
+handles: `Callable[T]`, which lowers to `GirType::FnPtr`, together with
+`Mutex[T]` and `RWLock[T]`, which are `Trivial`-copy with `clone_fn = None`.
+None of the three has a deep clone or an incref, so every materializing pass
+already skips those operands — there is nothing they know how to copy — and
+ownership at such a capture genuinely is undecided. It is carved out rather than flagged because none of the three
 answers can be given: an implicit clone or an implicit move breaches the
 ratified carve-out, and a rejection has no fix-it a user can write until
 per-variable capture lists exist. Flagging it would turn working programs

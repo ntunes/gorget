@@ -688,7 +688,11 @@ fn emit_implicit_return(
 }
 
 /// Collect free variables referenced in a closure body.
-/// Returns (name, type_id, local_id) for each free variable.
+///
+/// Returns `(name, type_id, local_id, span)` for each free variable, where
+/// `span` is that variable's FIRST occurrence inside the body — the position
+/// the consuming-position helpers key their last-use query on. See
+/// [`CaptureInfo::span`] for why the enclosing closure span cannot serve.
 fn collect_free_vars(
     ctx: &LoweringContext,
     expr: &Spanned<Expr>,

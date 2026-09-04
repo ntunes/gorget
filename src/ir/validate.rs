@@ -2593,17 +2593,21 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                     // destinations are validated like the rest.
                     //
                     // ONE cell stays carved out: a capture whose type has no
-                    // materialisation path (`lacks_materialization_path` —
-                    // `Callable[T]` and the other single-owner-by-design
-                    // handles). Ownership there genuinely IS undecided, and
-                    // none of the three answers can ship: an implicit clone or
-                    // an implicit move breaches the ratified carve-out under
+                    // materialisation path (`lacks_materialization_path`).
+                    // Measured over the fixture corpus, that predicate admits
+                    // `FnPtr` (`Callable[T]`) ∪ `Mutex__*` ∪ `RWLock__*` — the
+                    // single-owner-by-design handles, which are `Trivial`-copy
+                    // with `clone_fn = None`, so they have neither a deep clone
+                    // nor an incref. Ownership there genuinely IS undecided,
+                    // and none of the three answers can ship: an implicit clone
+                    // or an implicit move breaches the ratified carve-out under
                     // D31 full-strict, and a rejection has no spellable fix-it
                     // until D7's per-variable capture list exists. Flagging it
                     // would turn programs that run correctly today into build
                     // failures with no way out. Tracked as `todo/t1067`, gated
-                    // on D7; `tests/fixtures/known_gaps/closure_capture_callable_block_scope_uaf.gg`
-                    // pins the live defect the cell still hides.
+                    // on D7, with a repro per member —
+                    // `known_gaps/closure_capture_{callable,mutex}_block_scope_uaf.gg`
+                    // pin the live defects the cell still hides.
                     let env_carve_out = registry.get_type_def(type_name)
                         .map(|td| td.metadata.is_closure_env)
                         .unwrap_or(false);

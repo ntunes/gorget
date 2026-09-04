@@ -18948,9 +18948,14 @@ fn sh_gap_static_trait_method_returns_string_len() {
 /// bare `Spanned<Expr>` rather than a statement block: `FnBodyAst::Expr` is
 /// what carries it into the prescans.
 ///
-/// ⚠ THE VECTOR IS LOCAL TO THE CLOSURE, DELIBERATELY. The captured-collection
-/// sibling is a DIFFERENT defect (`todo/t0704`, the capture boundary) and is
-/// still rc 139 — see `tests/fixtures/known_gaps/closure_capture_*_uaf.gg`.
+/// ⚠ THE VECTOR IS LOCAL TO THE CLOSURE, DELIBERATELY. This cell is about the
+/// closure BODY reaching the prescans; the captured-collection sibling is a
+/// different defect at the CAPTURE BOUNDARY, and it is what makes this one's
+/// no-capture shape load-bearing. That sibling was `t0704`, closed in R49 by
+/// routing the capture site through the shared consuming-position sequence —
+/// its cells are now live fixtures (`closure_capture_then_mutate_source_uaf`,
+/// `closure_capture_inside_body_uaf`), so BOTH shapes are green and the
+/// discriminator survives as a statement about what each fixture pins.
 #[test]
 fn cow_closure_body_view_survives_realloc() {
     run_gg("cow_closure_body_view_survives_realloc.gg", "helloworld");
@@ -19184,6 +19189,33 @@ integer; ASan heap-use-after-free in __Closure_1__call. Gated on D7's \
 per-variable capture list. Asserts the intended `41`."]
 fn known_gap_closure_capture_callable_block_scope_uaf() {
     run_gg("known_gaps/closure_capture_callable_block_scope_uaf.gg", "41");
+}
+
+/// KNOWN GAP `todo/t1067`, the `Mutex`/`RWLock` MEMBER — the same cell with the
+/// captured handle a `Mutex[int]` rather than a `Callable`.
+///
+/// The carve-out that lets both build is derived
+/// (`lacks_materialization_path` = `needs_drop && !is_resource_type &&
+/// !is_refcount_clone_type`), and what it admits is WIDER than the `Callable`
+/// cell: `Mutex[T]` and `RWLock[T]` are `Trivial`-copy with `clone_fn = None`,
+/// so they satisfy every clause too. Naming only `Callable` would present a
+/// selection as a total enumeration (SIX Q#3). `RWLock[T]` is the third member
+/// and shares this shape exactly.
+///
+/// ⚠ PRE-EXISTING AND UNCHANGED — measured at the base commit and after the
+/// capture-ownership fix: the same garbage value and the same
+/// `heap-use-after-free` in `gorget_mutex_lock`.
+///
+/// ⚠ ggdef cannot adjudicate this one (`Mutex` is outside the phase-0 subset),
+/// so C + ASan is the instrument; the `Callable` sibling IS ggdef-adjudicated.
+#[test]
+#[ignore = "todo/t1067 (Mutex member) — a captured Mutex[T] is not materialised \
+at the capture site (single-owner carve-out, clone_fn = None), so an \
+environment outliving the mutex's scope reads freed memory. rc 0 with a garbage \
+integer; ASan heap-use-after-free in gorget_mutex_lock. Pre-existing, identical \
+at the base commit. Gated on D7. Asserts the intended `41`."]
+fn known_gap_closure_capture_mutex_block_scope_uaf() {
+    run_gg("known_gaps/closure_capture_mutex_block_scope_uaf.gg", "41");
 }
 
 /// THE (per-receiver) vs (name-keyed) DISCRIMINATOR, and the only cell in the
