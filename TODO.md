@@ -683,6 +683,37 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **N2's FOLD LANDED AND WENT WELL PAST ITS BRIEF — confirming review launched.**
+⭐ **B1's Deque cell exposed a WHOLESALE self-host gap, not a drop-hook one:** Rust C and LLVM both **2 → 4**
+(4 correct), **self-host CC FAILURE unchanged** — and it REDUCED the failure to **`Deque[int]` with a trivial
+closure, no `Drop`, no resource**. Filed **`t1286`**, RED at rc 101, with `git show --stat | grep -c self_host`
+→ **0** proving it is not the track's regression.
+⭐⭐ **AND IT CAUGHT A CORE #9 ⊕ TRAP I DID NOT BRIEF: a TOP-LEVEL fixture is AUTO-SCANNED into
+`runtime_parity_corpus`, so placing the Deque cell there would have booked a self-host non-MATCH FOR THIS
+ROUND'S OWN INFLOW — the exact thing the rule forbids.** It parked the cell in `self_host_gaps/` on the
+documented `t0969` precedent, declared it in `CORPUS_MANIFEST.txt` with a measured floor, and **flagged the
+decision as unasked-for.** ⚡ *"Add a fixture" is not a free action when the corpus auto-enrols it.*
+⭐ **B2's repro ships `push` and `map` CONTROLS beside the cell** — *"so four cannot be read as 'that's just
+what `Drop` does'"* — plus a **self-host companion test UN-IGNORED AND GREEN**, pinning the reference-grade
+shape **so it cannot regress while Rust catches up.** ⊕ And it measured that pre-fix the program printed
+`map`=**0**, `flat_map`=**0**: **the accumulator fix moved `flat_map` from dropping NOTHING to dropping twice
+— `t1216` is the REMAINING HALF of that move, not a regression it introduced.**
+⛔ **N1 was far wider than my two spot-checks: 13 MORE rows shed classes**, all 35 allowlisted HOF fixtures
+re-measured with the sweep's **own** awk, options and **REPS=3 per-class MAX**, every row stable across three
+reps. **`test_higher_order_named_fn` went to `-` and its row was DELETED** after verifying it is genuinely
+clean. Four constants regenerated (`LEAK_CEILING` 294→**293** · `LEAK_CLASS_PAIRS` 501→**486** ·
+`LEAK_RECORDS` 2302→**2247** · `UNCITED_LEAK_CLASS_PAIRS` 494→**481**) and mirrored.
+⊕ **Side effect handled honestly: a seed-note waiver went stale, and it REMOVED THE WAIVER rather than leave
+an over-declaration.**
+⊕ **N3 corrected MY framing, measured: `take(!a)` STILL BUILDS at rc 0** ⇒ **a STALE LESSON, not a broken
+suggestion — LOW, not MED.** ⊕ And it names the real question for whoever takes it: **if D27 retires `!`, a
+compiler still ACCEPTING it is the larger half.**
+⊕ **It retracted its own census-red attribution unprompted:** *"my Track R attribution rested on `ab429b88b`
+not being an ancestor, which does not establish causation."*
+⚠ **FLAKE FOR THE ROUND-CLOSE BATTERY: `orphan_reaper_self_test` is LOAD-SENSITIVE** — it spawns real
+processes and inspects PID/tag state, and failed once under concurrent builds while passing on every isolated
+re-run. **Re-run it ALONE before treating it as red.**
+
 ⛔⛔ **W PASS 2 — SIGNS OFF THE *CHOICE*, BLOCKS ON THE *BRIEF*. AND IT FOUND AN AXIS VALUE NO PASS HAD
 EXERCISED: THE HEADER DESIGN FAILS TO COMPILE.** A non-capturing closure escaping into a `Callable` — base
 rc 0, ASan CLEAN — under the prototype gives **`error: '__Closure_0__drop' undeclared`** plus the same for
