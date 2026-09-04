@@ -33,6 +33,17 @@ pub struct CaptureInfo {
     pub type_id: TypeId,
     pub local_id: LocalId,
     pub mode: CaptureMode,
+    /// Span of the capture's FIRST occurrence inside the closure body.
+    ///
+    /// The consuming-position helpers answer "is this the last use of
+    /// `name`?" from a span, and `is_last_use_at` returns a conservative
+    /// `false` for any ENCLOSING span. The whole-closure span is enclosing,
+    /// so it can never distinguish a source that is dead after the capture
+    /// from one that is still live — both read as "still live" and both get
+    /// a clone. Carrying the identifier's own span makes the capture site
+    /// answer the same question the struct-literal site already answers
+    /// correctly.
+    pub span: crate::span::Span,
 }
 
 /// A lifted closure pending emission as GIR types/functions.
@@ -96,7 +107,7 @@ impl ClosureLowering {
             .map(|p| p.node.name.node.clone())
             .collect();
 
-        let free_vars = collect_free_vars(ctx, &body.node, &param_names);
+        let free_vars = collect_free_vars(ctx, body, &param_names);
 
         // Detect mutations to determine capture mode
         let mutated = if is_move {
@@ -107,13 +118,13 @@ impl ClosureLowering {
 
         // Build capture info
         let captures: Vec<CaptureInfo> = free_vars.into_iter()
-            .map(|(name, type_id, local_id)| {
+            .map(|(name, type_id, local_id, span)| {
                 let mode = if mutated.contains(&name) {
                     CaptureMode::ByMutRef
                 } else {
                     CaptureMode::ByValue
                 };
-                CaptureInfo { name, type_id, local_id, mode }
+                CaptureInfo { name, type_id, local_id, mode, span }
             })
             .collect();
 
@@ -151,17 +162,25 @@ impl ClosureLowering {
             })
             .collect();
 
+        // Tier 1c coherence: a closure env is an ordinary aggregate. Its drop
+        // strategy and copy semantics are COMPUTED from its fields by the same
+        // helper every other struct registration uses, never asserted. An env
+        // holding a droppable capture is `(Recursive, Resource)`, so
+        // `__Closure_N__drop` is synthesised and the field is freed exactly
+        // once — by the env that owns it.
+        let (env_drop, env_copy) =
+            ctx.type_registry.compute_drop_strategy_for_struct(&fields);
         let type_def = TypeDef {
             name: struct_name.clone(),
             kind: TypeDefKind::Struct(StructDef { fields }),
             metadata: TypeMetadata {
-                // Marks this as a closure-env struct: captured locals at non-last-use
-                // are lifetime-tied aliases of outer-scope values (no independent
-                // ownership — outer-scope drops handle cleanup). The consume-site
-                // validator skips StructInit fields for closure-env destinations so
-                // the bitwise-copy alias pattern doesn't fire OwnedLiveSourceConsumed.
-                // See validate.rs `validate_consume` and docs/devbook/12-gir-lowering.md (closure lowering and capture).
+                // Marks this as a closure-env struct. The flag is closure
+                // IDENTITY only — it says nothing about ownership, because a
+                // closure env owns its by-value captures like any other
+                // aggregate owns its fields.
                 is_closure_env: true,
+                drop_strategy: env_drop,
+                copy_semantics: env_copy,
                 // CARRIER #1, SINGLE WRITER (Core #2 / Layering rule 3). Closure
                 // identity is a property of the TYPE, so it is recorded on the
                 // type's metadata at the one mint and read back through
@@ -291,80 +310,75 @@ impl ClosureLowering {
             expected_type: ctx.func_state.expected_type,
         });
 
-        // Emit the creation-site StructInit.
-        // CoW Ptr(T) captures are cloned to produce an independent owned T,
-        // preventing stale pointers if the source is mutated after capture.
+        // Emit the creation-site StructInit through the SHARED consuming-position
+        // sequence — the same three passes `lower_struct_init` runs for a user
+        // struct literal, in the same order:
         //
-        // For owned by-value resource-typed locals captured at last-use, MOVE
-        // the source into the struct (unregister its drop, MoveZero its slot
-        // AFTER the StructInit reads it). Otherwise the source's scope-exit
-        // drop fires on a buffer the closure env still aliases → heap-UAF on
-        // closure invocation.
-        let mut pending_move_zero: Vec<crate::ir::LocalId> = Vec::new();
-        let field_operands: Vec<Operand> = captures.iter()
-            .map(|cap| {
-                match cap.mode {
-                    CaptureMode::ByValue => {
-                        // If this capture is a CoW Ptr(T) alias, clone through
-                        // the Ptr to produce an owned T for the closure struct.
-                        // Exception: if the capture is the last use of the variable,
-                        // the closure takes ownership via move — no clone needed.
-                        if let Some(inner) = ctx.pointee_type(cap.type_id) {
-                            let is_last_use = ctx.is_last_use_at(&cap.name, closure_span);
-                            if is_last_use {
-                                // Last use — auto-deref Ptr(T) to T (move ownership)
-                                let deref_local = builder.add_local(inner, None);
-                                builder.assign(Place::local(deref_local),
-                                    Operand::Move(Place::local(cap.local_id)));
-                                ctx.move_zero_and_mark(builder, cap.local_id);
-                                return FunctionBuilder::copy(deref_local);
-                            }
-                        }
-                        // Owned by-value resource captured at last-use: defer
-                        // MoveZero to after StructInit so the field init can
-                        // still read the source.
-                        // Only applies to CopySemantics::Resource types.
-                        // CopySemantics::Trivial types (Shared, Channel, Weak) are
-                        // bitwise-copyable at GIR level; the runtime handles their
-                        // refcounts via explicit drops. The consume-site validator
-                        // skips Trivial types (see validate.rs).
-                        if ctx.pointee_type(cap.type_id).is_none()
-                            && ctx.type_registry.is_resource_type(cap.type_id)
-                            && ctx.drops.is_registered(cap.local_id)
-                            && ctx.is_last_use_at(&cap.name, closure_span)
-                        {
-                            ctx.drops.unregister(cap.local_id);
-                            pending_move_zero.push(cap.local_id);
-                            return FunctionBuilder::copy(cap.local_id);
-                        }
-                        // Unified boundary clone: `ensure_owned_at_boundary`
-                        // handles Ptr(T) borrows, ref-state locals, and
-                        // Untracked resource locals (via Tier 2a 2B extension).
-                        ctx.ensure_owned_at_boundary(
-                            builder,
-                            FunctionBuilder::copy(cap.local_id),
-                            closure_span,
-                            crate::ir::ImplicitCloneReason::ClosureCapture,
-                        )
-                    }
-                    CaptureMode::ByMutRef => {
-                        // Borrow the captured variable
-                        let ptr_type = ctx.type_registry.insert(GirType::MutPtr(cap.type_id));
-                        let ptr_local = builder.add_local(ptr_type, None);
-                        builder.emit_borrow_mut(ptr_local, Place::local(cap.local_id));
-                        FunctionBuilder::copy(ptr_local)
-                    }
+        //   1. `ensure_owned_at_boundary`      — materialize borrows (Ptr(T)
+        //                                        aliases, ref-state locals,
+        //                                        untracked resources).
+        //   2. `clone_multi_use_resource_args` — clone by-value resources the
+        //                                        env must not move out of.
+        //   3. `move_zero_consumed_args`       — transfer: MoveZero every source
+        //                                        the env now owns, AFTER the init
+        //                                        has read it.
+        //
+        // A closure capture is an ownership boundary, so the rule is the
+        // ratified one and it is the SAME rule: clone if the source is still
+        // live, move if it is dead. There is exactly one implementation of that
+        // table (Layering rule 3) and the closure site does not get a private
+        // second opinion.
+        //
+        // Pass 3 is what makes the transfer sound. It calls `move_zero_and_mark`,
+        // which KEEPS the source's drop entry and zeroes the slot, so
+        // `drop_elab` deletes the now-dead drop on the paths where the move
+        // happened and keeps it where it did not. Deleting the entry outright
+        // (`drops.unregister`) is not CFG-aware and loses the drop on every
+        // other path — see the warning on `DropTracker::unregister`.
+        let capture_exprs: Vec<Spanned<Expr>> = captures.iter()
+            .map(|cap| Spanned { node: Expr::Identifier(cap.name.clone()), span: cap.span })
+            .collect();
+        let mut field_operands: Vec<Operand> = captures.iter()
+            .map(|cap| match cap.mode {
+                CaptureMode::ByValue => FunctionBuilder::copy(cap.local_id),
+                CaptureMode::ByMutRef => {
+                    // Borrow the captured variable — the field IS a MutPtr, so
+                    // the pointer operand is exactly what must be stored.
+                    let ptr_type = ctx.type_registry.insert(GirType::MutPtr(cap.type_id));
+                    let ptr_local = builder.add_local(ptr_type, None);
+                    builder.emit_borrow_mut(ptr_local, Place::local(cap.local_id));
+                    FunctionBuilder::copy(ptr_local)
                 }
             })
             .collect();
-
-        let dst = builder.struct_init(&struct_name, struct_type_id, field_operands);
-        // After StructInit has read the moved sources, MoveZero their slots
-        // so the scope-exit drop tracker doesn't free buffers the closure
-        // env now owns.
-        for local in pending_move_zero {
-            ctx.move_zero_and_mark(builder, local);
+        // Pass 1. Skipped for ByMutRef, whose field is a Ptr — cloning it would
+        // deep-copy the pointee and store the address of a temporary, exactly
+        // as `lower_struct_init` skips its Ptr-typed fields.
+        //
+        // This pass keeps the ENCLOSING `closure_span`. Its own last-use query
+        // (`maybe_move_owning_param_ctor_temp`) governs a move out of an owning
+        // `^` param, and the conservative answer an enclosing span produces is
+        // the correct one there: only pass 2 decides capture ownership.
+        for (i, cap) in captures.iter().enumerate() {
+            if cap.mode != CaptureMode::ByValue {
+                continue;
+            }
+            let op = std::mem::replace(&mut field_operands[i], Operand::Constant(Constant::Unit));
+            field_operands[i] = ctx.ensure_owned_at_boundary(
+                builder,
+                op,
+                closure_span,
+                crate::ir::ImplicitCloneReason::ClosureCapture,
+            );
         }
+        // Pass 2.
+        super::exprs::clone_multi_use_resource_args(
+            ctx, builder, &mut field_operands, &capture_exprs,
+        );
+
+        let dst = builder.struct_init(&struct_name, struct_type_id, field_operands.clone());
+        // Pass 3.
+        super::exprs::move_zero_consumed_args(ctx, builder, &field_operands);
         FunctionBuilder::copy(dst)
     }
 }
@@ -674,12 +688,16 @@ fn emit_implicit_return(
 }
 
 /// Collect free variables referenced in a closure body.
-/// Returns (name, type_id, local_id) for each free variable.
+///
+/// Returns `(name, type_id, local_id, span)` for each free variable, where
+/// `span` is that variable's FIRST occurrence inside the body — the position
+/// the consuming-position helpers key their last-use query on. See
+/// [`CaptureInfo::span`] for why the enclosing closure span cannot serve.
 fn collect_free_vars(
     ctx: &LoweringContext,
-    expr: &Expr,
+    expr: &Spanned<Expr>,
     param_names: &FxHashSet<String>,
-) -> Vec<(String, TypeId, LocalId)> {
+) -> Vec<(String, TypeId, LocalId, crate::span::Span)> {
     let mut collector = FreeVarCollector {
         ctx,
         param_names,
@@ -695,12 +713,13 @@ struct FreeVarCollector<'a> {
     ctx: &'a LoweringContext<'a>,
     param_names: &'a FxHashSet<String>,
     local_names: FxHashSet<String>,
-    found: Vec<(String, TypeId, LocalId)>,
+    found: Vec<(String, TypeId, LocalId, crate::span::Span)>,
     seen: FxHashSet<String>,
 }
 
 impl FreeVarCollector<'_> {
-    fn visit_expr(&mut self, expr: &Expr) {
+    fn visit_expr(&mut self, sp: &Spanned<Expr>) {
+        let expr = &sp.node;
         match expr {
             Expr::Identifier(name) => {
                 if !self.param_names.contains(name)
@@ -709,45 +728,45 @@ impl FreeVarCollector<'_> {
                 {
                     if let Some((local_id, type_id)) = self.ctx.lookup_local(name) {
                         self.seen.insert(name.clone());
-                        self.found.push((name.clone(), type_id, local_id));
+                        self.found.push((name.clone(), type_id, local_id, sp.span));
                     }
                 }
             }
             Expr::BinaryOp { left, right, .. } => {
-                self.visit_expr(&left.node);
-                self.visit_expr(&right.node);
+                self.visit_expr(&left);
+                self.visit_expr(&right);
             }
             Expr::UnaryOp { operand, .. } => {
-                self.visit_expr(&operand.node);
+                self.visit_expr(&operand);
             }
             Expr::Call { callee, args, .. } => {
-                self.visit_expr(&callee.node);
+                self.visit_expr(&callee);
                 for arg in args {
-                    self.visit_expr(&arg.node.value.node);
+                    self.visit_expr(&arg.node.value);
                 }
             }
             Expr::MethodCall { receiver, args, .. } => {
-                self.visit_expr(&receiver.node);
+                self.visit_expr(&receiver);
                 for arg in args {
-                    self.visit_expr(&arg.node.value.node);
+                    self.visit_expr(&arg.node.value);
                 }
             }
             Expr::FieldAccess { object, .. } => {
-                self.visit_expr(&object.node);
+                self.visit_expr(&object);
             }
             Expr::Index { object, index } => {
-                self.visit_expr(&object.node);
-                self.visit_expr(&index.node);
+                self.visit_expr(&object);
+                self.visit_expr(&index);
             }
             Expr::If { condition, then_branch, elif_branches, else_branch } => {
-                self.visit_expr(&condition.node);
-                self.visit_expr(&then_branch.node);
+                self.visit_expr(&condition);
+                self.visit_expr(&then_branch);
                 for (cond, body) in elif_branches {
-                    self.visit_expr(&cond.node);
-                    self.visit_expr(&body.node);
+                    self.visit_expr(&cond);
+                    self.visit_expr(&body);
                 }
                 if let Some(eb) = else_branch {
-                    self.visit_expr(&eb.node);
+                    self.visit_expr(&eb);
                 }
             }
             Expr::Block(block) => {
@@ -755,22 +774,22 @@ impl FreeVarCollector<'_> {
             }
             Expr::StructLiteral { args, .. } => {
                 for arg in args {
-                    self.visit_expr(&arg.node);
+                    self.visit_expr(&arg);
                 }
             }
             Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
                 for elem in elems {
-                    self.visit_expr(&elem.node);
+                    self.visit_expr(&elem);
                 }
             }
             Expr::Move { expr: inner }
             | Expr::Propagate { expr: inner }
             | Expr::MutableBorrow { expr: inner } => {
-                self.visit_expr(&inner.node);
+                self.visit_expr(&inner);
             }
             Expr::Range { start, end, .. } => {
-                if let Some(s) = start { self.visit_expr(&s.node); }
-                if let Some(e) = end { self.visit_expr(&e.node); }
+                if let Some(s) = start { self.visit_expr(&s); }
+                if let Some(e) = end { self.visit_expr(&e); }
             }
             Expr::StringLiteral(lit, _) => {
                 // Visit interpolated variable references in f-strings
@@ -789,7 +808,12 @@ impl FreeVarCollector<'_> {
                         {
                             if let Some((local_id, type_id)) = self.ctx.lookup_local(ident) {
                                 self.seen.insert(ident.to_string());
-                                self.found.push((ident.to_string(), type_id, local_id));
+                                // `StringSegment::Interpolation` carries no span
+                                // (`lexer/token.rs`), so the interpolated
+                                // identifier's own occurrence is unrecoverable;
+                                // fall back to the enclosing literal's span,
+                                // which `is_last_use_at` answers conservatively.
+                                self.found.push((ident.to_string(), type_id, local_id, sp.span));
                             }
                         }
                     }
@@ -816,24 +840,24 @@ impl FreeVarCollector<'_> {
                 if let Pattern::Binding(name) = &pattern.node {
                     self.local_names.insert(name.clone());
                 }
-                self.visit_expr(&value.node);
+                self.visit_expr(&value);
             }
             Stmt::Assign { target, value } => {
-                self.visit_expr(&target.node);
-                self.visit_expr(&value.node);
+                self.visit_expr(&target);
+                self.visit_expr(&value);
             }
             Stmt::CompoundAssign { target, value, .. } => {
-                self.visit_expr(&target.node);
-                self.visit_expr(&value.node);
+                self.visit_expr(&target);
+                self.visit_expr(&value);
             }
             Stmt::Return(Some(expr)) | Stmt::Expr(expr) | Stmt::Throw(expr) => {
-                self.visit_expr(&expr.node);
+                self.visit_expr(&expr);
             }
             Stmt::If { condition, then_body, elif_branches, else_body } => {
-                self.visit_expr(&condition.node);
+                self.visit_expr(&condition);
                 self.visit_block(then_body);
                 for (cond, body) in elif_branches {
-                    self.visit_expr(&cond.node);
+                    self.visit_expr(&cond);
                     self.visit_block(body);
                 }
                 if let Some(eb) = else_body {
@@ -841,11 +865,11 @@ impl FreeVarCollector<'_> {
                 }
             }
             Stmt::While { condition, body, .. } => {
-                self.visit_expr(&condition.node);
+                self.visit_expr(&condition);
                 self.visit_block(body);
             }
             Stmt::For { iterable, body, .. } => {
-                self.visit_expr(&iterable.node);
+                self.visit_expr(&iterable);
                 self.visit_block(body);
             }
             _ => {}
@@ -1328,7 +1352,7 @@ mod tests {
             right: Box::new(Spanned::dummy(Expr::Identifier("a".to_string()))),
         };
 
-        let free = collect_free_vars(&ctx, &expr, &param_names);
+        let free = collect_free_vars(&ctx, &Spanned::dummy(expr), &param_names);
         assert_eq!(free.len(), 1);
         assert_eq!(free[0].0, "x");
     }
@@ -1344,7 +1368,7 @@ mod tests {
             right: Box::new(Spanned::dummy(Expr::IntLiteral(1))),
         };
 
-        let free = collect_free_vars(&ctx, &expr, &param_names);
+        let free = collect_free_vars(&ctx, &Spanned::dummy(expr), &param_names);
         assert!(free.is_empty(), "No free variables expected");
     }
 

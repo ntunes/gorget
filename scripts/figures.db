@@ -513,7 +513,7 @@ lint.typed_metadata.sidecars.mirror = tests/lints.rs:TYPED_METADATA_SIDECAR_BUDG
 lint.typed_metadata.sidecars.input = none
 
 row = lint.phase_d.proxy_reads
-lint.phase_d.proxy_reads.value = 90
+lint.phase_d.proxy_reads.value = 89
 lint.phase_d.proxy_reads.unit = Phase-D ownership proxy reads in src/
 lint.phase_d.proxy_reads.polarity = exact-pin
 lint.phase_d.proxy_reads.provenance = derived
@@ -523,7 +523,7 @@ lint.phase_d.proxy_reads.regen_extract = ^(?P<value>[0-9]+)
 lint.phase_d.proxy_reads.regen_fires = ^[0-9]+$
 lint.phase_d.proxy_reads.regen_env = none
 lint.phase_d.proxy_reads.instrument = grep over the lint const
-lint.phase_d.proxy_reads.measured_at = db9ec6a13
+lint.phase_d.proxy_reads.measured_at = 030d4d2d7
 lint.phase_d.proxy_reads.home = tests/lints.rs:PHASE_D_PROXY_BUDGET
 lint.phase_d.proxy_reads.scan = none
 lint.phase_d.proxy_reads.caveat = too small and too common to police by scanning; only figures_db_mirrors_agree guards it
@@ -811,7 +811,7 @@ spec_conformance.corpus.fixtures.note = the three compile-time `const _: () = as
 # `cfg!(debug_assertions)`, so a debug run captures numbers no gate evaluated;
 # `--release` is in the command and the debug notices are in regen_forbids.
 row = parity.runtime_diff.match_floor
-parity.runtime_diff.match_floor.value = 1527
+parity.runtime_diff.match_floor.value = 1559
 parity.runtime_diff.match_floor.unit = corpus fixtures whose self-host run matches Rust gg byte-for-byte
 parity.runtime_diff.match_floor.polarity = grow-only
 parity.runtime_diff.match_floor.provenance = measured
@@ -821,17 +821,16 @@ parity.runtime_diff.match_floor.regen_fires = Self-host Runtime Parity Diagnosti
 parity.runtime_diff.match_floor.regen_env = GG_BACKEND=unset GG_PARITY_FLOOR_OFF=unset GG_RUNTIME_DIFF=unset
 parity.runtime_diff.match_floor.regen_forbids = self_host_runtime_diff: SKIPPED|MATCH-count floor (skipped|DISABLED)
 parity.runtime_diff.match_floor.instrument = tests/integration.rs::self_host_runtime_diff
-parity.runtime_diff.match_floor.measured_at = dc0b0024b
+parity.runtime_diff.match_floor.measured_at = 030d4d2d7
 parity.runtime_diff.match_floor.home = tests/integration.rs:RUNTIME_DIFF_MATCH_FLOOR
 parity.runtime_diff.match_floor.scan = standard
 parity.runtime_diff.match_floor.caveat = the floor discounts 5 of measured jitter — this test's counts are timeout-flip sensitive under load (todo/t0924) — so a MISS is more likely real than noise but a QUIET tree is still the precondition for triaging one; C backend + linux only (parity_floor_active skips when GG_BACKEND is set)
 parity.runtime_diff.match_floor.cost_secs = 3600
 parity.runtime_diff.match_floor.mirror = tests/integration.rs:RUNTIME_DIFF_MATCH_FLOOR
-parity.runtime_diff.match_floor.waiver = tests/integration.rs 2 declared the two R48-close re-seed lines the constant cites as its evidence
 parity.runtime_diff.match_floor.input = none
 
 row = parity.runtime_diff.nonmatch_ceiling
-parity.runtime_diff.nonmatch_ceiling.value = 147
+parity.runtime_diff.nonmatch_ceiling.value = 146
 parity.runtime_diff.nonmatch_ceiling.unit = corpus fixtures the self-host does NOT reproduce (WRONG-OUTPUT + CC-FAIL + CRASH + DRIVER-FAIL)
 parity.runtime_diff.nonmatch_ceiling.polarity = shrink-only
 parity.runtime_diff.nonmatch_ceiling.provenance = measured
@@ -841,7 +840,7 @@ parity.runtime_diff.nonmatch_ceiling.regen_fires = Self-host Runtime Parity Diag
 parity.runtime_diff.nonmatch_ceiling.regen_env = GG_BACKEND=unset GG_PARITY_FLOOR_OFF=unset GG_RUNTIME_DIFF=unset
 parity.runtime_diff.nonmatch_ceiling.regen_forbids = self_host_runtime_diff: SKIPPED|non-MATCH ceiling SKIPPED|MATCH-count floor (skipped|DISABLED)
 parity.runtime_diff.nonmatch_ceiling.instrument = tests/integration.rs::self_host_runtime_diff, plus the one-line awk tail that subtracts MATCH from the PARITY denominator (the gate's own arithmetic; the test prints the two operands but never their difference)
-parity.runtime_diff.nonmatch_ceiling.measured_at = dc0b0024b
+parity.runtime_diff.nonmatch_ceiling.measured_at = 030d4d2d7
 parity.runtime_diff.nonmatch_ceiling.home = tests/integration.rs:RUNTIME_DIFF_NONMATCH_CEILING
 parity.runtime_diff.nonmatch_ceiling.scan = none
 parity.runtime_diff.nonmatch_ceiling.caveat = scan = none — 147 has 13 unmasked spellings, three of them in TODO.md, which is rewritten every round and would make any waiver rot within one. ⛔ AND THE GATE NO-OPS IN THE PROFILE PEOPLE ACTUALLY RUN: a debug `cargo test --test integration self_host` prints a notice instead of evaluating this ceiling, so a green family run says NOTHING about parity inflow (todo/t0924). Only the --release invocation in `regen` arms it
@@ -850,7 +849,7 @@ parity.runtime_diff.nonmatch_ceiling.mirror = tests/integration.rs:RUNTIME_DIFF_
 parity.runtime_diff.nonmatch_ceiling.input = none
 
 row = parity.runtime_diff.ggdef_adjudicated_floor
-parity.runtime_diff.ggdef_adjudicated_floor.value = 443
+parity.runtime_diff.ggdef_adjudicated_floor.value = 496
 parity.runtime_diff.ggdef_adjudicated_floor.unit = MATCH fixtures ggdef also elaborates, runs and AGREES with
 parity.runtime_diff.ggdef_adjudicated_floor.polarity = grow-only
 parity.runtime_diff.ggdef_adjudicated_floor.provenance = measured
@@ -860,7 +859,7 @@ parity.runtime_diff.ggdef_adjudicated_floor.regen_fires = Self-host Runtime Pari
 parity.runtime_diff.ggdef_adjudicated_floor.regen_env = GG_BACKEND=unset GG_PARITY_FLOOR_OFF=unset GG_RUNTIME_DIFF=unset
 parity.runtime_diff.ggdef_adjudicated_floor.regen_forbids = self_host_runtime_diff: SKIPPED|GGDEF_ADJUDICATED_FLOOR skipped|MATCH-count floor (skipped|DISABLED)
 parity.runtime_diff.ggdef_adjudicated_floor.instrument = tests/integration.rs::self_host_runtime_diff (the ggdef adjudication post-pass)
-parity.runtime_diff.ggdef_adjudicated_floor.measured_at = dc0b0024b
+parity.runtime_diff.ggdef_adjudicated_floor.measured_at = 030d4d2d7
 parity.runtime_diff.ggdef_adjudicated_floor.home = tests/integration.rs:GGDEF_ADJUDICATED_FLOOR
 parity.runtime_diff.ggdef_adjudicated_floor.scan = none
 parity.runtime_diff.ggdef_adjudicated_floor.caveat = scan = none — 9 unmasked spellings, four in TODO.md. ⚠ THIS IS THE TRUTH AXIS, AND IT IS A MINORITY OF THE MATCH SET: the rest is UNADJ-MATCH, where only the two compilers vouch for the answer (Core #8). A rise is succession-safety progress; the number is not a pass rate

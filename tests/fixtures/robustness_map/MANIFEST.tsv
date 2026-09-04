@@ -583,6 +583,7 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 18 traits & generics	gen_struct_of_struct	WORKS	7			WORKS	WORKS		WORKS	WORKS
 18 traits & generics	gen_struct_string	WORKS	alpha			WORKS	WORKS		WORKS	WORKS
 18 traits & generics	gen_struct_two_params	WORKS	10 / world			WORKS	WORKS		WORKS	WORKS
+18 traits & generics	trait_box_returned_from_closure	WORKS	Hello, Ada	(matches)	Ch18 + closures: a factory lambda returning an interface. The C and LLVM lanes are correct; the SELF-HOST has no GIR-level trait-object pack at a closure RETURN, so the body's Box[English] never reaches the declared Box[Greeter] result slot -- it returns a ZEROED trait box and the dispatch goes through a NULL vtable (rc 139). Expected is the CORRECT answer, hand-derived; graduates to WORKS when todo/t1084's closure-return cell is fixed. ⚠ This cell exists because the corpus fixture box_trait_closure_return.gg went CC-FAIL -> SEGV with no gate in the round-close battery able to see it.	WORKS	CRASH	DIVERGENT	WORKS	NO-VERDICT
 18 traits & generics	trait_cloneable	WORKS	1 / 99			WORKS	WORKS		WORKS	WORKS
 18 traits & generics	trait_comparable_ops	WORKS	true / false			WORKS	WORKS		WORKS	REJECTED
 18 traits & generics	trait_comparable_sort	WRONG	100 / 250 / 900			WRONG	WRONG		WRONG	NO-VERDICT

@@ -1,0 +1,43 @@
+# CAPTURE OWNERSHIP — the SIBLING-EVALUATION-ORDER cell. A closure captures a
+# collection in one argument of an aggregate init while a SIBLING argument of
+# the same init reallocates that collection.
+#
+# The capture and the realloc happen inside one `Pair(…)` construction, so this
+# cell adds an emission-ORDER dimension (D10(b): reason about when a thing
+# happens relative to its siblings, which is only visible in the IR) on top of
+# the capture-boundary rule. It does not change the root: the same program with
+# no aggregate at all behaves identically, and both are answered by the
+# environment holding its own value.
+#
+# ⚠ WHAT THE WRONG ANSWER LOOKS LIKE HERE. Without the rule this is not a crash
+# — it is rc 0 printing `7` then `70`, a silently wrong number over a
+# use-after-free, where both the language definition and `ggdef run` say `7`
+# then `7`. A crash becoming a wrong number is not an improvement (Core #8),
+# which is why the second line is asserted rather than the exit code.
+#
+# ⚠ THE REALLOC IS LOAD-BEARING — 5000 pushes, not one.
+#
+# ⚠ AND THE INSTRUMENT IS C + ASan: under `--backend=llvm --sanitize` this shape
+# reports only a leak, no use-after-free (`todo/t0731`, the sweep's second-lane
+# gap). `p.f.clone()` is deliberately live — `gorget_closure_clone_to_owned`
+# shallow-copies the 16-byte `{fn_ptr, env}` handle, so the clone and the
+# original share one environment and the cell also covers that aliasing.
+#
+# Prints `7` then `7`, both backends.
+struct Pair:
+    Callable[int(int)] f
+    int n
+
+int mutate(Vector[int] &v):
+    int i = 0
+    while i < 5000:
+        v.push(i)
+        i = i + 1
+    return 0
+
+void main():
+    Vector[int] v = [1]
+    Pair p = Pair((int x): x + v.get(0).unwrap(), mutate(&v))
+    Callable[int(int)] g = p.f.clone()
+    print(6 + v.get(0).unwrap())
+    print(g(6))

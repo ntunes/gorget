@@ -1,0 +1,42 @@
+# KNOWN GAP (`todo/t1303`) — a closure LITERAL at `unwrap_or_else` whose
+# receiver's PAYLOAD is itself a `Callable`. BOTH LANES GET IT WRONG, one level
+# too deep, and they fail differently:
+#
+#   RUST gg   builds and prints `hello`, rc 0 — and is MEMORY-UNSAFE doing it.
+#             Under `--sanitize`: `AddressSanitizer: stack-buffer-overflow`,
+#             `READ of size 32` from `__coal0`, a 16-byte `GorgetClosure`.
+#             The `unwrap_or_else` result is a `Callable[String()]` (16 B) and
+#             the destination slot is typed `Str` (32 B), so the copy reads 16
+#             bytes past the object. Regenerate:
+#               gg build --sanitize <this file> -o /tmp/x && /tmp/x
+#
+#   SELF-HOST cannot build it: `compute_closure_sig` peels the ambient expected
+#             type and finds a `GtFnPtr` — because at `unwrap_or_else` the
+#             ambient type IS the payload (`enum_category.ok_type`), and here
+#             the payload is a callable. It then takes that callable's RETURN
+#             type, emitting `Str __Closure_0__call(void*)` for a closure that
+#             must return the whole `Callable[String()]`; `cc` rejects it with
+#             `incompatible types when assigning to type 'Str' from type
+#             'GorgetClosure'`.
+#
+# ⭐ ONE ROOT CAUSE, TWO SYMPTOMS: both lanes read the closure's return type as
+# the PAYLOAD'S OWN return type instead of the payload type. Core #8 — "Rust gg
+# runs it" is NOT sufficient here; the agreed-on behaviour is undefined.
+#
+# ⚠ PRE-EXISTING, NOT R49 TRACK T1 INFLOW. Measured both sides of that landing:
+# before the ambient-return override the self-host emitted `int64_t` for this
+# closure and `cc` rejected THAT instead. A different wrong type, the same
+# CC-FAIL. The Rust-lane overflow is untouched by it and reproduces on `main`.
+#
+# ⚠ THE CLOSURE LITERAL IS LOAD-BEARING: `o.unwrap_or(h)`, the same payload
+# without a closure, is ASan-CLEAN on the Rust lane and builds everywhere.
+#
+# INTENDED, on both lanes: prints `hello`, rc 0, and ASan-clean.
+String hello():
+    return "hello"
+
+void main():
+    Option[Callable[String()]] o = None()
+    Callable[String()] h = hello
+    Callable[String()] f = o.unwrap_or_else((): h)
+    print(f())

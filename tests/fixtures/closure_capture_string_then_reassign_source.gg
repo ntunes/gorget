@@ -1,0 +1,32 @@
+# CAPTURE OWNERSHIP, the SCALAR-RESOURCE cell: no collection, no slice, no
+# element view. A closure captures a plain `String` local and the source is then
+# rebound 64 times, each rebind freeing the buffer the previous one held.
+#
+# The sibling repros (`closure_capture_then_mutate_source_uaf`,
+# `closure_capture_inside_body_uaf`) all reallocate a captured COLLECTION, which
+# admits the reading "a stale collection handle after a realloc". This cell has
+# no collection at all, so it pins the rule at the level it actually lives:
+# a capture is an ownership boundary, and an environment that holds a bitwise
+# alias of a still-live source reads freed memory the moment the source moves on.
+#
+# ⚠ THE REBINDS ARE LOAD-BEARING — 64, not one, and the payload is heap-FORCED
+# through `mk` so the freed buffer is a real heap allocation rather than
+# immortal `.rodata` (a string literal has `cap = 0` and `gorget_string_free`
+# no-ops on it).
+#
+# D1: a by-value capture is an independent snapshot AS OF CREATION, so the
+# closure keeps `helloworld` no matter what the source becomes afterwards.
+#
+# INTENDED: prints `helloworld`, rc 0, both backends, no use-after-free.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("hello", "world")
+    Callable[String()] f = (): s
+    int i = 0
+    while i < 64:
+        s = s + "xxxxxxxxxxxxxxxx"
+        i = i + 1
+    print(f())

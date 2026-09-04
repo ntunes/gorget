@@ -5270,7 +5270,7 @@ fn lower_string_interpolation(
 ///
 /// Runs AFTER `ensure_owned_at_boundary`, which already handles the Ptr(T)
 /// and ref-state borrow cases.
-fn clone_multi_use_resource_args(
+pub(super) fn clone_multi_use_resource_args(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     args: &mut Vec<Operand>,
@@ -5384,7 +5384,7 @@ fn clone_multi_use_resource_args(
 /// Single-use/temp sources are zeroed (zero-cost transfer). Multi-use sources
 /// that were cloned by clone_multi_use_resource_args are already replaced —
 /// the clone local gets MoveZero'd (it's single-use by definition).
-fn move_zero_consumed_args(
+pub(super) fn move_zero_consumed_args(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     args: &[Operand],

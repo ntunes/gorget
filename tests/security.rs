@@ -1759,6 +1759,45 @@ fn sort_empty_collection_no_ub() {
     );
 }
 
+/// SECURITY KNOWN GAP `t1303` — a closure literal at `unwrap_or_else` over a
+/// `Callable`-typed payload reads 16 bytes past a stack object on the RUST
+/// lane. No unsafe, no ownership operator, no FFI.
+///
+/// The `unwrap_or_else` result is a `Callable[String()]` (a 16-byte
+/// `GorgetClosure`) and the destination slot is typed `Str` (32 bytes), so the
+/// `memcpy` overreads: `AddressSanitizer: stack-buffer-overflow`, `READ of size
+/// 32`. ⚠ The emitted C is INTERNALLY INCONSISTENT and that localizes the fix:
+/// the closure is declared `GorgetClosure __Closure_0__call(const void*)` and
+/// the call temp is a `GorgetClosure`, both correct — only the DESTINATION slot
+/// is `Str`. So the defect is the `unwrap_or_else` CALL-RESULT SLOT typing, not
+/// the closure signature. (The SELF-HOST gets the signature wrong instead, which
+/// is why it fails to build rather than overreading — same wrong type, recorded
+/// one layer earlier.)
+///
+/// ⚠ IT PRINTS THE RIGHT ANSWER AND EXITS 0, so no value lane can see it —
+/// which is why this is ASan-gated. The SELF-HOST fails loudly on the same
+/// source (`cc` rejects the emitted C, `sh_closure_literal_callable_payload_unwrap_or_else`),
+/// so the safe failure is on the lane that cannot build it and the unsafe one
+/// is on the reference. Core #8: the lanes do not agree, and "Rust gg runs it"
+/// is not the bar.
+///
+/// ⚠ The closure LITERAL is load-bearing: `o.unwrap_or(h)` — same payload, same
+/// types — is ASan-clean.
+#[test]
+#[ignore = "SECURITY KNOWN GAP t1303: a closure literal at unwrap_or_else over \
+a Callable-typed payload copies a 16-byte GorgetClosure into a 32-byte Str slot \
+and reads past it (ASan stack-buffer-overflow, READ of size 32). The program \
+prints the right answer and exits 0, so only the sanitizer sees it. Asserts the \
+INTENDED clean run; TODO.md."]
+fn security_closure_literal_callable_payload_overflow() {
+    // INTENDED: the closure's type is the PAYLOAD type, the copy is 16 bytes,
+    // and the program is sanitizer-clean.
+    security_safe(
+        "attack_103_closure_literal_callable_payload_overflow",
+        "hello",
+    );
+}
+
 #[test]
 #[ignore = "SECURITY KNOWN GAP (found + verified 2026-08-17 by the for-in idiom \
 scout, orchestrator-reproduced): `for s in &d: s = \"zz\"` over a Vector[String] \
@@ -3296,7 +3335,8 @@ fn cow_static_trait_method_view_survives_realloc_safe() {
 
 /// PATH CELL — `emit_closure_call_function` (the closure body, whose AST is a
 /// bare `Spanned<Expr>`). The vector is LOCAL to the closure: the CAPTURED
-/// sibling is `todo/t0704`, a different defect at the capture boundary.
+/// sibling is a different defect at the capture boundary, closed in R49 and
+/// now pinned live by `closure_capture_then_mutate_source_uaf`.
 #[test]
 fn cow_closure_body_view_survives_realloc_safe() {
     security_safe("cow_closure_body_view_survives_realloc", "helloworld");

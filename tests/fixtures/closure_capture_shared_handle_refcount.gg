@@ -1,0 +1,31 @@
+# CAPTURE OWNERSHIP, the REFCOUNT-HANDLE cell of the typed axis.
+#
+# `Shared[T]` is a thin refcount handle: `copy_semantics` is `Trivial`, so it is
+# NOT `is_resource_type` and no deep clone exists for it — its "clone" is a
+# by-value incref. Every consuming-position pass that only asks
+# "is this a resource?" walks straight past it, which is how a handle ends up
+# shallow-aliased into an environment, and how an environment ends up declaring
+# a drop strategy that does not match what it actually holds.
+#
+# ⚠ WHAT THIS CELL IS FOR, stated honestly: it is GREEN before the
+# capture-ownership rule lands as well as after. It is here because a draft of
+# that rule that asked only `is_resource_type` broke exactly this shape, and the
+# environment's computed drop strategy is what caught it. A cell that guards a
+# prospective break is worth as much as one that pins a fixed bug, but it is a
+# different claim and should not be read as the second.
+#
+# ⚠ SCOPE OMITTED: the ESCAPING variant of this cell (returning the closure) is
+# not reachable — a returned NAMED closure capturing a local is rejected by
+# `E_ClosureEscapesScope` whatever it captures, which is its own filed gap.
+#
+# INTENDED: prints `7`, `9`, `7`, rc 0, both backends, no double-decrement.
+
+from std.sync import Shared
+
+void main():
+    Shared[int] cell = Shared[int](7)
+    Callable[int()] read = (): cell.get()
+    Callable[int()] read_plus = (): cell.get() + 2
+    print(read())
+    print(read_plus())
+    print(cell.get())
