@@ -221,7 +221,7 @@ is not enough if the brief that the executor reads is stale.**
 
 | L — closure-capture | **M1 — Box mint** | **M2 — trait-obj pack** | N — `t0988` | P — drop side | Q — `t1066` guard |
 |---|---|---|---|---|---|
-| **`t1067`–`t1075`** ⚠ | **`t1076`–`t1080`** | **`t1081`–`t1085`** | **N1 `t1086`–`t1090` · N2 `t1091`–`t1095`** | **`t1106`–`t1115`** | **`t1096`–`t1105`** |
+| **`t1067`–`t1075` + `t1136`–`t1145`** ⚠ | **`t1076`–`t1080`** | **`t1081`–`t1085`** | **N1 `t1086`–`t1090` · N2 `t1091`–`t1095`** | **`t1106`–`t1115`** | **`t1096`–`t1105`** |
 
 ⛔⛔ **THIRD ID INCIDENT, AND IT IS A NEW FAILURE MODE: I SPENT AN ID OUT OF A BLOCK I HAD ALREADY ISSUED.**
 L held `t1066`–`t1075`; I then filed `todo/t1066.md` myself for the conflict-marker gap (`4d695b14f`).
@@ -242,6 +242,25 @@ type**, not the source element. **`_new_like` is a read-side reconstruction of t
 needs the RESULT element type's TYPED metadata, which already exists and is one lookup away.**
 ⊕ N2's two edits are **ORDER-COUPLED**: freeing flat_map's `sub` without first installing the result hooks
 turns a 531 B leak into a **heap-use-after-free**. Neither lands alone.
+
+⭐⭐ **TRACK L IS THE ROUND'S FIRST SIGN-OFF — DESIGN APPROVED AT PASS 4, EXECUTOR LAUNCHED 2026-09-04.**
+Four sequential fresh reviews; the diagnosis survived all four and **every blocking finding was a defect in
+the PRESCRIPTION, never in the root cause.** ⭐ **The shipped shape is `FULL2` = clone-when-live at the capture
+site + env metadata + `move_zero_and_mark` transfer + the occurrence-span fix ON THE BY-VALUE ARM ONLY +
+deleting the three `is_closure_env` validator carve-outs.**
+⚡ **AND IT HITS THE CoW CHARTER OPTIMUM PASS 2 SAID THE DESIGN COULD NOT REACH** — 0 clones when the capture
+source is dead, 1 when it is live, **better than HEAD**.
+⛔ **THE DESIGN QUESTION NO PASS HAD POSED, AND ITS ANSWER WAS "NEITHER":** `{A,i}` and `{A,B}` were briefed
+as alternatives. **`{A,i}` MANUFACTURES A DOUBLE FREE** on a non-escaping param capture that is ASan-clean at
+HEAD; **`{A,B}` REGRESSES LEAK-FREEDOM.** Only `{A,i,B}` is sound — **they are two halves of one rule** —
+and `B` must be spelled **`move_zero_and_mark`**, because `drops.unregister`'s OWN doc comment
+(`drops.rs:310-314`) says it is *"NOT CFG-AWARE … pair a runtime `move_zero` at the consuming site instead."*
+**The prescription was written on the function being rejected.**
+⛔ **`t0771`'s STATED DISCRIMINATOR IS FALSIFIED.** `check_expr_for_escaping_closures` has arms for
+`Expr::Identifier`, `Expr::StructLiteral` and `Expr::ArrayLiteral` — **and NO `Expr::Closure` arm** — so a
+returned closure LITERAL is never inspected. **The guard covers 1 of 4 cells; three are live UAFs at HEAD,
+two of them unfiled.** The real discriminator is **`local AND named`**, not `!is_param`; `t0771`'s control
+was *no capture at all* and it never tried a local capture.
 
 ⭐ **F-G SCOUT RETURNED; PASS 1 LAUNCHED. THE CHARTER WAS FALSE AND THE SCOUT PROVED IT — D46 IS
 UNIMPLEMENTED ON ALL FOUR ENGINES, not "the ggdef lane only".** `gg check` accepts; C and LLVM answer by
@@ -330,7 +349,7 @@ reject** under D27 (`E_MoveWithoutOperator`), so `tests/integration.rs:60651-606
 
 ⊕ **`t1053` RETURNED TO THE POOL** — A1-I refused to file it because `todo/t0774` already owned the subject,
 **following GREP-BEFORE-YOU-FILE over my instruction.** It is free.
-⚡ **FIRST UNISSUED ID IS NOW `t1136`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
+⚡ **FIRST UNISSUED ID IS NOW `t1146`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
@@ -2476,9 +2495,33 @@ PROCEEDING UNDER A STATED READING. Surface at the next owner contact; do NOT sta
    requiring `@derive`", which would reject `Some(1) == Some(1)` FOREVER.**
    ⊕ Measured today: **`Some(1) == Some(1)` prints `false` on C and LLVM and `true` on ggdef**, and the
    entire 3,350-file corpus contains **ZERO `Option[T] == Option[T]` comparisons** — which is why it survived.
-   ⇒ **The scout reads the RATIONALE as settling it (intrinsic structural equality whenever the elements are
-   comparable) and calls it a SUBJECT GAP IN THE LEDGER TEXT, not an open design question. ONE CONFIRMING
-   LINE, in parallel with execution.**
+   ⇒ **The scout read the RATIONALE as settling it and called it a subject gap. ⚠ SHARPENED BY F-G PASS 1,
+   AND IT IS NOW A REAL OWNER ASK, NOT A CONFIRMING LINE:**
+   ⛔ **`Option` AND `Result` *ARE ENUMS*, SO D46's LITERAL TEXT REJECTS THEM.** This is not a gap the
+   rationale quietly covers — **the TEXT and the RATIONALE point OPPOSITE WAYS**, and a brief that assumed
+   ACCEPT was measured to contradict its own table. Under the prototype `gg check` **rejects** with
+   ``operator `==` is not defined for type `Option` ``.
+   ⊕ **AND THE CELL LIST IS LONGER THAN FIVE — also unruled and unnamed anywhere: `Array[T,N]` ·
+   `Box[Trait]` · `Callable[T]` · `Range`.**
+   ✅ **WHICHEVER WAY IT IS RULED, NOTHING IN-REPO BREAKS: zero equality sites on ANY of those types across
+   all 4,721 fixture/spectest/lib files.** ⚠ **AND IT IS NOT FREE TO IMPLEMENT EITHER WAY:
+   `type_key_for_trait_lookup` maps `Generic(def_id,_)` to the BARE DEF NAME (`typecheck.rs:6415-6417`),
+   discarding element types — "Option-of-comparable" needs the `Generic` args directly, not the trait key.**
+   ⭐ **ORCHESTRATOR RECOMMENDATION (given to the owner 2026-09-04): ACCEPT, gated on element comparability —
+   the rationale is about ANNOTATABILITY, ggdef already implements it, and rejecting makes a non-annotatable
+   type permanently uncomparable. The seam to accept knowingly: "declarable types need `@derive`,
+   non-declarable get intrinsic-when-elements-comparable" — which is the answer D46 ALREADY gives for tuples.**
+
+3. 🆕 **THE ORDERING SIBLINGS ARE A SEPARATE ASK, AND A SEPARATE TRACK (F-G pass 1, measured).**
+   `<` `>` `<=` `>=` on a struct is the same `op_trait_and_method` hole — **but the blast radius is 938 sites
+   across 91 files, versus 4 for `==`, and 929 OF THE 938 ARE `String`.** `String` is registered
+   `Equatable`/`Hashable` **but NOT `Comparable`**, so a naive gate **rejects `"ab" < "ac"` — working,
+   ubiquitous code** — and **`Comparable` is NOT DERIVABLE AT ALL**, so the teaching diagnostic cannot say
+   *"add `@derive`"*. **D46's "Owed:" names only the `==` path.**
+   ⭐ **RECOMMENDATION: keep the CLASS fix (Core #4) by making `op_trait_and_method` EXHAUSTIVE over all 31
+   `BinaryOp` variants with the four ordering arms as explicit `=> None` citing a filed id — site N+1 becomes
+   a COMPILE ERROR and ordering behaviour is unchanged — then split the ordering REJECT into its own track
+   with an owner ask on whether `String` becomes `Comparable`.**
 
 2. **`decisions.md:1569` ENDS WITH AN OPEN OWNER-RAISED QUESTION THAT NAMES TRACK L's EXACT SHAPE.**
    The block closes with an explicitly undecided question about *"Returning a closure that captured a local …
