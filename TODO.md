@@ -675,6 +675,16 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⊕ **FOLDS OUT 2026-09-04: Q addendum 2 → pass 3 launched; S-a2 addendum 2 → pass 3 launched; S-a3 brief
+written on the owner-approved shape → pass 1 launched.** ⚠ **Q's pass-3 brief asks for a NINTH marker shape
+specifically because the independent witness has falsified the enumerator's set TWICE** (pass 1: `|||||||` +
+empty label; pass 2: CRLF + marker size). ⚡ **A SET THAT HAS BEEN WRONG TWICE DESERVES A THIRD LOOK — that is
+the witness working, not the enumerator failing.**
+⊕ **Q1 REVERSES an earlier fold decision, and the reason generalises:** a stateful `=======` arm is blind to
+the residue left by **hand-stripping markers**, which is exactly the remediation that closed this track's
+founding escape. ⚡ **A GUARD MUST SEE THE RESIDUE ITS OWN FIX LEAVES BEHIND.** The weakening also bought
+nothing — independent `^=======$` measures 0 tree-wide hits.
+
 ⚖⚖ **OWNER RULINGS 2026-09-04 — BOTH OPEN ASKS CLOSED.**
 **(1) S-a3 APPROVED AS RECOMMENDED: put the drop and clone fn pointers in the closure env's EXISTING
 allocation header.** The 16-byte `GorgetClosure` handle does not change; the header already exists and three
