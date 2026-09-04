@@ -68,6 +68,21 @@ owes a note + a filed subset gap.
   exits 101, the next 0; passes in isolation. **Pre-existing, unrelated to any track. Do not chase it.**
 - **A stdout/md5 gate is structurally blind to the leak class a materialization change moves** — ASan is
   mandatory wherever a fix allocates an env (Core #13).
+- ⭐ **AN INSTRUMENT SHAPED LIKE A CALL GRAPH CANNOT SEE A PRODUCER THAT CALLS NOTHING.** Track L's census
+  enumerated *"`lower_closure` callers"* via a rustc rename and called it independent. **`build_spawn_wrapper`
+  (`spawn.rs:296-321`) builds a closure env `StructInit` WITHOUT calling `lower_closure`** — so the rename is
+  structurally incapable of listing it, and reports TOTAL. ⚡ **SIX Q#4 again, and the same shape as the
+  `ConsumeSiteClass` lesson below: state the census SUBJECT as the thing PRODUCED, never as the function
+  CALLED.** The scout MET the missing site (a red `spawn_closure_shared`) and filed it as a hand-rolled
+  predicate rather than a missed producer.
+- ⭐ **`git log -S <flag>` IS THE CHEAPEST CORE-#14 TEST WE HAVE.** `is_closure_env` returns exactly ONE
+  commit — *"drive consume-site violations to zero"*. ⇒ **the flag was minted by a burn-down, to suppress the
+  violations it was itself producing.** That is a fairer and stronger indictment than "deliberately blinded",
+  and it takes one command. **Run it on every exemption flag a track proposes to delete.**
+- ⚠ **A REPAIR CAN BE ACCIDENTAL AT THE MECHANISM LEVEL, NOT JUST THE CELL LEVEL (SIX Q#6).** L's ablation
+  credited a fix to the arm it was testing; measured, **the metadata line ALONE fixed the cell** — by
+  synthesising `__Closure_N__clone` and DOUBLE-CLONING at the escape. Both arms deleted, still green.
+  ⇒ **ablate the PLUMBING too, never only the arms you think are load-bearing.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
