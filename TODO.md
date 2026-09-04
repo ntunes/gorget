@@ -216,7 +216,25 @@ file records as owner-sourced** — and N2 reasoned to exactly that conclusion a
 ⭐ **THREE WAYS TO RESOLVE, and only the owner can pick:** (a) a one-line owner ruling admitting the row;
 (b) amend the header to permit extension-by-analogy under standing autonomy; (c) argue the GRADUATION clause
 covers it — **which N2 measured and explicitly declined**, so it is the weakest.
-⊕ **Everything else in INT-B is executable meanwhile; only §2's block TEXT is held.**
+⛔ **CORRECTION — I TOLD THE OWNER "ONLY §2's BLOCK TEXT IS HELD". MEASURED FALSE: THE RULING GATES
+ACCEPTANCE 1, 2 AND 5.** Without the row the fixture is top-level, swept and leaking with NO row → `❌ NEW
+LEAK` → acceptance 2 is rc 1. **All five constants INCLUDE the row**, so **no constant may be predicted,
+pinned, re-stamped or waiver-surgeried before the ruling**. Row-without-block leaves the inventory short and
+ships an admission the file's own header declares uncovered. And a **"do not admit"** ruling DELETES the row
+and moves all five.
+⭐ **SEQUENCING: §3, §3b, §4, the guard, the waiver INVENTORY and the ledger are executable NOW; acceptance 1,
+2 and 5 are NOT. The ruling is a hard prerequisite for CLOSING, not for STARTING.**
+⛔ **AND THE Core #6 GUARD I PROPOSED RED-LIGHTS THE CORRECT END STATE.** *"Every `todo/` id named anywhere in
+the allowlist must exist"* fires on the RIGHT answer and the wrong one alike — the two retired ids are named
+at FILE-HEADER sites and inside N2's own replacement block, which narrates them in PAST TENSE, and the fix
+touches neither. **Six Questions #2, on the replacement guard — the same failure that retired the count-based
+one, one level up.** ⭐ **THE CLASS IS "AN `⚖ ADMITTED` BLOCK'S RETIRE CONDITION OVER-STATES ITS BLOCKERS",
+and the guard is a required `# RETIRES: <id>…` line per block with every id asserted to exist** — both
+directions, no allowlist, no sentinel hole, and it fires TODAY on the live instance.
+⊕ **FOUR uncovered AXES have now been found, one per pass, each closed by an instrument the executor does not
+author:** a row left at its old value (advisory) · a row whose fixture stops BUILDING (coverage) · a row KEPT
+for a fixture that no longer leaks (`fixed_leak`) · and COLUMN 3, which is **fully forced — zero degrees of
+freedom — so stating the rule closes it.** **Pass 5's single question is whether a FIFTH axis exists.**
 ⊕ **When the ruling lands, the exemplar exists** — a block headed `⚖⚖ OWNER RULING (date), recorded verbatim:`
 (`grep -n 'recorded verbatim' tests/sanitize/LEAK_ALLOWLIST.txt`). ⚠ **I claimed no block quotes the owner
 verbatim; that was FALSE, and it was itself A SELECTION PRESENTED AS AN ENUMERATION inside the paragraph
