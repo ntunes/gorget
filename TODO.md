@@ -683,6 +683,20 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+✅ **M2 INTEGRATED** (`f8507a843`) — **FIFTEEN TRACKS LANDED.** `build_rc=0 · lib_rc=0 · lints_rc=0 ·
+todo_rc=0`.
+⭐⭐ **AND THE MERGE REDDED `--test lints` AT rc 101 BEFORE I COMMITTED IT — CAUGHT BY GATING, NOT BY LUCK.**
+The failure was **`figures_db_values_have_one_spelling`**, and the offending file was **`TODO.md` — MY OWN
+HANDOVER TEXT.** Recording N2's constant changes, I **re-spelled two covered figures** instead of citing
+their constants; N2's fold then moved both, and my prose became the second, stale spelling.
+⚡⚡ **THE GUARD FIRED ON THE ORCHESTRATOR'S OWN RECORD, WHICH IS EXACTLY WHAT IT IS FOR.** ⇒ **RULE FOR THIS
+HANDOVER GOING FORWARD: NEVER RE-SPELL A COVERED FIGURE IN PROSE — name the constant and let the reader
+regenerate.** *Same Core #15(a) discipline I have been briefing at tracks all round, applied to me by a
+lint rather than by a reviewer.*
+⊕ **Two independent gate runs agreed on rc 101 before I looked** — worth noting, because the FIRST run's
+output was TRUNCATED and showed only `index_rc`/`build_rc`. **A truncated gate log is not a green gate;
+re-running it is what surfaced the failure.**
+
 ⛔⛔ **I STOPPED MY OWN PRE-CLOSE SWEEP — THE SEQUENCING WAS WRONG, AND SAYING SO IS CHEAPER THAN DEFENDING
 IT.** It had run **1417 s (~24 min) against 15 concurrent build processes**, was stalled on the self-host
 `lowerer_comparison`, **and was blocking a signed-off integration on the same worktree.**
