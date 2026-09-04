@@ -272,7 +272,40 @@ signing off. **Four obligations, all measured:**
 ⊕ **When the red goes green, FOUR asserts execute for the FIRST TIME** (the `t0951` positive control plus
 three evasion negatives) — they sit AFTER `uncited` and have never run on this tree.
 
-✅✅ **INT-A IS COMPLETE — ALL FIVE BRANCHES ARE IN ONE TREE. Branch `worktree-agent-a1a7ca4acbc53bfa5`, tip
+✅✅✅ **INT-A's MERGED TREE IS SIGNED OFF.** The output-review found no wrong tree and no lost content, and
+ran **the check nobody had: `src/` is BYTE-IDENTICAL to a mechanical `git merge-tree` replay** of the same
+five-merge chain — no hand edit, no lost hunk, no injected hunk, no reordering. **Every deviation from a plain
+merge is confined to NINE files, all audited.** ⭐ **THAT REPLAY-IDENTITY CHECK IS THREE COMMANDS AND CATCHES
+A CLASS NO ROUND-CLOSE GATE NAMES — worth making permanent.**
+⊕ Also proven, not asserted: the `DONE.md` resolution's replay diff is **6 deletions, 0 insertions, all six
+conflict markers** — a machine-checkable proof that no hand re-insertion happened; and the 46 "missing" T1
+lines were **all removed by L's OWN later commits**, so the supersession is measured, not argued.
+⊕ **`ALLOWED_UNWIRED`'s smaller list is CORRECT** — five entries were wired between L's merge base and HEAD,
+so L's larger list is the OLDER one. Green bidirectionally.
+🔧 **THREE BLOCKING findings, all on `todo/t1305.md`, NONE on the tree** — with INT-A's executor now: its
+§(ii) casts doubt on the one action that clears the gate; its expected-red inventory **omits the two FATAL
+sweep sections** (`❌ NEW LEAK CLASS` on ~22 rows and `⛔ CITED ROW … self_whole_move_ok`, both `rc=1`, and
+**`sanitize_sweep.sh` is on the ROUND-CLOSE BATTERY — my own close meets them too**); and one number says
+"two BELOW its pin" where it lands **AT** its pin.
+
+⚠⚠ **A COMPOSITION RISK NOTHING IN THE ROUND NAMED, AND THE ROUND-CLOSE BATTERY IS WHERE IT SURFACES:** the
+three parity constants came from **T1 ALONE** — the only branch that moved them, so git took its side
+correctly — but **T1 measured them on a tree WITHOUT N2's Vector-HOF lowering change and WITHOUT S-a2's new
+rejects.** Own-inflow is discharged (both of N2's new top-level fixtures carry LIVE self-host MATCH tests, and
+S-a2 added zero). **The residual risk is a BEHAVIOURAL FLIP OF AN EXISTING CORPUS FIXTURE against a ceiling
+with ZERO SLACK — and a red there would be MIS-ATTRIBUTED to whoever runs it.** Regen at round close:
+`GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release self_host_runtime_diff
+-- --nocapture`, **`--release` mandatory**, confirm no `SKIPPED` lines.
+
+⭐ **ALL 23 OUTSTANDING RE-KEY ROWS ARE NOW MEASURED: 22 CONFIRM the re-key at byte-exact counts, and the
+23rd — `test_higher_order_named_fn` — is FULLY CLEAN, so its row is DELETED, not re-keyed.** That is a THIRD
+action, and it is the fixture INT-B's brief had flagged as having no subject at all.
+⚠ **THREE NESTED WINDOWS IN ONE CHAIN, each correcting the one above** (INT-A's 28 → a reviewer's 8 → this
+23). **Ask what window every remaining measurement was taken in.**
+⊕ **The end state is confirmed by direct swap** — two constants move, `uncited` holds at its pin, the lint
+goes FULLY GREEN, and that green run **executed** the four asserts that had never run: all passed.
+
+⊖ **Superseded: INT-A IS COMPLETE — ALL FIVE BRANCHES ARE IN ONE TREE. Branch `worktree-agent-a1a7ca4acbc53bfa5`, tip
 `8f7391db4`, base `85cd4529e`. Output-review live.** Merge order T1 `c089fe6ac` → L → N2 → S-a2 → re-seed;
 per-branch merge bases in the executor's report. **All three acceptance lines rc 0**, `--test lints` red on
 the ONE predicted assert with the predicted shape, every other gate green.
