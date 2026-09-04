@@ -3095,11 +3095,28 @@ fn collection_elem_drop_routes_through_type_drop_fns() {
 ///
 /// Two structural assertions:
 ///  1. The consuming-mutator name list (`"push" | "add" | "extend" | "send" |
-///     "push_back" | "push_front"`) appears exactly TWICE — the value-arg
-///     type-hint arm and the consuming-position arm. A new collection-mutator
-///     name (or a copy of the arm) forces an audit: is it a value-position
-///     HINT only (like `fill`/`get_or_put`, which must NOT consume), or a true
-///     consume? — then re-pin.
+///     "push_back" | "push_front"`) appears exactly THREE times — the value-arg
+///     type-hint arm, the consuming-position arm, and the trait-object pack's
+///     destination arm. A new collection-mutator name (or a copy of the arm)
+///     forces an audit: is it a value-position HINT only (like
+///     `fill`/`get_or_put`, which must NOT consume), or a true consume? — then
+///     re-pin.
+///
+///     AUDIT OF THE THIRD ARM (`pack_dest`, added 2026-09-04 by the R49 M2
+///     output-review fold): **HINT ONLY, never a consume decision.** It answers
+///     "what type does this method's value slot hold", so the trait-object pack
+///     can decide whether a `Box[Concrete]` needs packing into a `Box[Trait]`
+///     `{data, vtable}` pair; the consume/clone decision stays with arm 2,
+///     which this fold did not touch on purpose — widening arm 2 would move the
+///     Null-materialization hint's blast radius, a different axis.
+///     ⚠ **IT IS ALSO WHY THE ARM EXISTS AT ALL: arm 3 carries the value-slot
+///     INDEX AND the destination TYPE out of ONE match.** The defect it retires
+///     was precisely a SPLIT between those two — the type was computed for
+///     `insert` while the index came from arm 1, whose key-value clause is
+///     guarded `args.len() >= 2`, so the one-argument members of that family
+///     (`Set`/`HashSet` `insert`, `Guard`/`WriteGuard` `set`) had a correct
+///     destination type computed and then discarded, and stayed
+///     stack-buffer-overflows. Do not "simplify" arm 3 by reading arm 1's index.
 ///  2. The consuming-position match is preceded by the `if is_gir_method` gate.
 ///     Dropping the gate (re-introducing the raw name-match) drops this
 ///     substring, so the guard trips structurally — a name-match reintroduction
@@ -3123,7 +3140,7 @@ fn consuming_position_name_match_is_gir_gated() {
 
     // (1) The consuming-mutator name list appears in exactly two arms:
     //     the value-arg type-hint arm + the consuming-position arm.
-    const EXPECTED_ARMS: usize = 2;
+    const EXPECTED_ARMS: usize = 3;
     let arms = src
         .matches("\"push\" | \"add\" | \"extend\" | \"send\" | \"push_back\" | \"push_front\"")
         .count();

@@ -2,20 +2,37 @@
 # `Vector` consuming position, not just at the call-argument positions that
 # carry a real signature.
 #
-# THE CLASS: a builtin collection method has no `fn_sigs` entry carrying its
-# element type — the value param falls back to `I64_TYPE` — so the pack at
-# `lower_call_arg` was asked "is the destination a `Box[Trait]`?", answered
-# "no, it is `int`", and declined. A `Box[Concrete]` then reached
+# THE CLASS: `method_param_types` in `lower_method_call` is filled ONLY on the
+# `is_gir_method` path and is EMPTY for every builtin collection method, so
+# `callee_param_type` at `lower_call_arg` is `None` and the pack takes its
+# `None => return val` early exit — it was never asked the question at all.
+# (`fn_sigs` is NOT consulted at this site. It would answer `I64_TYPE`, which
+# is why a destination-type carrier had to be ADDED rather than repaired, but
+# the pack never sees that answer. Regenerate:
+# `grep -n 'is_gir_method\|method_param_types' src/ir/lowering/exprs/methods.rs`.)
+# A `Box[Concrete]` then reached
 # `Vector__Box__Speaker__set` unpacked, and the runtime memcpy'd 16 bytes of
 # `{data, vtable}` out of an 8-byte `void*` slot. Every row below was rc 135
 # before the destination type was routed through the protocol table.
 #
-# ⚠ ONE ROW PER SIBLING (Core #4 / Core #12). `push` alone is one value of a
-# typed axis; `set`, `insert` and `fill` are the same position class reached
-# through three more `BuiltinMethodDecl` arms. `fill` and `get_or_put` are
-# deliberately NOT consuming positions — they take the destination type as a
-# HINT only — so they also pin that the hint path and the consume path read
-# the same carrier.
+# ⚠ ONE ROW PER `Vector` SIBLING — AND THAT IS ALL THIS FILE CLAIMS
+# (Core #4 / Core #12). `push` alone is one value of a typed axis; `set`,
+# `insert` and `fill` are the same position class reached through three more
+# `BuiltinMethodDecl` arms. `fill` and `get_or_put` are deliberately NOT
+# consuming positions — they take the destination type as a HINT only — so they
+# also pin that the hint path and the consume path read the same carrier.
+#
+# ⚠ SIBLING PROTOCOLS ARE PINNED ELSEWHERE, NOT IMPLIED HERE. The value-writing
+# position class spans more receivers than `Vector`, and each has its own file:
+# `box_trait_pack_map_consuming_positions.gg` (`Dict`/`HashMap`
+# `put`/`get_or_put`), `box_trait_pack_set_consuming_positions.gg`
+# (`Set`/`HashSet` `add`/`insert` — the ONE-ARGUMENT shape, which an earlier
+# revision of this class fix silently omitted while this header claimed sibling
+# totality), `box_trait_pack_deque_alias_push.gg` (the alias axis) and
+# `box_trait_pack_index_assign.gg` (`v[i] = x` / `d[k] = x`, a different write
+# site). Regenerate the family from the declaration table, never from this
+# list:  grep -n 'name: "put"\|name: "set"\|name: "insert"\|name: "fill"\|name: "get_or_put"' \
+#            src/ir/lowering/builtins.rs
 #
 # ⚠ THE PUSHED VALUE MUST BE A TEMP. A `Box` is single-owner-by-design, so a
 # live named source at these positions is `E_MoveWithoutOperator` at check

@@ -2,8 +2,11 @@
 # with `Box.new` + `push` and returned from a helper. It used to segfault
 # (rc 139 on both backends, ASan `stack-buffer-overflow` in
 # `__interceptor_memcpy`) because the trait-object pack never ran at a builtin
-# consuming position: the collection's element type reached the pack as `int`,
-# so `Box[Robot]` was handed straight to `Vector__Box__Speaker__push` and the
+# consuming position: no destination type reached the pack AT ALL — a builtin
+# collection method leaves `method_param_types` empty, so the pack's
+# `callee_param_type` was `None` and it returned early without deciding
+# anything. `Box[Robot]` was handed straight to `Vector__Box__Speaker__push`
+# and the
 # runtime memcpy'd 16 bytes of `{data, vtable}` out of an 8-byte `void*` slot.
 #
 # ⚠ DISCRIMINATED FROM ITS SIBLING BY FORMATION SPELLING — do not merge them.

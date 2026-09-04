@@ -1,0 +1,69 @@
+# LIVE REGRESSION FIXTURE — the trait-object pack at the LOCK-GUARD write
+# position, the third and fourth one-argument members of the key-value writer
+# family.
+#
+# ⭐ WHY THIS IS NOT COVERED BY THE COLLECTION FIXTURES. `Guard.set` and
+# `WriteGuard.set` write a value into the guarded slot exactly the way
+# `Vector.set` writes into an element slot, but they take ONE argument, not
+# two. The value-slot index was originally computed by a match arm guarded
+# `args.len() >= 2`, so every one-argument member of the family fell through to
+# "this method has no value slot" and the correctly-computed destination type
+# was thrown away. `Set`/`HashSet` `insert` is the same omission on the
+# collection side; these two are its lock-side siblings. Regenerate the family
+# from the declaration table, never from a hand list:
+#   grep -n 'name: "put"\|name: "set"\|name: "insert"\|name: "fill"\|name: "get_or_put"' \
+#       src/ir/lowering/builtins.rs
+# → 9 rows, of which exactly 3 declare a single param: `SET.insert` (aliased by
+# `HASHSET`), `GUARD.set` and `WRITE_GUARD.set`.
+#
+# ⚠ BOTH ROWS WERE rc 135 (SIGBUS) BEFORE the one-argument shape reached the
+# pack, on both backends — the runtime memcpy'd 16 bytes of `{data, vtable}`
+# out of an 8-byte `void*` slot, the same overflow as the collection cells.
+#
+# ⚠ THE `Guard[T] g = m.lock()` SPELLING IS LOAD-BEARING. `with m.lock() as g:`
+# is a move-follow-through ICE (rc 101,
+# `Move-mode assign _N = move _M: source is drop-registered but is not
+# MoveZero'd before the next drop site`) for EVERY guarded element type —
+# `int`, `String` and `Box[Trait]` alike, and with no `.set` in the block at
+# all. That is a separate, pre-existing gap on the `with`-binding axis, filed
+# as `todo/t1270`; it is unrelated to the pack and this file must not be
+# rewritten into that spelling.
+#
+# ⚠ THE SET VALUE MUST BE A TEMP. A `Box` is single-owner-by-design, so a live
+# named source here is `E_MoveWithoutOperator` at check time.
+#
+# ⚠ Payloads are heap-forced through `mk`.
+#
+# ⚠ It stays in `known_gaps/` deliberately: moving the file registers a
+# non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING`, and Core #9 ⊕ forbids
+# raising that ceiling for a round's own inflow. The self-host lane has no
+# analogue of the GIR-level pack at consuming positions (`todo/t1084`).
+#
+# INTENDED: prints `G1!`, `W1!` on both backends.
+from std.collections import Box
+from std.sync import Mutex
+from std.sync import RWLock
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Mutex[Box[Speaker]] m = Mutex[Box[Speaker]](Box.new(Robot(mk("G", "0"))))
+    Guard[Box[Speaker]] g = m.lock()
+    g.set(Box.new(Robot(mk("G", "1"))))
+    print(g.get().speak())
+
+    RWLock[Box[Speaker]] r = RWLock[Box[Speaker]](Box.new(Robot(mk("W", "0"))))
+    WriteGuard[Box[Speaker]] w = r.write()
+    w.set(Box.new(Robot(mk("W", "1"))))
+    print(w.get().speak())

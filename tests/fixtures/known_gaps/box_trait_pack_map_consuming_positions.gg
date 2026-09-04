@@ -20,7 +20,10 @@
 # ⚠ `get_or_put` is a HINT-ONLY position: it borrows its default rather than
 # consuming it, so consuming (clone + move-zero) the value there would
 # double-free a live source. It is pinned to show the hint path and the
-# consume path read the SAME destination-type carrier.
+# consume path read the SAME destination-type carrier. BOTH protocols carry a
+# `get_or_put` row: the `Dict` one and the `HashMap` ALIAS one are two values
+# of the alias axis at a position whose fix shipped with no regression net of
+# its own, and a fix nothing pins is next round's regression.
 #
 # ⚠ Payloads are heap-forced through `mk`.
 #
@@ -29,7 +32,7 @@
 # raising that ceiling for a round's own inflow. The self-host lane has no
 # analogue of the GIR-level pack at consuming positions.
 #
-# INTENDED: prints `D1!`, `G2!`, `H3!` on both backends.
+# INTENDED: prints `D1!`, `G2!`, `H3!`, `J4!` on both backends.
 from std.collections import Box
 from std.collections import Dict
 from std.collections import HashMap
@@ -59,3 +62,7 @@ void main():
     HashMap[String, Box[Speaker]] h = HashMap[String, Box[Speaker]]()
     h.put(mk("k", "3"), Box.new(Robot(mk("H", "3"))))
     print(h.get(mk("k", "3")).unwrap().speak())
+
+    HashMap[String, Box[Speaker]] j = HashMap[String, Box[Speaker]]()
+    Box[Speaker] jgot = j.get_or_put(mk("k", "4"), Box.new(Robot(mk("J", "4"))))
+    print(jgot.speak())

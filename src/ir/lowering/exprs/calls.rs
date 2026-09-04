@@ -543,12 +543,20 @@ pub(super) fn lower_call_arg(
     // lookup on the non-firing paths.
     //
     // `callee_param_type` is the declared-signature answer and is the right
-    // one wherever a signature exists. Builtin collection methods have no
-    // `fn_sigs` entry that carries the element type — their `fn_sigs` value
-    // param falls back to `I64_TYPE` — so a builtin consuming position hands
-    // the destination type in through `pack_dest_hint`, resolved from the
-    // protocol table at the caller (see `lower_method_call`). Signature first,
-    // hint second: the hint only ever fills a `None`.
+    // one wherever a signature exists. For a builtin collection method there
+    // IS no such answer here: `lower_method_call` fills `method_param_types`
+    // only on the `is_gir_method` path, so `callee_param_type` arrives `None`
+    // and the pack below would take its `None => return val` early exit —
+    // NEVER ASKED THE QUESTION, rather than asked and answered wrong.
+    // (`fn_sigs` is not consulted for this argument. It would answer
+    // `I64_TYPE` for the value param, which is why the destination type had to
+    // be ADDED as a carrier rather than repaired in place — but that wrong
+    // answer never reaches the pack. An earlier revision of this comment said
+    // it did; corrected rather than silently swapped, per Core #14.)
+    // So a builtin consuming position hands the destination type in through
+    // `pack_dest_hint`, resolved from the protocol table at the caller (see
+    // `lower_method_call`). Signature first, hint second: the hint only ever
+    // fills a `None`.
     let val = maybe_pack_trait_object_at_arg(
         ctx, builder, val, callee_param_type.or(pack_dest_hint));
     // G2 site-3 UAF-fold close: the projection above minted transient

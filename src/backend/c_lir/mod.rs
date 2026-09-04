@@ -932,7 +932,31 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     // avoid undefined-reference errors from C-mangled names like __gg_double that have
     // no corresponding LLVM IR symbol.
     if !wrappers_only {
-        let mut adapter_fids: HashSet<u32> = HashSet::new();
+        // ⚠ BTreeSet, NOT HashSet — THIS SET IS ITERATED TO EMIT CODE.
+        // A `HashSet` here made `gg build --emit-c` NONDETERMINISTIC: the same
+        // binary on the same source emitted the `__adapt_*` thunks in a
+        // different order on different runs. Measured 2026-09-04 by the R49 M2
+        // output-review fold — two `--emit-c` runs of the SAME `gg` on
+        // `tests/fixtures/vector_hof_cross_type_map.gg` differed, and the two
+        // files were `sort`-identical, i.e. pure reordering. It cost a
+        // pre-vs-post C-emit diff three false positives
+        // (`dict_box_callable`, `vector_hof_cross_type_map`,
+        // `vector_userspace_hofs`) before the cause was found, which is the
+        // real damage: it makes emitted-C diffing useless as an instrument.
+        // ⚠ IT WAS NOT THE ONLY SITE, and the first draft of this comment
+        // claimed it was. A second run of the same pre/post C-emit diff, with
+        // THIS site already fixed, surfaced `module.type_drop_fns` — a
+        // `HashMap` iterated at `:1040` to emit the `__gorget_dtor_*` forward
+        // declarations. That one is fixed at the PRODUCER (`src/lir/mod.rs`,
+        // now a `BTreeMap`) rather than sorted here, so no future emission
+        // site can reintroduce it. `by_type` (`:2144`) was already a
+        // `BTreeMap` for the same reason.
+        // Regenerate the class — do not trust this list:
+        //   grep -nE 'for .+ in &?[a-z_]+' src/backend/c_lir/mod.rs
+        // and check that nothing else iterates a hash-ordered container to
+        // produce OUTPUT — membership-only sets are fine. The instrument that
+        // FINDS them is two `--emit-c` runs of one binary, diffed.
+        let mut adapter_fids: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
         for func in &module.functions {
             for block in &func.blocks {
                 for inst in &block.insts {
@@ -1021,6 +1045,9 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     // implicit-declaration compile ERROR under
     // -Werror=implicit-function-declaration (clang ≥16 / Xcode default; only a
     // warning under gcc, which is why the suite's gcc build didn't catch it).
+    // ⚠ ORDER MATTERS HERE — this loop EMITS. `type_drop_fns` is a `BTreeMap`
+    // (not a `HashMap`) precisely so this is reproducible; see the type's doc
+    // comment in `src/lir/mod.rs`. Do not "optimize" it back to a hash map.
     for info in module.type_drop_fns.values() {
         if info.drop_fn_name.starts_with("__gorget_dtor_") {
             writeln!(out, "void {}(void* __p);", info.drop_fn_name).unwrap();

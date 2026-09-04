@@ -63406,12 +63406,62 @@ fn vec_box_trait_pushed_no_helper() {
 }
 
 /// LIVE REGRESSION FIXTURE — the trait-object pack at every `Vector`
-/// consuming position (`push` / `set` / `insert` / `fill`), not just at the
-/// call-argument positions that carry a real signature. Each was rc 135
-/// before the destination type reached the pack through the protocol table.
+/// consuming position (`push` / `set` / `insert` / `fill`). A builtin method
+/// leaves `method_param_types` empty, so the pack's `callee_param_type` was
+/// `None` and it returned early without deciding anything — not "decided
+/// wrongly from `fn_sigs`", which it never reads at that site. Each cell was
+/// rc 135 before the destination type reached the pack through the protocol
+/// table. `Set`/`HashSet`, `Dict`/`HashMap`, `Deque` and the index-assign
+/// site have their own files; this one claims `Vector` and nothing more.
 #[test]
 fn box_trait_pack_vector_consuming_positions() {
     run_gg("known_gaps/box_trait_pack_vector_consuming_positions.gg", "C3!\nB2!\nF6!");
+}
+
+/// KNOWN GAP `todo/t1270` — `with <lock>.lock() as g:` ICEs `gg build` rc 101
+/// on both backends with `Move-mode assign _N = move _M: source is
+/// drop-registered but is not MoveZero'd before the next drop site`
+/// (`src/ir/lowering/mod.rs:1853`). The discriminator is the BINDING FORM:
+/// `Guard[int] g = m.lock()` + the same body is rc 0 printing `7`, and `with`
+/// itself is healthy (`arena_basic.gg` uses it, green). The guarded type is
+/// irrelevant — `int`, `String` and `Box[Trait]` all ICE identically, with no
+/// write through the guard at all. Found while probing the pack's `Guard.set`
+/// cell; unrelated to it (that cell is green, see `box_trait_pack_guard_set`).
+#[test]
+#[ignore = "KNOWN GAP t1270: `with m.lock() as g:` ICEs rc 101 \
+(move-follow-through: source is drop-registered but is not MoveZero'd). The \
+`Guard[int] g = m.lock()` spelling of the identical program is rc 0. Intended: \
+prints `7`."]
+fn known_gap_with_lock_guard_binding_ices() {
+    // INTENDED: `7` — the `with` form binds the guard and releases it at
+    // block exit, exactly as the two-line form does.
+    run_gg("known_gaps/with_lock_guard_binding_ices.gg", "7");
+}
+
+/// LIVE REGRESSION FIXTURE — the LOCK-GUARD write position. `Guard.set` and
+/// `WriteGuard.set` are the third and fourth ONE-ARGUMENT members of the
+/// `put`/`set`/`insert`/`fill`/`get_or_put` family, so they fell through the
+/// same `args.len() >= 2` guard that hid `Set`/`HashSet` `insert`. Both rows
+/// were rc 135 (SIGBUS) on both backends before the one-argument shape reached
+/// the pack. The `Guard[T] g = m.lock()` spelling is load-bearing: the
+/// `with m.lock() as g:` form is a pre-existing move-follow-through ICE for
+/// every element type (`todo/t1270`), unrelated to the pack.
+#[test]
+fn box_trait_pack_guard_set() {
+    run_gg("known_gaps/box_trait_pack_guard_set.gg", "G1!\nW1!");
+}
+
+/// LIVE REGRESSION FIXTURE — the SET consuming positions, and the ONE-ARGUMENT
+/// shape of the key-value writer family. `Set`/`HashSet` `insert` is a one-arg
+/// alias for `add` on the same runtime callee (`gorget_set_add`); every other
+/// member of the `put`/`set`/`insert`/`fill`/`get_or_put` family takes two
+/// arguments, so a value-slot index guarded `args.len() >= 2` discarded a
+/// correctly-computed destination type and left these two cells at rc 135
+/// while `.add` on the identical receiver was fixed. The `add` rows are here
+/// because that half shipped with no regression net of its own.
+#[test]
+fn box_trait_pack_set_consuming_positions() {
+    run_gg("known_gaps/box_trait_pack_set_consuming_positions.gg", "A1!\nS2!\nB3!\nH4!");
 }
 
 /// LIVE REGRESSION FIXTURE — the KEY-VALUE consuming positions, and the axis
@@ -63423,7 +63473,7 @@ fn box_trait_pack_vector_consuming_positions() {
 /// to any text-derived census of consuming positions.
 #[test]
 fn box_trait_pack_map_consuming_positions() {
-    run_gg("known_gaps/box_trait_pack_map_consuming_positions.gg", "D1!\nG2!\nH3!");
+    run_gg("known_gaps/box_trait_pack_map_consuming_positions.gg", "D1!\nG2!\nH3!\nJ4!");
 }
 
 /// LIVE REGRESSION FIXTURE — the pack on an ALIAS PROTOCOL. `Deque`'s method

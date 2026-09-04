@@ -1,0 +1,92 @@
+# LIVE REGRESSION FIXTURE — the trait-object pack at the SET consuming
+# positions, and the ONE-ARGUMENT shape of the key-value writer family.
+#
+# ⭐ THE DISCRIMINATOR — WHY THIS FILE EXISTS SEPARATELY FROM THE `Vector` AND
+# `Dict` ROWS. `Set.insert` is a ONE-ARG ALIAS for `Set.add` on the same
+# runtime callee (regenerate:
+#   grep -n 'name: "insert"' src/ir/lowering/builtins.rs
+# → the SET arm, `runtime_callee: Some("gorget_set_add")`, `params: elem_param`).
+# Every OTHER member of the `put`/`set`/`insert`/`fill`/`get_or_put` family
+# takes TWO arguments, so the value-slot index was originally computed by a
+# match arm guarded `args.len() >= 2`. A one-arg `insert` failed that guard and
+# fell through to "this method has no value slot" — while the destination TYPE
+# for it was computed correctly three lines above, in a match arm that lists
+# `"insert"` by name. The hint was computed and then thrown away, and
+# `Set[Box[Trait]].insert(temp)` stayed a live stack-buffer-overflow (bare
+# rc 135, SIGBUS) while `.add(temp)` on the identical receiver was already
+# fixed. Index and type now come out of ONE match, so they cannot disagree.
+#
+# ⚠ ONE ROW PER SPELLING × ONE ROW PER PROTOCOL (Core #4 / Core #12).
+# `add` and `insert` are two spellings of one consuming position; `Set` and
+# `HashSet` are two protocols reaching it, and `HashSet`'s method table IS
+# `SET.methods` held BY REFERENCE, so no text-derived census of
+# `BuiltinMethodDecl` rows can see it. The `add` rows are here because the
+# fix that closed them shipped with no regression net of its own — a fix
+# nothing pins is next round's regression.
+#
+# ⚠ ONE ELEMENT PER SET, DELIBERATELY. A `Set[Box[Trait]]` hashes the
+# `{data, vtable}` PAIR — pointer identity — so two structurally equal
+# `Robot`s occupy two slots and iteration order over more than one element is
+# not a property this fixture may assert. Whether `Set[Box[Trait]]` should be
+# accepted at all is an open owner question; this file pins only that the
+# accepted form is MEMORY-SAFE and dispatches correctly, and takes no position
+# on the accept/reject axis.
+#
+# ⚠ THE INSERTED VALUE MUST BE A TEMP. A `Box` is single-owner-by-design, so a
+# live named source at these positions is `E_MoveWithoutOperator` at check
+# time; the temp form is the only shape that reaches the pack here.
+#
+# ⚠ Payloads are heap-forced through `mk`. A literal would not reallocate and
+# would hide a stale-pointer read.
+#
+# ⚠ THE REST OF THE ONE-ARGUMENT FAMILY IS PINNED ELSEWHERE, NOT IMPLIED HERE.
+# `GUARD.set` and `WRITE_GUARD.set` are the other two one-argument members
+# (`params: elem_param`, same grep as above); both were rc 135 for the same
+# reason and are covered by `box_trait_pack_guard_set.gg`. `Shared[Mutex[…]]`
+# is NOT covered by either file: `Shared[Mutex[Box[Speaker]]].lock()` is
+# `E_NoMethodFound` on `Shared[Mutex[trait Speaker]]` — the Box is already gone
+# from the printed type, which is `todo/t1082`, not this axis.
+#
+# ⚠ It stays in `known_gaps/` deliberately: moving the file registers a
+# non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING`, and Core #9 ⊕ forbids
+# raising that ceiling for a round's own inflow. The self-host lane has no
+# analogue of the GIR-level pack at consuming positions (`todo/t1084`).
+#
+# INTENDED: prints `A1!`, `S2!`, `B3!`, `H4!` on both backends.
+from std.collections import Box
+from std.collections import Set
+from std.collections import HashSet
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Set[Box[Speaker]] a = Set[Box[Speaker]]()
+    a.add(Box.new(Robot(mk("A", "1"))))
+    for e in a:
+        print(e.speak())
+
+    Set[Box[Speaker]] s = Set[Box[Speaker]]()
+    s.insert(Box.new(Robot(mk("S", "2"))))
+    for e in s:
+        print(e.speak())
+
+    HashSet[Box[Speaker]] b = HashSet[Box[Speaker]]()
+    b.add(Box.new(Robot(mk("B", "3"))))
+    for e in b:
+        print(e.speak())
+
+    HashSet[Box[Speaker]] h = HashSet[Box[Speaker]]()
+    h.insert(Box.new(Robot(mk("H", "4"))))
+    for e in h:
+        print(e.speak())

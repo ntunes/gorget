@@ -1516,20 +1516,38 @@ pub(super) fn lower_index_assign(
             maybe_move_zero(ctx, builder, &val);
         }
     } else {
-        // ⚠ STATED EXCLUSION from the trait-object pack's cell set, not an
-        // oversight. A USER `__setitem__` / `IndexMut` destination is not a
-        // builtin protocol, so `protocol_for_mangled_name` above answers
-        // `None` and the pack declines here by construction. Its destination
-        // type would have to come from `fn_sigs` — the carrier that answers
-        // `I64_TYPE` for a builtin collection's value parameter, and whose
-        // repair is `todo/t0992`'s territory, not a rider on this one.
+        // ⚠ WHAT THE TRAIT-OBJECT PACK DOES FOR A USER `__setitem__` /
+        // `IndexMut` DESTINATION. This arm is NOT excluded from the pack: the
+        // pack runs UNCONDITIONALLY above, before the `is_vector` / `is_dict`
+        // split, for every receiver. What differs here is only its INPUT — a
+        // user type has no builtin protocol, `protocol_for_mangled_name`
+        // answers `None`, and the pack therefore receives `None` as its
+        // destination type and early-exits.
+        //
+        // ⚠ NO INVARIANT IS ASSERTED HERE, DELIBERATELY (Core #14). An earlier
+        // revision of this comment claimed the pack "declines here by
+        // construction". That is not what the branch says. This arm's
+        // predicate is `collection_kind` being neither `Array` nor a map kind
+        // (`:1444-1445`) — it does not exclude builtin set-kinded protocols,
+        // for which `protocol_for_mangled_name` answers `Some`. So
+        // `debug_assert!(protocol_for_mangled_name(&type_name).is_none())`
+        // asserts something the predicate does not establish, and the honest
+        // move is to state the mechanism rather than dress it as a guarded
+        // invariant.
+        // The same revision said the destination type "would have to come from
+        // `fn_sigs`, the carrier that answers `I64_TYPE`". That is wrong for
+        // THIS arm: a user `__setitem__` has a real `fn_sigs` entry with real
+        // declared parameter types — the loop below looks it up by name — so
+        // if this arm ever needs a pack, `fn_sigs` is the RIGHT carrier for it,
+        // not the degenerate one. `todo/t0992` is about the BUILTIN value
+        // parameter, a different row.
         //
         // REACHABILITY IS UNMEASURED: the obvious probe (a user type indexed
         // with a `Box[Trait]` value) is rejected before lowering with
         // `E_NotIndexable`, so whether a program can reach this arm carrying a
         // widening `Box[Concrete]` is an open question rather than a known
-        // hole. Recorded so the enumerated set closes WITH an exclusion rather
-        // than silently short.
+        // hole. Recorded so the enumerated set closes WITH a stated open cell
+        // rather than silently short.
         //
         // Check for IndexMut / set equip method (operator overload)
         if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {

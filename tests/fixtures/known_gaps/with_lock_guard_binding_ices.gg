@@ -1,0 +1,36 @@
+# KNOWN GAP `todo/t1270` — `with <lock>.lock() as g:` ICEs `gg build` rc 101 on
+# a program with nothing exotic in it.
+#
+#   [move-follow-through] 1 violation(s):
+#     @main::bb0::i4 — Move-mode assign _4 = move _3: source is drop-registered
+#     but is not MoveZero'd before the next drop site
+#   panicked at src/ir/lowering/mod.rs:1853
+#
+# ⭐ THE DISCRIMINATOR IS THE BINDING FORM, NOT THE LOCK AND NOT `with`.
+# The same program written with the repo's other spelling —
+# `Guard[int] g = m.lock()` then the same body — is rc 0 and prints `7`. And
+# `with` itself is fine: `with Arena(4096) as pool:` is green today
+# (`tests/fixtures/arena_basic.gg`). It is the combination that ICEs.
+#
+# ⭐ AND IT IS NOT ABOUT THE GUARDED TYPE. Measured 2026-09-04, bare rc, all
+# rc 101 with the identical violation: `Mutex[int]`, `Mutex[String]`,
+# `Mutex[Box[Trait]]` — and with NO `.set` in the block at all, so it is the
+# `with`-binding of the guard that trips it, not any write through it.
+#
+# ⚠ UNRELATED TO THE R49 M2 TRAIT-OBJECT PACK, and measured to be so: the ICE
+# is byte-identical before and after that change, and reproduces on `int`,
+# where the pack cannot fire at all. It was found while probing whether
+# `Guard.set` was reachable for the pack's one-argument cell; the pack cell
+# itself is green and pinned by `box_trait_pack_guard_set.gg`, which uses the
+# working spelling deliberately.
+#
+# ⚠ Payload is a plain `int` on purpose — the smallest shape that reproduces.
+# Widening it to a String would suggest the resource type matters; it does not.
+#
+# INTENDED: prints `7`, rc 0.
+from std.sync import Mutex
+
+void main():
+    Mutex[int] m = Mutex[int](7)
+    with m.lock() as g:
+        print(g.get())
