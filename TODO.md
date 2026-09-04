@@ -506,11 +506,27 @@ test go red.**
 ⚖⭐ **OWNER RULED ON L's TWO ASKS, 2026-09-04 — AND RULED *AGAINST* THE ORCHESTRATOR'S LEAN ON BOTH:
 *"fix the leaks and fix SH so that it compiles the new fixtures. As part of this round."*** I recommended
 ADMIT-AND-FILE for both; **the owner said FIX, this round.** ⇒ **TWO TRACKS OPEN, SCOUTS LAUNCHED:**
-**S — `t0953`, ID BLOCK `t1167`–`t1176`** — the closure-env heap leak that is the mechanism behind both
-genuinely-new-inflow rows. **`LEAK_CEILING` stays an exact pin at 294 and is NOT raised.**
-**T — `t0877`, ID BLOCK `t1177`–`t1186`** — the self-host `guess_return_type` arms that block 3 of Track L's
-11 fixtures. ⚠ **THE ITEM DOCUMENTS ONLY ARMS (a) AND (b); L's EXECUTOR HIT (b)/(c)/(d) — SO (c) AND (d) ARE
-UNDOCUMENTED AND THE ITEM IS INCOMPLETE.**
+**S — `t0953`, ID BLOCK `t1167`–`t1176`, SCOUT LAUNCHED** — the closure-env heap leak that is the mechanism
+behind both genuinely-new-inflow rows. **`LEAK_CEILING` stays an exact pin and is NOT raised.**
+⭐ **GROUNDING FOUND BEFORE BRIEFING, AND IT SHRINKS THE TRACK: THE RUNTIME IS NOT THE DEFECT.**
+`gorget_closure_free` (`runtime_string.c:153`) **DOES free the env** — it walks back to the
+`[size_t size | env_data…]` prefix header and frees the original allocation. ⇒ **the block is freeable and the
+free function is correct; it is simply NEVER CALLED for a closure literal at a call-argument position.**
+⇒ ⚡ **THIS IS CORE #3 — register ownership at the value's BIRTH — not a runtime gap**, which is a much
+smaller and better-shaped fix than "grow the runtime".
+⊕ **`t0953` IS THE 8-BYTE-PER-CLOSURE FLOOR THREE OTHER TRACKS MEASURE AGAINST** (N1, N2 and L all report
+their residue as "`t0953` only"), **so closing it moves ASan numbers across the whole round.**
+**T — `t0877`, ID BLOCK `t1177`–`t1186`, SCOUT LAUNCHED** — the self-host `guess_return_type`
+(`lower_closures.gg:651`) arms that block 3 of Track L's 11 fixtures.
+⚠⚠ **THE ITEM IS A LEAD, NOT A SPECIFICATION: it documents only arms (a) and (b); L's executor hit
+(b)/(c)/(d), so (c) AND (d) ARE UNNAMED — and a previous review found arm (b) DIAGNOSES AN `EIdentifier` ARM
+THAT DOES NOT EXIST, with two more body shapes failing identically.**
+⭐ **THE QUESTION THAT DECIDES THIS TRACK'S SIZE: IS THE FIX A *PORT*?** Rust gg registers the closure's
+params as locals before body inference (Tier 1c, `src/ir/lowering/closures.rs`); **if the self-host is simply
+missing that step, this is a port, not a design.**
+⊕ **AND A LAYER QUESTION WORTH ASKING OUT LOUD: a function named `guess_return_type` that falls through to
+`I64_TYPE` is a WRONG-ANSWER DEFAULT — the same shape as the `unwrap_or("int64_t")` class this round has been
+retiring. More arms may be the wrong fix.**
 ⚡ **THE RULING'S PRINCIPLE, WHICH OUTLIVES THE TWO ASKS: an inflow ceiling is not a place to put a defect
 you have just discovered you own. Both of my "admit" recommendations were the designing-around-a-gap shape —
 the fixtures were the load-bearing artifact and I proposed bending the ceiling around them.**
