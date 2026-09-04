@@ -9918,7 +9918,36 @@ fn sanitize_allowlists_shrink_only() {
     // falsified by measurement: the row retires only when ALL THREE of
     // `todo/t0948`, `todo/t0971` and `todo/t0972` land. See the two marked
     // CORRECTION blocks in the allowlist — they are kept deliberately.
-    const LEAK_CEILING: usize = 294;
+    // ⚠⚖ 294 → 300 (R49 Track L, 2026-09-04). SIX new rows, ONE root, and the
+    // owner ruling was taken TWICE — the second time on a corrected figure.
+    // Track L closed a closure-capture use-after-free class by materialising
+    // owned values at the capture site; `todo/t1210` is that the env's FIELDS
+    // are then never dropped, so every newly-materialised capture is a leak.
+    // THREE of the six rows are fixtures the track never touched — and
+    // `spawn_unchecked_bypasses_check` was ASan-CLEAN at the base commit — so
+    // this is genuinely NEW INFLOW, which the allowlist header reserves to an
+    // OWNER ASK. Answered 2026-09-04: land it, admit the rows, make the
+    // admission TEMPORARY. Every one of the six CITES its owning item in
+    // column 3, and `scripts/sanitize_sweep.sh` is now FATAL on a cited class
+    // that stops leaking, so these rows cannot outlive the defect.
+    // ⚠ NOT ALL SIX ARE `t1210`: the aggregate cell's env-BLOCK record is
+    // `todo/t0948`, and `closure_capture_then_mutate_source_uaf` is
+    // `todo/t0310` (its env drop RUNS; the leak is the closure's owned RETURN
+    // value) and is PRE-EXISTING, measured at base once the crash that masked
+    // it is removed.
+    // ⚠⚖ 300 → 301: the full sweep this fold ran surfaced ONE more pre-existing
+    // leak with no row, `string_enum_variants` (`todo/t1290`, `String ch =
+    // input[i]`). It is NOT this round's inflow — a compiler built from Track
+    // L's base leaks the identical 12 B in 6 allocations and the fixture has no
+    // closure in it — so it needs no owner ask, and its row cites `t1290` so the
+    // sweep's retiring direction forces the row out when the leak stops.
+    // ⚠⚖ 301 → 300: and this one is a BURN-DOWN, not an admission. The full
+    // sweep reported `cow_closure_deferred_mutate` as no longer leaking at all,
+    // and the capture-ownership fix is why: measured 96 B in 3 allocations
+    // (`str_alloc_copy*3`) against a compiler built from Track L's base, and
+    // ASan-CLEAN after. A pre-existing row this round's fix RETIRED, removed by
+    // the round that earned it rather than left for a later reader.
+    const LEAK_CEILING: usize = 300;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -10093,8 +10122,17 @@ fn sanitize_allowlists_shrink_only() {
     // `gg build --sanitize` and `--backend=llvm --sanitize` each report the same
     // 16 allocations, all `__gorget_closure_env_alloc`, and no corruption.
     // See the `⚠⚠ OWNER ASK` block in the allowlist.
-    const LEAK_CLASS_PAIRS: usize = 501;
-    const LEAK_RECORDS: usize = 2302;
+    // ⚠⚖ Then both rise with R49 Track L's six new rows and two WIDENED ones:
+    // +10 (fixture, class) pairs and +8 net records. The net hides two moves in
+    // opposite directions, and both are deliberate: `closure_fstring_capture`
+    // was TIGHTENED (`gorget_string_format*5` → `*1`, its row had been admitting
+    // four records it no longer leaks) while gaining `str_alloc_copy*1`, and
+    // `shared_callable` gained `gorget_shared_new*2`. Counts are the EXACT
+    // measured values, never rounded up, so any drift trips the gate — that is
+    // what makes a widened row a measurement rather than a waiver.
+    // LEAK_LOOSE_SIGNATURES is unchanged: no new row carries a `*N+` marker.
+    const LEAK_CLASS_PAIRS: usize = 511;
+    const LEAK_RECORDS: usize = 2308;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────
@@ -10158,7 +10196,12 @@ fn sanitize_allowlists_shrink_only() {
     // makes against leaving headroom in `LEAK_CEILING`.
     // TARGET: 0. Every pair carrying a filed item is the end state; nothing else
     // in this file creates pressure toward it.
-    const UNCITED_LEAK_CLASS_PAIRS: usize = 494;
+    // ⚠⚖ 494 → 493 (R49 Track L fold): NOT by citing a pair, but by FIXING one.
+    // `cow_closure_deferred_mutate`'s row was uncited and its leak is gone (96 B
+    // in 3 allocations at this track's base, ASan-CLEAN after the
+    // capture-ownership fix), so the row went and its pair went with it. This is
+    // the direction the owner's ruling asks for — burnt down, not accounted for.
+    const UNCITED_LEAK_CLASS_PAIRS: usize = 493;
 
     // A `todo/` item counts as citable for a pair only if it EXISTS and its body
     // NAMES the pair's top-frame symbol. Cached: 293 rows would otherwise re-read

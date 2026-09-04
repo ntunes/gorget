@@ -261,6 +261,62 @@ box_trait_vector_lit	__gorget_box_alloc_Robot*1,str_alloc_copy*1
 # ⊕ THIRD COLUMN: `<class>=<item>`, the per-class citation. Rows that predate it
 # carry none; the three rows that postdate it do (`iter_trait_default_trait_args`,
 # `self_whole_move_ok`, `vector_hof_cross_type_map`).
+# ⚖ ADMITTED (R49 Track L, 2026-09-04; OWNER RULING TAKEN TWICE — see below).
+# EIGHT rows, ONE root, and the root is FILED: `todo/t1210` — the Rust lane frees
+# a closure environment BLOCK and never the environment's FIELDS, because the
+# `GirType::FnPtr` arm of the LIR drop lowering hardcodes `gorget_closure_free`
+# and the typed `__Closure_N__drop` it should call is emitted with ZERO call
+# sites. Track L made the closure capture site materialise owned values (closing
+# a use-after-free class), so every value it now materialises INTO an env is a
+# value nothing frees. The UAF is gone; the leak it was hiding is what is left.
+#
+# ⚠ THE RULING WAS RE-ASKED ON A CORRECTED FIGURE, AND THAT MATTERS. The first
+# ask said 2 of 5 cells were new inflow. A confirming review swept base-vs-merged
+# and found the true shape: EIGHT leaking cells, FIVE of them new inflow, and
+# three of those five are PRE-EXISTING FIXTURES THIS TRACK NEVER TOUCHED —
+# `spawn_unchecked_bypasses_check` was CLEAN at base and leaks now. The owner
+# confirmed the ruling at 5-of-8 (2026-09-04): land it, admit the rows, and make
+# the admission TEMPORARY. Do not read the first figure anywhere; it was wrong.
+#
+# THE THREE GRADUATION ROWS are covered by the ⚖ EXTENDED (2026-09-02) paragraph
+# in this file's header — a leak "newly made VISIBLE by a fixture GRADUATING out
+# of `known_gaps/`". All three were `heap-use-after-free` at the base commit,
+# measured, so their leak was never CLEAN, it was unreachable behind a crash
+# (SIX Q#6 verbatim: read CLEAN only because it crashed first).
+# THE FIVE NEW-INFLOW ROWS are covered by the 2026-09-04 ruling above and by
+# nothing else — the header's own words are "a row whose leak is genuinely NEW
+# INFLOW remains an OWNER ASK", and this is that ask, answered.
+#
+# ⛔ EVERY ROW CITES ITS ITEM IN COLUMN 3, AND THAT IS WHAT MAKES IT TEMPORARY.
+# `scripts/sanitize_sweep.sh` now treats a CITED class that has stopped leaking,
+# or shrunk below what its row admits, as FATAL rather than advisory: the moment
+# `t1210` (or `t0948`, or `t0310`) lands, this gate goes RED and forces these
+# rows out. Uncited rows keep their advisory behaviour. The precedent is
+# `security_safe_except_on` (tests/lints.rs, R48 Track R), whose doc states the
+# same contract in the same words.
+#
+# ATTRIBUTION IS PER PAIR, MEASURED, NOT PER ROW:
+#   `t1210` — env FIELD never dropped. Every `str_alloc_copy` / `gorget_str_cat`
+#     / `gorget_shared_new` pair below, plus the INDIRECT `gorget_array_reserve`
+#     record inside the aggregate cell's env block.
+#   `t0948` — a `Callable` in a STRUCT FIELD: `field_is_transitively_droppable`
+#     excludes bare `FnPtr` fields, so `struct Pair` is `[drop: None, copy: Copy]`,
+#     no `Pair__drop` is emitted and the env BLOCK itself leaks. That is the
+#     `__gorget_closure_env_alloc` record in `callable_capture_overlap_*`.
+#   `t0310` — NOT an env defect at all. In `closure_capture_then_mutate_source_uaf`
+#     the env drop DOES run (`__Closure_0__drop` is called); the 6 B allocates at
+#     frame `__Closure_0__call`, inside the closure BODY, and is the closure's
+#     OWNED RETURN VALUE, which `print(f())` receives and never frees. Proven
+#     PRE-EXISTING at the base commit by the same shape minus the realloc loop:
+#     identical 6 B / `str_alloc_copy*1`, with no use-after-free to mask it.
+#   ⚠ THE FIRST DISCLOSURE ATTRIBUTED ALL OF THIS TO `todo/t0953`. That is wrong
+#     and `t0953` owns NONE of these rows: its subject is a closure literal at a
+#     CALL-ARGUMENT position whose env is abandoned when the call returns.
+#
+# ⚠ THE SCAN THAT FOUND THE THREE EXTRA CELLS WAS A SELECTION (368 of ~2242
+# corpus fixtures), so this list is a floor, not a census. The authoritative
+# instrument is a full `scripts/sanitize_sweep.sh`.
+callable_capture_overlap_aggregate_init_uaf	__gorget_closure_env_alloc*1,gorget_array_reserve*1	__gorget_closure_env_alloc=t0948,gorget_array_reserve=t1210
 callable_clone_value_form_axis	__gorget_closure_env_alloc*4
 callable_vector_element_plain_sig_call_segv	__gorget_closure_env_alloc*2
 # ⚠⚠ OWNER ASK, NOT AN ADMISSION ALREADY COVERED — READ THIS BEFORE THE ROW.
@@ -366,9 +422,13 @@ cli_basic	str_alloc_copy*1
 clone_breaks_borrow_chain	__gorget_closure_env_alloc*2
 closure_as_callback	__gorget_closure_env_alloc*1
 closure_capture_patterns	__gorget_closure_env_alloc*1
+closure_capture_then_mutate_source_uaf	str_alloc_copy*1	str_alloc_copy=t0310
+closure_captures_param_then_escapes_uaf	str_alloc_copy*2	str_alloc_copy=t1210
 closure_compose	__gorget_closure_env_alloc*3
+closure_escape_capture_axis_local_literal	gorget_str_cat*1,str_alloc_copy*1	gorget_str_cat=t1210,str_alloc_copy=t1210
+closure_escape_capture_axis_param_named	str_alloc_copy*1	str_alloc_copy=t1210
 closure_float_ret	__gorget_closure_env_alloc*1
-closure_fstring_capture	__gorget_closure_env_alloc*1,gorget_string_format*5
+closure_fstring_capture	__gorget_closure_env_alloc*1,gorget_string_format*1,str_alloc_copy*1	str_alloc_copy=t1210
 closure_higher_order_chain	__gorget_closure_env_alloc*3
 closure_mixed_implicit_explicit_wiring	__gorget_closure_env_alloc*1
 closure_multiline_return	__gorget_closure_env_alloc*2,gorget_string_format*2
@@ -387,7 +447,6 @@ coroutine_dict_set	__gorget_closure_env_alloc*4
 coroutine_result_combinators	str_alloc_copy*3
 coroutine_vector_ops	gorget_array_push*1
 cow_amp_ref_field_forward	gorget_array_push*2
-cow_closure_deferred_mutate	str_alloc_copy*3
 cow_enum_bare_assign	str_alloc_copy*1
 cow_lazy_mut_borrow_write	str_alloc_copy*1
 crypto_hash	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*11,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
@@ -648,7 +707,7 @@ shared_arc_only	gorget_shared_new*2
 shared_atomic	gorget_atomic_int_new*1
 shared_atomic_bool	gorget_atomic_bool_new*1
 shared_await_release	gorget_mutex_new*2,gorget_shared_new*2
-shared_callable	__gorget_closure_env_alloc*1
+shared_callable	__gorget_closure_env_alloc*1,gorget_shared_new*2	gorget_shared_new=t1210
 shared_early_return	gorget_mutex_new*2,gorget_shared_new*2
 shared_float	gorget_mutex_new*2,gorget_shared_new*2
 shared_int_spawn_control	gorget_mutex_new*2,gorget_shared_new*2
@@ -684,6 +743,7 @@ snag49a_throws_for_iter	gorget_array_push*1
 snag54_result_out_fallthrough	str_alloc_copy*1
 snag55_dict_get_or_in_callee	str_alloc_copy*1
 spawn_blocking_multi	str_alloc_copy*3+
+spawn_unchecked_bypasses_check	str_alloc_copy*1	str_alloc_copy=t1210
 sqlite_basic	str_alloc_copy*2
 stdlib_io_file_writer	str_alloc_copy*1
 stdlib_io_stdout_typed	str_alloc_copy*2
@@ -715,6 +775,29 @@ stress_spawn_fan_out	gorget_atomic_int_new*1
 stress_taskgroup_fan	gorget_atomic_int_new*1
 string_closures_transform	__gorget_closure_env_alloc*5,gorget_str_cat*2,gorget_string_format*4,str_alloc_copy*4
 string_conversions	gorget_parse_float*1,gorget_parse_int*1,str_alloc_copy*6
+# ⚖ ADMITTED (R49 Track L fold, 2026-09-04; covered by NEITHER new-inflow clause
+# and needing no owner ask — see below). Owned by `todo/t1290`.
+# MECHANISM: `String ch = input[i]` — a String INDEX read binding an owned local
+# — materialises through `gorget_string_clone_to_owned` into a value nothing
+# registers for drop, so `tokenize` leaks one small allocation per loop trip:
+# 12 byte(s) in 6 object(s), frames `str_alloc_copy <- gorget_string_clone_to_owned
+# <- tokenize <- main`. Identical on C and on `--backend=llvm` (measured by hand;
+# this sweep is C-only, `todo/t0731`).
+# ⛔ WHY NO OWNER ASK: it is NOT new inflow, and that was MEASURED, not argued. A
+# compiler built from R49 Track L's base commit `8bd978079` leaks the IDENTICAL
+# 12 B in 6 allocations, and the fixture (unchanged in-tree since 2026-04-07)
+# contains no closure, no capture and no `Callable` — so the capture-ownership
+# change that produced the eight rows above cannot reach it. The header's
+# reserve-to-OWNER-ASK clause covers genuinely NEW inflow; this is a pre-existing
+# leak that a full sweep surfaced, which is what this file is for.
+# ⚠ THE CAUSE IS NOT NAMED HERE ON PURPOSE. `todo/t1290` records a hypothesis
+# about the `s[i]` View-tagging surface and marks it EXPLICITLY UNPROVEN: the
+# base-vs-base measurement rules Track L OUT, it does not rule anything IN.
+# Bisect between the last green full sweep and HEAD before naming a write site.
+# ⭐ AND THIS ROW IS A DEADLINE, NOT A PARDON: it cites `t1290` in column 3, so
+# the retiring direction added in `scripts/sanitize_sweep.sh` turns FATAL the
+# moment the leak stops — the row forces its own removal.
+string_enum_variants	str_alloc_copy*1	str_alloc_copy=t1290
 string_higher_order	__gorget_closure_env_alloc*15,gorget_str_cat*1,gorget_string_format*1,str_alloc_copy*4
 string_parsing_patterns	str_alloc_copy*2
 string_word_frequency	str_alloc_copy*4

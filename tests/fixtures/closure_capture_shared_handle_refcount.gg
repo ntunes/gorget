@@ -14,9 +14,20 @@
 # prospective break is worth as much as one that pins a fixed bug, but it is a
 # different claim and should not be read as the second.
 #
-# ⚠ SCOPE OMITTED: the ESCAPING variant of this cell (returning the closure) is
-# not reachable — a returned NAMED closure capturing a local is rejected by
-# `E_ClosureEscapesScope` whatever it captures, which is its own filed gap.
+# ⚠ SCOPE OMITTED, AND THE REASON GIVEN HERE WAS FALSE (corrected 2026-09-04).
+# This header used to say the ESCAPING variant of this cell was "not reachable —
+# a returned NAMED closure capturing a local is rejected by
+# `E_ClosureEscapesScope` whatever it captures". It is reachable, and a
+# PRE-EXISTING fixture already sits on it: `tests/fixtures/shared_callable.gg`
+# reaches it through `Shared[Callable[int()]]((): counter.get() + 1)`, which
+# builds green — the escape diagnostic keys on the SPELLING (a local AND named
+# closure), not on escape, which is `todo/t1068`.
+# ⇒ THE ESCAPING CELL IS GENUINELY UNCOVERED HERE, not covered-by-impossibility,
+# and it is the cell that regressed: `shared_callable` went from 16 B/1 to
+# 56 B/3 under `--sanitize` when the capture site began materialising, because
+# the `Shared` box now moves into an env field nothing drops (`todo/t1210`).
+# A typed axis whose "impossible" value has a live fixture sitting on it is a
+# hole in the net, not an omission (Core #12).
 #
 # INTENDED: prints `7`, `9`, `7`, rc 0, both backends, no double-decrement.
 
