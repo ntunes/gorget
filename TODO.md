@@ -196,6 +196,16 @@ owes a note + a filed subset gap.
   downstream as meaning.** The conclusion (not the fix, not an owner ask) survives on its other grounds, but
   **the "ratified against" framing was over-reach.** ⇒ **before citing a ledger entry as settling a question,
   check that its SUBJECT is the same question — not merely the same vocabulary.**
+- ⛔⛔ **A DELIBERATE BREAK THAT FAILS TO COMPILE MEASURES THE PREVIOUS COMPILER — and it nearly recorded a
+  FALSE "the guard does not fail on revert" this round.** A reviewer's `if false {` left a variable unused,
+  `cargo build` **failed under `-D warnings`**, and the STALE binary still rejected. ⇒ **write
+  `if false && <cond> {`, and CHECK THE BUILD'S rc BEFORE BELIEVING THE MEASUREMENT.** This is the sharpest
+  corollary yet of Core #5's binary-must-match-the-commit rider: **a break is only a break if it BUILT.**
+- ⭐ **THE SELF-HOST BEAT RUST GG 9-of-10 vs 1-of-10 ON THE `Box` PRIMITIVE AXIS — a MEASURED instance of the
+  succession plan's "reference lags the self-host".** The SH's `box_alloc_c_type` is total with a structural
+  fallback where Rust's mint has a wrong-answer `unwrap_or("int64_t")` default. ⇒ **when a Rust-lane defect
+  looks like a design gap, PROBE THE SH FIRST — it may already hold the reference-grade shape, and then the
+  fix is a PORT rather than a design.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
