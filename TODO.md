@@ -369,6 +369,23 @@ owes a note + a filed subset gap.
   is rc 139 SIGSEGV — it was green only because it never read the box it built.** ⇒ **the refusal converts a
   SEGV into a cited compile-time error, which is the direction the item asks for.** ⚡ **Before calling a new
   reject a regression, ADD A READ — a program that never observes the value it builds proves nothing.**
+- ⛔⛔⛔ **A DETECTOR RED-VERIFIED AGAINST A BREAK BUILT IN ITS OWN IMAGE IS NOT VERIFIED AT ALL.** R49's
+  same-base overlap scanner was reported as *"RED-verified twice"*. Measured: **its own synthetic positive
+  control returns ZERO findings** — that memcpy sits on opaque function params, so there is no same-base pair
+  in it at all — **and the only thing that reds it is a hand-broken IR constructed to match the detector's
+  own rule.** ⇒ **"1816 programs / 109,969 sites / 0 findings" supported nothing**, and the same scanner
+  **returns 0 on the exact rc-99 IR that reproduces the defect it was adjudicating.**
+  ⚡ **CORE #13, SHARPENED: a positive control must come from the DEFECT, not from the RULE. RED-verify
+  against a REAL reproducing artifact — and if none exists, that absence is the finding.**
+- ⛔⛔ **"BOTH BACKENDS AGREE" HID A LIVE OOB WRITE IN A GREEN, NON-`#[ignore]`d, TOP-LEVEL FIXTURE.**
+  `combinator_callable_param_same_type` is **rc 99 `memcpy-param-overlap` under LLVM+ASan**, rc 0 with
+  correct output under plain LLVM (**benign by luck**), and **clean on the C lane — which is why nobody saw
+  it.** ⛔ **And `tests/integration.rs:62694` ASSERTS that fixture "is ASan-clean": true on C, FALSE on LLVM.**
+  ⇒ **an ASan assertion that names no LANE is a Core #8 hazard: it reads as universal and is measured on one.**
+- ⚠ **A FILED ITEM'S PRESCRIBED FIX CAN BE A TRAP.** `t0729` prescribes `llvm.memmove` — which would have
+  **SILENCED ASan WHILE PRESERVING THE 8-BYTE OVERRUN**, converting a detectable defect into an invisible
+  one. ⇒ **read an item's `fix` field as a hypothesis, never as a plan; the mechanism here was a MIS-TYPED
+  SLOT, so `memmove` addresses the symptom's detector rather than the cause.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
@@ -607,6 +624,13 @@ you have just discovered you own. Both of my "admit" recommendations were the de
 the fixtures were the load-bearing artifact and I proposed bending the ceiling around them.**
 ⊕ **`t1085` RETURNED TO THE POOL 2026-09-04** — M2 filed `t1081`–`t1084` and left it unused. Free for
 re-issue, like `t1053` and `t1056`–`t1063`.
+⛔ **`t0729` MUST NOT BE CLOSED — RE-SCOPED, NOT GRADUATED.** Its FIXTURE graduates (it pins a real fix:
+the inner `None()` temp was mistyped as the outer Option, so the copy length was 24 into a 16-byte field);
+**its CLASS is live at HEAD.** ⭐ **The arch question is CLOSED by direct x86_64 measurement — filing-era
+dst/src/len `224`/`240`/24 overlaps, HEAD `232`/`248`/**16** is disjoint, and the length is a CONSTANT
+OPERAND in the emitted IR, which no frame layout on any target can change.** ⚠ **Two agents with two
+separately-built detectors reached this independently.**
+
 ⛔⛔⭐ **TRACK U OPENED 2026-09-04 — ID BLOCK `t1187`–`t1196`. THE ROUND'S LARGEST FINDING, AND IT CAME OUT
 OF A HALTED EXECUTOR RUNNING ONE MEASUREMENT.** **33 LIVE OUT-OF-BOUNDS STACK WRITES AT HEAD**, 18 files,
 5 shapes, sizes confirmed against the compiler's own `memset`. **One mechanism: the copy LENGTH comes from
