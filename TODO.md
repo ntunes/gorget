@@ -167,6 +167,17 @@ is not enough if the brief that the executor reads is stale.**
 |---|---|---|---|---|---|
 | **`t1066`–`t1075`** | **`t1076`–`t1080`** | **`t1081`–`t1085`** | **`t1086`–`t1095`** | **`t1106`–`t1115`** | **`t1096`–`t1105`** |
 
+⭐ **TRACK A2 OPENED 2026-09-04 — ID BLOCK `t1116`–`t1125`, WRITTEN HERE IN THE SAME ACTION THAT LAUNCHED
+ITS SCOUT.** ⚠ **A2 WAS NEVER A FORMAL TRACK — it was a SCOPE LABEL from Track A's scout split, and the
+owner caught the orchestrator calling it "a named owner" for the four surviving sidecars.** It is a track
+now. **Subject: `Callable` TYPE ERASURE — the root the other conventions grow out of.**
+`calls.rs:1897`'s `if local_type_id == UNIT_TYPE` is **identity by SENTINEL** — in the class by the repo's
+OWN wording (Layering rule 2 forbids *"name prefixes, SENTINEL VALUES, or runtime-symbol conventions"* in a
+single breath) — and **INVISIBLE TO EVERY REGEX RATCHET, because there is no string to match.**
+⇒ **the synthetic `__callable_N` name exists BECAUSE of that erasure, and it is a MAP KEY into four sidecar
+tables. Fix the erasure and convention 2's arm becomes UNREACHABLE** — that is why this is a root fix and
+not a fifth de-duplication.
+
 ⛔⛔ **I ALMOST REPEATED THE COLLISION, TWO SCREENS BELOW ITS OWN LESSON — and the near-miss is worth more
 than the lesson was.** I wrote this table giving **P** `t1096`–`t1105`, **which Q's brief had ALREADY been
 issued** and is in an agent's hands right now. ⚡ **THE LEDGER IS NOT THE ALLOCATOR — THE BRIEF IS.** An id
@@ -191,7 +202,7 @@ reject** under D27 (`E_MoveWithoutOperator`), so `tests/integration.rs:60651-606
 
 ⊕ **`t1053` RETURNED TO THE POOL** — A1-I refused to file it because `todo/t0774` already owned the subject,
 **following GREP-BEFORE-YOU-FILE over my instruction.** It is free.
-⚡ **FIRST UNISSUED ID IS NOW `t1116`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
+⚡ **FIRST UNISSUED ID IS NOW `t1126`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
