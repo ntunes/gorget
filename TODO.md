@@ -176,6 +176,14 @@ is not enough if the brief that the executor reads is stale.**
 |---|---|---|---|---|---|
 | **`t1066`–`t1075`** | **`t1076`–`t1080`** | **`t1081`–`t1085`** | **`t1086`–`t1095`** | **`t1106`–`t1115`** | **`t1096`–`t1105`** |
 
+⭐ **TRACK F-G SCOUT LAUNCHED 2026-09-04 — ID BLOCK `t1126`–`t1135`, WRITTEN HERE IN THE SAME ACTION.**
+**D46 (`==` without `Equatable`) — RATIFIED 2026-08-27 AND UNIMPLEMENTED.** ⚠ **`t0013`'s own headline is
+STALE:** D46's measured table says the current answer is **address identity, NONDETERMINISTIC ACROSS LANES**,
+not *"silently answers false"* — **severity is silent-wrong-output, and the scout re-measures it.**
+⇒ **G IS NOW ELIGIBLE — ITS DISCHARGE IS VERIFIED, NOT JUDGED.** F shipped the RED witness:
+`tests/fixtures/robustness_map/cells/hof_for_each_strings_noimport_namedfn.gg` is present and BUILD-FAIL in
+`MANIFEST.tsv:232`, whose note names it *"the import half's only possible witness once that lands"*.
+
 ⭐ **TRACK A2 OPENED 2026-09-04 — ID BLOCK `t1116`–`t1125`, WRITTEN HERE IN THE SAME ACTION THAT LAUNCHED
 ITS SCOUT.** ⚠ **A2 WAS NEVER A FORMAL TRACK — it was a SCOPE LABEL from Track A's scout split, and the
 owner caught the orchestrator calling it "a named owner" for the four surviving sidecars.** It is a track
@@ -211,7 +219,7 @@ reject** under D27 (`E_MoveWithoutOperator`), so `tests/integration.rs:60651-606
 
 ⊕ **`t1053` RETURNED TO THE POOL** — A1-I refused to file it because `todo/t0774` already owned the subject,
 **following GREP-BEFORE-YOU-FILE over my instruction.** It is free.
-⚡ **FIRST UNISSUED ID IS NOW `t1126`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
+⚡ **FIRST UNISSUED ID IS NOW `t1136`** (`t1065` filed; `t1053` and `t1056`–`t1063` free for re-issue).
 ⚠ **The issued ids are NOT yet on disk** — their tracks are still executing, so `ls todo/` cannot tell you
 what is taken. **This table is the only record. A `ls`-based "next free id" WOULD RE-ISSUE `t1048`, which is
 exactly the collision MA-3b exists to prevent.**
