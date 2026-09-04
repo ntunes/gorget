@@ -238,6 +238,21 @@ owes a note + a filed subset gap.
   order: lowering the callee-holding function first overwrites `fn_sigs` with `UNIT_TYPE`, so a later direct
   call reads `call_void`. ⇒ **an executor reading the two-variable cell's leading `42` would have MIS-READ IT
   AS A FIX.** ⭐ **When a finding is "X matters", build the cell that holds everything but X.**
+- ⭐ **THE ZONE QUESTION THAT ACTUALLY MATTERS IS NOT "WHICH FILE" BUT "WHICH CONTENT" — AND A "SAFE" THIN
+  WRAPPER CAN SILENTLY VOID A TRACK'S WHOLE POINT.** A2-α's executor asked to change `lower_call_arg`'s
+  signature and offered a back-compat wrapper so no foreign call site moved. **Correct instinct for zone
+  hygiene, and EXACTLY the shape pass 4 warned makes the track retire nothing** — if the track's own sites
+  reach the function through the wrapper, they must still MINT A NAME to satisfy it.
+  ⇒ ⭐ **THE RULING THAT GENERALISES: a compatibility wrapper is fine for callers whose CONTRACT IS GENUINELY
+  THE OLD ONE, and forbidden for the callers the track exists to convert. Give it a MECHANICAL discriminator,
+  not a judgement call** — here, `grep -rn 'format!("__callable_\|format!("__gorget_closure_call_' src/ | wc -l`
+  must go **4 → 0**; if it does not, a name is still being minted to satisfy a signature.
+- ⭐ **TWO TRACKS EDITING ONE FILE IS FINE WHEN THE HUNKS ARE DISJOINT BY *CONTENT*; git merges on content,
+  not line number.** A2-α (`validate.rs:420`/`:428`) and Track L (`:1948`/`:2613`/`:2867`) both edit
+  `validate.rs` concurrently and will merge cleanly despite each shifting the other's line numbers.
+  ⇒ **do NOT reassign a small surgical edit to another executor to avoid a "conflict"** — handing scope to a
+  track already mid-flight is strictly worse, **and a retraction separated from the measurement that produced
+  it is worthless: the next reader re-derives the false claim.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
