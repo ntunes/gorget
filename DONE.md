@@ -1,3 +1,64 @@
+- [2026-09-04] **`t0704` + `t0771` CLOSED, `t0703` CLOSED AS ALREADY-FIXED (R49 Track L) — THE CLOSURE
+  CAPTURE WAS THE ONE CONSUMING POSITION WITH ITS OWN PRIVATE OWNERSHIP RULE, and the guard that would
+  have caught it had been blinded by a burn-down.**
+  **THE DEFECT.** `lower_closure` built the creation-site `StructInit` by hand: it ran
+  `ensure_owned_at_boundary` (which materializes BORROWS) and stopped. `lower_struct_init` runs THREE
+  passes for a user struct — `ensure_owned_at_boundary` → `clone_multi_use_resource_args` →
+  `move_zero_consumed_args` — and it is the second that implements the other half of the ratified table:
+  *clone when the source is still live*. So an OWNED capture that stayed live past the capture was
+  bit-copied into the environment as an alias, and the next realloc, rebind or scope exit of the source
+  freed the buffer the environment was still holding. Two arms of ONE rule, not two bugs.
+  **THE FIX (Layering rule 3 / Core #4).** The closure-env `StructInit` now routes through the SAME three
+  passes, so there is one implementation of the consuming-position table instead of two. That supplies
+  the ownership TRANSFER for free: `move_zero_consumed_args` calls `move_zero_and_mark`, which keeps the
+  drop entry and zeroes the slot so `drop_elab` deletes the drop only on the paths where the move
+  happened — the hand-rolled arm used `drops.unregister`, which is not CFG-aware and is the operation
+  that function's own doc warns manufactures the return-borrow double-free class. Two companions: the
+  env `TypeDef` now takes its `drop_strategy`/`copy_semantics` from
+  `compute_drop_strategy_for_struct` like every other aggregate (without it the env owns a value while
+  declaring it owns nothing, and the field leaks); and `CaptureInfo` carries the capture's OCCURRENCE
+  span, because `is_last_use_at` answers a conservative `false` for the enclosing closure span and could
+  never tell a dead source from a live one.
+  **THE GUARD WAS ALREADY THERE.** `is_closure_env` was read at three places in `src/ir/validate.rs` and
+  all three were `continue`s that SKIPPED validation. `git log -S is_closure_env -- src/ir/types.rs`
+  returns ONE commit — a Tier 2a burn-down that minted the flag to zero the violations it was itself
+  producing, on a stated-but-unguarded invariant. Core #14 exactly. All three carve-outs are gone, and
+  the unit test that PINNED the exemption (`tier1c_coherence_closure_env_skipped`) is inverted, with a
+  companion cell so it cannot be satisfied by flagging every env. Deliberately reverting the env metadata
+  by line now fails the build on all ELEVEN capture cells with `[type-metadata-coherence]`.
+  **CELLS RED→GREEN**, all RED-verified against the pre-fix compiler this session: captured collection ·
+  realloc outside the body / inside the body / from a sibling argument of the same aggregate init ·
+  captured scalar `String` rebound under a live capture · the closure-escape 2×2 (param/local ×
+  literal/named), of which three cells ran with a captured borrow and the fourth was the only one the
+  escape diagnostic ever inspected. `heap-use-after-free` in every one at HEAD; none after, on C and
+  LLVM, with `ggdef run` agreeing on every value.
+  ⚠⚠ **SEVERITY-CLASS CHANGE, DISCLOSED: FIVE OF THOSE CELLS CONVERT UAF → LEAK, AND THE SANITIZE SWEEP
+  IS RED UNTIL `t0953` CLOSES.** `known_gaps/` is OUT of the swept corpus and top-level is IN, so
+  graduating four fixtures and adding seven puts five leaking cells into `scripts/sanitize_sweep.sh` for
+  the first time with zero allowlist rows: 80 B/2 · 12 B/2 · 8 B/2 · 6 B/1 · 4 B/1. **At the base commit
+  the sweep's own classifier reports `heap-use-after-free` on all five, not a leak** — the residue is what
+  is LEFT once the use-after-free is gone, and it is `t0953`'s mechanism
+  (`__gorget_closure_env_alloc` is 72 of that 80 B: `gorget_closure_free` reclaims the 16-byte block and
+  never the heap env's fields). On the owner's severity ranking that trade is the right direction, but it
+  is a CHANGE OF CLASS and stating it is not optional — the allowlist header's own SIX Q#6 warning is
+  verbatim this shape (*"read CLEAN only because it crashed first"*). **No rows were admitted**: the owner
+  ruled this round *"fix the leaks"*, and the residue is being closed rather than allowlisted, so the
+  sweep stays red between this landing and `t0953`.
+  **THE COST IS THE HAND-WRITTEN COUNT.** `closure_capture_capture_cost_axis` pins both directions with
+  `assert_eq!`: a dead source materializes NOTHING, a live one materializes exactly ONCE. Reverting the
+  occurrence span alone measures `string_clone = 1` in the dead cell — RED — while stdout is unchanged,
+  which is why the guard is a clone meter and not an output assertion.
+  **`t0703` was fixed on 2026-08-29 by `e7967d570`**, which created `resolve_collection_identity`, moved
+  both repros out of `known_gaps/` and edited the item without closing it. Both are live and green on C
+  and LLVM. **STILL OPEN, FILED NOT FIXED:** `t1067` (a captured single-owner handle — `Callable`/`FnPtr`,
+  `Mutex`, `RWLock`, the cells with no spellable answer, gated on D7; the `Mutex` member is
+  pre-existing, base-identical and was unfiled until this round) · `t1068` (`E_ClosureEscapesScope`
+  over-rejects the fourth escape cell, and its stated premise is now false) · `t1069` (self-host:
+  `Callable.clone()`'s result gets no env-field drop) · `t1070` (an f-string interpolation carries no
+  span, so that capture cell pays a conservative clone) · `t1071` (the spawn wrapper, the second
+  closure-env `StructInit` producer, still ASSERTS the ownership its sibling now derives). `t0877`
+  sharpened with two more body-shape arms; `t0729` recorded as no longer reproducing at base, which is a
+  RED gate there and not this round's doing.
 - [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
   STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,
   garbage or empty stdout on BOTH backends. Two producer sites now stamp the View tag; 12 cells RED→GREEN.**

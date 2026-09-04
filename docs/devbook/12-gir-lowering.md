@@ -358,63 +358,98 @@ an `Expr::Closure` into three things (`closures.rs:1-6`):
 ### Capture analysis
 
 Free variables are found by `collect_free_vars`
-(`closures.rs:604`): a `FreeVarCollector` walks the body, and any
+(`closures.rs:692`): a `FreeVarCollector` walks the body, and any
 identifier that is neither a closure param nor a body-local, but *does*
-resolve to a local in the enclosing scope, is a capture
-(`closures.rs:631-640`). Each capture's mode is decided by
-`detect_mutations` (`closures.rs:781`): a captured variable that the
-closure body *mutates* is captured `ByMutRef`; otherwise `ByValue`
-(`closures.rs:101-118`). A `move`-closure forces everything `ByValue`
-(`closures.rs:102-104`).
+resolve to a local in the enclosing scope, is a capture. Each capture's
+mode is decided by `detect_mutations` (`closures.rs:877`): a captured
+variable that the closure body *mutates* is captured `ByMutRef`;
+otherwise `ByValue`. A `move`-closure forces everything `ByValue`.
+
+The collector walks `Spanned<Expr>`, not bare `Expr`, so a `CaptureInfo`
+(`closures.rs:31`) records the **span of the capture's first occurrence
+inside the body** alongside its name, type and local. That span is what
+makes the ownership decision below answerable: `is_last_use_at` is keyed
+on a position, and it answers a conservative `false` for any *enclosing*
+span — so the whole-closure span can never distinguish a source that is
+dead after the capture from one that is still live. Both would read as
+"still live", and every capture would clone.
+
+One capture shape has no occurrence span to record: an identifier whose
+only mention is inside an f-string interpolation. `StringSegment::Interpolation`
+carries no span, and the collector recovers the name by splitting the
+interpolation text, so that capture falls back to the enclosing literal's
+span and takes the conservative answer.
 
 The env struct's field types follow from the mode (`closures.rs:124-138`):
 `ByValue` captures get the (CoW-resolved, `Ptr(T)` → `T`) value type;
 `ByMutRef` captures get a `MutPtr(T)` field so the closure can write
 through to the outer variable.
 
-### Capture-by-value is a clone (or a move), never a shallow alias
+### The creation site is an ordinary consuming position
 
-At the creation site (`closures.rs:280-335`), each `ByValue` field
-operand is produced carefully, because a closure outlives the stack frame
-it was created in:
+A closure environment owns its by-value captures exactly as a user struct
+owns its fields, so the creation-site `StructInit` runs the *same* three
+passes `lower_struct_init` runs, in the same order (`closures.rs:338-380`):
 
-- If the capture is a CoW `Ptr(T)` alias at its **last use**, the source
-  is moved into the struct (auto-deref + `move_zero_and_mark`,
-  `closures.rs:288-297`).
-- If it's an owned by-value resource at **last use**, the `MoveZero` is
-  *deferred* to after the `StructInit` reads it (so the field init can
-  still read the source), then the source slot is zeroed
-  (`closures.rs:307-315`, `338-343`). Without this, the source's
-  scope-exit drop would free a buffer the closure env still owns — a
-  heap-UAF on closure invocation (`closures.rs:274-278`).
-- Otherwise, `ensure_owned_at_boundary` inserts a deep **clone**
-  (`closures.rs:319-324`, `ImplicitCloneReason::ClosureCapture`).
+1. **`ensure_owned_at_boundary`** materializes borrows — CoW `Ptr(T)`
+   aliases, ref-state locals, untracked resources. It is skipped for
+   `ByMutRef` captures, whose field *is* a `MutPtr`: the pointer operand is
+   exactly what must be stored, and cloning it would deep-copy the pointee
+   and store the address of a temporary.
+2. **`clone_multi_use_resource_args`** applies the other half of the
+   consuming-position table: clone a source that is still live past the
+   capture; leave one that is dead alone. It reads the capture's occurrence
+   span through a synthesized `Expr::Identifier` argument, and it is what
+   makes a bare borrow param clone regardless of liveness — the caller keeps
+   ownership, so moving out of it would hand the caller's own buffer across
+   the boundary.
+3. **`move_zero_consumed_args`** performs the transfer, *after* the init has
+   read its operands: every resource source the environment now owns is
+   `move_zero_and_mark`ed.
 
-This is the consuming-position contract from CLAUDE.md applied to a
-capture boundary: the closure env must *own* its captured resource data,
-so the compiler either moves (when the source is dead) or clones (when
-it's a borrow or stays live). A shallow alias would double-free.
+That third pass is why the transfer is sound rather than merely quiet.
+`move_zero_and_mark` **keeps** the source's drop entry and zeroes the slot,
+so `drop_elab` statically deletes the drop on the paths where the move
+happened and keeps it on the paths where it did not. Deleting the entry
+outright is not CFG-aware — every path loses the drop, which is how a
+transfer manufactures the return-borrow double-free class.
 
-### The env struct is tagged `is_closure_env`
+Routing through the shared sequence, rather than reimplementing the table
+here, is [layering rule 3](24-layering-discipline.md) at a boundary where
+two implementations had drifted: one that clones borrows, and one that
+clones borrows *and* live owned sources. A capture is not a special
+consuming position — it is the fifth one.
+
+### `is_closure_env` is identity, not an ownership claim
 
 The lifted struct's `TypeMetadata` sets `is_closure_env: true`
-(`closures.rs:150`). This is read in two validator carve-outs in
-`src/ir/validate.rs`:
+(`closures.rs:181`) beside `closure_call_fn` and `closure_captures`. The
+flag answers "is this type a closure environment?" and nothing else.
 
-- The **consume-site validator** skips `StructInit` fields whose
-  destination is a closure-env struct, so the deliberate bitwise-copy of
-  a captured value at non-last-use doesn't trip `OwnedLiveSourceConsumed`
-  (the `Instruction::StructInit` arm at `validate.rs:2430-2440`: the
-  `is_closure_env` read at `validate.rs:2438`, `if is_closure { continue; }`
-  at `:2440`).
-- The **type-metadata coherence validator** skips closure-env structs
-  entirely (`validate.rs:1944`): a closure that captures at non-last-use
-  holds *lifetime-tied aliases* it doesn't independently own, so the env
-  struct stays `(DropStrategy::None, CopySemantics::Trivial)` and
-  scope-exit doesn't double-free the captured values (the outer-scope
-  drops handle them). The explanatory comment is at
-  `validate.rs:1935-1943` (it still cites the dead `closure-capture.md`;
-  it means this section).
+The env's `drop_strategy` and `copy_semantics` are **computed from its
+fields** by `TypeRegistry::compute_drop_strategy_for_struct`
+(`closures.rs:172`) — the same helper every other aggregate registration
+uses. An env holding a droppable capture is `(Recursive, Resource)`, so
+`__Closure_N__drop` is synthesized and the field is freed exactly once, by
+the environment that owns it. Asserting `(None, Trivial)` instead would be
+an environment carrying a value while declaring it carries nothing: no drop
+is synthesized, and the capture is either leaked or freed by whoever else
+still aliases the buffer. The Tier 1c coherence validator sees closure envs
+like any other struct and flags that mismatch.
+
+One narrow carve-out remains, in the consume-site validator's `StructInit`
+arm: a capture whose type `lacks_materialization_path` (`types.rs:777`).
+That predicate is derived, never listed — `needs_drop && !is_resource_type
+&& !is_refcount_clone_type` — and it selects the single-owner-by-design
+handles: `Callable[T]`, which lowers to `GirType::FnPtr`, together with
+`Mutex[T]` and `RWLock[T]`, which are `Trivial`-copy with `clone_fn = None`.
+None of the three has a deep clone or an incref, so every materializing pass
+already skips those operands — there is nothing they know how to copy — and
+ownership at such a capture genuinely is undecided. It is carved out rather than flagged because none of the three
+answers can be given: an implicit clone or an implicit move breaches the
+ratified carve-out, and a rejection has no fix-it a user can write until
+per-variable capture lists exist. Flagging it would turn working programs
+into build failures with no way out.
 
 ### The call function
 

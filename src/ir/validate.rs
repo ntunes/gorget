@@ -1936,19 +1936,6 @@ pub fn validate_type_metadata_coherence(
             }
         }
 
-        // Closure-env carve-out: structs tagged `is_closure_env: true`
-        // (`closures.rs:140`) capture outer-scope locals at non-last-use as
-        // lifetime-tied aliases — the closure does NOT independently own
-        // those captured values. Outer-scope drops handle cleanup; the
-        // env struct itself stays `(None, Trivial)` so scope-exit doesn't
-        // double-free. The consume-site validator already skips StructInit
-        // fields for closure-env destinations; the coherence validator
-        // skips them here for the same reason. See
-        // `docs/devbook/12-gir-lowering.md` (closure lowering and capture).
-        if td.metadata.is_closure_env {
-            continue;
-        }
-
         if expected_drop == DropStrategy::Recursive
             && actual_drop == DropStrategy::None
         {
@@ -2601,17 +2588,33 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
         for (i, inst) in bb.instructions.iter().enumerate() {
             match inst {
                 Instruction::StructInit { type_name, fields, .. } => {
-                    // Closure-env structs (`__Closure_N`) use lifetime-tied aliasing
-                    // for captured locals: the closure env is always freed before the
-                    // outer scope, so the outer scope's drops handle cleanup. These
-                    // captures are intentional bitwise aliases — not ownership violations.
-                    // Read `is_closure_env` from TypeDef metadata (set at registration,
-                    // no name matching). See closures.rs and types.rs TypeMetadata.
-                    let is_closure = registry.get_type_def(type_name)
+                    // A closure env owns its by-value captures exactly as any
+                    // other aggregate owns its fields, so closure-env
+                    // destinations are validated like the rest.
+                    //
+                    // ONE cell stays carved out: a capture whose type has no
+                    // materialisation path (`lacks_materialization_path`).
+                    // Measured over the fixture corpus, that predicate admits
+                    // `FnPtr` (`Callable[T]`) ∪ `Mutex__*` ∪ `RWLock__*` — the
+                    // single-owner-by-design handles, which are `Trivial`-copy
+                    // with `clone_fn = None`, so they have neither a deep clone
+                    // nor an incref. Ownership there genuinely IS undecided,
+                    // and none of the three answers can ship: an implicit clone
+                    // or an implicit move breaches the ratified carve-out under
+                    // D31 full-strict, and a rejection has no spellable fix-it
+                    // until D7's per-variable capture list exists. Flagging it
+                    // would turn programs that run correctly today into build
+                    // failures with no way out. Tracked as `todo/t1067`, gated
+                    // on D7, with a repro per member —
+                    // `known_gaps/closure_capture_{callable,mutex}_block_scope_uaf.gg`
+                    // pin the live defects the cell still hides.
+                    let env_carve_out = registry.get_type_def(type_name)
                         .map(|td| td.metadata.is_closure_env)
                         .unwrap_or(false);
-                    if is_closure { continue; }
                     for (idx, op) in fields.iter().enumerate() {
+                        if env_carve_out && operand_lacks_materialization_path(func, registry, op) {
+                            continue;
+                        }
                         let class = ConsumeSiteClass::StructInit {
                             type_name: type_name.clone(),
                             arg_index: idx,
@@ -2862,11 +2865,6 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                             if td.metadata.copy_semantics == CopySemantics::Trivial {
                                 continue;
                             }
-                            // Closure-env slots use lifetime-tied aliasing
-                            // (see StructInit case above for rationale).
-                            if td.metadata.is_closure_env {
-                                continue;
-                            }
                         }
                     }
                     let dst_type = registry.type_name(dst_local.type_id)
@@ -2990,6 +2988,23 @@ fn validate_assign_consume(
         source_type_name,
         violation,
     })
+}
+
+/// Is this operand a whole-local read of a value the lowering cannot
+/// materialise? See `TypeRegistry::lacks_materialization_path`.
+fn operand_lacks_materialization_path(
+    func: &Function,
+    registry: &TypeRegistry,
+    operand: &Operand,
+) -> bool {
+    let place = match operand {
+        Operand::Copy(p) | Operand::Move(p) => p,
+        Operand::Constant(_) => return false,
+    };
+    if !place.projections.is_empty() { return false; }
+    func.locals.get(place.local.0 as usize)
+        .map(|l| registry.lacks_materialization_path(l.type_id))
+        .unwrap_or(false)
 }
 
 /// The unified consume-site rule. Returns `Some(warning)` when the
@@ -3925,12 +3940,9 @@ mod tests {
         );
     }
 
-    /// Tier 1c: closure-env struct carve-out — a struct tagged
-    /// `is_closure_env: true` with resource fields is NOT flagged, even
-    /// when the helpers would compute `(Recursive, Resource)`. The closure
-    /// captures are lifetime-tied aliases; outer-scope drops handle cleanup.
-    #[test]
-    fn tier1c_coherence_closure_env_skipped() {
+    /// Build a module holding one droppable type and one closure-env struct
+    /// with a field of that type, registered with the given metadata.
+    fn closure_env_module(drop: DropStrategy, copy: CopySemantics) -> Module {
         let mut module = Module::new();
         module.type_registry.add_type_def(TypeDef {
             name: "OwnedBuf".into(),
@@ -3949,13 +3961,49 @@ mod tests {
             }),
             metadata: TypeMetadata {
                 is_closure_env: true,
+                drop_strategy: drop,
+                copy_semantics: copy,
                 ..Default::default()
             },
         });
+        module
+    }
+
+    /// Tier 1c: `is_closure_env` buys NO exemption from coherence.
+    ///
+    /// This test used to assert the opposite — that a closure env holding a
+    /// droppable capture was deliberately left at `(None, Trivial)` and must
+    /// not be flagged. That exemption WAS the defect: it let an env carry a
+    /// value it genuinely owned while declaring it owned nothing, so no
+    /// `__Closure_N__drop` was synthesised and the capture was either leaked or
+    /// freed by whoever else still aliased the buffer. A closure env is an
+    /// ordinary aggregate; an incoherent one is flagged like any other.
+    #[test]
+    fn tier1c_coherence_closure_env_not_exempt() {
+        let module = closure_env_module(DropStrategy::None, CopySemantics::Trivial);
+        let warnings = validate_type_metadata_coherence(&module);
+        assert!(
+            warnings.iter().any(|w| w.type_name == "Closure_env_42"
+                && w.expected_drop == DropStrategy::Recursive
+                && w.expected_copy == CopySemantics::Resource
+                && w.kind == TypeMetadataCoherenceKind::Struct),
+            "an env declaring (None, Trivial) over a droppable capture must be \
+             flagged. Warnings: {:?}", warnings
+        );
+    }
+
+    /// The companion cell: an env registered the way `lower_closure` registers
+    /// one — metadata COMPUTED from the fields by
+    /// `compute_drop_strategy_for_struct` — is coherent and stays silent.
+    /// Without this the guard above would be satisfied by a validator that
+    /// flagged every closure env unconditionally.
+    #[test]
+    fn tier1c_coherence_closure_env_computed_metadata_is_clean() {
+        let module = closure_env_module(DropStrategy::Recursive, CopySemantics::Resource);
         let warnings = validate_type_metadata_coherence(&module);
         assert!(
             warnings.iter().all(|w| w.type_name != "Closure_env_42"),
-            "closure-env struct should NOT be flagged. Warnings: {:?}", warnings
+            "a coherent closure env must not be flagged. Warnings: {:?}", warnings
         );
     }
 

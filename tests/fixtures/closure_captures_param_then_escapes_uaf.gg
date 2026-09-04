@@ -1,0 +1,41 @@
+# CLOSURE-ESCAPE CAPTURE AXIS, cell (param × literal). See
+# `closure_escape_capture_axis_param_named.gg` for the full 2×2.
+#
+# `make_adder` takes `String p`, builds a closure capturing it, and RETURNS the
+# closure. `p` is a parameter, so it binds a BORROW — the caller keeps
+# ownership — and the environment outlives `make_adder`'s frame by construction.
+# The capture is an ownership boundary, so a live borrow clones: the escaping
+# environment holds its own `String`, and `make_adder`'s scope exit frees only
+# the caller's value.
+#
+# Without the rule the environment stored the borrowed handle:
+#
+#     freed by:   gorget_string_free  ← make_adder  ← main
+#     read by:    gorget_str_cat      ← mk          ← __Closure_0__call
+#
+# ⚠ NEITHER MUTATION NOR A COLLECTION IS NEEDED. The sibling cells trigger
+# through a realloc of a captured collection; this one needs only the closure
+# outliving its frame via `return`. The deallocation is the defining function's
+# own scope exit.
+#
+# ⚠ AND THE CAPTURE NEED NOT BE A PARAMETER — that claim was false. A captured
+# LOCAL escapes identically (`closure_escape_capture_axis_local_literal.gg`);
+# what used to save the local case was the SPELLING, since
+# `check_expr_for_escaping_closures` never inspects a returned closure literal.
+# The control that IS meaningful is `Callable[String()] make(): return ():
+# mk("hel","lo")` — same escape, no capture — which was always clean.
+#
+# ⚠ A plain build was rc 0 with SILENTLY WRONG OUTPUT, which is worse than the
+# crash the collection cells give; `--sanitize` reports
+# `AddressSanitizer: heap-use-after-free`.
+#
+# Prints `hello`, rc 0, both backends, ASan-clean.
+String mk(String a, String b):
+    return a + b
+
+Callable[String()] make_adder(String p):
+    return (): mk(p, "lo")
+
+void main():
+    Callable[String()] g = make_adder("hel")
+    print(g())

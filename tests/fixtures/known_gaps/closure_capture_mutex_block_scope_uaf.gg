@@ -1,0 +1,45 @@
+# KNOWN GAP (`todo/t1067`, the `Mutex`/`RWLock` member) — the SAME capture cell
+# as `closure_capture_callable_block_scope_uaf.gg`, with the captured handle a
+# `Mutex[int]` instead of a `Callable`. rc 0 printing a garbage integer;
+# `AddressSanitizer: heap-use-after-free` in `gorget_mutex_lock` under
+# `--sanitize`.
+#
+# WHY THIS CELL EXISTS SEPARATELY. The consuming-position carve-out that lets
+# both programs build is `TypeRegistry::lacks_materialization_path` —
+# `needs_drop && !is_resource_type && !is_refcount_clone_type`. That predicate is
+# derived, and what it admits is WIDER than the `Callable` cell alone: `Mutex[T]`
+# and `RWLock[T]` are `copy_semantics: Trivial` with `clone_fn = None`
+# (single-owner by design, no incref and no deep clone), so they satisfy every
+# clause too. An item that named only `Callable` would be presenting a SELECTION
+# as a total enumeration; this fixture is the second member, and `RWLock[T]` is
+# the third, sharing this one's shape and mechanism exactly.
+#
+# ⚠ PRE-EXISTING AND UNCHANGED. Measured at the base commit and after the
+# capture-ownership fix: identical garbage value, identical
+# `heap-use-after-free` in `gorget_mutex_lock`. The carve-out preserves the
+# behaviour rather than creating it — before the fix the whole closure-env
+# `StructInit` was skipped by the validator, so this program built for a
+# different reason and ran the same way.
+#
+# ⚠ THE GATE IS D7, NOT THE CAPTURE RULE — same as the `Callable` cell. Clone
+# breaches the ratified single-owner carve-out, move breaches it and silently
+# consumes under D31 full-strict, and a rejection has no fix-it a user can
+# spell until D7's per-variable capture list exists.
+#
+# ⚠ ggdef CANNOT ADJUDICATE THIS ONE: `Mutex` is outside the phase-0 subset
+# (`unresolved callee `Mutex``), so the truth axis here is C + ASan, and the
+# expected value is read off the program's own meaning rather than the oracle's.
+# Its `Callable` sibling IS ggdef-adjudicated and prints `41` there.
+#
+# INTENDED (asserted by the `#[ignore]`d
+# `known_gap_closure_capture_mutex_block_scope_uaf`): prints `41`, rc 0,
+# ASan-clean.
+
+void main():
+    Callable[int()] outer = (): 0
+    int n = 1
+    while n > 0:
+        Mutex[int] m = Mutex[int](41)
+        outer = (): m.lock().get()
+        n = n - 1
+    print(outer())

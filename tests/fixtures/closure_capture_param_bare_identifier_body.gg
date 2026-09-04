@@ -1,0 +1,28 @@
+# CAPTURE OWNERSHIP, the BARE-IDENTIFIER-BODY cell: the closure body is nothing
+# but the captured name, so the capture is the source's LAST USE by the
+# occurrence-span reading — the shape where the move arm and the clone arm
+# disagree most sharply.
+#
+# The capture root is a PARAMETER, which binds a BORROW, so the answer is a
+# clone and not a move however dead the local looks: the caller keeps ownership,
+# and moving out of a bare borrow param hands the caller's own buffer across the
+# boundary. `clone_multi_use_resource_args`'s `is_borrow_param` clause is what
+# decides that, ahead of the last-use question.
+#
+# ⚠ THIS SHAPE DID NOT BUILD AT ALL before the capture site routed through the
+# shared consuming-position sequence: it failed the Tier 2a consume-site
+# validator with `AssignIntoOwnedSlot(dst: GorgetString) — borrowed source
+# consumed at consuming position`, because the hand-rolled capture arm reached
+# the environment field with the parameter's borrow still untouched.
+#
+# INTENDED: prints `hello`, rc 0, both backends, ASan-clean.
+
+void use_it(String p):
+    Callable[String()] g = (): p
+    print(g())
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    use_it(mk("hel", "lo"))

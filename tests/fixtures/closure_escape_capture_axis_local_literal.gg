@@ -1,0 +1,23 @@
+# CLOSURE-ESCAPE CAPTURE AXIS, cell (local × literal). See
+# `closure_escape_capture_axis_param_named.gg` for the whole 2×2 and why the
+# escape diagnostic only ever sees the (local × named) cell.
+#
+# This cell matters because it falsifies "the capture must be a PARAMETER". The
+# capture here is a plain LOCAL, and the closure still escapes with a live
+# reference to it: `p`'s scope exit frees the buffer the returned environment
+# holds. The capture site owes the same rule at every consuming position —
+# clone if the source is live, move if it is dead — and the source is live here
+# precisely because the environment outlives the frame.
+#
+# INTENDED: prints `hello!`, rc 0, both backends, no use-after-free.
+
+String mk(String a, String b):
+    return a + b
+
+Callable[String()] make_local():
+    String p = mk("hel", "lo")
+    return (): mk(p, "!")
+
+void main():
+    Callable[String()] g = make_local()
+    print(g())
