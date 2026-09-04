@@ -206,6 +206,23 @@ owes a note + a filed subset gap.
   fallback where Rust's mint has a wrong-answer `unwrap_or("int64_t")` default. ⇒ **when a Rust-lane defect
   looks like a design gap, PROBE THE SH FIRST — it may already hold the reference-grade shape, and then the
   fix is a PORT rather than a design.**
+- ⛔⛔ **THE PIPE-RC TRAP BIT ITS OWN ENFORCER, 2026-09-04.** The orchestrator has warned every agent this
+  round to read exit codes off the BARE command — then wrote
+  `git worktree remove "$w" 2>&1 | sed 's/^/…/' && echo "PRUNED"`. **`&&` read SED's status, not git's**, so
+  five worktrees that all failed with **rc 128 (`cannot remove a locked working tree`)** were each reported
+  **PRUNED**. Nothing was removed; the count never moved from 20.
+  ⚡ **THE LESSON IS NOT "be careful" — IT IS THAT A DECORATED COMMAND IS A PIPED COMMAND.** `| sed`, `| tee`,
+  `| tail` for *formatting* is the same trap as `| grep` for filtering. ⇒ **capture the rc FIRST, decorate
+  after: `cmd >/dev/null 2>&1; rc=$?`.**
+- ⛔⛔ **`scripts/round_cleanup.sh` WOULD HAVE DELETED BOTH LIVE EXECUTORS — FILED AS `t1146`.** Its `--dry-run`
+  proposed removing **13** worktrees, **8 of them live**, because it selects on cleanliness alone and emits
+  `--force`. **MA-6 already says a live agent needs a keep-list; the SCRIPT does not implement it**, so the
+  discipline lives in the operator's memory. ⭐ **The fix is mechanical and free: `git worktree remove` already
+  refuses a live worktree with `lock reason: claude agent <id> (pid N)` at rc 128 — the information the script
+  needs is what git is already printing at it.**
+  ⚠ **AND A HYGIENE ASSUMPTION IS FALSE: five long-idle CLEAN worktrees are ALL harness-LOCKED and cannot be
+  pruned by hand either. Disk does NOT fall at round close the way the rule assumes** (stable at 17%);
+  **any "worktrees reclaimed" count that does not separate LOCKED from DIRTY over-reports.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
@@ -2541,7 +2558,14 @@ exact text for all three is prepared and awaits one line of authorization; **unt
 HERE and in the track briefs, and every track cites "owner ruling 2026-09-04".**
 
 1. ⚖ **D46 EXTENDS — INTRINSIC STRUCTURAL EQUALITY FOR THE NON-ANNOTATABLE AGGREGATES, GATED ON ELEMENT
-   COMPARABILITY.** ACCEPT when every element is itself comparable: `Option[T]` · `Result[T,E]` · `Vector[T]`
+   COMPARABILITY.** ⚠⚠ **COST CORRECTED 2026-09-04 BY F-G PASS 2, AND THE OWNER WAS TOLD: THE PREDICATE IS
+   THE CHEAP HALF (~55 lines, one file). THE ACCEPT CELLS *STILL ANSWER `false`* — `(1,2)==(1,2)`,
+   `Some(1)==Some(1)`, `[1,2]==[1,2]` all print `false` WITH THE PREDICATE IN**, because the eq lowering is a
+   `format!("{type_name}__eq")` dispatch with **no structural fallback** (`exprs/operators.rs:136-160`).
+   ⇒ ⛔ **SHIPPING THE PREDICATE ALONE RATIFIES A WRONG ANSWER — strictly worse than HEAD, and it fights
+   Core #8.** ⭐ **THE RULING STANDS; ITS ACCEPT HALF IS A SEPARATE TRACK: SEVEN AGGREGATE FAMILIES ×
+   STRUCTURAL EQUALITY, RECURSIVE OVER ELEMENT TYPES, ON C + LLVM + SELF-HOST, PLUS `Set`/`Dict`
+   ORDER-INDEPENDENCE (its own unruled question). THE ACCEPT PREDICATE MUST NOT LAND BEFORE ITS LOWERINGS.** ACCEPT when every element is itself comparable: `Option[T]` · `Result[T,E]` · `Vector[T]`
    · `Set[T]` · `Dict[K,V]` · `Array[T,N]` · `Range` (+ tuples, already ruled). REJECT unchanged: user
    structs/enums without `@derive` or a user `equip`. ⊕ **`Box[Trait]` and `Callable[T]` are REJECT — a trait
    object and a closure have no structural equality to give; name them so the axis has no unnamed cell.**
@@ -4032,6 +4056,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0638`](todo/t0638.md) **MED** — 🆕🐛 [MED — fmt interior-comment escape: the residual OUTSIDE the fill-emitter chokepoint] every FILL-emitted delimited li…
 
 - [`t0900`](todo/t0900.md) **HIGH** — ⚠ THE FILED MECHANISM WAS WRONG, AND THE CORRECTION IS THE USEFUL PART. Re-measured 2026-08-30 at 05f72286. This item sa…
+- [`t1146`](todo/t1146.md) **HIGH** — 🆕 [HIGH — a --yes mid-round deletes live executors; measured 2026-09-04 during R49] scripts/round_cleanup.sh has no live…
 ### Medium
 
 - [`t0639`](todo/t0639.md) — 🆕 CI/TOOLING FOLLOW-UPS (filed 2026-06-30, from the test_result_advanced CI-red fix — see DONE):
