@@ -683,6 +683,31 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⚖✅ **OWNER RULING 2026-09-04 — S-a2's PROPOSAL AGREED: THE CALLEE POSITION IS A BORROW POSITION.**
+A call does not consume its callee: `Callable` borrows, `MutCallable` mutably borrows, `ConsumeCallable`
+consumes. `d[k](v)` parses and lowers to call-through-place; `h = d[k]` used only to call binds a borrow; the
+transfer sites still clone. **Re-brief S-a2 around the ruling and land the field/tuple reject now with index
+places deferred behind the callee-borrow rule, NAMED as an omitted cell.**
+
+⭐⭐ **AND BOTH REMAINING "OWNER ASKS" DISSOLVE ON INSPECTION — I OVER-ESCALATED TWICE.**
+**(1) `Set[Box[Trait]]` IS ALREADY RULED.** `docs/define-gorget/decisions.md:2977` (the ratified D46 rider):
+***"`Box[Trait]` and `Callable[T]` REJECT — a trait object and a closure have no structural equality to give;
+they are named here so the axis has no unnamed cell."*** **A `Set` REQUIRES equality. Therefore
+`Set[Box[Trait]]` rejects BY THE EXISTING RULE — it is a CONSEQUENCE to implement, not a decision to take.**
+⊕ Independent prior art agrees: **Rust does not compile `HashSet<Box<dyn Trait>>`** (`Hash` is not
+object-safe); **C++'s `std::set<unique_ptr<Base>>` compares POINTERS** — the same known footgun, needing a
+custom comparator. ⇒ **`Set.add`'s newly-*safe* acceptance is also wrong and goes the same way (Core #8:
+"most often by making the language REJECT it").**
+**(2) `t1198` (f64→f32 at consuming positions) NEEDS NO RULING EITHER — the reference-grade answer is
+universal.** **A LITERAL IS NOT AN f64.** In Rust, Go and Swift, `1.5` in a `float32` context IS a float32
+literal — typed by context, never narrowed. ⇒ **the fix is context-typed float literals**, which makes
+`float32 x = 1.5` **ACCEPT** (it currently REJECTS) and `Box[float32](1.5)` accept **with the right value**.
+⚡⚡ **GORGET TODAY REJECTS THE GOOD SPELLING AND ACCEPTS THE BROKEN ONE.** That is not an unratified
+semantics question; it is a defect with one obvious correct shape, and `feedback_language_semantics` already
+binds it — *primitives get correct semantics.*
+⇒ ⚡ **THE LESSON ON MYSELF: BEFORE ESCALATING, CHECK WHETHER THE RATIFIED RECORD ALREADY ANSWERS IT AND
+WHETHER EVERY COMPARABLE LANGUAGE AGREES. Two of my four asks were consequences, not decisions.**
+
 ⭐⭐ **Q OUTPUT-REVIEW = SIGN OFF (4 non-blocking; 2 fold as guard-strengthening, 2 as record fixes).**
 ⭐ **It settled the floors question BY MEASUREMENT, not source read:** in the vacuous-walk break
 `tracked_files()` returned **7527** paths, so its memoised `assert!(set.len() > 500)` **passed cleanly while
