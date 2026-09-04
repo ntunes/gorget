@@ -683,6 +683,37 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **Q EXECUTOR COMPLETE (`a73cca58f`) — output-review launched. ITS FLOORS CAUGHT TWO *VACUOUS-PASS*
+BREAKS, WHICH IS THE WHOLE POINT OF THEM.** Six breaks, every one anchored by line. **Breaks 3 and 4 — a walk
+that reads no files, and a line loop that reads no lines — both leave `findings` EMPTY**, so **without the
+floors the test passes vacuously**, and they fire **independently of each other**. ⚡ *That is the guard's own
+failure class, guarded.*
+⭐ **Break 5 is invisible to the tree walk entirely (0 findings either way)** — E9(a) made concrete: **the tree
+has ZERO CRLF files, so the CRLF arms are exercised ONLY by the table.** *The table is not ceremony; it is the
+only instrument for three of the rows.*
+⭐ **Floors measured by TWO INDEPENDENT IMPLEMENTATIONS to identical counts** — `files_read = 7465`,
+`lines_scanned = 1,010,312` — read off the guard itself by raising a floor **by line**.
+⊕ **39-row table (18 MUST-MATCH / 21 MUST-NOT-MATCH)**, with E2's per-line resolution shipped: marker-size-10's
+opener and closer MUST-MATCH, **its `==========` separator deliberately MUST-NOT-MATCH** because it is
+byte-identical to a setext underline.
+
+⭐⭐ **`t1255` — FOUND BY ITS OWN RED PLANT FAILING, AND FILED RATHER THAN REPAIRED.** *"The guard was right,
+my append was wrong"*: the first plant landed **mid-line**, because **`TODO.md` has NO FINAL NEWLINE and its
+last line is a LIVE POINTER ROW**, so every `>>` append corrupts it (`tail -c 1 | od -c` → mid-UTF-8).
+⚡ **AND IT DECLINED TO FIX IT: the repair rewrites the bytes of the ONE FILE EVERY CONCURRENT TRACK IS
+EDITING.** ⊕ **It also refused the tempting overclaim** — it states the mechanism *produces the shape* of the
+round's earlier real `TODO.md` corruption and explicitly does **not** claim it caused that instance.
+⊕ **`t1256`** — devbook/27 calls `tests/lints.rs` *"five ratchets"* over `src/**`; it is **219 tests**, several
+tree-wide. **Discriminated from `t0829`**, which owns the same chapter's rotted *citation form*: *"fixing every
+citation leaves the sentence just as wrong."*
+⊕ **Two honest limits, flagged rather than smoothed:** the `||||||| merged common ancestors` row's **exact
+bytes were never observed** (its *shape* is witnessed by a real zdiff3 merge), and the doc-comment says so;
+and **no devbook edit was made DELIBERATELY**, citing devbook/25's own rule against enumerating the lint
+roster and `t0829`'s record that widening a devbook/27 fix past a track's reviewed boundary is how unreviewed
+claims enter that chapter.
+⊕ **E5 confirmed LIVE: `7463 → 7465` and `1,009,831 → 1,010,312` moved AGAIN during the session** — and **the
+floors were untouched by the drift, exactly as designed.** *That is why they are floors and not equalities.*
+
 ⭐⭐ **N2 OUTPUT-REVIEW = SIGN OFF ON THE FIX AND THE GUARD** — *"the strongest guard package I have reviewed
 on this repo"* — **2 BLOCKING (both cheap, both coverage/bookkeeping), folded.**
 ⭐ **It CONFIRMED the round's biggest finding by building a real pre-fix compiler:** an **8-element** probe →
