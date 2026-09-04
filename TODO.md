@@ -522,6 +522,28 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   my rewritten ledger comment **no longer re-spells the value**, making the R48 waiver dead — **retired
   rather than carried.** **Two guards, two catches, both on my own edits.**
 
+- **✅ K · INTEGRATED — `5d2ff2213`, the round's FIFTH landing and the CRITICAL the owner assigned to R49 BY
+  NAME. Worktree pruned.** Closes **`t0871`**; files `t1048`–`t1051` and `t1064`. Gates bare: build 0 ·
+  `--lib` 1181/0 · `--test lints` **221/0**.
+  ⭐ **THE EXECUTOR CAME BACK BETTER THAN ITS ERRATA ASKED, THREE TIMES:**
+  1. **It made the fixture split SELF-DEFENDING rather than merely correct.** Splitting the `.insert()` cell
+     recovers three ggdef adjudications — **but nothing goes RED if someone tidies it back together**, so
+     the *"do not re-merge, it costs three adjudications and nothing goes red"* warning sits at **FOUR**
+     sites: fixture header, ratchet row block, test docstring, `DONE.md`.
+  2. **It re-measured the refuted cost claim at TWO path lengths, not one** — `7`/`7` and `67`/`67`,
+     identical for both spellings — **and rather than just deleting the false sentence it KEPT WHAT THE
+     FIXTURE ACTUALLY HOLDS: the clone count scales with path LENGTH, an ALGORITHM defect no spelling
+     migration was ever going to fix.**
+  3. ⭐ **`t1064` CAME BACK SPLIT IN TWO.** I handed it 9 broken repro paths; it re-derived **17 of 247**, in
+     two sub-classes a naive `exists()` guard would blur — **9 GENUINELY MISSING** (the real debt) and
+     **8 MERELY MIS-SPELLED** (the file exists; the path omits `tests/fixtures/`). ⊕ And
+     `self_host_cited_fixture_paths_resolve` **already IS that guard and already tolerates both spellings —
+     only its POPULATION needs widening**, which is why the mis-spellings never surfaced.
+     **Separating them stops a rename being counted as missing evidence.**
+  ⊕ It also **declined one erratum for the right reason** (a stale distance in an already-committed comment
+  would have needed the amend I forbade) **and flagged it instead of silently leaving it** — **I corrected
+  it in `DONE.md` at integration; no source comment carries the phrase.**
+
 - **✅ K · OUTPUT-REVIEW: INTEGRATE AFTER THREE ERRATA. All three mandatory gates PASS; the fix is called
   REFERENCE-GRADE.** Errata sent; merge on their return.
   ⭐⭐ **THE SH PORT WAS NECESSARY — PROVEN THREE INDEPENDENT WAYS, so "already correct / one-lane fix" was
