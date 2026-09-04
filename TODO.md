@@ -683,6 +683,26 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⚖ **OWNER RULING 2026-09-04 — L: LAND IT AND ADMIT THE ROWS, ADMISSION TO BE *TEMPORARY*.** Branch (a) taken.
+⛔⛔ **AND "TEMPORARY" IS NOT FREE TODAY — THE ALLOWLIST HAS NO RETIRING DIRECTION.** S-a's pass 1 measured
+that when a row stops leaking the sweep prints *"✅ no longer leaking — DELETE these rows"* / *"leaking LESS —
+TIGHTEN these rows"* and **NEITHER SETS rc=1**. ⇒ **an admitted row is permanent by default; it rots in place
+and nothing ever forces its removal.** ⚡ **That is Core #6's both-directions requirement failing on the
+allowlist itself — a ratchet with only one direction.**
+⇒ **TO HONOUR THE OWNER'S "TEMPORARY": admit each row CITING THE ITEM THAT WILL CLOSE IT, and make the
+no-longer-leaking / leaking-less path FATAL for cited rows.** Precedent in-tree: Track R's
+`security_safe_except_on`, whose doc states the contract exactly — *"the moment the cited defect is fixed,
+this test goes RED and forces the annotation to be removed."* **Same shape, different allowlist.**
+
+⭐ **FEASIBILITY OF A LEAK-FIX TRACK — YES, with one honest limit.** The two NEW rows:
+`closure_escape_capture_axis_param_named` (4 B/1) — S-a pass 1 measured it goes **fully clean, rc 0,
+ASan-CLEAN** with the field-drop half alone; `closure_escape_capture_axis_local_literal` (12 B/2) — goes
+**12 → 6**, and the residual 6 B is **producer-side** (the STACK env's field is cloned, memcpy'd into the heap
+env, and the stack copy abandoned). ⇒ **a track scoped to the two admitted rows CLOSES ONE and TIGHTENS the
+other; clearing both needs the capture-ownership half too.**
+⛔ **AND THE FIELD-DROP HALF MUST NOT SHIP ALONE — it double-frees on the CLONE path (ASan-confirmed) because
+`Callable.clone()` is shallow at field level.** ⇒ **minimum safe scope = field drop + typed-clone routing.**
+
 ⚖⚖⚖ **THE FOURTH AND SHARPEST OWNER ASK — L's INTEGRATION IS A TRILEMMA AND EVERY BRANCH COSTS SOMETHING.**
 Track L converts a set of **use-after-frees into leaks** — a strict improvement on the owner's own ranking
 (mem-unsafety > silent-wrong-output > ICE > leak). **But landing it turns `scripts/sanitize_sweep.sh` RED
