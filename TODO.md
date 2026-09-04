@@ -174,7 +174,27 @@ is not enough if the brief that the executor reads is stale.**
 
 | L — closure-capture | **M1 — Box mint** | **M2 — trait-obj pack** | N — `t0988` | P — drop side | Q — `t1066` guard |
 |---|---|---|---|---|---|
-| **`t1066`–`t1075`** | **`t1076`–`t1080`** | **`t1081`–`t1085`** | **`t1086`–`t1095`** | **`t1106`–`t1115`** | **`t1096`–`t1105`** |
+| **`t1067`–`t1075`** ⚠ | **`t1076`–`t1080`** | **`t1081`–`t1085`** | **N1 `t1086`–`t1090` · N2 `t1091`–`t1095`** | **`t1106`–`t1115`** | **`t1096`–`t1105`** |
+
+⛔⛔ **THIRD ID INCIDENT, AND IT IS A NEW FAILURE MODE: I SPENT AN ID OUT OF A BLOCK I HAD ALREADY ISSUED.**
+L held `t1066`–`t1075`; I then filed `todo/t1066.md` myself for the conflict-marker gap (`4d695b14f`).
+**L is re-issued `t1067`–`t1075` and told NOT to take `t1076`+, which is M1's.**
+⚡ **MA-3b says the orchestrator ALLOCATES ids and tracks never pick their own. It does not say the
+ORCHESTRATOR MAY NOT SPEND FROM AN ISSUED BLOCK — and that is the hole all three incidents fell through.**
+⇒ **THE RULE, STATED WHOLE: an issued block is SPENT AND UNTOUCHABLE — by the holder, by a sibling track,
+AND BY THE ORCHESTRATOR. File from `FIRST UNISSUED` only, and advance it in the same action.**
+
+⭐ **TRACK N SPLIT INTO N1 + N2 (2026-09-04), ON A MEASURED MECHANISM BOUNDARY.** N1 = *"the pushed element
+is a BORROW into the source"* (`expand_find`, `expand_filter`) — **memory unsafety, and its headline cell
+writes FOUR BYTES OF FREED HEAP TO STDOUT at rc 0 with `gg check` clean.** N2 = *"the destination carries no
+typed element metadata, and its element type is NOT the source's"* (`expand_map`, `expand_flat_map`).
+⚡ **THE SPLIT IS FORCED, NOT STYLISTIC: the remedy that fixes N1 is a MISCOMPILE in N2.** `gorget_array_new_like`
+applied to `Vector[String].map((s): s.len())` — **a cell CORRECT at HEAD** — gives `stack-buffer-overflow`,
+READ of size 32 in `gorget_array_push`, because `expand_map` sizes its result by the **closure's return
+type**, not the source element. **`_new_like` is a read-side reconstruction of the SOURCE's hooks; the class
+needs the RESULT element type's TYPED metadata, which already exists and is one lookup away.**
+⊕ N2's two edits are **ORDER-COUPLED**: freeing flat_map's `sub` without first installing the result hooks
+turns a 531 B leak into a **heap-use-after-free**. Neither lands alone.
 
 ⭐ **TRACK F-G SCOUT LAUNCHED 2026-09-04 — ID BLOCK `t1126`–`t1135`, WRITTEN HERE IN THE SAME ACTION.**
 **D46 (`==` without `Equatable`) — RATIFIED 2026-08-27 AND UNIMPLEMENTED.** ⚠ **`t0013`'s own headline is
