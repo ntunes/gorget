@@ -505,6 +505,43 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   COMMIT** or `ratified_decisions_are_cited_in_the_spec` reds. Raising the budget is never the remedy.
   ⊕ **`t0977` and `t0978` filed from E's block; `t0961`/`t0962`/`t0963` closed to `DONE.md`.**
 
+- **⚡ F · FOLD LANDED (`537d95628`) — CONFIRMING OUTPUT-REVIEW LAUNCHED. AND MY INSTRUCTION WAS HALF WRONG.**
+  ⛔⛔ **THREE OF THE FOUR ROWS I ORDERED DELETED ARE REAL AND STAY — AND THE REVIEWER MADE THIS ROUND'S
+  SIGNATURE ERROR.** `lib/std/iter.gg:818` is a bare `equip [T] Set[T]:` block declaring `for_each`, `find`
+  and `find_index`. Measured: `Set[String].find((e): e.len() == 3)` is **`gg check` OK WITH the `std.iter`
+  import** and `E_NoMethodFound` **WITHOUT** it. ⇒ **the reviewer probed only the no-import side — the same
+  HOLD-ONE-AXIS-CONSTANT error `t0987` and `t0988` each made THREE times, on THE VERY AXIS ITS OWN S8
+  FINDING WAS ABOUT.** **Deleting them would have removed WORKING METADATA on a FALSE WITNESS.** Only
+  `Dict.update` was genuinely fabricated (`gorget_map_update` is a **merge**, no HofOp arm) — row deleted.
+  ⭐ **AND IT CHANGED THE GUARD'S DESIGN:** the witness union **must include the `equip` blocks**, and must
+  be **PER-FAMILY, not flat — a flat union accepts `Dict.reduce`.** New lint
+  `closure_shape_rows_have_a_callback_witness` **RED-verified TWICE** (re-adding `Dict.update` names it;
+  `("Dict","reduce")` — a real method in the wrong family — is **also** caught).
+  ⛔⛔ **A THIRD DEFECT THE FOLD TURNED UP — A GUARD THAT VIOLATED ITS OWN COMMENT.** `--accept` retired a
+  divergence whenever `len(div_lanes) > 1`, but `diverges` is computed over **MEASURED** lanes — so a
+  `c,llvm` run **ERASED `DIVERGENT` ON 137 UNRELATED ROWS**, every flag raised against the **UNMEASURED
+  selfhost lane**, including succession-plan findings (`str_slice_colon` selfhost=WRONG;
+  `func_closure_reassign` / `loop_range_paren_endpoint` selfhost=WORKS). ⭐ **THE COMMENT DIRECTLY ABOVE THAT
+  CONDITION ALREADY FORBADE IT; THE CONDITION DID NOT IMPLEMENT ITS OWN COMMENT.** Fixed to
+  `len(div_lanes) == len(VALUE_LANES)`; **the first run was DISCARDED, NOT COMMITTED**; re-run diff is
+  **exactly 25 lines, 0 erasures, 0 empty LLVM baselines, every changed row `hof_*`.** ⊕ Recorded in `t0993`
+  **with a warning that earlier two-lane `--accept` runs likely did the same.**
+  ✅ **B2 REWRITTEN AND NOW ANSWERED EMPIRICALLY, NOT BY DATES** — real cause `efaabeadc` against labels
+  written `f62b5472b`; `doc_ld_in_range_inclusive` on LLVM exits **rc 139, SIGSEGV** ⇒ **YES, always a signal
+  death.** ⊕ The `pair_upperstr_c_map_join` catch is confirmed: **the load-bearing predicate is UNTYPED, and
+  zero of the seven have one.**
+  ✅ **S3 — the executor CONCEDES it under-claimed**: it had checked only the C lane, where the cell is
+  BUILD-FAIL either way. **"Single-lane blindness, exactly what I flagged in others' work."**
+  ⊕ **`t0987`'s FOURTH correction states the WHOLE axis this time:** `Set.for_each` fabricates
+  `gorget_set_for_each`, and **the two protocols fail DIFFERENTLY** (no-import: **Set rejects cleanly,
+  Vector fabricates**) — **two distinct routes into the catch-all.**
+  ⊕ **S9 `--accept-drift` split out** — *"a `TRAP → CRASH:sig11` fold under a 'progress rows folded' summary
+  is a RATCHETED SEGFAULT"*; it now declines out loud. ⊕ **S7: `hof_for_each_strings_noimport_namedfn` is
+  the ONLY corner G will flip** — the review confirms it before G is released.
+  ⚠ **One erratum of mine PUSHED BACK ON: `closures.rs:182` was NOT stale** (grep confirms 182).
+  **Gates bare:** build 0 · `--lib` **1188/0** · `--test lints` **219/0** · `robustness_map --lanes c,llvm`
+  **0, no REGRESSION line, 0 new divergences.** `t0994`–`t0996` **unused — nothing here was a new class.**
+
 - **✅ A1-I · PASS 4 SIGNED OFF — EXECUTOR LAUNCHED.** Folded as ADDENDUM 4 (7 fold items, all scope/errata
   inside a sound design; streak NOT reset).
   ✅ **THE THREE-STATE DEMONSTRATION HOLDS, REBUILT FROM A TYPED SOURCE** (not a name re-derivation):
