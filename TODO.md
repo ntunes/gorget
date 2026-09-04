@@ -522,6 +522,56 @@ this premise still TRUE, or a filed fact that decayed?*). The memory entry is no
   my rewritten ledger comment **no longer re-spells the value**, making the R48 waiver dead — **retired
   rather than carried.** **Two guards, two catches, both on my own edits.**
 
+- **✅ F · INTEGRATED — `ef171a34a`, the SIXTH landing.** Files `t0990`–`t0993`; corrects `t0987`, `t0988`,
+  `t0068` in place. Gates bare: build 0 · `--lib` 1184/0 · `--test lints` **222/0**. ⚠ Worktree
+  harness-LOCKED at merge; prune when it releases. ✅ **G's BLOCKER IS DISCHARGED** — F shipped the
+  `for_each`-without-import RED cell that pins `t0987`'s trigger.
+  ⭐⭐ **ITS EXECUTOR CLOSED WITH A SCOREBOARD ON ITS OWN ERRORS, AND IT NAMES THE ROUND'S SIGNATURE FAILURE:**
+  *"I was wrong three times, and each time the same way — **HOLDING AN AXIS CONSTANT WHILE VARYING
+  ANOTHER**. The `_full`-vs-2-arg witness (checked C, missed LLVM), the `t0993` attribution (dates instead
+  of measurement), and now `Set.find` (checked `check`, not `build`). All three were caught by review, none
+  by me. **The countermeasure that actually worked was MECHANICAL ENUMERATION FROM A TABLE, not more careful
+  probing.**"* ⇒ **which is why `t0987`'s fifth correction is a SET DIFFERENCE** — `calls.rs`'s three
+  per-family exclusion arms minus the bare `equip` blocks gives the fabrication set in **four methods, one
+  grep.**
+  ⭐ **AND IT FIXED THE GUARD'S SCRAPE RATHER THAN NOTING IT** — the naive version was **dropping `fold` and
+  `map` from BOTH equip blocks entirely**, leaving those rows standing on the HofOp arms alone: **exactly
+  the single-witness dependency the guard exists to remove**, and exactly what `iter.gg:396` plans to
+  retire. **RED-verified against the `("Set","map")` evasion.**
+  ⊕ It **applied the Core #5 rule the same hour it was added** — rebuilding from the committed tree
+  *between* `cargo test` and the map run — and fixed **two further stale cites** in `t0068`'s body, staled
+  by its own 266-line insertion.
+
+- **⚡ A1-I · EXECUTOR RETURNED (`fc3c3c23a`) — OUTPUT-REVIEW LAUNCHED.** Three typed carriers;
+  **28 of 29 sites changed, 1 deliberately kept**, and **`grep` for `__Closure_`/`__call` predicates in
+  `src/` now returns ZERO.** Gates bare: build 0 · `--lib` **1182/0** · `--test lints` **222/0/1** ·
+  `-p ggdef` 187/0 · `spec_conformance` 3/0 · `security` 213/0 · targeted **C 479/0 and LLVM 485/0.**
+  ⭐ **CARRIER #1 GREW TO CARRY THE CAPTURES RATHER THAN RE-KEYING THE MAP — so the name-keyed sidecar is
+  DELETED, NOT RELOCATED** (Layering rule 3). Its third component needed no home: `register_named` interns
+  **one id per name**, so it **is** the id whose metadata this is.
+  ✅ **THREE-STATE DEMONSTRATION ON ITS OWN BUILD:** pristine **RED** → carriers **GREEN (all ten shapes
+  matching ggdef on C and LLVM)** → const-hoist evasion **RED with `--test lints` GREEN and the ratchet
+  still 30 == 30.** ⊕ And it states honestly that **the `assert_eq!` probe still compiles and fires** — the
+  carriers add a typed route, they do not make the old fact unavailable — **so both ratchets ship EXPLICITLY
+  LABELLED BOOKKEEPING** and `-D dead-code` is called an accident, never a guard.
+  ⭐⭐ **IT REFUSED AN INSTRUCTION OF MINE AND WAS RIGHT: `t1053` WOULD HAVE BEEN A DUPLICATE.** `todo/t0774`
+  already owns that subject **in its own words**, down to naming `Instruction::CallIndirect` as the unused
+  typed representation and `call_indirect_tracked` as the migration point. **I told it to file; the
+  GREP-BEFORE-YOU-FILE rule says don't; it followed the rule over the instruction** and enriched `t0774`
+  with A1-I's measurement instead. **`t1053` returns to the pool.**
+  ⚡ **PLACEMENT RULED: the fixtures STAY in `tests/fixtures/closure_identity/`.** Their env leak is
+  **`todo/t0953`, measured identically on the PRE-FIX compiler**, so it is not A1-I's inflow — and six rows
+  on a **shrink-only** allowlist would put a **second** identical leak question to the owner while A1-M's is
+  still pending. ⛔ **THE COST IS RECORDED, NOT WAIVED: out of the top-level scan is out of
+  `runtime_parity_corpus` too, so the SH MATCH is A MEASUREMENT, NOT A CONTINUOUSLY ENFORCED GATE.**
+  Reversible with one `git mv`; revisit if the owner's A1-M ruling admits rows of this shape.
+  ⚡ **`t1055` ORDERED: the self-host's OWN name-match debt** — 12 predicates including a **verbatim mirror
+  of the DCE seed just retired**. ⚠ **The SH is CORRECT on the miscompile; this is name-match debt only.**
+  ⊕ **`t0681` RE-SCOPED, NOT CLOSED** (its `Box[Callable]` deref half is still live, now wired;
+  `ALLOWED_UNWIRED` 30 → 29), and **`box_callable_call_through_box_undefined_function` still ICEs and was
+  NOT claimed** — a `Callable`-typed struct FIELD has no closure env, so the carve-out correctly does not
+  fire.
+
 - **✅ K · INTEGRATED — `5d2ff2213`, the round's FIFTH landing and the CRITICAL the owner assigned to R49 BY
   NAME. Worktree pruned.** Closes **`t0871`**; files `t1048`–`t1051` and `t1064`. Gates bare: build 0 ·
   `--lib` 1181/0 · `--test lints` **221/0**.
