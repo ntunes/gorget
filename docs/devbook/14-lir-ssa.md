@@ -106,7 +106,9 @@ one value (`dst`). `Inst::dst()` (`src/lir/mod.rs:1029`) is the canonical
   externs only**), `CallRuntime` (typed dispatch to a known runtime function via
   the `RuntimeFn` enum, `src/lir/runtime.rs:218`), `CallPtr` (indirect through a
   pointer), `CallByRef` (indirect through a `FuncRef`), `CallClosure` (through a
-  closure's fn_ptr+env).
+  closure's fn_ptr+env — its `ClosureDispatchKind` and per-argument `arg_abis`
+  are *read off* `Instruction::CallIndirect`, not re-derived here; devbook 12,
+  "The indirect callee is a value, and it travels as one").
 - **Runtime checks** — `BoundsCheck`, `DivCheck`, `Trap`.
 - **Pragmatic high-level ops** — `Printf`/`Fprintf` (kept as instructions
   because format-string expansion varies by backend), `InlineC` (a

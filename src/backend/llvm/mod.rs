@@ -1789,11 +1789,6 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         if defined_fns.contains(ext.name.as_str()) {
             continue;
         }
-        // Skip inline-expanded names
-        if ext.name.starts_with("__callable_") || ext.name.starts_with("__gorget_closure_call_")  {
-            // These are now CallClosure instructions, but ensure_extern may still register them.
-            continue;
-        }
         // Skip Option/Result combinator methods (inlined at each call site)
         if parse_option_result_combinator(&ext.name).is_some() {
             continue;
@@ -1970,11 +1965,6 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                     } else { name.clone() };
                     if seen.contains(name.as_str()) || LIBC_BUILTINS.contains(&name.as_str())
                         || defined_fns.contains(name.as_str()) {
-                        continue;
-                    }
-                    // Skip inline-expanded names — no extern declaration needed.
-                    if name.starts_with("__callable_") || name.starts_with("__gorget_closure_call_")  {
-                        // These are now CallClosure instructions, but ensure_extern may still register them.
                         continue;
                     }
                     // Skip Option/Result combinator methods (inlined at each call site)

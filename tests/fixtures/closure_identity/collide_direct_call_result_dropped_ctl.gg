@@ -1,0 +1,11 @@
+# Control for `collide_direct_call_result_dropped.gg`: ordinary name, so the
+# direct call reads its OWN return type. Green before and after.
+int helper_1(int a, int b):
+    return a + b
+
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    print(apply((int y): y * 2, 21))
+    print(helper_1(40, 2))

@@ -1,0 +1,6 @@
+# Control for `collide_no_closure.gg`: identical program, ordinary name.
+int helper_1(int a, int b):
+    return a + b
+
+void main():
+    print(helper_1(40, 2))

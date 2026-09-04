@@ -1,0 +1,17 @@
+# The SECOND manifestation, and a Core #10 lower-or-reject violation: the
+# closure arm did not only READ the shared function table, it WROTE to it,
+# inserting the callable's parameter list under the manufactured name with a
+# `unit` RETURN TYPE. The user's own direct call then read its return type back
+# out of that entry, concluded the call returns nothing, and took the
+# discard-the-result branch — printing a constant `0` where 42 was computed.
+#
+# Before the fix: C printed garbage then `0`, exit 0. ggdef adjudicates 42, 42.
+int __callable_1(int a, int b):
+    return a + b
+
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    print(apply((int y): y * 2, 21))
+    print(__callable_1(40, 2))

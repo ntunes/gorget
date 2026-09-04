@@ -1,0 +1,8 @@
+# Control for `extern_symbol_named_callable.gg`: an `extern "C"` binding to a
+# symbol that DOES exist. Proves the extern path itself is sound and that the
+# sibling cell's failure was the SPELLING, not the mechanism.
+extern "C":
+    extern int cabs_of(int v) = "llabs"
+
+void main():
+    print(cabs_of(0 - 42))

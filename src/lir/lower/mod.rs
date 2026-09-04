@@ -105,12 +105,6 @@ pub(super) struct FuncLowering<'a> {
     pub(super) extern_abi_kinds: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
     /// Extern return ABI kinds (fn_name → AbiKind).
     pub(super) return_abi_kinds: &'a rustc_hash::FxHashMap<String, crate::ir::abi::AbiKind>,
-    /// Declared parameter passing mode per function (`ByValue`/`ByPtr`/
-    /// `ByMutPtr`) — the GIR module's single source of truth. Read at
-    /// `Inst::CallClosure` for INDIRECT callees whose GIR type was erased,
-    /// under [`crate::ir::abi::indirect_callee_key`].
-    pub(super) fn_param_abis:
-        &'a rustc_hash::FxHashMap<String, Vec<crate::ir::lowering::context::ParamABI>>,
     /// Call signatures for EVERY GIR function, keyed by function name —
     /// closure call bodies and ordinary functions alike (built at
     /// `ModuleLowering::lower` from `gir.functions`). ⚠ Membership is
@@ -314,7 +308,6 @@ impl<'a> LoweringContext<'a> {
                     &self.module.type_drop_fns,
                     &self.gir.fn_extern_abi_kinds,
                     &self.gir.fn_return_abis,
-                    &self.gir.fn_param_abis,
                     &closure_call_sigs,
                 );
                 fl.lower();
@@ -1515,7 +1508,6 @@ impl<'a> FuncLowering<'a> {
         type_drop_fns: &'a std::collections::HashMap<String, crate::lir::TypeDropInfo>,
         extern_abi_kinds: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
         return_abi_kinds: &'a rustc_hash::FxHashMap<String, crate::ir::abi::AbiKind>,
-        fn_param_abis: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::lowering::context::ParamABI>>,
         closure_call_sigs: &'a std::collections::HashMap<String, ClosureCallSig>,
     ) -> Self {
         let params: Vec<LirType> = gir_func
@@ -1577,7 +1569,6 @@ impl<'a> FuncLowering<'a> {
             type_drop_fns,
             extern_abi_kinds,
             return_abi_kinds,
-            fn_param_abis,
             closure_call_sigs,
             current_span: None,
             printf_str_temps: Vec::new(),

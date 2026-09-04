@@ -1,0 +1,18 @@
+# The DIAGNOSTIC-QUALITY cell: when the user's function and the closure's
+# signature disagree on ARITY, the injected entry made the compiler emit a call
+# with the wrong number of arguments — and the only complaint the user saw was
+# the C compiler's, verbatim ("too many arguments to function '__callable_1'"),
+# with ZERO Gorget diagnostics. A build that fails in the backend with no
+# front-end diagnostic is a rejection the compiler never made.
+#
+# Post-fix this is an ordinary program: 42 from the closure call, 101 from the
+# direct one. Expected output QUOTED FROM ggdef.
+int __callable_1(int a):
+    return a
+
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    print(apply((int y): y * 2, 21))
+    print(__callable_1(101))

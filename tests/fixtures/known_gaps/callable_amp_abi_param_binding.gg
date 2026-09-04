@@ -4,10 +4,12 @@
 # ⚠ THIS IS THE CELL WHOSE FACT CHANNEL IS EMPTY AT THE LIR WRITE SITE. A
 # `Callable[..]` parameter's GIR local type is erased to `unit`, so the closure
 # operand carries no `FnPtr` signature by the time `Inst::CallClosure` is built.
-# The declared param ABIs are therefore PUBLISHED at the GIR call site (the last
-# point where the signature is in scope) into `fn_param_abis` under
-# `abi::indirect_callee_key`, and read back at the LIR write site. Both shapes
-# below take that route:
+# The declared param ABIs are therefore WRITTEN at the GIR call site (the last
+# point where the signature is in scope) onto `Instruction::CallIndirect`, and
+# read back at the LIR write site. They used to travel through the module-global
+# `fn_param_abis` map under a synthesised `abi::indirect_callee_key`; R49 Track
+# A2-alpha retired that key with the manufactured callee name it qualified.
+# Both shapes below take that route:
 #   - direct `apply(bump, &p)`             — `&`-param called straight through
 #   - the `Vector.get().unwrap()` iterator — the shape filed as a HIGH SIGSEGV
 #

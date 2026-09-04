@@ -1,0 +1,10 @@
+# The MINIMAL shape: a user function whose name is one the compiler used to
+# manufacture for indirect dispatch, and NOTHING else — no closure anywhere in
+# the program. Rust gg is accidentally correct here (a direct call resolves
+# through `func_index` before the old name-decode was reached); the self-host,
+# whose arg-ABI table fires on the name alone, is not. The family's floor.
+int __callable_1(int a, int b):
+    return a + b
+
+void main():
+    print(__callable_1(40, 2))

@@ -1,0 +1,17 @@
+# WHICH print came out wrong depended on DECLARATION order, because the shared
+# table entry was written when `apply` was lowered and read when `main` was.
+# Same program as `collide_direct_call_result_dropped.gg` with `main` declared
+# FIRST: the read then precedes the write and the DIRECT call is correct while
+# the CLOSURE call is not — the mirror image.
+#
+# Pinned so the dependence is a fact and not folklore: an executor who does not
+# know it reads this cell's leading 42 as evidence of a fix.
+int __callable_1(int a, int b):
+    return a + b
+
+void main():
+    print(__callable_1(40, 2))
+    print(apply((int y): y * 2, 21))
+
+int apply(Callable[int(int)] f, int x):
+    return f(x)

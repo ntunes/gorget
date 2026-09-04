@@ -1,3 +1,109 @@
+- [2026-09-04] **`t0389` CLOSED (R49 Track A2-α, a graduation A2-α's producer fix caused) — the Rust-lane ICE
+  on `Callable[void(int &, String ^)] f = mix; f(&a, ^greeting)` is gone, AND THE ICE WAS A FALSE POSITIVE
+  MANUFACTURED BY THE CALLEE'S OWN NAME. ⚠ The item's other half — "the SELF-HOST prints correctly" —
+  is now FALSE and is filed as `t1118`.**
+  **THE MECHANISM, which is the interesting part.** The panic read `Tier 2a consume-site violation …
+  CollectionMutator(__gorget_closure_call_3, arg #0) — untracked source consumed (ownership not decided)`
+  on a program `gg check` accepted. `is_consume_extern` asks `module.consume_externs`, a set derived at
+  module finalization from `fn_param_ownerships` by taking **every function with an `Ownership::Move`
+  parameter**. The closure-call arm had INJECTED the callable's ownerships into `fn_param_ownerships`
+  under its manufactured `__gorget_closure_call_<slot>` key — purely so `lower_call_arg` could read them
+  back one line later — so finalization derived the SYNTHETIC name into `consume_externs`, and the
+  validator then demanded a decided ownership for an argument no arm had ever registered. ⭐ **A
+  compiler-invented callee was classified as a collection mutator because a table keyed by a made-up
+  name said so.** With the identity on `Instruction::CallIndirect` there is no key, no derived entry,
+  and no violation. Fixed at the producer, which is where `t0389` asked for it.
+  **VERIFIED:** `hi` / `101` on C and LLVM; ASan-clean under `detect_leaks=1`, with a positive control
+  (a `closure_identity/` sibling reports its known 32 bytes in the same run, so CLEAN is a verdict and
+  not a silent instrument). Test un-ignored as `callable_local_var_consuming_arg`.
+  ⚠ **THE FIXTURE STAYS IN `known_gaps/`, AND THE REASON IS A DECAYED ORACLE CLAIM.** `t0389` recorded
+  this as a *"reference lags the self-host"* cell — Rust panicking where the self-host printed correctly.
+  **Re-measured 2026-09-04: the self-host exits 139 on it.** Reproduced with a driver rebuilt from
+  PRISTINE committed source, so it is pre-existing and not this track's inflow (`t1118`). Moving the
+  fixture to `tests/fixtures/*.gg` would enrol a self-host SEGV in `runtime_parity_corpus` — raising the
+  non-match count for one's own inflow, which is exactly what a track may not do. It stays in
+  `known_gaps/` with a LIVE Rust-lane test, the established shape for a fixed-here/lagging-there cell.
+  ⊕ **AND ONE MORE CENSUS ROW MOVED THAT IS NOT OURS.** `known_gaps_census.sh --check` also flags
+  `llvm_nested_option_match_no_memcpy_overlap` (`t0729`). Measured on the PRISTINE compiler: it passes
+  there too — pre-existing drift, a different class, left for its own adjudication.
+
+- [2026-09-04] **`t0774` CLOSED (R49 Track A2-α) — THE INDIRECT CALLEE CROSSED LAYERS AS A *NAME*, AND
+  THAT NAME SHARED THE MODULE'S FUNCTION NAMESPACE WITH USER CODE. `int __callable_1(int, int)` plus
+  any closure call was a SILENT WRONG-OUTPUT MISCOMPILE on C, an `llc` type failure on LLVM, a
+  DISCARDED direct-call result, a build failure with ZERO Gorget diagnostics, and exit 139 through
+  `extern "C"`. Four mints deleted, all six decode sites gone, 16 cells RED→GREEN on both backends.**
+  **THE DEFECT.** Every indirect-dispatch arm manufactured its callee name — `__callable_<slot>`,
+  `__gorget_closure_call_<slot>` — emitted a plain `Instruction::Call` with it, and left three layers
+  below to recognise the SPELLING. `__callable_1` is a legal Gorget identifier and a legal `extern "C"`
+  symbol, so the collision is reachable from ordinary documented source. It was not only READ: to reach
+  `lower_call_arg` the arm INJECTED the callable's signature into module-global `fn_sigs` /
+  `fn_param_ownerships` under the same key, so the user's own direct calls were re-typed by a closure's
+  signature. Measured on the pristine pre-fix compiler, C lane:
+  `collide_closure_call` exit 0 printing `281474267998517` · `collide_direct_call_result_dropped`
+  garbage then a constant `0` (Core #10, the result is DISCARDED) · `collide_arity_mismatch` build rc 1
+  leaking `too many arguments to function '__callable_1'` with **no Gorget diagnostic at all** ·
+  `extern_symbol_named_callable` **exit 139** · both sibling-prefix cells wrong. ⭐ **THE BACKENDS
+  DISAGREED — C shipped the unsafe binary, LLVM refused it (`'%v2' defined with type 'i64' but expected
+  'ptr'`) — a Core #8 cell, and the LLVM refusal was the only thing making any of it visible.**
+  **THE FIX (Core #1, at the write site).** `Instruction::CallIndirect` — dead end-to-end, its own doc
+  saying *"reserved for future dynamic dispatch"* — now carries the callee OPERAND, its
+  `ClosureDispatchKind` and its declared per-argument ABI, and lowers to `Inst::CallClosure`.
+  `LoweringContext::call_indirect_tracked`'s `func: impl Into<String>` is **REPLACED** by an
+  `IndirectCallee` enum: `Named` for the five arms that dispatch through a genuine emitted symbol (a
+  `__Closure_N__call` thunk, a vtable slot, a `Constant::FuncRef` — there the symbol IS the callee),
+  `Value` for the four whose callee is a runtime value. ⚠ **REPLACED, not accompanied: read as an added
+  `Option<…>` beside a still-required name, the four arms must still mint a name to pass and the track
+  retires nothing.** `lower_call_arg` takes a `CalleeAbi::{Named, Declared}` for the same reason, so the
+  declared signature is HANDED to it instead of round-tripping through a shared table.
+  ⭐ **THE DECODE IS DELETED, NOT NARROWED.** `insts.rs`'s 110-line name-decode branch is gone; so are
+  both LLVM extern-declaration suppressions, both dead `validate.rs` prefix predicates, and
+  `abi::indirect_callee_key` — a helper that qualified the ABI key with the enclosing function BECAUSE
+  the bare names are not unique, while its sibling channels stayed bare-keyed. There is no narrowing that
+  separates "a name the compiler minted" from "a name the user wrote" once both are strings in one flat
+  namespace. Mint census **4 → 0**; decode ratchet **30 → 19**.
+  ⛔ **A RETRACTION THAT MUST SHIP WITH IT.** The brief claimed closing `validate.rs`'s two prefix
+  predicates would make `call to undefined function` TOTAL once the mints were gone. **MEASURED FALSE,
+  two-stage:** removing both predicates alone changes nothing (output byte-identical); the check only
+  fires once `auto_register_externs` is disabled — a NAME-AGNOSTIC blanket fallback that registers every
+  unknown callee as a variadic extern *before* validation, so `callables` contains every callee by
+  construction. With it off, 26 of 31 sampled fixtures fail on ordinary runtime spellings. The predicates
+  were still deleted — for the true reason, Layering rule 2, delete-don't-document — and the sweeper is
+  filed as **`t1116`**, not fixed inline.
+  **THE NET (Core #11/#12).** 16 new cells under `tests/fixtures/closure_identity/` — 8 RED-verified
+  against the pristine pre-fix compiler on C **and** LLVM, 2 DISCRIMINATION cells green before and after
+  (a name that collides with no minted slot; a program with no closure at all), 6 negative controls.
+  ⚠ **Every cell asserts `42` — never a snapshot: the wrong value is a live pointer plus a constant and
+  differs between runs.** Nine of ten are ggdef-ADJUDICATED (block bodies, because phase-0 rejects an
+  expression body); `extern_symbol_named_callable` is build-only, because post-fix nothing defines
+  `__callable_probe` and the honest outcome is a LINK failure. Two axes nobody had isolated are now
+  pinned rather than folklore: the manifestation depends on **DECLARATION** order, not statement order
+  (`collide_decl_order_main_first` vs `collide_stmt_order_direct_first` hold statement order constant and
+  invert), and **the two prefixes are not symmetric** — `__callable_` injected `unit`, the sibling
+  injected the real return type, so a "does it print 42" pair would have passed for different reasons.
+  **GUARDS (Core #6, both directions).** New `no_manufactured_indirect_callee_names` — 0 mints, exact —
+  **verified RED by a line-anchored break that COMPILES** (restoring one `format!` mint: rc 0 build, lint
+  names the site). `indirect_call_abi_decision_sites` re-derived to the moved definition and the moved
+  write site, plus a new pin that `closure_arg_abis` has exactly ONE caller.
+  `indirect_dispatch_results_registered_at_birth` gained `builder.call_indirect` — discharging its own
+  standing instruction *"add it here the moment it acquires one"* — and ⚠ **its routing needle
+  `call_indirect_tracked(builder` was measured to SHRINK ITSELF: it counted the argument list's first
+  token, so wrapping a call across lines read 5/4 as 2/3 with all nine arms still routed.** Re-anchored
+  to the receiver.
+  ⭐ **AND THE SELF-HOST IS WORSE, WHICH INVERTS A CLAIM IN THE TREE.** `todo/t1055` and
+  `tests/lints.rs` both said the self-host *"does NOT reproduce the Rust miscompile … so this is layering
+  debt, not a defect"*. Clause 1 is true and scoped to the A1-IDENTITY family; **clause 2 is false.**
+  `needs_ptr_arg` (`self_host_lowerer/lir_lower.gg`) address-takes argument 0 of any call whose callee
+  NAME carries either prefix, with **no `func_index` precedence check** — so a five-line program with **no
+  closure anywhere** is miscompiled on the SH lane while Rust gg is correct. The Rust decode was
+  CONDITIONAL; this one is UNCONDITIONAL. ⚠ **The firing site is the ARG-ABI TABLE, not `lir_codegen.gg`'s
+  `void**` decode — the SH-emitted C contains a plain direct call and ZERO `void**`** (`__v3 = &__s2;
+  __v5 = __callable_1(__v3, __v2);`), so an investigator pointed at the decode finds it inert and
+  concludes the repro is wrong. Four `known_gaps/` repros wired `#[ignore]` asserting `42`, `t1055`
+  re-graded MED→HIGH with a per-cell disposition, and both false clauses corrected in place.
+  **FILED:** `t1116` (`auto_register_externs`), `t1117` (the two ABI-driven validator walkers have no
+  `CallIndirect` arm — a gap this change made visible rather than created, and one whose colliding-name
+  mis-classification it closed).
+
 - [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
   STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,
   garbage or empty stdout on BOTH backends. Two producer sites now stamp the View tag; 12 cells RED→GREEN.**

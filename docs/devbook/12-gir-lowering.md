@@ -467,6 +467,61 @@ returns a plausible wrong number with a clean exit code. The typed
 carriers exist so that question has one answer and no spelling can supply
 a second.
 
+### The indirect callee is a value, and it travels as one
+
+Not every call has a callee the lowering can name. A `Callable[T]`
+parameter, an escaped closure returned out of a function, a callable read
+out of a collection — in each of these the callee is a *runtime value*, and
+`Instruction::CallIndirect` is how it crosses the layer boundary. The
+instruction carries three things: the callee **operand**, its
+`ClosureDispatchKind` (a `Callable` slot is a `void*[2]` pair; an escaped
+closure is a `GorgetClosure` struct), and the callee's **declared
+per-argument ABI**. All three are written by the arm that lowers the call,
+which is the last point in the pipeline where the callable's spelled
+signature is still in scope; LIR lowering reads them straight back to build
+`Inst::CallClosure` (`src/lir/lower/insts.rs`).
+
+The whole indirect-dispatch class routes through one chokepoint,
+`LoweringContext::call_indirect_tracked`, which takes an `IndirectCallee`
+rather than a name. Some members of the class genuinely dispatch through an
+emitted symbol — a lifted closure's `__Closure_N__call` thunk, a
+trait-object vtable slot, a `Constant::FuncRef` — and those pass
+`IndirectCallee::Named`, because there the symbol really is the callee. The
+members whose callee is a value pass `IndirectCallee::Value`, and nothing
+downstream needs a name for them, because there is none. The chokepoint also
+registers the result for drop at its birth: an indirect call's result is a
+freshly materialized owned value exactly like a direct call's.
+
+**Why the identity rides on the instruction rather than in a name.** The
+alternative is to manufacture one — `__callable_<slot>` for a parameter,
+`__gorget_closure_call_<slot>` for an escaped closure — emit a plain
+`Instruction::Call` with it, and let each layer below recognise the
+spelling. That fails for a reason no amount of care at the read sites can
+repair: the manufactured name goes into the module's **flat, string-keyed
+function namespace, which is the one user functions live in.**
+`__callable_1` is a legal Gorget identifier, and it is a legal `extern "C"`
+symbol too, so the collision is reachable from ordinary source. A program
+that declares `int __callable_1(int, int)` and calls any closure has the
+closure call dispatched to the user's function — an integer where a
+`void*[2]` block belongs. Worse, a name is not only read: to reach
+`lower_call_arg`, the arm had to *inject* the callable's signature into the
+shared `fn_sigs` table under it, so the user's own direct calls were re-typed
+by a closure's signature and their results discarded.
+
+The failure has no honest read-side fix, because at the read site the two
+names are the same string (layering rule 2, and the debugging heuristic:
+the complexity is a symptom, the writer is where it lives). Carrying the
+identity on the instruction removes the question rather than answering it —
+and it removes the sidecar with it. The declared argument ABI used to travel
+in a module-global map under a synthesised, function-qualified key that the
+producer formatted and the consumer re-formatted identically; both ends now
+hold the same typed field, so there is one source of truth and no key
+(layering rule 3).
+
+`no_manufactured_indirect_callee_names` in `tests/lints.rs` pins that no arm
+mints such a name again; the behavioural net is
+`tests/fixtures/closure_identity/collide_*`.
+
 The mapping of the lifted `__Closure_N` struct and the
 `Callable__GorgetClosure` mangled form onto the runtime `GorgetClosure`
 struct happens at the C backend boundary (`src/backend/c_lir/`), which

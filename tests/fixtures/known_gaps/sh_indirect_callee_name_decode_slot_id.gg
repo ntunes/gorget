@@ -1,0 +1,17 @@
+# SELF-HOST LANE GAP (`todo/t1055`), the SLOT-ID cell. The digits after the
+# prefix are a local slot id, and the self-host's `needs_ptr_arg` table does not
+# read them at all — it matches the PREFIX. So `__callable_9`, which collides
+# with no slot the compiler ever minted, is miscompiled just the same.
+#
+# This is what makes the self-host row different in KIND from the Rust one: on
+# the Rust lane, a name that collided with no minted slot was green (see
+# `closure_identity/collide_slot_id_not_arity.gg`). Here nothing has to collide.
+int __callable_9(int a, int b):
+    return a + b
+
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    print(apply((int y): y * 2, 21))
+    print(__callable_9(40, 2))

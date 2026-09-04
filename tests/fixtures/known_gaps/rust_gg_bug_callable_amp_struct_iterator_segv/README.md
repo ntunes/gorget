@@ -42,8 +42,10 @@ callable arrives as a `Callable[..]` **PARAMETER**, whose GIR local type is eras
 declared `&` was unavailable where the decision was made.
 
 R43 Track C writes the tag from the callee's DECLARED parameter ownership at one LIR
-site, and publishes the declared ABIs at the GIR call site (`abi::indirect_callee_key`)
-for exactly this erased-signature provenance. The iterator has nothing to do with it:
+site, and writes the declared ABIs at the GIR call site for exactly this
+erased-signature provenance. (Those ABIs travelled through the module-global
+`fn_param_abis` map under a synthesised `abi::indirect_callee_key` until R49 Track
+A2-alpha put them on `Instruction::CallIndirect` and retired the key.) The iterator has nothing to do with it:
 `while`/`get()`/`unwrap()` only supplied the PARAMETER-bound callable that the
 annotated-local shape does not.
 

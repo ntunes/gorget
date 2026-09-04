@@ -6160,6 +6160,106 @@ fn sh_keyword_no_parse_rule_swallows_block_where() {
     );
 }
 
+
+/// KNOWN GAP (`todo/t1055`), SELF-HOST lane — the self-host decides an
+/// argument's ABI from the CALLEE'S NAME, unconditionally.
+///
+/// `bool needs_ptr_arg(String fn_name, int arg_idx)` in
+/// `tests/fixtures/self_host_lowerer/lir_lower.gg` opens with
+/// `if arg_idx == 0 and (fn_name.starts_with("__callable_") or
+/// fn_name.starts_with("__gorget_closure_call_")): return true`, consumed at
+/// two argument-emit sites in the same file. It address-takes argument 0 of
+/// any call whose callee NAME carries either prefix, with no check that the
+/// callee is a compiler-minted indirect dispatch at all.
+///
+/// ⚠⚠ CITE `lir_lower.gg`'s `needs_ptr_arg`, NOT `lir_codegen.gg`'s
+/// `void**` decode. The SH-emitted C for these cells contains a PLAIN DIRECT
+/// CALL and ZERO `void**`: the codegen decode never fires on them, and an
+/// investigator pointed at it concludes the repro is wrong. The emitted line
+/// is `__callable_1(&__slot, 2)` — an address where an `int` was written.
+///
+/// ⭐ THE SELF-HOST DEFECT IS STRICTLY WIDER THAN THE RUST TWIN R49 Track
+/// A2-alpha retired. Rust's decode was CONDITIONAL — `insts.rs` looked the
+/// name up in `func_index` first, so a user function occupying the name won,
+/// and the miscompile needed a closure call in the same module to inject a
+/// colliding signature. The self-host's is UNCONDITIONAL: five lines with NO
+/// CLOSURE ANYWHERE reproduce it, and a slot id that collides with nothing
+/// reproduces it too.
+///
+/// ⚠ NOT A LIVE SELF-HOST FIXTURE, DELIBERATELY. New corpus must compile AND
+/// match on the SH lane in the round it lands; these do neither, so they are
+/// `known_gaps/` + `#[ignore]` asserting the CORRECT output — the output Rust
+/// gg produces today — and the ceiling is not raised for them.
+///
+/// MEASURED against the self-host lowerer driver, 2026-09-04, via
+/// `driver F lib --emit-c` → `cc -O0 -w` → run.
+#[test]
+#[ignore = "KNOWN GAP (t1055): the self-host's `needs_ptr_arg` arg-ABI table \
+(self_host_lowerer/lir_lower.gg) address-takes argument 0 of any call whose \
+callee NAME starts with `__callable_`/`__gorget_closure_call_`, with no \
+func_index precedence check — so a user function with that name is \
+miscompiled with NO closure in the program. Asserts the INTENDED 42."]
+#[serial(self_host_lowerer_driver)]
+fn sh_indirect_callee_name_decode() {
+    sh_known_gap_expect(
+        "known_gaps/sh_indirect_callee_name_decode.gg",
+        "sh_indirect_callee_name_decode",
+        "42",
+    );
+}
+
+/// KNOWN GAP (`todo/t1055`), SELF-HOST lane — the SLOT-ID cell.
+///
+/// The digits after the prefix are a local slot id and `needs_ptr_arg` never
+/// reads them; it matches the prefix. On the Rust lane a name colliding with
+/// no minted slot was GREEN (`closure_identity/collide_slot_id_not_arity.gg`),
+/// which is precisely the axis that shows the two lanes fail for different
+/// reasons — so it gets its own cell rather than being folded in.
+#[test]
+#[ignore = "KNOWN GAP (t1055): the self-host matches the indirect-callee \
+PREFIX and ignores the slot id, so a name that collides with nothing the \
+compiler minted is still miscompiled. Asserts the INTENDED 42/42."]
+#[serial(self_host_lowerer_driver)]
+fn sh_indirect_callee_name_decode_slot_id() {
+    sh_known_gap_expect(
+        "known_gaps/sh_indirect_callee_name_decode_slot_id.gg",
+        "sh_indirect_callee_name_decode_slot_id",
+        "42\n42",
+    );
+}
+
+/// KNOWN GAP (`todo/t1055`), SELF-HOST lane — a real closure call AND the
+/// user's own direct call in one program. The MIRROR IMAGE of the Rust twin:
+/// the self-host gets the closure call right and the direct call wrong.
+#[test]
+#[ignore = "KNOWN GAP (t1055): with a closure call and a direct call in one \
+program, the self-host miscompiles the DIRECT one — the mirror of the Rust \
+defect R49 A2-alpha retired. Asserts the INTENDED 42/42."]
+#[serial(self_host_lowerer_driver)]
+fn sh_indirect_callee_name_decode_direct() {
+    sh_known_gap_expect(
+        "known_gaps/sh_indirect_callee_name_decode_direct.gg",
+        "sh_indirect_callee_name_decode_direct",
+        "42\n42",
+    );
+}
+
+/// KNOWN GAP (`todo/t1055`), SELF-HOST lane — the SIBLING prefix. Both
+/// spellings sit in one `or` expression in `needs_ptr_arg`'s first clause, so
+/// a fix that teaches only one of them is half a fix; pinned separately.
+#[test]
+#[ignore = "KNOWN GAP (t1055): `needs_ptr_arg`'s first clause tests both \
+indirect-callee prefixes in one expression, so the `__gorget_closure_call_` \
+spelling reaches the same address-take. Asserts the INTENDED 42/42."]
+#[serial(self_host_lowerer_driver)]
+fn sh_indirect_callee_name_decode_sibling() {
+    sh_known_gap_expect(
+        "known_gaps/sh_indirect_callee_name_decode_sibling.gg",
+        "sh_indirect_callee_name_decode_sibling",
+        "42\n42",
+    );
+}
+
 /// Shared body for the SELF-HOST-lane `known_gaps` pins above: build (cached)
 /// the self-host lowerer driver, emit C for the fixture, compile and run it,
 /// and assert the CORRECT output — the output Rust gg already produces. Each
@@ -6451,8 +6551,11 @@ fn rust_gg_bug_closure_struct_capture_no_persist() {
 /// `t`, wrapper-mangled calling convention, drop-elab freeing `t` in the loop —
 /// were all REFUTED: the GIR passes a correct pointer (`_18 = borrow_mut _8`),
 /// and only the ABI TAG was missing, because a `Callable[..]` PARAMETER's GIR
-/// type is erased to `unit`. The declared ABIs are now published at the GIR
-/// call site (`abi::indirect_callee_key`) and read at the LIR write site.
+/// type is erased to `unit`. The declared ABIs are written at the GIR call
+/// site — the last point where the signature is in scope — and read at the LIR
+/// write site. ⚠ They used to travel through the module-global `fn_param_abis`
+/// map under a synthesised `abi::indirect_callee_key`; R49 Track A2-α put them
+/// on `Instruction::CallIndirect` itself, so there is no key and no map hop.
 ///
 /// Stays in `known_gaps/` (out of `runtime_parity_corpus`) with a LIVE test:
 /// the self-host lane still mis-lowers indirect `&` calls.
@@ -59996,9 +60099,12 @@ fn known_gap_derive_hashable_float_field_link_failure() {
 // At an indirect (`Callable`/closure) call each argument's pointer-vs-value ABI
 // used to be GUESSED from the argument's pointee SHAPE at two independent
 // backend read sites; it is now WRITTEN at one LIR site from the CALLEE's
-// declared parameter ownership (`src/lir/lower/insts.rs`, `Inst::CallClosure`),
-// with the erased-signature provenance publishing its declared ABIs at the GIR
-// call site (`abi::indirect_callee_key`).
+// declared parameter ownership (`src/lir/lower/operands.rs`,
+// `closure_arg_abis`, feeding `Inst::CallClosure`), with the erased-signature
+// provenance writing its declared ABIs onto `Instruction::CallIndirect` at the
+// GIR call site. ⚠ That channel used to be the module-global `fn_param_abis`
+// map keyed by a synthesised `abi::indirect_callee_key`; R49 Track A2-α
+// retired the key along with the manufactured callee name it was built from.
 //
 // ⚠ THE WHOLE NET LIVES IN `known_gaps/` WITH **LIVE** TESTS, DELIBERATELY.
 // `runtime_parity_corpus` (this file) reads only `tests/fixtures/*.gg` and
@@ -60828,27 +60934,50 @@ fn known_gap_shared_init_from_live_local_ices() {
     run_gg("known_gaps/shared_init_from_live_local_ices.gg", "hello");
 }
 
-/// KNOWN GAP — calling a `Callable[...]`-typed LOCAL VARIABLE with a
-/// consuming argument panics the lowerer (`Tier 2a consume-site violation`,
-/// src/ir/lowering/mod.rs:2114). `gg check` passes, so this is a
-/// crash-on-valid-program.
+/// GRADUATED from `known_gaps/` (`t0389`) by R49 Track A2-α — calling a
+/// `Callable[…]`-typed LOCAL VARIABLE with a consuming argument used to PANIC
+/// the lowerer on a program `gg check` accepted: a crash-on-valid-program.
 ///
-/// GLYPH-INDEPENDENT: the retired-glyph twin panics with a byte-identical
-/// message, so it is NOT a D27 issue. The INDEXED-callee form of the same
-/// program compiles and runs on the Rust lane — see
-/// `callable_bang_arr_indexed_callee`, the one in-corpus cell of that shape —
-/// so the hole is specific to calling a Callable-typed local BINDING.
-/// (`d27_sh_caret_fntype_param_suffix` is NOT an indexed-callee twin: it
-/// passes its callable as a parameter. It shares the fn-type param-suffix
-/// parse position, not the callee shape.)
+/// ⭐ THE ICE WAS A FALSE POSITIVE MANUFACTURED BY THE CALLEE'S NAME. The panic
+/// read `Tier 2a consume-site violation … CollectionMutator(
+/// __gorget_closure_call_3, arg #0) — untracked source consumed`. That
+/// classification came from `is_consume_extern`, which asks
+/// `module.consume_externs` — a set derived at module finalization from
+/// `fn_param_ownerships` by taking every function with an `Ownership::Move`
+/// parameter. The closure-call arm had INJECTED the callable's ownerships into
+/// `fn_param_ownerships` under its manufactured `__gorget_closure_call_<slot>`
+/// key precisely so `lower_call_arg` could read them back, so finalization duly
+/// derived the synthetic name into `consume_externs` and the validator demanded
+/// a decided ownership for an argument no arm had registered. **A synthetic
+/// callee was classified as a collection mutator because a table keyed by a
+/// made-up name said so.** With the callee's identity carried on
+/// `Instruction::CallIndirect` there is no key, no derived entry and no
+/// violation — the fix is at the producer (Core #3), exactly where `t0389`
+/// asked for it.
+///
+/// Verified on both Rust backends, and ASan-clean under `detect_leaks=1` (the
+/// leak instrument's positive control: a `closure_identity/` sibling reports its
+/// known 32 bytes in the same run, so a silent CLEAN here is a real CLEAN).
+///
+/// ⚠ THE FIXTURE STAYS IN `known_gaps/`, AND THE REASON IS THE OTHER LANE.
+/// `t0389` recorded the self-host as printing this correctly while Rust gg
+/// panicked — a "reference lags the self-host" cell. **That claim has decayed:
+/// the self-host now exits 139 on it.** Measured with a driver built from
+/// PRISTINE committed source, so it is pre-existing and not this track's
+/// inflow; filed as `t1118`. Moving the fixture to `tests/fixtures/*.gg` would
+/// enrol a self-host SEGV in `runtime_parity_corpus`, which is the one thing a
+/// track may not do with its own inflow — so it stays here with a LIVE
+/// Rust-lane test, the same shape as
+/// `rust_gg_bug_callable_amp_struct_iterator_segv` and
+/// `callable_amp_abi_param_binding`.
+///
+/// GLYPH-INDEPENDENT: the retired-glyph twin panicked with a byte-identical
+/// message, so it was never a D27 issue. The INDEXED-callee form of the same
+/// program always compiled and ran on the Rust lane — see
+/// `callable_bang_arr_indexed_callee` — which is what identified the hole as
+/// specific to calling a Callable-typed local BINDING.
 #[test]
-#[ignore = "KNOWN GAP (filed R41 T-RB0): calling a Callable-typed LOCAL \
-VARIABLE with a consuming arg ICEs at src/ir/lowering/mod.rs:2114 (Tier 2a \
-consume-site violation, `untracked source consumed`). gg check passes. \
-Glyph-independent (the `!` twin panics identically). The indexed-callee form \
-works, so the closure-call lowering must register the consume site the way \
-the indexed path already does."]
-fn known_gap_callable_local_var_consuming_arg_ices() {
+fn callable_local_var_consuming_arg() {
     run_gg(
         "known_gaps/callable_local_var_consuming_arg_ices.gg",
         "hi\n101",
@@ -63063,6 +63192,230 @@ fn closure_arg_user_method_named_call_string_return() {
 #[test]
 fn closure_arg_free_function_named_call() {
     run_gg("closure_identity/closure_arg_free_function_named_call.gg", "7063\ndone");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE INDIRECT CALLEE'S IDENTITY — the SECOND convention, and the collision it
+// shares with USER code.
+//
+// A1-IDENTITY (above) retired the `__call` substring test that decided "is this
+// argument a closure" from a MANGLED USER METHOD name. These cells cover the
+// convention one over: until R49, every indirect-dispatch arm MANUFACTURED a
+// callee name — `__callable_<slot>`, `__gorget_closure_call_<slot>` — emitted a
+// plain `Instruction::Call` with it, and left the LIR lowering, the validator
+// and the LLVM backend to recognise the SPELLING.
+//
+// ⚠ THAT NAMESPACE IS THE ONE USER FUNCTIONS LIVE IN. It is flat, module-global
+// and string-keyed, and the manufactured names are ordinary Gorget identifiers a
+// user may write. Two ordinary programs that never mention a closure convention
+// therefore reached three distinct failures:
+//
+//   shape                        | before the fix (Rust gg, C lane)
+//   -----------------------------|-------------------------------------------
+//   closure call + `__callable_1`| exit 0, a nondeterministic heap-derived
+//                                | number where 42 is correct — SILENT WRONG
+//                                | OUTPUT, `gg check` clean
+//   + the user's own direct call | that, AND the direct call printing `0`:
+//                                | the closure arm had overwritten the shared
+//                                | table entry with a `unit` return type
+//   arity disagreement           | build rc 1 leaking the C compiler's
+//                                | "too many arguments to function
+//                                | '__callable_1'" — ZERO Gorget diagnostics
+//   `extern "C" … = "__callable_probe"` | exit 139
+//
+// On the LLVM lane the first three are a hard `llc` failure ('%v2' defined with
+// type 'i64' but expected 'ptr') rather than a wrong answer — Core #8: the
+// backends DISAGREED, one shipping the unsafe binary and one refusing it.
+//
+// THE FIX is `Instruction::CallIndirect` carrying the callee VALUE, its
+// `ClosureDispatchKind` and its declared per-argument ABI. A runtime-resolved
+// callee has no name, so after it there is nothing to manufacture, nothing to
+// inject into a shared table, and no decode site downstream.
+//
+// ⚠⚠ EVERY CELL ASSERTS 42 (or 42/101), NEVER A SNAPSHOT OF THE OBSERVED
+// NUMBER — the wrong value is a live heap pointer plus a constant and differs
+// between runs. Every expected string below is QUOTED FROM ggdef, which
+// adjudicates all nine `.gg` cells (only the `extern "C"` cell is outside the
+// phase-0 subset, and it asserts a build outcome rather than stdout).
+//
+// AXIS COVERED, cell by cell:
+//   prefix           `__callable_` · `__gorget_closure_call_` (NOT symmetric:
+//                    the first injects a `unit` return type, the second the
+//                    real one, so they fail DIFFERENTLY — see the two
+//                    `collide_sibling_*` cells)
+//   manifestation    wrong dispatch · dropped result · missing diagnostic ·
+//                    SIGSEGV through the extern namespace
+//   ordering         declaration order · statement order, isolated from each
+//                    other by the two `collide_*_order_*` cells
+//   namespace        Gorget identifier · `extern "C"` symbol
+//   name shape       slot id that collides · slot id that does not
+//   backend          C and LLVM (the LLVM lane re-runs every cell under
+//                    `GG_BACKEND=llvm`)
+//
+// RED-VERIFIED against the pre-fix compiler, C lane, 2026-09-04 (Core #12) —
+// rebuilt from pristine committed source, every rc read off the BARE command:
+//   collide_closure_call                    exit 0, "281474267998517"
+//   collide_direct_call_result_dropped      exit 0, "281474866687581\n0"
+//   collide_decl_order_main_first           exit 0, "42\n281474029213941"
+//   collide_stmt_order_direct_first         exit 0, "0\n281474038924733"
+//   collide_arity_mismatch                  BUILD rc 1, raw C diagnostic
+//   collide_sibling_escaped_closure         exit 0, "281473912936077"
+//   collide_sibling_direct_call             exit 0, "281473912936077\n42"
+//   extern_symbol_named_callable            exit 139
+//   collide_no_closure / _slot_id_not_arity GREEN (discrimination cells)
+//   all six controls                        GREEN
+// On the LLVM lane the eight RED cells are all BUILD rc 1 (llc type failure),
+// and the same two discrimination cells plus six controls are green.
+//
+// OMITTED CELLS, NAMED (Core #12):
+//   • A sibling-prefix twin of `collide_arity_mismatch`: the sibling arm
+//     injects the callable's REAL return type, so the arity disagreement is
+//     already covered by `collide_sibling_direct_call`; a twin would be a
+//     DISCRIMINATION cell, not a RED-verified one.
+//   • `__Closure_N__call` — that spelling names a genuine emitted thunk, so it
+//     is not a manufactured name and does not join this class. It is still
+//     dispatched through `call_indirect_tracked`, as `IndirectCallee::Named`.
+//   • The self-host lane. It reproduces this class MORE WIDELY than Rust gg
+//     ever did — see `known_gaps/sh_indirect_callee_name_decode.gg` and
+//     `todo/t1055`; those cells are `#[ignore]`d, not live, per the
+//     compile-and-MATCH-same-round rule.
+
+/// The severity leader: silent wrong output from an ordinary program.
+#[test]
+fn collide_closure_call() {
+    run_gg("closure_identity/collide_closure_call.gg", "42");
+}
+
+/// Control: same closure call, ordinary name.
+#[test]
+fn collide_closure_call_ctl() {
+    run_gg("closure_identity/collide_closure_call_ctl.gg", "42");
+}
+
+/// The dropped-result manifestation — a Core #10 lower-or-reject violation.
+#[test]
+fn collide_direct_call_result_dropped() {
+    run_gg("closure_identity/collide_direct_call_result_dropped.gg", "42\n42");
+}
+
+/// Control for the dropped-result cell.
+#[test]
+fn collide_direct_call_result_dropped_ctl() {
+    run_gg("closure_identity/collide_direct_call_result_dropped_ctl.gg", "42\n42");
+}
+
+/// DECLARATION order decided which print came out wrong.
+#[test]
+fn collide_decl_order_main_first() {
+    run_gg("closure_identity/collide_decl_order_main_first.gg", "42\n42");
+}
+
+/// Statement order held constant against the cell above ⇒ the discriminator
+/// was declaration (lowering) order, not statement order.
+#[test]
+fn collide_stmt_order_direct_first() {
+    run_gg("closure_identity/collide_stmt_order_direct_first.gg", "42\n42");
+}
+
+/// The diagnostic-quality cell: a build that failed in the C compiler with no
+/// Gorget diagnostic at all. Expected output quoted from ggdef.
+#[test]
+fn collide_arity_mismatch() {
+    run_gg("closure_identity/collide_arity_mismatch.gg", "42\n101");
+}
+
+/// Control for the arity cell: same arity difference, ordinary name.
+#[test]
+fn collide_arity_mismatch_ctl() {
+    run_gg("closure_identity/collide_arity_mismatch_ctl.gg", "42\n101");
+}
+
+/// The SIBLING prefix, escaped-closure dispatch.
+#[test]
+fn collide_sibling_escaped_closure() {
+    run_gg("closure_identity/collide_sibling_escaped_closure.gg", "42");
+}
+
+/// The sibling prefix with the user's own direct call — which stayed CORRECT
+/// where the `__callable_` twin printed `0`, because the two arms injected
+/// different return types. The asymmetry is the point.
+#[test]
+fn collide_sibling_direct_call() {
+    run_gg("closure_identity/collide_sibling_direct_call.gg", "42\n42");
+}
+
+/// Control for both sibling cells.
+#[test]
+fn collide_sibling_ctl() {
+    run_gg("closure_identity/collide_sibling_ctl.gg", "42\n42");
+}
+
+/// DISCRIMINATION CELL, green before AND after (Core #12: this is not
+/// coverage, it pins that the fix does not regress the accidentally-correct
+/// path). A user function named `__callable_1` with NO closure in the program
+/// resolves through `func_index` before any decode was reached.
+/// ⚠ The self-host lane is NOT correct on this shape — `known_gaps/`.
+#[test]
+fn collide_no_closure() {
+    run_gg("closure_identity/collide_no_closure.gg", "42");
+}
+
+/// Control for the no-closure cell.
+#[test]
+fn collide_no_closure_ctl() {
+    run_gg("closure_identity/collide_no_closure_ctl.gg", "42");
+}
+
+/// DISCRIMINATION CELL: the digits were a local SLOT id, never an arity.
+#[test]
+fn collide_slot_id_not_arity() {
+    run_gg("closure_identity/collide_slot_id_not_arity.gg", "42\n42");
+}
+
+/// The `extern "C"` namespace — BUILD-ONLY, and deliberately so.
+///
+/// Before the fix this built clean and segfaulted: the decode tested the
+/// EMITTED C SYMBOL, and `extern "C"` lets the user choose it. After the fix
+/// the call is an ordinary extern call to a symbol nothing defines, so the
+/// build must fail at LINK time naming `__callable_probe`. That is the honest
+/// outcome, and it is what this asserts — there is no stdout, because a
+/// correct compiler never produces a binary here.
+///
+/// ⚠ The assertion is on the LINKER's message, not on a rejection Gorget
+/// makes: nothing in the language forbids binding an extern to an undefined
+/// symbol, and nothing should — the diagnostic belongs to the linker.
+#[test]
+fn extern_symbol_named_callable_must_not_link() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture =
+        manifest_dir.join("tests/fixtures/closure_identity/extern_symbol_named_callable.gg");
+    assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
+
+    let out = build_with_timeout(
+        gg_command("build").arg(&fixture),
+        "closure_identity/extern_symbol_named_callable.gg",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        !out.status.success(),
+        "binding an `extern \"C\"` symbol to `__callable_probe` must FAIL to \
+         link — nothing defines that symbol. A successful build here means the \
+         indirect-dispatch name decode is back: it used to accept this program \
+         and emit a closure-shaped call on an integer argument, giving a binary \
+         that exits 139.\nstdout: {}\nstderr: {stderr}",
+        String::from_utf8_lossy(&out.stdout),
+    );
+    assert!(
+        stderr.contains("__callable_probe"),
+        "the build failure must NAME the missing symbol `__callable_probe`. A \
+         failure for any other reason is not this cell.\nstderr: {stderr}",
+    );
+}
+
+/// Control: an `extern "C"` binding to a symbol that exists.
+#[test]
+fn extern_symbol_ctl() {
+    run_gg("closure_identity/extern_symbol_ctl.gg", "42");
 }
 
 /// `todo/t0681`: `Box[Callable[…]](closure)` used to ICE ("call to undefined

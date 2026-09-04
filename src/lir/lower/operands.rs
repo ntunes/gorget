@@ -238,9 +238,14 @@ impl<'a> FuncLowering<'a> {
     /// callable's declared signature reaches this point by two routes:
     ///  1. the closure operand's own `GirType::FnPtr` (annotated locals,
     ///     escaped closures), and
-    ///  2. the module's declared `fn_param_abis`, published at the GIR call
-    ///     site under [`crate::ir::abi::indirect_callee_key`] — the route that
-    ///     survives the `Callable[..]` PARAMETER's erasure to `unit`.
+    ///  2. the declared ABI the GIR call site wrote onto
+    ///     `Instruction::CallIndirect` — the route that survives the
+    ///     `Callable[..]` PARAMETER's erasure to `unit`.
+    ///
+    /// Channel 2 used to be a module-global `fn_param_abis` entry under a
+    /// synthesised `__callable_<local>@<fn>` key, which the producer formatted
+    /// and this reader re-formatted identically in the hope of meeting in the
+    /// middle. It now arrives on the instruction, so there is no key.
     ///
     /// An EMPTY result means the signature reached neither channel (a
     /// container element, an `auto`-bound callable): that is *unknown*, not
@@ -249,7 +254,7 @@ impl<'a> FuncLowering<'a> {
     pub(super) fn declared_closure_param_by_ptr(
         &self,
         closure_operand: Option<&Operand>,
-        synthetic_callee: &str,
+        declared: &[crate::ir::lowering::context::ParamABI],
     ) -> Vec<bool> {
         use crate::ir::lowering::context::ParamABI;
         if let Some(op) = closure_operand {
@@ -261,11 +266,79 @@ impl<'a> FuncLowering<'a> {
                     .collect();
             }
         }
-        let key = crate::ir::abi::indirect_callee_key(synthetic_callee, &self.lir_func.name);
-        self.fn_param_abis
-            .get(&key)
-            .map(|abis| abis.iter().map(|a| *a == ParamABI::ByMutPtr).collect())
-            .unwrap_or_default()
+        declared.iter().map(|a| *a == ParamABI::ByMutPtr).collect()
+    }
+
+    /// Build `Inst::CallClosure`'s per-user-argument `arg_abis` for an indirect
+    /// call.
+    ///
+    /// Every argument starts `Auto` and is then refined by the two facts this
+    /// layer is entitled to:
+    ///
+    ///  * a small non-union aggregate passed by value gets `ByValue` — the
+    ///    LLVM backend used to reconstruct this by scanning for `SlotAddr`
+    ///    producers, and declared LIR signatures are authoritative instead; and
+    ///  * a parameter the callee DECLARED as `&` gets `Ptr`. The invariant,
+    ///    spelled once: **an argument's ABI at an indirect call is the
+    ///    CALLEE's DECLARED parameter ABI** — the same fact the `__adapt_*`
+    ///    shim emitter derives from `LirFunction.params`. A `&`
+    ///    (`MutableBorrow`) param is a POINTER in that declared signature, so
+    ///    the call site forwards the pointer.
+    ///
+    /// Leaving it `Auto` made BOTH backends reconstruct the decision from the
+    /// ARGUMENT's pointee SHAPE (`is_aggregate() && !contains_resource`) — two
+    /// independent guesses at one missing fact. The guess coincides with the
+    /// truth for scalars and for resource aggregates, and DIVERGES for a
+    /// non-resource aggregate behind a `&`: the call site then passed the
+    /// struct by value where the callee (and its adapter) declared `void*` —
+    /// SIGSEGV, or a silently lost write-through where the platform ABI hands
+    /// large aggregates over in a hidden-pointer slot.
+    ///
+    /// GUARD G1 (Core #6) — "the declared ABI never reached this write site".
+    /// An indirect call with user args whose callee signature is in NEITHER
+    /// channel is precisely the state in which the backends must guess from the
+    /// argument's shape, which is the defect class this write site retires.
+    /// Reported, not fatal: a legitimately by-value large aggregate also leaves
+    /// `Auto` here, so the terminal state is a shrinking allowlist, not an
+    /// assert. Census: `GG_REPORT_CLOSURE_ABI_GUESS=1 gg build <fixture>`;
+    /// ratchet: `closure_abi_declared_signature_census` in tests/integration.rs.
+    pub(super) fn closure_arg_abis(
+        &self,
+        closure_operand: Option<&Operand>,
+        declared: &[crate::ir::lowering::context::ParamABI],
+        user_arg_types: &[LirType],
+        n_user_args: usize,
+    ) -> Vec<crate::ir::abi::AbiKind> {
+        use crate::ir::abi::AbiKind;
+        let mut abis = vec![AbiKind::Auto; n_user_args];
+        for (i, ty) in user_arg_types.iter().enumerate().take(abis.len()) {
+            if abis[i] == AbiKind::Auto {
+                if let LirType::Struct(sid) = ty {
+                    let sdef = &self.module_structs[sid.0 as usize];
+                    if !sdef.is_union_layout
+                        && super::types::is_small_aggregate(ty, self.module_structs)
+                    {
+                        abis[i] = AbiKind::ByValue;
+                    }
+                }
+            }
+        }
+        let by_ptr = self.declared_closure_param_by_ptr(closure_operand, declared);
+        for (i, is_ptr) in by_ptr.iter().enumerate().take(abis.len()) {
+            if *is_ptr {
+                abis[i] = AbiKind::Ptr;
+            }
+        }
+        if by_ptr.is_empty()
+            && n_user_args > 0
+            && std::env::var_os("GG_REPORT_CLOSURE_ABI_GUESS").is_some()
+        {
+            eprintln!(
+                "[closure-abi-unknown] fn={} callee=<indirect> args={}",
+                self.lir_func.name, n_user_args
+            );
+        }
+        abis
     }
 
     pub(super) fn operand_lir_type(&self, operand: &Operand) -> LirType {

@@ -1,0 +1,18 @@
+# The SIBLING prefix. Escaped closures went through a second manufactured
+# spelling, `__gorget_closure_call_<slot>`, decoded by the same sites and
+# equally collidable — one convention over from the one A1-IDENTITY retired.
+#
+# ⚠ THE TWO PREFIXES WERE NOT SYMMETRIC and a "does it print 42" pair would
+# have passed for different reasons: the `__callable_` arm injected a `unit`
+# return type into the shared table, this one injected the callable's REAL
+# return type. So this cell reproduces the wrong-dispatch manifestation but NOT
+# the dropped-result one — which is why both prefixes get their own cells.
+int __gorget_closure_call_1(int a, int b):
+    return a + b
+
+int(int) make_doubler(int n):
+    return (int y): y * n
+
+void main():
+    auto d = make_doubler(2)
+    print(d(21))
