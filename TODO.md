@@ -683,6 +683,41 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+⭐⭐ **L's FOLD 3 RAN THE FULL ~25 MIN SWEEP AND MADE THREE UNASKED JUDGEMENT CALLS, ALL RIGHT.**
+⭐ **It admitted EIGHT rows, not the five I briefed** — the sweep's own `new_leak` bucket fired on the three
+GRADUATIONS too, which had **no rows at all**, so five would have left the gate red and **L unlandable**. The
+three extra go under the **pre-existing 2026-09-02 graduation extension ⇒ no new owner ask.**
+⭐ **It also TIGHTENED `closure_fstring_capture`** (`gorget_string_format*5 → *1`) — its row had been
+admitting **four records it no longer leaks**. *An admission that over-declares is the same rot in the other
+direction.*
+⭐⭐ **AND IT SCOPED THE RETIREMENT TO FULL-CORPUS RUNS, "because on a `FIXLIST` demo EVERY UNRUN ROW READS AS
+FIXED."** ⚡ **A guard that would have fired on its own blindness — caught before shipping.** ⊕ **BOTH
+POLARITIES DEMONSTRATED RED and the assertions are now PERMANENT IN THE SELF-TEST:** disable the retirement →
+*"a CITED row whose fixture no longer leaks was not forced out"*, rc 2; remove the scoping → *"an UNCITED row
+was forced out"*, rc 2. **The retiring direction cannot itself rot** — the strongest form of Core #6 this
+round has produced.
+⊕ **One cell's owner corrected again: `closure_capture_then_mutate_source_uaf` belongs to `t0310`**, not
+`t1210` — the sixth attribution correction on that table, and the first that names a NEW owner.
+⊕ **Retractions landed:** `t1071`'s *"MEASURED NO LIVE HARM"* (stdout assertion, cannot see a leak) and
+`t1070`'s *"the cost is one extra materialisation"* (**a leak record while `t1210` is open**; the charter
+framing only becomes true once it lands).
+⭐ **"EIGHT IS NOW A CENSUS, NOT A FLOOR" — SETTLED AND AUTHORITATIVE.** The full corpus sweep establishes the
+capture class is exactly those eight, superseding the confirming review's 368-fixture selection, **and no
+cited row is stale.**
+
+⛔ **THE SWEEP FOUND A NINTH RED THAT IS NOT THIS TRACK'S, AND IT IS THE ROUND-CLOSE BLOCKER — `t1290`.**
+`string_enum_variants` leaks **12 B / 6 allocs** from `String ch = input[i]`
+(`str_alloc_copy ← gorget_string_clone_to_owned ← tokenize`) on **C and LLVM**; a compiler built from L's
+**base** leaks the identical amount and **the fixture contains no closure**, so it is not `t1210`. It has no
+allowlist row, so it fails the gate outright.
+⇒ **ORCHESTRATOR CALL, no owner ask needed: ADMIT IT, CITED TO `t1290`.** It is **pre-existing, not inflow**,
+and the reserve-to-owner clause covers genuinely-new inflow only. ⚡⚡ **AND L's OWN NEW MECHANISM MAKES A
+CITED ADMISSION A DEADLINE RATHER THAN A PARDON — the moment `t1290` is fixed the row goes FATAL and forces
+its own removal.**
+⊕ **Restraint preserved deliberately:** the item records a Track-K (`t0871`, `s[i]` View-tagging) hypothesis
+**explicitly marked UNPROVEN**, and says bisect before naming a write site. **Not to be upgraded while
+admitting the row.**
+
 ⭐ **W PASS 3 UNBLOCKED WITHOUT THE OWNER — I CHECKED WHETHER THE COST QUESTION ANSWERS ITSELF, AND IT
 HALF DOES.** The tempting inference was: *if a non-capturing closure sets `env = NULL` and skips the
 allocation, there is no header to fill, so Y1's undeclared-symbol failure disappears and the cost question is
