@@ -1,0 +1,44 @@
+# CAPTURE OWNERSHIP — a closure captures a collection and the SOURCE is then
+# reallocated out from under it. The environment holds its own value, so the
+# realloc cannot reach it.
+#
+#     Callable[String()] f = (): v.get(0).unwrap()   # captures `v`
+#     while i < 64: v.push(mk(…))                    # `v` reallocates
+#     print(f())                                     # still `hello`
+#
+# THE RULE THIS PINS. A closure capture is an ownership boundary, so it obeys
+# the same table every other consuming position obeys: clone if the source is
+# still live, move if it is dead. `v` is live across 64 pushes, so the capture
+# clones, and the environment's field is an independent collection that no
+# realloc of `v` can sever.
+#
+# ⚠ THE REALLOC IS LOAD-BEARING (64 pushes, not one) and the payload must be
+# heap-FORCED through `mk`, never a literal: a string literal is `.rodata` with
+# `cap = 0` and `gorget_string_free` no-ops on it, so a literal payload proves
+# nothing. 0 pushes and 1 push are both rc 0 without the rule.
+#
+# ⚠ THE DISCRIMINATOR IS THE CAPTURE ROOT, NOT WHERE THE MUTATION IS SPELLED.
+# The sibling `closure_capture_inside_body_uaf.gg` reallocates INSIDE the body
+# with no saved view variable at all; `cow_closure_body_view_survives_realloc.gg`
+# runs the identical statements with the vector LOCAL to the closure — no
+# capture, and it was already correct. Capture is what makes this shape a
+# boundary.
+#
+# ⚠ THE INSTRUMENT IS C + ASan. Without the rule this is rc 139 on both
+# backends, and under `--backend=llvm --sanitize` the aggregate sibling reports
+# only a leak (`todo/t0731`).
+#
+# Prints `hello`, both backends, ASan-clean.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = []
+    v.push(mk("hel", "lo"))
+    String() f = (): v.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(mk("fill", "er"))
+        i = i + 1
+    print(f())

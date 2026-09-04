@@ -668,7 +668,15 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// Lowered 91 → 90 (R49 Track M1): the deleted unreachable `Box` mint in
     /// `lower_struct_literal` carried a `drops.is_registered` guard before its
     /// `register_local`. The live mint's copy stays.
-    const PHASE_D_PROXY_BUDGET: usize = 90;
+    /// Lowered 90 → 89 (R49 Track L, closure-capture ownership). The closure-env
+    /// `StructInit` no longer runs a private capture-ownership predicate; it
+    /// routes through the shared consuming-position sequence
+    /// (`ensure_owned_at_boundary` → `clone_multi_use_resource_args` →
+    /// `move_zero_consumed_args`), so the hand-rolled
+    /// `ctx.drops.is_registered(cap.local_id)` guard in `lower_closure` is gone
+    /// along with the rest of that second opinion.
+    /// The two removals are independent, so the merged budget is 89.
+    const PHASE_D_PROXY_BUDGET: usize = 89;
 
     let count = count_phase_d_proxy_reads();
     assert_exact_ratchet(
@@ -24811,8 +24819,9 @@ fn staging_move_burndown_shrink_only() {
 /// overwhelmingly the RECENT filings — the `.gg` gets written under time
 /// pressure and the wiring step is the one that gets dropped. Several are
 /// CRITICAL memory-safety repros (`box_*_double_free`,
-/// `closure_capture_then_mutate_source_uaf`,
-/// `read_through_borrow_param_destroys_caller_value`).
+/// `read_through_borrow_param_destroys_caller_value`; and
+/// `closure_capture_then_mutate_source_uaf`, whose row has since LEFT — it was
+/// graduated out of `known_gaps/` into a live regression fixture).
 ///
 /// ## SHRINK-ONLY
 ///
@@ -24829,14 +24838,13 @@ fn staging_move_burndown_shrink_only() {
 #[test]
 fn known_gaps_repros_are_wired_to_a_test() {
     /// Baseline regenerated 2026-08-27 by running this test. SHRINK-ONLY.
-    const ALLOWED_UNWIRED: [&str; 24] = [
+    const ALLOWED_UNWIRED: [&str; 23] = [
         "box_callable_call_through_box_undefined_function",
         "box_enum_payload_c_wont_compile_llvm_double_frees",
         "box_get_bound_to_local_double_free",
         "box_get_non_primitive_llvm_llc_type_error",
         "box_move_without_operator_missing_at_ctor_and_field",
         "box_optional_payload_incomplete_type_both_lanes",
-        "closure_capture_then_mutate_source_uaf",
         "dict_index_assign_during_iteration_ice",
         "dict_value_write_through_silently_dropped",
         "doc_ld_concurrency_example_does_not_typecheck",

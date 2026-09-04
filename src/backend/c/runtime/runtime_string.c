@@ -160,10 +160,27 @@ static inline void gorget_closure_free(void* p) {
     c->env = NULL;
 }
 
-// Deep-clone a closure: copy fn_ptr as-is, allocate a fresh env via
+// Clone a closure: copy fn_ptr as-is, allocate a fresh env via
 // `__gorget_closure_env_alloc` (reading the size from the source's prefix
-// header), and memcpy the env contents. Result is independently owned —
-// the clone's drop frees its own env without affecting the source.
+// header), and memcpy the env contents.
+//
+// ⚠ THE COPY IS SHALLOW AT FIELD LEVEL, AND THAT IS THE WHOLE CONSTRAINT ON
+// ENV-FIELD DROPS. The env BLOCK is independently owned — `gorget_closure_free`
+// on the clone frees its own allocation and never touches the source's. The env
+// FIELDS are not: a `GorgetClosure` is `{ fn_ptr, env }`, 16 bytes and
+// TYPE-ERASED, so this function cannot name the captured field types and the
+// `memcpy` reproduces their pointers verbatim. After it, the clone and the
+// source hold the SAME captured buffers.
+//
+// ⇒ A per-field drop may not be emitted for BOTH handles. The typed
+// `__Closure_N__drop` the lowering generates is the right tool for that job and
+// this function is not: closing the env-field leak means routing
+// `Callable.clone()` through the typed clone, or refcounting the env — never
+// adding a deep copy here, which would need a vtable slot the 16-byte layout
+// does not have, or name-matching on the env struct (layering rule 2).
+// `todo/t0953` owns the Rust-lane leak this constraint currently protects;
+// `todo/t1069` owns the self-host's version, where the field drop IS emitted at
+// make-sites and a clone result is exactly the cell it misses.
 static inline GorgetClosure gorget_closure_clone_to_owned(const GorgetClosure* src) {
     __gorget_closure_clone_count++;
     GorgetClosure dst;

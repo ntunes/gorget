@@ -3296,7 +3296,8 @@ fn cow_static_trait_method_view_survives_realloc_safe() {
 
 /// PATH CELL — `emit_closure_call_function` (the closure body, whose AST is a
 /// bare `Spanned<Expr>`). The vector is LOCAL to the closure: the CAPTURED
-/// sibling is `todo/t0704`, a different defect at the capture boundary.
+/// sibling is a different defect at the capture boundary, closed in R49 and
+/// now pinned live by `closure_capture_then_mutate_source_uaf`.
 #[test]
 fn cow_closure_body_view_survives_realloc_safe() {
     security_safe("cow_closure_body_view_survives_realloc", "helloworld");

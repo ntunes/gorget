@@ -246,6 +246,15 @@ closure capture; enum field init is the same shape but goes through the
 using the local, so the last-use check is what distinguishes "transfer
 ownership" from "clone and keep."
 
+That split is why a struct-shaped boundary is a *sequence*, not one call.
+`ensure_owned_at_boundary` answers only the borrow half of the table; the
+live-owned half is `clone_multi_use_resource_args`, and the transfer is
+`move_zero_consumed_args`. `lower_struct_init` runs all three in order, and so
+does the closure-env `StructInit` — a capture is the fifth boundary in the set,
+not a position with its own rule. Running only the first is the failure mode
+that boundary has to be watched for: it materializes a borrow and lets a
+still-live owned source be bit-copied into the aggregate as an alias.
+
 ## Materialization points — the enforced boundary set
 
 > **Finding (re-derived 2026-05-29 from current source; reframed 2026-05-30).**
@@ -509,7 +518,7 @@ move):
 | `exprs/mod.rs:608` | tuple-literal field init (`Expr::TupleLiteral` in `lower_expr_inner`) |
 | `exprs/mod.rs:2141` | struct field init (`lower_struct_literal`) |
 | `exprs/mod.rs:3207` | match-arm value escaping an arm |
-| `closures.rs:319,559` | closure capture |
+| `closures.rs:367,637` | closure capture (`:367` is pass 1 of the shared three-pass sequence — see below) |
 
 Both `return` forms go through the SAME helper on purpose. The statement return
 used to hand-roll its own `GirType::Ptr(inner)`-only clone, which was blind to

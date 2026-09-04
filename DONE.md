@@ -530,6 +530,113 @@
   40·90·97·100·87/28, 0 failed on BOTH backends · `staging_move_burndown --check` rc 0 ·
   `--clones=stats` identical pristine vs fixed (no CoW charter breach).
 
+- [2026-09-04] **`t0704` + `t0771` CLOSED, `t0703` CLOSED AS ALREADY-FIXED (R49 Track L) — THE CLOSURE
+  CAPTURE WAS THE ONE CONSUMING POSITION WITH ITS OWN PRIVATE OWNERSHIP RULE, and the guard that would
+  have caught it had been blinded by a burn-down.**
+  **THE DEFECT.** `lower_closure` built the creation-site `StructInit` by hand: it ran
+  `ensure_owned_at_boundary` (which materializes BORROWS) and stopped. `lower_struct_init` runs THREE
+  passes for a user struct — `ensure_owned_at_boundary` → `clone_multi_use_resource_args` →
+  `move_zero_consumed_args` — and it is the second that implements the other half of the ratified table:
+  *clone when the source is still live*. So an OWNED capture that stayed live past the capture was
+  bit-copied into the environment as an alias, and the next realloc, rebind or scope exit of the source
+  freed the buffer the environment was still holding. Two arms of ONE rule, not two bugs.
+  **THE FIX (Layering rule 3 / Core #4).** The closure-env `StructInit` now routes through the SAME three
+  passes, so there is one implementation of the consuming-position table instead of two. That supplies
+  the ownership TRANSFER for free: `move_zero_consumed_args` calls `move_zero_and_mark`, which keeps the
+  drop entry and zeroes the slot so `drop_elab` deletes the drop only on the paths where the move
+  happened — the hand-rolled arm used `drops.unregister`, which is not CFG-aware and is the operation
+  that function's own doc warns manufactures the return-borrow double-free class. Two companions: the
+  env `TypeDef` now takes its `drop_strategy`/`copy_semantics` from
+  `compute_drop_strategy_for_struct` like every other aggregate (without it the env owns a value while
+  declaring it owns nothing, and the field leaks); and `CaptureInfo` carries the capture's OCCURRENCE
+  span, because `is_last_use_at` answers a conservative `false` for the enclosing closure span and could
+  never tell a dead source from a live one.
+  **THE GUARD WAS ALREADY THERE.** `is_closure_env` was read at three places in `src/ir/validate.rs` and
+  all three were `continue`s that SKIPPED validation. `git log -S is_closure_env -- src/ir/types.rs`
+  returns ONE commit — a Tier 2a burn-down that minted the flag to zero the violations it was itself
+  producing, on a stated-but-unguarded invariant. Core #14 exactly. All three carve-outs are gone, and
+  the unit test that PINNED the exemption (`tier1c_coherence_closure_env_skipped`) is inverted, with a
+  companion cell so it cannot be satisfied by flagging every env. Deliberately reverting the env metadata
+  by line now fails the build on all ELEVEN capture cells with `[type-metadata-coherence]`.
+  **CELLS RED→GREEN**, all RED-verified against the pre-fix compiler this session: captured collection ·
+  realloc outside the body / inside the body / from a sibling argument of the same aggregate init ·
+  captured scalar `String` rebound under a live capture · the closure-escape 2×2 (param/local ×
+  literal/named), of which three cells ran with a captured borrow and the fourth was the only one the
+  escape diagnostic ever inspected. `heap-use-after-free` in every one at HEAD; none after, on C and
+  LLVM, with `ggdef run` agreeing on every value.
+  ⚠⚠ **SEVERITY-CLASS CHANGE, DISCLOSED: FIVE CELLS CONVERT UAF → LEAK, AND FOUR OF THE FIVE ARE NOT THE
+  MECHANISM THIS ENTRY FIRST NAMED.** `known_gaps/` is OUT of the swept corpus and top-level is IN, so
+  graduating four fixtures and adding seven puts five leaking cells into `scripts/sanitize_sweep.sh` for
+  the first time, with **zero allowlist rows**. **At the base commit the sweep's own classifier reports
+  `heap-use-after-free` on all five, not a leak** — the residue is what is LEFT once the use-after-free is
+  gone. Regenerate the table with a verbatim copy of the sweep's own `leak_classes()`
+  (`grep -n 'leak_classes()' scripts/sanitize_sweep.sh`) over `gg build --sanitize <cell>` +
+  `ASAN_OPTIONS=detect_leaks=1:exitcode=0 LSAN_OPTIONS=use_stacks=0 ./<cell>`:
+
+  | cell | bytes/allocs | the sweep's own class key | corpus | owner |
+  |---|---|---|---|---|
+  | `callable_capture_overlap_aggregate_init_uaf` | 80 B/2 | `__gorget_closure_env_alloc*1,gorget_array_reserve*1` | graduated | **`t0948`** (72 B Direct) + `t1210` (8 B Indirect) |
+  | `closure_escape_capture_axis_local_literal` | 12 B/2 | `gorget_str_cat*1,str_alloc_copy*1` | **NEW** | `t1210` |
+  | `closure_captures_param_then_escapes_uaf` | 8 B/2 | `str_alloc_copy*2` | graduated | `t1210` |
+  | `closure_capture_then_mutate_source_uaf` | 6 B/1 | `str_alloc_copy*1` | graduated | `t1210` |
+  | `closure_escape_capture_axis_param_named` | 4 B/1 | `str_alloc_copy*1` | **NEW** | `t1210` |
+
+  ⛔ **`t0953` OWNS NONE OF THE FIVE, AND SAYING IT DID WAS THE ERROR.** `grep -c
+  __gorget_closure_env_alloc` over the five run logs is `1,0,0,0,0`: only the aggregate cell carries an
+  env-BLOCK frame at all, and that one is a closure literal stored in a **struct field** (`struct Pair:
+  Callable[int(int)] f`), which is `t0948` — `field_is_transitively_droppable` excludes bare
+  `GirType::FnPtr` fields, so `Pair` is classified `[drop: None, copy: Copy]`, no `Pair__drop` is emitted,
+  and the env block is never freed. `t0953`'s subject is a closure literal at a **call-argument** position
+  whose env is abandoned when the call returns; no cell here has one. The count was re-measured and the
+  attribution was inherited (Core #5 applied to one half of a sentence).
+  ⭐ **THE OTHER FOUR CELLS — AND THE 8 B REMAINDER OF THE FIRST — ARE ONE UNFILED RUST-LANE GAP, NOW
+  `t1210`: the env BLOCK is freed and the env's FIELDS are not.** `src/lir/lower/drops.rs`
+  (`grep -n 'gorget_closure_free' src/lir/lower/drops.rs`) hardcodes
+  `DropStrategy::Trivial("gorget_closure_free")` for every `GirType::FnPtr` local, and
+  `gorget_closure_free` (`grep -n 'gorget_closure_free' src/backend/c/runtime/runtime_string.c`) frees the
+  size-prefixed block only. The typed `__Closure_N__drop` that frees the captured fields **is emitted and
+  has zero call sites** — read it off the emitted C with `gg build --emit-c-lir
+  tests/fixtures/closure_escape_capture_axis_local_literal.gg | grep -n '__Closure_0__drop'`: one forward
+  decl, one definition, no call. A bare `Callable` local is `GirType::FnPtr`, never `GirType::Named`, so
+  that arm never reads the truthful `drop_strategy` this round put on the env `TypeDef`. **`t1069` records
+  this as an aside** (*"this is the half Rust gg does not have"*) inside a `lane = "self-host"` item; the
+  Rust-lane half had no owner until now.
+  ⭐ **AND NO ENV-BLOCK FIX GREENS A SINGLE CELL — 72 of 110 BYTES, 0 of 5 CELLS.** Freeing every env block
+  reclaims 72 of the 110 B and greens **zero** of the five: the aggregate cell's other 8 B is an ASan
+  **Indirect** record — a `GorgetArray` buffer held by a field *inside* the 72 B block — so freeing the
+  block without the field drop only re-grades it as an orphaned **Direct** leak, and the other four cells
+  have no env-block record at all. **The field-drop half is required by every one of the five.**
+  ⛔ **`t1210` IS NOT A ONE-LINE FIX, AND THE NAIVE VERSION IS A DOUBLE FREE.** Emitting the field drop
+  alone detonates, because `gorget_closure_clone_to_owned` is shallow at field level — a `.clone()` leaves
+  two handles sharing every captured buffer (`grep -n 'THE COPY IS SHALLOW AT FIELD LEVEL'
+  src/backend/c/runtime/runtime_string.c`). The drop half and a typed `Callable.clone()` land together.
+  ⚠ **TWO OF THE FIVE ARE NEW INFLOW, NOT GRADUATIONS**, and that distinction is what the allowlist header
+  turns on: `tests/sanitize/LEAK_ALLOWLIST.txt` extends the admit-with-citations ruling to leaks *"newly
+  made VISIBLE by a fixture GRADUATING out of `known_gaps/`"* and says *"a row whose leak is genuinely NEW
+  INFLOW remains an OWNER ASK"* (`grep -n 'NEW INFLOW' tests/sanitize/LEAK_ALLOWLIST.txt`).
+  **No rows were admitted and none is sought**: the owner ruled this round *"fix the leaks"*, so the
+  residue is being closed rather than allowlisted, and this track integrates only once the env-field-drop
+  face is closed — at which point the inflow is zero and no ask is owed. On the owner's severity ranking
+  UAF → LEAK is the right direction, but it is a CHANGE OF CLASS and stating it is not optional; the
+  allowlist header's own SIX Q#6 warning is verbatim this shape (*"read CLEAN only because it crashed
+  first"*).
+  **THE COST IS THE HAND-WRITTEN COUNT.** `closure_capture_capture_cost_axis` pins both directions with
+  `assert_eq!`: a dead source materializes NOTHING, a live one materializes exactly ONCE. Reverting the
+  occurrence span alone measures `string_clone = 1` in the dead cell — RED — while stdout is unchanged,
+  which is why the guard is a clone meter and not an output assertion.
+  **`t0703` was fixed on 2026-08-29 by `e7967d570`**, which created `resolve_collection_identity`, moved
+  both repros out of `known_gaps/` and edited the item without closing it. Both are live and green on C
+  and LLVM. **STILL OPEN, FILED NOT FIXED:** `t1067` (a captured single-owner handle — `Callable`/`FnPtr`,
+  `Mutex`, `RWLock`, the cells with no spellable answer, gated on D7; the `Mutex` member is
+  pre-existing, base-identical and was unfiled until this round) · `t1068` (`E_ClosureEscapesScope`
+  over-rejects the fourth escape cell, and its stated premise is now false) · `t1069` (self-host:
+  `Callable.clone()`'s result gets no env-field drop) · `t1070` (an f-string interpolation carries no
+  span, so that capture cell pays a conservative clone) · `t1071` (the spawn wrapper, the second
+  closure-env `StructInit` producer, still ASSERTS the ownership its sibling now derives) · **`t1210`**
+  (the Rust lane frees the closure env BLOCK and never its FIELDS — `__Closure_N__drop` is emitted with
+  zero call sites; the owner of four of the five residual leak cells above). `t0877` sharpened with **two**
+  more body-shape arms — a bare LOCAL identifier body and a METHOD-CHAIN body; `t0729` recorded as no
+  longer reproducing at base, which is a RED gate there and not this round's doing.
 - [2026-09-03] **`t0871` CLOSED (R49 Track K) — `s[a:b]`, `s[i]` and the `for c in s:` element were UNTAGGED
   STRING VIEWS, so binding one and then growing the source read freed memory: exit 0, no diagnostic,
   garbage or empty stdout on BOTH backends. Two producer sites now stamp the View tag; 12 cells RED→GREEN.**

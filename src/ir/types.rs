@@ -243,13 +243,18 @@ pub struct TypeMetadata {
     /// Mirrors `BuiltinTypeProtocol::c_runtime_alias`.
     pub c_runtime_alias: Option<String>,
     /// Set for `__Closure_N` struct types created by the closure-lowering pass.
-    /// The closure env owns captured values via lifetime-tied aliasing — it holds
-    /// bitwise copies of outer-scope locals whose lifetime exceeds the closure's.
-    /// The consume-site validator skips StructInit fields when the destination
-    /// is a closure-env type, because the outer scope's drop handles cleanup
-    /// (the env is always freed before the outer scope exits). This is the
-    /// typed-metadata form of the "closure alias" ownership pattern —
-    /// contrast with user struct inits where the struct independently owns its fields.
+    ///
+    /// This flag is closure IDENTITY, not an ownership claim. A closure env
+    /// owns its by-value captures exactly as a user struct owns its fields:
+    /// the capture site is a consuming position, so it clones a source that is
+    /// still live and moves one that is dead, and the env's own
+    /// `drop_strategy` / `copy_semantics` are COMPUTED from its field types
+    /// like any other aggregate's.
+    ///
+    /// An env does NOT merely alias outer-scope values, and it is NOT always
+    /// freed before the scope that built it: `Callable[String()] f(String p):
+    /// return (): p` returns the env, outliving `p` entirely. Nothing here may
+    /// be used to skip an ownership rule.
     pub is_closure_env: bool,
     /// CARRIER #1 (closure identity, Core #2). For a `__Closure_N` env struct,
     /// the name of its lifted call body (`__Closure_N__call`); `None` for
@@ -763,6 +768,37 @@ impl TypeRegistry {
     /// pick whichever name makes the intent clear.
     pub fn is_resource_or_contains_resource(&self, type_id: TypeId) -> bool {
         self.needs_drop(type_id)
+    }
+
+    /// Does this type need dropping while the lowering has NO way to produce
+    /// an independent copy of it?
+    ///
+    /// This is the single-owner-by-design set as the LOWERING sees it. Every
+    /// consuming-position pass that materialises a value asks
+    /// `is_resource_type` (deep clone) or `is_refcount_clone_type` (by-value
+    /// incref) first; both answer `false` here, so all of them skip the
+    /// operand — there is nothing they know how to materialise.
+    ///
+    /// ⚠ THE SET IS WIDER THAN `Callable[T]`, AND NAMING ONLY IT IS THE
+    /// SELECTION-AS-ENUMERATION MISTAKE. `Callable[T]` is the loudest member —
+    /// it lowers to `GirType::FnPtr` and carries a heap-allocated env — but
+    /// `Mutex[T]` and `RWLock[T]` satisfy every clause too: `Trivial` copy
+    /// semantics, a real drop, and `clone_fn = None` (single-owner, neither an
+    /// incref nor a deep clone). They differ in how that metadata is stamped —
+    /// `Mutex` from the builtin `ensure_mutex_type_def`, `RWLock` from the
+    /// template-monomorph arm, because it is a `struct RWLock[T]` template in
+    /// `lib/std/sync.gg` — so a fact established about one is not thereby
+    /// established about the other. Re-derive the membership rather than
+    /// trusting this paragraph: it is a snapshot of a predicate, and the
+    /// predicate is the authority.
+    ///
+    /// A consuming position therefore cannot decide ownership for these types
+    /// at all. Only the user can, by writing `^source` or `source.clone()`.
+    /// Derived from the two typed axes, never a list of names.
+    pub fn lacks_materialization_path(&self, type_id: TypeId) -> bool {
+        self.needs_drop(type_id)
+            && !self.is_resource_type(type_id)
+            && !self.is_refcount_clone_type(type_id)
     }
 
     /// Check whether a type has Resource copy semantics (owns heap-allocated buffers).

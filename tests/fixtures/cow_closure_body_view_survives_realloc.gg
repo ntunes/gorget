@@ -7,15 +7,19 @@
 # `cow_reassigned_after`, so the element view stayed a lazy borrow and the 64
 # pushes reallocated it away.
 #
-# ⚠ THE VECTOR IS LOCAL TO THE CLOSURE, DELIBERATELY. The sibling shape where
-# the vector is CAPTURED is a DIFFERENT defect with a different mechanism — the
-# captured collection handle is a borrow bound at capture time
-# (`closures.rs` `field_load` -> `Ptr` + `set_field_borrow`) and goes stale on
-# realloc wherever the realloc is spelled. That one is `todo/t0704`, still open,
-# with its own two repros in `tests/fixtures/known_gaps/`. Measured
-# discriminator: capture -> still rc 139 after this fix; no capture -> rc 0.
-# Do not "generalise" this fixture by hoisting the vector out of the closure —
-# it would stop testing this cell and start failing for t0704's reason.
+# ⚠ THE VECTOR IS LOCAL TO THE CLOSURE, DELIBERATELY. This cell is about the
+# closure BODY reaching the per-function prescans. The sibling shape where the
+# vector is CAPTURED was a DIFFERENT defect with a different mechanism and a
+# different fix — the capture site owed the consuming-position rule (clone a
+# live source, move a dead one) and did neither, so the environment aliased a
+# buffer the source still owned. That was `t0704`; it is CLOSED, and its cells
+# are live fixtures next to this one (`closure_capture_then_mutate_source_uaf`,
+# `closure_capture_inside_body_uaf`).
+# The discriminator that made the two separate is still the point of this file:
+# when the prescan fix landed, no-capture went rc 139 -> rc 0 and BOTH capture
+# shapes stayed rc 139. Do not "generalise" this fixture by hoisting the vector
+# out of the closure — it would stop testing this cell and start testing the
+# capture boundary, which the two fixtures above already cover.
 #
 # THE REALLOC IS LOAD-BEARING (64 pushes), and the payload is heap-FORCED via
 # `mk` so ASan reports a legible heap-use-after-free, not a bare SIGSEGV.
