@@ -2,11 +2,37 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ ROUND XLIX IS OPEN (2026-09-03), owner-authorised — the R48-close suspension of Round-lifecycle
-step 7 is SPENT. Headline: THE `Callable` VALUE FORM CARRIES LOSSY TYPE METADATA — a memory-safety
-class fix, plus the owner's ease ruling.** No track has been scouted or briefed yet; the roster below
-is the ROSTER, not a set of signed-off designs. Every track still owes scout → brief → ≥3 fresh
-sequential brief-reviews → executor → fresh output-review before it integrates.
+**▶ ROUND XLIX IS OPEN (2026-09-03), owner-authorised. Headline: THE `Callable` VALUE FORM CARRIES LOSSY
+TYPE METADATA — a memory-safety class fix, plus the owner's ease ruling.**
+
+### 🚨 READ THIS FIRST — LIVE STATE AS OF 2026-09-04. **EVERYTHING BELOW THIS BLOCK IS A RUNNING LOG OF THE
+ROUND AND IS SUPERSEDED BY IT ON ANY QUESTION OF STATUS.**
+*(This session already crashed once on disk exhaustion. This block exists so a cold restart is not read from
+4,800 lines of prose. It is condensed into a proper pending-only handover at round close.)*
+
+**FIFTEEN TRACKS INTEGRATED:** E · H · C · A1-M · K · F · A1-I · R · A2-α · N1 · M1 · F-G · Q · M2.
+
+⛔ **INTEGRATION ORDER IS FIXED AND NON-NEGOTIABLE — `T1` AND `L` LAND TOGETHER.** Track L ALONE puts
+non-MATCH at **150 against a ceiling of 147** (measured in `--release`; three independent counts agree), and
+T1 turns exactly the three offending cells CC-FAIL → MATCH, landing at 146. **Then N2, then S-a2.**
+⚠ **The pre-L branch sits at EXACTLY the ceiling with zero slack** — any track adding one non-MATCH top-level
+fixture breaches — **and all three parity gates SKIP EVALUATION under `cfg!(debug_assertions)` (`todo/t0924`),
+so only `--release` with `GG_RUNTIME_DIFF=1` can see it.**
+
+**UNINTEGRATED WORK, all commits verified reachable:** T1 executor (live) · L `2f7eb9b58` (done, waits for T1)
+· N2 `0d9f9cebe` (done) · S-a2 `55323d628` (output-review live) · a leak-class re-seed executor (live).
+**→ R50:** W + S-a3 (merged, brief measured against source three times) · U1 · U2 · S-a1 · S-b · T2.
+
+⚖ **ONE OWNER ASK OPEN:** admit `vector_hof_result_element_sizing` (`__gorget_closure_env_alloc*5`, cite
+`t0953`) — its leak is measured irreducible, since a named callee with the same body sizes correctly, so the
+closure literal IS the defect's entry condition.
+
+⛔ **ROUND-CLOSE BLOCKERS KNOWN IN ADVANCE:** the sanitize sweep is red at HEAD on **27 rows, all one renamed
+frame** (`__gorget_array_reserve_one`, from `b5356f361` — a rename, NOT a leak; a track is fixing it); and the
+`T1`+`L` merge needs **`PHASE_D_PROXY_BUDGET` = 89** and **`ALLOWED_UNWIRED` = 23**, values on NEITHER side.
+
+⚠ **DISK IS A STANDING CONSTRAINT** — the box crashed on it. **Every agent builds its own compiler**; prune
+finished **reviewers'** scratch too, not just executors'. Keep pending agents' worktrees AND their `/tmp`.
 
 ### 📍 R49 LIVE STATE (2026-09-03, orchestrator) — supersedes the per-track prose below on STATUS
 ⭐ **TRACK E IS SIGNED OFF AND EXECUTING — the round's first executor.** FIVE sequential fresh brief-reviews,
