@@ -111,6 +111,24 @@ owes a note + a filed subset gap.
   ⇒ **SHARPENED IN AGENTS.md Core #15(a) THIS ROUND: a `file:line` IS a load-bearing claim, so it carries the
   GREP THAT REGENERATES IT, never a bare number.** ⊕ Orchestrator duty: **re-anchor a brief at HEAD at LAUNCH
   time, and message any in-flight reviewer the moment a sibling track integrates into its files.**
+- ⛔⛔ **A WITNESS THAT CANNOT FIRE IS NOT A WITNESS — AND THE ROUND SHIPPED ONE INTO THREE BRIEFS.**
+  The HOF path-witness command derived `method=${name%%__*}`, so a cell named `flat_map__local__noimp`
+  yielded `flat` and the regex became `__flat__`, **which can never match `__flat_map__`.** ⇒ **every
+  `flat_map` `wit=0` was STRUCTURALLY GUARANTEED, NOT MEASURED**, and the required `wit>0` NEGATIVE CONTROL
+  **could not exist under it.** (Same defect for `sort_by*`→`sort`, `sorted_by*`→`sorted` — and a
+  sort-family ACQUITTAL was resting on those cells.) ⚡ **SIX Q#2 APPLIED TO THE INSTRUMENT ITSELF: before
+  trusting any `wit=0`, SEE THE SAME COMMAND PRODUCE A `wit>0` on a cell you know bypasses the mechanism.**
+- ⛔ **AN ACCESSOR CAN BE TOTAL OVER THE TYPE AND PARTIAL OVER THE ANSWER.** N2's brief prescribed reading
+  `StructDef.elem_drop_fn`. **It is `Some` only for `DropStrategy::Trivial`** — `Recursive` and `Custom` map
+  to `None` (`lir/lower/mod.rs:1117-1120`). ⇒ **the prescription installs NOTHING for a user struct, and a
+  `Vector[Wrap]` cell leaks with `Wrap__drop` EMITTED AND NEVER REFERENCED.** ⚡ **The brief's yield was
+  green only because `String` is a runtime singleton whose metadata happens to sit where the chosen accessor
+  looks — the SEVENTH SIX-Q#6 of that family. ⇒ SCORE EVERY VALUE OF THE ELEMENT-TYPE AXIS: primitive ·
+  String · user struct RECURSIVE · user struct CUSTOM. Two of four is an anecdote (Core #12).**
+- ⭐ **A WRITER THAT WRITES BY RAW BYTE OFFSET IS INVISIBLE TO THE FIELD-NAME GREP THAT ENUMERATES ITS
+  SIBLINGS.** `insts.rs:2264-2295` installs all three array hooks at offsets 40/48/56 and **cannot be found
+  by `grep elem_drop`** — the sentinel-with-no-string shape, third instance this round. **When counting
+  writers on an axis, enumerate by the STRUCT LAYOUT or the CONSUMER, never by the field NAME.**
 - **`ConsumeSiteClass` is the WRONG WITNESS for AST-lowering sites** — a category error: it enumerates GIR
   *instruction* kinds, and one `StructInit` arm has FOUR producers. All nine arms can be dispositioned while
   `Vector[Callable] = [closure]` still SEGVs.
