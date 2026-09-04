@@ -261,7 +261,25 @@ executor should be told to REPORT.**
 - ⛔ **§9 could not brief INT-B** — a reviewer tried and listed seven unanswerable questions, now required
   report contents. ⊕ **The report goes to `/tmp`**: it must quote a figures-DB-covered spelling, which no
   COMMITTED file may contain, and `/tmp` is outside the scan roots.
-📋 **INT-B IS BRIEFED AT `/tmp/brief_INTB_v1.md`, pass 1 running — and it is the FIRST brief in this chain
+🚨 **PASS 2 BUILT THE END STATE AND FOUND THE FOURTH NESTED WINDOW — IT IS THE END-STATE CANDIDATE ITSELF.**
+The constant table I shipped was measured on the §1-ONLY tree, which goes green **because §2 and §3b are
+ABSENT**; on that same tree the SWEEP is hard red. **A green cell, green for an unrelated reason (Six
+Questions #6).**
+⛔ **THE REAL END STATE MOVES A DIFFERENT THREE:** `LEAK_CLASS_PAIRS`, `LEAK_RECORDS` **and
+`UNCITED_LEAK_CLASS_PAIRS`** — which **FALLS by 13**, because every class the reconciliation sheds is an
+uncited pair. **`LEAK_CEILING` is NOT one of them**, and its stability is a **COMPENSATING +1/−1 WASH** —
+the block inventory sees the +1, **nothing sees the −1.** State the two moves separately, never as a net.
+⛔ **THE EXAMINED SET IS 46 STEMS (24 divergent ∪ 27 re-keyed), 37 CHANGED — I said "~16" and omitted EIGHT
+of Track L's OWN inflow rows.** A reviewer **beat all six acceptance items** by leaving ONE divergent row at
+L's over-admitting value: it is UNCITED, so the sweep files it advisory with no rc, and an item scoped to the
+CHANGED set cannot see it. ⭐ **Fix: scope to the EXAMINED set, and add the one TOTAL check the executor does
+NOT author — assert the sweep's `✅ leaking LESS than its row admits` section names NO row in that set.**
+⊕ **A disposition criterion for over-admitting rows OUTSIDE both sets, PROVEN not assumed:** build the
+compiler at the merge base and re-measure — identical at base ⇒ pre-existing `t0572` debt; shrunk ⇒ in scope.
+⊕ **Every `figures.py check` on the five leak rows is a MIRROR** (their regen censuses the very file they
+pin), so **acceptance 6 is the ONLY independent evidence in the whole set.**
+
+📋 **INT-B v3 IS AT `/tmp/brief_INTB_v3.md`, pass 3 running — it is the brief in this chain
 whose every load-bearing number was MEASURED on a real tree.** Its executor is gated on INT-A's output-review
 signing off. **Four obligations, all measured:**
 1. **CLOSE THE +2 — it is ONE ROW.** Adopting N2's `vector_hof_cross_type_map` row alone takes the uncited
