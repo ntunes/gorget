@@ -675,6 +675,90 @@ IR that reproduces the defect** — the operands are two DIFFERENT allocas, and 
 that happened to land on the neighbour. **So "1824 programs / 109,969 sites / ZERO" would have returned ZERO
 ON THE BUGGY COMPILER.** ⇒ **CORE #13 VERBATIM: the detector was RED-verified against SYNTHETIC SAME-BASE
 overlaps, a class the real defect does not belong to. RED-VERIFYING AGAINST THE WRONG CLASS PROVES NOTHING.**
+✅ **TRACK R INTEGRATED** (`b2f6eb30a`, output-review SIGN OFF). Post-integration bare rcs on the integration
+branch: `lints_rc=0` (224) · `census_rc=0` · `lib_rc=0` (1185) · `todo_rc=0`. `known_gaps_census.sh --check`
+is **rc 1 → rc 0**; roster held 215, PASS 7→6, set-equality against the unchanged 6-row allowlist holds.
+⭐ **The reviewer VERIFIED THE ARCH REFUTATION'S *FORM*, not just its facts:** R's argument reasons from IR
+constants **FORWARD** to in-bounds-ness, unlike the earlier one that reasoned **BACKWARD** from frame spacing
+to IR structure and forgot a `+8`. Stronger still: both `Option` layouts **contain no pointers**, so 16/24 are
+identical on either LP64 target. ⊕ And it nearly repeated the round's own trap — *"reading that through a grep
+filter LOSES the `addq $8` and yields a wrong dst"*.
+⊕ **`#[expect(dead_code)]` verified MECHANICALLY, not taken on trust:** standalone `rustc --test`, no caller →
+rc 0; caller returns → **rc 1 `this lint expectation is unfulfilled`**. **It IS the enforcing guard** — not
+Core #14 in a new costume — and strictly better than the `#[allow(dead_code)]` precedent it sits beside.
+⊕ **INTEGRATION-SAFETY FACT WORTH KEEPING: `scripts/sanitize_sweep.sh` HAS NO BACKEND SELECTION — it runs the
+C lane ONLY.** So the live LLVM rc-99 trip will **not** red the round-close sweep. ⚠ *That also means the
+round-close sweep cannot see ANY LLVM-only memory defect.*
+
+⛔ **CARDINAL-RULE RISK FLAGGED BY R's REVIEWER — PRESERVED HERE SO IT CANNOT BE LOST WITH `/tmp`.**
+`ls todo/ | grep -E 't118[7-9]|t119[0-6]'` → **rc 1, no items.** Track U's measured enumeration lives ONLY in
+`/tmp` briefs, which are pruned at round close. **Durable summary, so it is reconstructible from the repo:**
+**33 live out-of-bounds STACK WRITES at HEAD across 18 files in 5 shapes, one mechanism — the memcpy LENGTH
+comes from the SOURCE value's type while the DESTINATION field is sized from the DECLARED type.** Known
+members: **13 p2p fixtures**, the `dataframe_*` family, `d23_traitdefault_generic_throws`, and
+`combinator_callable_param_same_type` (**green, non-`#[ignore]`d, TOP-LEVEL, and rc 99 under LLVM+ASan**).
+⚠ **ASan SEES NONE OF THEM** — the emitted user IR is not instrumented, only the runtime C is, so a stack OOB
+write is invisible unless the overrun lands exactly on the source buffer (which is how `t0729` was found by
+accident). ⛔ **IF TRACK U DOES NOT LAND, THIS ENUMERATION MUST BE FILED BEFORE ROUND CLOSE.**
+
+⛔⛔⛔ **S-a2 PASS 1 OVERTURNS S-a PASS 2's EVIDENCE — AND STOPPED MY BRIEF FROM CORRUPTING AN ACCURATE
+FILED ITEM. THE ROUND'S MOST CONSEQUENTIAL CATCH.**
+
+⛔⛔ **THE `t0948` NEAR-MISS.** Pass 2 reported *"`t0948` characterises this as a LEAK. It is a DOUBLE-FREE"*,
+and my brief §1 turned that into a ⭐ instruction to **rewrite the item's severity and mechanism**.
+**`t0948` IS CORRECT AS FILED.** Its own hard-gate table marks the double-free **conditional on
+`GG_A3_FNPTR_DROPS=1` — an instrument NOT PRESENT IN TREE (grep empty).** Pass 2 dropped the precondition and
+reported a **conditional** result as a **HEAD** result. ⇒ ⚡⚡ **A CORRECTION THAT IS ITSELF WRONG DOESN'T JUST
+WASTE A ROUND — IT DESTROYS A GOOD RECORD, AND FILED ITEMS ARE WHERE THIS PROJECT KEEPS ITS MEMORY. BEFORE
+"CORRECTING" A FILED ITEM, REPRODUCE THE ITEM'S OWN STATED PRECONDITIONS.**
+
+⛔⛔ **AND THE FIFTH — AND WORST — INSTANCE OF THE ROUND'S DOMINANT DEFECT CLASS: PASS 2 READ TWO
+`gorget_closure_free` CALLS OUT OF THE EMITTED C AND REPORTED A RUNTIME VERDICT IT NEVER OBSERVED.** ASan
+**halts on the first error**, and a UAF fires at `main:3708` **before** the frees at `:3751/:3753`. Every row
+of the five-cell evidence table is contaminated by ONE unrelated defect: all three probes use
+`Callable[int()] make(String s): return (): s.len()`, **which frees its own capture inside `make`**. Re-measured
+at HEAD: row 2 is **`heap-use-after-free`, 41-byte region** — *not* "attempting double-free", *not* a 16-byte
+env; row 3 is the same UAF — *not* "122 B leak". A minimal repro with **no struct, no field read, no bare
+assign** reproduces it identically. ⇒ **the probes' failure had nothing to do with the carve-out.**
+⚡ **THE PROBE'S HELPER WAS ITSELF BROKEN, AND THE HELPER WAS IDENTICAL IN ALL THREE CELLS — SO THE "AXIS" WAS
+A CONSTANT. A shared helper across every cell of a table is a SINGLE POINT OF FAILURE for the whole table.**
+
+⭐ **A REAL DOUBLE-FREE EXISTS — BY A DIFFERENT MECHANISM.** It needs **BOTH** a bare-temp ctor arg never
+move-zeroed **AND** a field read: `Holder(mk(40))` + `g = h.f` → **rc 1, 16 B**; `Holder(^c)` + `g = h.f` →
+**CLEAN**; `Holder(mk(40))` with no field read → **CLEAN**. **Both frees are in `main`; NO `Holder__drop`
+participates**, so `[drop: None, copy: Copy]` is *not* one of the two owners — the second owner is the
+**constructor-argument temp**. ⊕ **That defect belongs to NO CURRENT TRACK.**
+
+⛔ **MY ACCEPT CONTROL WAS UNSATISFIABLE ON BOTH HALVES, AND ONE HALF FIGHTS THE RATIFIED LEDGER.**
+`^h.f` → `E_PartialMove`, and that is **RATIFIED — D10(a) ADDENDUM (`decisions.md`, 2026-09-02): field/index
+moves reject.** The repo already agrees (`src/semantic/safety/helpers.rs`: a sub-place *"accepts `.clone()`
+only"*). `h.f.clone()` compiles but **leaks 16 B** (`t0948`) so it cannot "run clean" until `t0948` lands.
+⚡ **I wrote an accept-control without checking the ledger — in a brief whose own §2 tells the reviewer to
+check the ledger first.**
+
+⛔ **THE SPLIT LINE WAS ON THE WRONG AXIS.** `expr_is_place` is true for Identifier/Self/FieldAccess/
+TupleFieldAccess/non-range Index and **false for a call result**. ⇒ **the real partition is PLACE → check-time
+GATE vs TEMP → LOWERING ownership-at-birth.** `.get(0).unwrap()`, dict value, `Option` payload and a returned
+`Callable` are **move-eligible shape #2 and must NOT be gated** — their leaks are producer-side defects
+(`t0949`, `t0873`), different write sites, Core #3. **S-a2 straddled that line; scoped to PLACES only it is
+coherent and small.**
+⊕ **SIX Q#4 AGAIN: after `t0948` flips the predicate, the no-field-read cell becomes a double-free with NO
+READ TO GATE.** No widening of a read-gate rule reaches it.
+
+⭐ **THE SUBJECT IS REAL, AND IT IS A ONE-LINE ASYMMETRY IN ONE FUNCTION.** In
+`src/semantic/safety/check_expr.rs`'s `require_explicit_move_for_single_owner_init`, the unique-lock arm (D53)
+and the drop-taint arm (D4/D12) both resolve places structurally via `expr_is_place` + `lvalue_value_type` —
+**the by-design SingleOwner arm where `Callable` lands is `if let Expr::Identifier(_)`.** Structural widening
+prototyped at `/tmp/recover_Sa2b_gate_widen.patch`, `--lib` 1185/0.
+⊕ **N1 corrects my §6: `grep -c 'needs_explicit_move\|MoveWithoutOperator\|single_owner' src/semantic/typecheck.rs`
+→ 0. NO F-G COORDINATION REQUIRED.** ⊕ **N3: D27 drift inside the very message being widened** —
+`errors.rs:1616` still emits ``write `!{name}` `` while the sibling arm emits `^{name}`.
+⊕ **TWO UNFILED FINDINGS, and the second outranks the track:** `Vector[Callable].push(^c)` **ICEs**
+(`Tier 2a consume-site violation … untracked source consumed`, build rc 101 with **check rc 0**) — not
+`t0873`, not `t0949`; and **the escaping-capture UAF** (`make(String s): return (): s.len()`) is
+**memory-unsafety from ordinary safe syntax with `gg check` CLEAN**. **Both owed items; the second likely its
+own track.**
+
 ⛔⛔⛔ **S-a PASS 2 = BLOCKING ×4. THE TRACK SPLITS INTO S-a1 / S-a2 / S-a3, AND S-a3 IS AN OWNER DESIGN ASK.**
 Measured at `4acc2cee0`. §1's byte table regenerates exactly; A2's three witnesses present; A4 confirmed at
 source. **A track that cannot get its design signed off is REBUILT or SPLIT, never reviewed harder.**
