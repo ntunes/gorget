@@ -20,12 +20,37 @@
 | ✅✅ **H** | **`t1387` INTEGRATED** 2026-09-05 (`8573b12ca`+`0c137cbe0`). Output-review SIGNED OFF; 3 errata fixed at `6b4c8a544`. ⭐ **Its executor found FOUR defects in my brief; the review found a fifth in ITS filing.** | `t1409`–`t1417` |
 | ✅✅ **K** | **`t1385` INTEGRATED** 2026-09-05 (`b5c5eaabc`+`1c2513e45`); errata `9d7e9f71b`. Output-review **SIGNED OFF**. ⭐ **93 cell-lanes now gated; both allowlists ratchet BOTH ways.** | `t1434`–`t1437` |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
-| **L** | **`t1410`** — wrapping ops lower to UB on C. 🔵 **pass 4.** ⛔⛔ **THE SCOUT'S SAME-WIDTH FIX IS A NET REGRESSION — `I16 × Mul` is DEFINED at HEAD and it makes it UB** — and HEAD has a **7th** UB cell. True count **9 of 26**, 8 UBSan-visible. | `t1443`–`t1447` |
+| **L** | **`t1410`** — wrapping ops lower to UB on C. 🔵 **pass 5.** ⛔⛔ **`Neg` SPLIT OUT — its semantics are UNRATIFIED and my brief told the executor to SUPPRESS the question** (filed `t1443`). Ships `Add`/`Sub`/`Mul`. | `t1444`–`t1447` |
 | **J** | **`t1407`** — `Vector.fill`. ✅✅✅ **3/3 SIGNED OFF, 🟢 EXECUTOR LAUNCHED.** ⛔ **Pass 3 RETRACTED my Addendum 4 §1 — it had retracted a TRUE claim from a superseded artifact.** | `t1422`–`t1427` |
 | **E** | **`t0953`** — ✅✅✅✅ **DESIGN SIGNED FOUR TIMES, 🟢 EXECUTOR LAUNCHED.** ⛔ **`#[must_use]` measured by rustc NOT to catch its class; the safety premise is FALSE for the sort family.** | `t1351`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ⚖⚖ A GENUINE OWNER ASK — **AND MY BRIEF TOLD THE EXECUTOR NOT TO RAISE IT** (`t1443`, non-blocking)
+
+**L's pass 4 refused an instruction reading *"✅ NO OWNER ASK — Settled. Do not raise a question."* It was right.**
+- **MEASURED AT HEAD:** `0 - INT64_MIN` **traps `T_Overflow`**; **`-INT64_MIN` SILENTLY WRAPS.** Structural:
+  **`Inst::Neg` carries NO `Overflow` field**, so it has **no policy at all** — nobody ever chose this.
+- ⛔ **`D30` LISTS THE FIX'S OWN CHOICE AMONG ITS *REJECTED* ALTERNATIVES** — *"defined-wrap (silent corruption +
+  inconsistent with int's trap)"* — ⛔ **and `D30`'s PREMISE, *"64-bit `int` overflow already trapped"*, IS THE
+  CLAIM NEGATION FALSIFIES.** ⊕ **But D30's SUBJECT is the NARROW paths and `-INT64_MIN` is not narrow — SIX-Q
+  #4, a case with NO SUBJECT.** ⊕ **Unary negation's overflow semantics appear NOWHERE in the ledger** (3 hits,
+  all `**` precedence).
+- ⛔ **Core #8: BOTH BACKENDS AGREE ON THE WRAP** — necessary, not sufficient. **My *"LLVM is correct"* was an
+  assertion, not a citation.**
+- ⛔⛔ **AND THE FIX WOULD HAVE RATIFIED IT BY FIXTURE** — the top-level fixture pins `neg64`, which auto-enters
+  the parity corpus **and** the sweep. **The same durable-false-content hazard the track had just refused
+  elsewhere.**
+- ⇒ ⭐ **DECISION: `Neg` IS SPLIT OUT.** Ship `Add`/`Sub`/`Mul` (genuinely D18/D30-ratified); **remove the `neg`
+  cells from the top-level fixture.** **`t1443` carries the question with its archaeology and BLOCKS NOTHING.**
+  *(Shipping defined-wrap would PRE-EMPT a ruling that may go the other way and then have to be undone.)*
+- ⛔ **AND MY `-O2` HEADLINE FIGURE WAS CONTRADICTED BY THE ARTIFACT IT CITED** — five of six shapes identical
+  modulo labels; **`Shl` genuinely widens to 64-bit register ops** (zero-extending → sign-extending load).
+  ⚠ **`Shl` is the ONE discretionary decision AND the ONLY shape that changes** — the cost basis did not survive
+  its own command.
+- ⛔ **AND NARROWING `t1442` TO `IShl` ALONE WOULD HAVE LEFT `IShr` BELONGING TO NO ITEM** — same bare shift,
+  same discarded `ty`, same missing trap, and the Rust lane traps both. **`t1442` widened to the shift family.**
 
 ### 🟢🟢 J AND E BOTH LAUNCHED — **AND EACH LAUNCH BRIEF HAD TO RETRACT ONE OF MY OWN RETRACTIONS**
 
