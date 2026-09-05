@@ -121,6 +121,10 @@ assume). `E_MoveWithoutOperator`
 **at bare-assign sites AND at constructor / struct / enum-init sites** + consume;
 **require the user to write `^source` or `source.clone()`** (unique locks: `Shared[Mutex[T]]`, never `.clone()`). (At a plain function / method call these types are simply borrowed.)
 
+### Reason about storage and liveness, never about what the value IS
+
+**At an ownership boundary the question is what these two access paths do to the same storage over time — does it overlap, do their live ranges intersect, can either one write — never what type family the value belongs to.** ⚠ **A type family says what a value is CAPABLE of; it never says what THESE paths do to THIS storage.** `clone_fn` presence proves a source *can* be duplicated and says nothing about whether the boundary transfers ownership of the duplicate — **so a property of the SOURCE never settles a question about the BOUNDARY.** ⊕ Ratified carve-outs remain carve-outs: the single-owner set is a real type-family rule, and it tells you a value has no implicit-copy path — it does **not** tell you whether a given position conflicts. Full rule: [`docs/language-design.md` §3.5](docs/language-design.md) — *"Overlap is about storage, not spelling"*, *"The test is ability to write, not the sigil."*
+
 At each consuming position (`push`, `put`, `set`, `insert`, `send`,
 `v[i] = x`) the collection must own — **the POSITION is the rule; the receiver's
 spelling (`fns` vs `self.routes`) is not part of it**. The compiler **picks per-arg from

@@ -455,7 +455,7 @@ fmt.max_width.input = none
 # of bare zeros and commit-hash tails collide with 79. The uniqueness scanner
 # cannot police them. Mirrors still exact-pin the literals.
 row = agents_md.heading_count
-agents_md.heading_count.value = 80
+agents_md.heading_count.value = 81
 agents_md.heading_count.unit = AGENTS.md extractor-hit headings
 agents_md.heading_count.polarity = exact-pin
 agents_md.heading_count.provenance = derived

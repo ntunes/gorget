@@ -11215,7 +11215,7 @@ fn agents_md_size_ratchet() {
 ///
 /// Inflow: a new token-count lint is a `scripts/figures.db` row in the
 /// same commit, or it is rejected.
-const AGENTS_MD_HEADING_COUNT: usize = 80;
+const AGENTS_MD_HEADING_COUNT: usize = 81;
 
 const AGENTS_MD_HEADING_INVENTORY: &[(&str, &str)] = &[
     ("H-TITLE", "# Gorget Compiler"),
@@ -11241,6 +11241,7 @@ const AGENTS_MD_HEADING_INVENTORY: &[(&str, &str)] = &[
     ("H-STRUCT", "## Project Structure"),
     ("H-SYNTAX", "## Language Syntax (Quick Reference)"),
     ("H-OWN", "## Ownership at Consuming Positions (push/put/set/insert/send, constructors, returns, captures)"),
+    ("H-OWN-STORAGE", "### Reason about storage and liveness, never about what the value IS"),
     ("H-SQ", "## Solution Quality"),
     ("H-LAY", "## Layering discipline"),
     ("LAY-1", "1. **Lossless on invariants, lossy on syntax.**"),

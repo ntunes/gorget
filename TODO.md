@@ -88,6 +88,79 @@ The DEAD-cell argument is sound and pass 1 confirmed it independently — live r
 finds **no conflict**, and reader-vs-writer does not gate that row. **But that is a SEMANTICS question for the
 owner, not something a measurement settles.**
 
+### ⛔ TRACK B IS SPLIT — SHIP THE DEAD CELL ONLY (orchestrator decision, pass-1 recommended)
+
+Pass 1: **R4 — three items, one hat, two of them UNBUILT** (`t0948` regresses `p12` to a link failure;
+`t1210` never prototyped). Gauntlet rule: **rebuilt or SPLIT, never reviewed harder.** ⊕ D2's
+"cannot be split" is refuted by its own evidence — `t1067` alone *"converts UAFs into leaks"*, and on the
+ratified ladder (mem-unsafety > silent-wrong > ICE > leak) **a half that is strictly better IS a shippable
+increment.**
+
+**B1 = the DEAD cell ONLY.** No conflict under §3.5 · reader/writer irrelevant · **no dependency on `t1210`** ·
+**NO accept/reject surface change**, so Core #9's ggdef+NEG obligation never fires and the zero-slack SH
+ceiling is not stressed · guard already wired (`grep -n 'closure_capture_callable_block_scope_uaf' tests/integration.rs`).
+**File BOTH live sub-cells as NAMED remaining cells** (Core #12).
+
+⛔ **EVIDENCE THAT MUST NOT SURVIVE INTO ANY BRIEF:**
+- **The live-`Callable` `.clone()` fix-it is a UAF on BOTH backends** (`bash /tmp/revB1_a7fa6e85b7a7f5e03/full_a7f.sh p15_clone_fixit.gg`).
+  ⭐ **SEPARATE TWO CLAIMS:** the **FIX-IT** claim ("the user writes `.clone()` and it is correct") is
+  **FALSIFIED**; the **MATERIALIZE** claim ("the compiler clones AT THE CAPTURE BOUNDARY and the env OWNS it")
+  is untouched and **never prototyped**. ⛔ **And materialize cannot be correct until `t1210` lands** — the env
+  owning a deep copy needs `__Closure_N__drop`, which `t1210` records as **emitted with zero call sites**. It
+  converts the UAF into a **LEAK**, not into correctness.
+- **"Capturing `h.f` is already rejected today" is MISATTRIBUTED** — that probe rejects at a **bare-assign**
+  site. **The direct capture `(): h.f()` PASSES `gg check`** and link-fails with `undefined reference to
+  'Holder__f'`. ⊕ **Same shape as the `p12` failure the brief blamed on the `t0948` prototype ⇒ that failure is
+  PRE-EXISTING, not a prototype artifact.**
+- **The fire count is a SELECTION** — 171 of 426 files (**40%**) unbaselined, booked as "evidence already in
+  hand". Baseline them or say "255 baselined / 171 unknown" and drop the word TOTAL.
+- ⭐ **`clone_fn` PRESENCE IS NOT A SUFFICIENT DISCRIMINATOR** — it says a source can be duplicated and says
+  **nothing** about whether the capture boundary transfers ownership of the duplicate.
+- ⭐ **THE `is_move` PATH BYPASSES THE READER ASSUMPTION ENTIRELY:**
+  `grep -n 'let mutated = if is_move' src/ir/lowering/closures.rs` — for a move-closure the mutation set is
+  unconditionally empty ⇒ **every capture is `ByValue`, WRITERS INCLUDED.** Probe it or name it omitted.
+
+⚠ **I OVER-STATED THE LANE OBLIGATION, IN THE HARMFUL DIRECTION.** A `Mutex`/`RWLock` reject does **NOT** owe
+"a NEG fixture on every lane": **ggdef CANNOT adjudicate `Mutex`** (outside phase-0 subset — `t1067` says so
+verbatim), so it owes **a filed SUBSET GAP + a note, NOT a mirrored reject** (Core #9's own escape clause);
+self-host owes **a filed lane-lag citation**, not a same-round mirror. Only C+LLVM owe the reject + NEG
+fixtures + census. **Written as "every lane" the cell looks un-shippable, and both escapes are bad — stall, or
+stress the zero-slack ceiling to discharge an obligation Core #9 never imposed.**
+⊕ **D31's DX RIDER CANNOT BE SATISFIED for a live `Mutex` reject** — `clone_fn = None` by design and D53's
+`Shared[Mutex[T]]` is a **restructuring, not a fix-it**. The diagnostic must **TEACH THE SHAPE**, or the
+executor ships a bare `E_`.
+
+### ✅ TRACK D SCOUTED — AND THE DEFERRAL'S COST PREMISE IS REFUTED
+
+**`Router__dispatch_inner` ALREADY emits 3 matched `gorget_closure_clone_to_owned`/`_free`** — the per-request
+clone the deferral existed to avoid **is already shipped**, and it is what makes the 8 httpserver sites safe,
+**not "distinct keys"**. 5000 requests, HEAD vs prototype: `total_allocs` unchanged, `live_bytes` unchanged,
+wall **5.87 → 5.42 ms**, RSS +4 kB. ⇒ **THE MEASURED HOT-PATH COST OF WIDENING THE REJECT IS ZERO.**
+**Write site:** `grep -n "Expr::FieldAccess { .. } | Expr::TupleFieldAccess { .. }" src/semantic/safety/check_expr.rs`
+— adding `| Expr::Index { .. }` is the whole Rust-lane change. Prototypes:
+`/tmp/recover_scoutD_a09352_gate.patch`, `/tmp/recover_scoutD_a09352_full.patch`.
+⛔ **BLOCKING PREREQUISITE — `t0873(b)` LANDS THE SAME ROUND OR THIS TRACK REDS `sanitize_sweep.sh`.**
+`tests/fixtures/dict_box_callable.gg` is ASan-clean at HEAD **only** because each element is bound exactly
+once; **every remedy the reject offers turns clean into leaking** (`Vector`/`Dict` of `Callable` never
+synthesises `elem_drop`). It is top-level, in the sanitize corpus, **not** allowlisted, and a new row is
+forbidden inflow.
+🆕 **NEW HIGH — THE RETURN POSITION HAS NO SUBJECT AT ALL (SIX-Q#4):** `return v[0]` does not reject — and it
+is **not index-specific**: `return h.f` is **also** `gg check` rc 0 + ASan double-free, **a hole in the field
+arm R49 ALREADY SHIPPED**. `check_stmt.rs` calls `tainted_place_name` but never
+`require_explicit_move_for_single_owner_init`. ⇒ **SPLIT: D1 = index widening + `t0873(b)`; D2 (`t1339`) = the
+return-position hole; D3 (`t1340`) = the `d[k](v)` parser fix (optimality, not a blocker — cost measures zero).**
+⚠ **The item's recorded discriminator is a THIRD incomplete reading:** full discriminator = (element read >1)
+**AND** (read materializes as DerefLoad, not Clone) — the second conjunct is a **whole-program property**
+(`t0949`). **Safety here is NOT locally auditable.**
+
+⚖ **SECOND MISSING-RULING ASK (Track D, independent):** *"the callee position is a borrow position"* is cited
+by `t1225`, `devbook/11` and three lane comments — **and is NOT in the ledger.** Exhaustive search of 3365
+lines: no entry. **All occurrences were written by R49 Track S-a2, citing each other.**
+
+⚠ **OPS: `SendMessage` TO A **COMPLETED** AGENT RESUMES IT WITH NO WORKTREE.** Pass 1 had finished and its tree
+had self-disposed; my message revived it into a treeless shell that could not re-verify anything. **Do not
+message a completed agent expecting it to re-measure — respawn instead.**
+
 ⛔ **LESSON, AND IT IS THE ROUND'S THIRD OF THIS SHAPE:** I put a scout's unverified measurements in front of
 the owner as grounds for editing the RATIFIED LEDGER. **A scout measurement has not been through the gauntlet.
 Nothing reaches the ledger — or the owner as a basis for ratification — before a fresh pass has tried to
