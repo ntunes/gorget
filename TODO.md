@@ -18,14 +18,44 @@
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED. ⭐ **BOTH GATES NOW CLEAR** — F1r INTEGRATED, and **R1 IS RULED (Line A, signature-only, 'for now')**. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** ⏸ **QUEUED BEHIND THE SAFETY SET** per the owner's fixed order, not blocked. | `t1362`–`t1371` |
 | ✅✅ **H** | **`t1387` INTEGRATED** 2026-09-05 (`8573b12ca`+`0c137cbe0`). Output-review SIGNED OFF; 3 errata fixed at `6b4c8a544`. ⭐ **Its executor found FOUR defects in my brief; the review found a fifth in ITS filing.** | `t1409`–`t1417` |
-| **K** | **`t1385`** — the SEED HALF. ✅✅✅ **3/3 SIGNED OFF, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⭐ **H + K ARE THE ONLY TWO THINGS BETWEEN HERE AND A GREEN `--lanes all`.** | `t1433`–`t1437` (`t1432` = K2) |
+| **K** | **`t1385`** — the SEED HALF. **EXECUTOR RETURNED** (`0730960f3`+`34096bb9c`) → 🔵 **output-review**. ⭐ **It found a THIRD instance of the red-on-arrival trap, and measured the briefed timeout protection NOT TO EXIST** (filed `t1433`). | `t1434`–`t1437` (`t1433` spent) |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
 | **L** | **`t1410`** — ⛔ **THE WRAPPING OPERATORS LOWER TO UB ON THE C LANE**, and `lib/std/hash.gg`'s `FxHasher` is `*% 31 +%` at **four** sites ⇒ **every `@derive(Hashable)` executes it.** LLVM is CORRECT, so the lanes differ in **DEFINED-NESS** (Core #8). 🔵 **SCOUT LAUNCHED 2026-09-05** — opened as a TRACK, not deferred. | `t1438`–`t1447` |
 | **J** | **`t1407`** — `Vector.fill`, **TWO defects**. 🔵 **RE-SCOUT (J2) measuring the HYBRID.** **Streak 0/3.** ⛔ **Pass 1 killed `v2b`: its snapshot is the `save/restore` READ-SITE shape, and its `memset` has NO possible RED row.** | `t1421`–`t1427` (`t1420` spent) |
-| **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**. 🔵 **SCOUT LAUNCHED 2026-09-05.** ⭐ **K's triage handed it a TOTAL enumeration for free: 21 of 22 sanitizer rows are exactly this frame**, + 13 already-baselined siblings. **93 of 301 allowlist rows carry `closure_env_alloc`; only 17 cite the item.** | `t1349`–`t1358` |
+| **E** | **`t0953`** — ✅ SCOUTED → 🔵 **brief-review pass 1**, brief `/tmp/brief_E_v1.md`. **Streak 0/3.** ⛔⛔ **THE LEAK IS LOAD-BEARING — the filed fix turns it into a UAF + double-free.** Ships the **provably-safe subset**; blocking half filed `t1349`. **84 of 293 rows carry the frame, 3 cite it** *(my 93/301/17 were LINE counts incl. comment prose)*. | `t1350`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ⛔⛔⛔ TRACK E's SCOUT BUILT THE FILED FIX AND MEASURED IT MAKING THINGS **WORSE**
+
+**The most valuable scout result of the round.** Brief `/tmp/brief_E_v1.md`; recommendation
+`/tmp/scoutE_01db12fc/recover_01db12fc_variantC.patch`.
+- ⛔⛔ **FREEING THE CLOSURE-ARG TEMP TURNS THE LEAK INTO A USE-AFTER-FREE AND A DOUBLE-FREE.** The lazy
+  iterator adapters **RETAIN** the closure; `sanitize_sweep.sh` goes `corruption: 1 → 5` on four corpus
+  fixtures. ⭐ **SIX-Q #6 at full strength: those cells are green today ONLY because the caller's temp is never
+  freed. The leak is not a mitigation — it is a SECOND DEFECT CANCELLING THE FIRST.**
+- ⭐ **THE REAL WRITE SITE IS IN THE STDLIB**: `lib/std/iter.gg`'s `map`/`filter` store a **borrowed** `Callable`
+  parameter into a returned struct **without cloning**, because the parameter is a **generic `F`** that
+  `pack_closure_at_dest_type`'s destination predicate never sees. **Two owners, one drop.** ⇒ **filed `t1349`
+  (HIGH)**, and it shares its gate with `t1225`'s callee-borrow sequencing.
+- ⭐ **THE CENSUS IS TOTAL — 2612 fixtures, six cells, every reachable one.** `wrap_single_closure_arg`
+  drop-registers in **none of three arms** and has **TWO CALLERS WITH OPPOSITE OWNERSHIP SEMANTICS AND NO
+  PARAMETER DISTINGUISHING THEM** — the invariant is dropped on the way in (**layering rule 1**). ⊕ **The
+  reference-grade idiom already exists one file over** (`printf_str_temps`: temps *"born below GIR drop
+  registration"*, so the call emitter frees them).
+- ⛔ **THE ITEM'S SCOPE WAS TOO NARROW.** A packed `Callable` **LOCAL** at a call arg leaks identically via a
+  different arm ⇒ **a GIR-level fix converts a case-2 leak into a case-2a leak, MEASURED.** That cell fires in
+  **0 of 2612** fixtures — **a real coverage hole.**
+- ⚠⚠ **THREE OF THE SANITIZE GATE'S POSITIVE CONTROLS ARE MANUFACTURED WITH THIS EXACT BUG.** With the fix in,
+  the sweep **hard-fails `❌ THE SANITIZE GATE'S OWN INSTRUMENT IS BROKEN` before producing ANY corpus verdict.**
+  Its README anticipates it — *"re-point the controls … in the same commit that retires the old one"* — but
+  **says TWO where the measurement says THREE**, and `selftest_leak_twice` needs two distinct call **SITES**
+  because **LSan merges identical stacks.** A bug-independent replacement is prototyped and verified.
+- ⛔ **THE FORCING FUNCTION IS HALF-TRUE: under the safe subset only ONE of the two owner admissions retires.**
+  The other is a direct-call-argument fixture — the blocked cell.
+- ⛔ **AND MY OWN FIGURES WERE WRONG: 84 of 293 rows carry the frame and 3 cite the item, not 93/301 and 17.**
+  I had run `grep -c` over a file whose **comment prose** contains the string. Corrected in the item.
 
 ### ✅✅ H IS INTEGRATED — **AND ITS OUTPUT-REVIEW FOUND A FIFTH DEFECT, IN THE EXECUTOR'S OWN FILING**
 
