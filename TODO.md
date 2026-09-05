@@ -147,6 +147,11 @@ FIX IT NOW** — the addendum only records what was measured.
   **Do not let the withdrawn CRITICAL framing reach an executor** — it would send someone hunting a wrong
   ownership tag when the write site is a missing type check on member access. **Blocks `t0041`** (the
   owner-ratified campaign to make `for x in xs` the default idiom).
+  ⚖ **OWNER RULED 2026-09-05:** *"Right, if p is an int, no fields should be accepted. gg check should
+  reject that, no question about it."* ⇒ **SIX-QUESTIONS #1 is CLOSED for this item — it is a hole, not two
+  ratified semantics, and the builtin's behaviour is the correct one.** The rejection belongs at **`gg check`**,
+  not at lowering (today the ICE comes from the Tier 2a consume-site validator — wrong layer, wrong
+  diagnostic). **No design question remains; this is an implementation track.**
 
 ⚖ **TWO OWNER ASKS ARE OPEN. They block the CoW work; they do NOT block the safety tracks — do not stall.**
 - **R1 — cost-axis ratification.** `docs/internals/cow-cost-contract.md` is **LEANING, not ratified**, except
