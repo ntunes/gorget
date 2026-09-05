@@ -396,16 +396,20 @@ profiler as the one thing that made an inferred, invisible, non-rejecting memory
 ***"given an apparent space leak, how would a programmer locate it?"*** as what nearly killed the project.
 **`t0538` phases the knob at stage C** (*"A(summary+arg elision) → B(spec+fixtures) → C(knob …)"*).
 ⭐ **THE CONFLICT DISSOLVES ONCE D42'S KNOB IS SPLIT IN TWO, because the halves have different prerequisites:**
-- **ATTRIBUTION (diagnostics) — SHIPS WITH THE ANALYSIS.** Measured at HEAD: `--clones=stats` prints
-  `[clone-site] #0=10` — **an OPAQUE INDEX, no source line, no function name.** ⇒ **a programmer can COUNT a
-  clone but CANNOT LOCATE one**, which is MLKit's killer question with Gorget's answer being "you can't".
-  Regenerate: `./target/debug/gg run <any getter fixture> --clones=stats 2>&1 | grep clone-site`.
+- **ATTRIBUTION — LARGELY BUILT ALREADY; I SAID OTHERWISE AND WAS WRONG.** `--clones=stats` prints an opaque
+  `[clone-site] #0=10`, **but that is the coarse view, not the instrument.** `--clones=sites-tsv=PATH` emits
+  **file · line · column · type · REASON · bytes · symbol** per CloneId — e.g.
+  `0  <file>  5  12  Dict[int, int]  ReturnFromBorrow  144  gorget_map_clone`. ⇒ **MLKit's "how would a
+  programmer locate it?" ALREADY HAS AN ANSWER.** Regenerate:
+  `./target/debug/gg run <getter fixture> --clones=sites-tsv=/tmp/x.tsv >/dev/null 2>&1; cat /tmp/x.tsv`.
+  **The real gap is that it is a DUMP, not a DIAGNOSTIC** — nothing surfaces it to a user who did not already
+  suspect a clone. ⇒ **what must ship with the analysis is `warn`, not the whole knob.**
 - **THE `deny` CONTRACT — STAYS AFTER §3, and `t0538` is RIGHT about that:** *"§3 BEFORE §4 IS NOT
   NEGOTIABLE — without the specified set, `deny` pins user code to optimizer internals and every analysis
   improvement is a potential breaking change."*
 ⇒ **Ship attribution early, the contract late. Neither note is wrong; they are about different halves.**
 
-⚠ **THE MAIN BODY OF F's SCOUT REPORT HAS NOT ARRIVED** — only its prior-art addendum, which references
+✅ **F's MAIN BODY ARRIVED (see the R1 table + return matrix below).** ⊖ *(superseded: it was missing)* ⚠ **THE MAIN BODY OF F's SCOUT REPORT HAD NOT ARRIVED** — only its prior-art addendum, which references
 Lines A/B/C, an 8.9× figure, a `peek`/`advance` measurement and an F1/F2/F3 split **none of which I hold**.
 **Requested; do NOT act on F until the R1 table and the return-position matrix are in hand.**
 ⚠ **OPS (self-reported by F's scout, MA-1 violation):** it spawned nested research agents **without
@@ -858,6 +862,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t1210`](todo/t1210.md) **HIGH** — 🆕🚨 [HIGH — a LEAK of EVERY heap value a closure captures, from ordinary safe syntax, gg check clean and rc 0 on both bac…
 - [`t1225`](todo/t1225.md) **HIGH** — 🆕🚨 [HIGH — MEMORY-UNSAFE FROM ORDINARY SAFE SYNTAX, both backends, gg check rc 0 AND gg build rc 0; the DEFERRED half of…
 - [`t0952`](todo/t0952.md) **HIGH** — 🆕🐛 [HIGH (re-graded from MED 2026-09-05) — a LEAK *and* an O(n) deep copy per iteration step, from ordinary safe syntax,…
+- [`t1362`](todo/t1362.md) **CRITICAL** — 🆕🔥 [CRITICAL -- SILENT WRONG OUTPUT AND A DOUBLE FREE, BOTH BACKENDS, ggdef-ADJUDICATED AGAINST BOTH, LIVE AND UNFILED S…
 ### Medium
 
 - [`t0115`](todo/t0115.md) **MED** — 🆕🐛 [MED — COMMENT MISATTRIBUTION, PRE-EXISTING on both lanes; found 2026-08-19 by the R43 Track G output review, executo…
