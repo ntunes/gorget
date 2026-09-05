@@ -12,6 +12,7 @@
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C** | 🔵 SCOUTING. **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** **`t1225`** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
+| **G** | 🆕 **THE STANDING VIEW-INVALIDATION MATRIX — owner-directed 2026-09-05.** 🔵 SCOUTING. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
 | **F1** | 🆕 **`t1362` CRITICAL — ggdef adjudicates against BOTH backends. 🔵 brief-review pass 1. Streak 0/3.** | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
@@ -378,6 +379,51 @@ FIX IT NOW** — the addendum only records what was measured.
   not at lowering (today the ICE comes from the Tier 2a consume-site validator — wrong layer, wrong
   diagnostic). **No design question remains; this is an implementation track.**
 
+### 🚀 TRACK G OPENED 2026-09-05 — WHY `t1362` ELUDED US, AND THE INSTRUMENT THAT WOULD HAVE CAUGHT IT
+
+**Owner: *"How has it eluded us so long? We need a fixture or something to test it extensively, this is a
+crucial feature of gorget!"*** ⇒ **I pushed back on "a fixture" and the owner's intent is served by a GATE.**
+
+⛔ **THE FAMILY — *"a view is not severed when its source is mutated"* — HAS BEEN CLOSED FOUR TIMES, EACH FOR A
+DIFFERENT SOURCE KIND, NEVER AS A CLASS** (`grep -n 'materialize' DONE.md`):
+
+| date | shape closed |
+|---|---|
+| 2026-07-17 | for-loop element binding, mode-driven |
+| 2026-07-18 | loop-carried bare-param materialize |
+| 2026-07-19 | branch/scope bare-param pre-header materialize |
+| 2026-07-02 (`bdef3d375`) | getter view — **STRAIGHT-LINE HALF ONLY** |
+
+**`t1362` is the same family for *getter view × nested block*.** ⇒ **Core #4's litmus — *"ask how many sites
+there are and what stops site N+1"* — was never applied to this family.**
+
+⭐⭐ **THE INSTRUMENT EXISTED ONCE AND WAS NOT KEPT.** `DONE.md` 2026-07-06: *"**3 of the 4 ggdef-adjudicated
+materialize-on-write holes** FIXED (both backends; #4 was a memory-safety SIGSEGV). The definition's first
+production catches."* ⇒ **ggdef SYSTEMATICALLY FOUND FOUR HOLES IN EXACTLY THIS CLASS — and there is NO
+standing sweep and NO gate** (searched `scripts/`; nothing). **A one-off. Nothing re-asks the question.**
+
+**Two measured coverage facts:**
+- **1 of 2246** `.gg` fixtures resembles the shape at all (crude shape-search, orchestrator).
+- **`GGDEF_ADJUDICATED_FLOOR` = 496** of 2246 ⇒ ggdef adjudicates **~22%**, **and it is a FLOOR that ratchets
+  upward, NOT a requirement that risky shapes be covered.**
+
+⛔ **WHY "A FIXTURE" IS THE WRONG ANSWER: hand-written fixtures closed this family FOUR TIMES and missed the
+fifth.** A fifth pins the cell we just found and says nothing about cell six.
+⇒ **The instrument is 2026-07-06's sweep MADE STANDING: a GENERATED cross-product, ggdef-adjudicated, GATED.**
+Generated so the enumeration cannot be a selection; oracle-adjudicated so it needs no hand-written expected
+output; gated so cell six cannot land silently.
+
+⚠ **THE SCOUT IS BRIEFED TO ATTACK THIS FRAMING, NOT IMPLEMENT IT POLITELY.** Three things could sink it and
+it must say so:
+1. ⛔ **Core #13 — ggdef is STRUCTURALLY BLIND to memory invalidation, and `t1362`'s worst cell is a DOUBLE
+   FREE.** **A ggdef-only matrix cannot see its own worst cell.** Per-cell-class oracle assignment is required,
+   ASan included, plus a rule for cells where ggdef **abstains** (out-of-subset — an abstention that reads as
+   green is SIX-QUESTIONS #6).
+2. ⛔ **CORPUS INFLOW.** A ~250-cell matrix landing as top-level fixtures is enormous inflow against a
+   **ZERO-SLACK** non-MATCH ceiling. **This may decide the design.**
+3. ⛔ **"NEVER RAN" MUST NOT READ AS "PASSED"** — a generated program that fails to compile is an ABSENT cell,
+   not a passing one. ⚠ **That exact hole is LIVE in another gate right now (`t1360`).**
+
 ### 🚀 TRACK F OPENED 2026-09-05 — `D40`/`D52`, THE OPTIMALITY CAMPAIGN (owner-directed, in parallel with the safety tracks)
 
 **Owner: *"Yes, open D40/D52 as a track now. I also need some help to decide on R1."*** ⇒ **The scout's SECOND
@@ -486,7 +532,7 @@ actually read.
 ⛔ **THE CLONE-BAND ANCHORS WERE RE-SEEDED AT THIS ROUND'S OPEN** (date 2026-09-05, one sha, values
 unchanged — R49 moved the clone meter not at all). `clone_band_anchor_is_reseeded_before_work_resumes` is the
 gate that enforces it; do not let it drift.
-⛔ **FIRST UNISSUED `todo/` ID: `t1383`.** ⊕ **BLOCKS: A1 `t1309`–`t1318` · B `t1319`–`t1328` · C `t1329`–`t1338` · D `t1339`–`t1348` · E `t1349`–`t1358` · F2/F3 `t1362`(used)+`t1363`–`t1371` → **F1 owns `t1363`–`t1372`** · A2 `t1373`–`t1382`.** Allocate a private disjoint block per executor (MA-3b).
+⛔ **FIRST UNISSUED `todo/` ID: `t1393`.** ⊕ **BLOCKS: A1 `t1309`–`t1318` · B `t1319`–`t1328` · C `t1329`–`t1338` · D `t1339`–`t1348` · E `t1349`–`t1358` · F2/F3 `t1362`(used)+`t1363`–`t1371` → **F1 owns `t1363`–`t1372`** · A2 `t1373`–`t1382`.** Allocate a private disjoint block per executor (MA-3b).
 
 ⚠ **THE ONE THING R49 PAID FOR REPEATEDLY, AND THE ONE THING TO CARRY:** **A SELECTION PRESENTED AS AN
 ENUMERATION.** It fired on a constant censused without the branch that moved it · on figures inherited rather
