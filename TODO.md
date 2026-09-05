@@ -1315,6 +1315,51 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
 
+### ⛔⛔ THE ROUND-CLOSE BATTERY WAS **FALSE IN ITS OWN TEXT**, AND THE LINT THAT POLICES IT IS BLIND BY CONSTRUCTION
+
+⭐⭐ **I CORRECTED THE COMMAND IN PLACE AND FILED THE GUARD (`t1406`, HIGH).** Three halves, each regenerated:
+1. `grep -n 'robustness_map' AGENTS.md` — the battery prescribed **BARE** `python3 scripts/robustness_map.py`
+   and called it *"five lanes (C · LLVM · self-host · ASan · ggdef)"*.
+2. `grep -n 'default=' scripts/robustness_map.py | grep -i lane` — **`--lanes` defaults to `"c"`.**
+   ⇒ ⛔ **THE BARE COMMAND RUNS ONE LANE. THE PROSE BESIDE IT WAS FALSE, FOR TWO ROUNDS.**
+3. `grep -n 'robustness_map' .github/workflows/ci.yml` — CI runs **`--lanes c,llvm`** *and* **`--lanes all`**.
+⇒ **CI's five-lane step is a GATE THE BATTERY DID NOT RUN.**
+
+⛔⛔ **AND THE RECONCILING LINT REPORTS IT COVERED.** `grep -n "battery.contains(target)" tests/lints.rs` — the
+coverage predicate is **SUBSTRING CONTAINMENT** over the battery text, so **a CI step counts as covered the
+moment the battery mentions the same SCRIPT PATH, whatever ARGUMENTS either side passes.**
+⭐⭐⭐ **THIS IS THE GUARD'S OWN SENTENCE FAILING.** `AGENTS.md` says local-green is the sign-off *"only for as
+long as that lint holds it true"* — and records that the previous prose was **measured FALSE, three CI steps
+absent, a round green while CI was red.** ⇒ ***the lint was written for exactly this class and cannot see this
+instance.*** **SIX-Q #2, on the guard that guards the round.**
+
+⛔ **THE FIX IS NOT "ADD A ROW"** — the predicate must compare what is **GATED**, not what is **SPELLED**.
+⚠ **A fix that special-cases `--lanes` repeats the defect on the next flag: `GG_STAGING_MOVE_GUARD=fatal` and
+`--release` are the same shape.** ⊕ **And its RED direction must be a CI step whose ARGUMENTS differ from the
+battery's — shown going red, or the replacement is the same guard with a longer body.**
+
+⚠⚠ **CONSEQUENCE, STATED PLAINLY: the battery is now HONEST AND THEREFORE RED.** `--lanes all` fails on `t1385`
+(11 legacy divergences) + `t1387` (the ASan leak). **A red battery is NEVER waivable** ⇒ **R50 cannot close
+until both are discharged.** ⭐ **Both are actionable: `t1385` clears by command + a bucket review; `t1387` has
+NO accept path and must be FIXED.**
+
+### 🚀 TRACK H OPENED — `t1387`, THE LEAK THAT CANNOT BE ACCEPTED
+
+**Scout launched, base `be3eb61b6`.** `ex_char_frequency.gg` leaks **2 bytes** via
+`gorget_string_clone_to_owned` ← `str_alloc_copy` ← `main` — a clone made at a **`for ch in s:` LOOP HEAD** and
+**never registered for drop.** **Reproduced independently by two agents.**
+⭐ **Hypothesis is Core #3 verbatim** (*register ownership at the value's birth… the leak class is always a
+missing or mis-typed ownership tag*) — **and the scout is told to PROVE IT FROM THE EMITTED C, not from reading
+the lowering**, because this round has had three certifications falsified by source-reading where a build would
+have settled it.
+⭐⭐ **THE TWO QUESTIONS THAT DECIDE ITS SCOPE:** (a) **instance or CLASS?** `for ch in s:` over a `String` is an
+extremely common shape — enumerate the sibling producers **with an INDEPENDENT witness**; (b) ⛔ **WHY DOES ONLY
+THIS CELL SHOW IT?** 819 value-semantics cells + ~1000 legacy rows, and exactly one reds under ASan.
+**That asymmetry is a clue, not noise (SIX-Q #6) — if the leak is broader, the map's ASan lane is
+UNDER-REPORTING, and that is a second finding.**
+⚠ **Crowded family: `t0045`/`t0403` (integrated this round) and `t1362`/`t0750` both touched for-element
+ownership. The scout must say what DISCRIMINATES this, or that it is the same class.**
+
 ### ⭐⭐⭐ G's OUTPUT-REVIEW — THE RED FIVE-LANE GATE **IS CLEARABLE THIS ROUND**, BY A COMMAND ITS OWN ITEM SAYS DOES NOT EXIST
 
 ⭐⭐ **`t1385`'s CENTRAL MECHANISM CLAIM IS WRONG, AND THE REVIEWER MEASURED THE ALTERNATIVE END-TO-END.** The
