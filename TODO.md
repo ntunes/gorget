@@ -13,8 +13,8 @@
 | **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
 | **C2** | ✅ **DESIGN SIGNED OFF (7th reproduction).** 6 folds → 🔵 **narrow pass 7** on the ONE new deliverable only. ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D0** | 🔵 SCOUTING. **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1 (owner-named). | `t1393`–`t1402` |
-| **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
+| **D01** | ⛔ **MERGED 2026-09-05 — D0 + D1 ARE ONE OWNERSHIP INVARIANT; NEITHER SHIPS ALONE.** ✅ scouted → needs brief. | `t1393`–`t1402` |
+| ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | **G** | passes 1–3 BLOCKED → 3 folds → 🔵 pass 4. **Streak 0/3.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
 | **F1r** | passes 1+2 BLOCKED → 2 folds → 🔵 pass 3. **Streak 0/3.** ⭐ **Design re-measured end-to-end TWICE; 207 `cow_*` fixtures PRE vs POST all SAME.** | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
@@ -449,6 +449,61 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ⛔⛔ D0 AND D1 ARE **ONE OWNERSHIP INVARIANT** — MERGED. NEITHER IS SHIPPABLE ALONE.
+
+**D0's fix clears NONE of D1's three fixtures — and the correct conclusion is STRONGER than "blocked".** A
+controlled pair, one edit apart:
+
+| program | HEAD | D0 fix |
+|---|---|---|
+| `dict_box_callable.gg` verbatim (bare index read binds a 2nd owner) | rc 0 **CLEAN** | rc 1 **double-free** |
+| same file, the read made **owning** (`.clone()`) | rc 1, **16 B leaked** | rc 0 **CLEAN** |
+
+⭐ **HEAD IS WRONG IN BOTH CELLS.** One leaks; the other is **ACCIDENTALLY CORRECT (SIX-Q #6)** — *the missing
+element-drop and the extra owner CANCEL.* ⇒ **D0's fix does not create `dict_box_callable`'s bug; it UNMASKS
+`t1225`'s.**
+
+⛔ **SO THEY ARE NOT PREREQUISITE-AND-DEPENDENT — THEY ARE TWO HALVES OF ONE INVARIANT:**
+- **D0 alone** → a clean fixture becomes a **double-free**, and `CORRUPTION_CEILING` is `assert_eq!(…, 1)`
+  (verified) ⇒ admitting a row **ships a known double-free. FATAL.**
+- **D1 alone** → the three fixtures leak. **FATAL.**
+- **Together** → the collection owns and drops; the read binds a borrow or an explicit clone ⇒ **exactly one
+  free.** Proven by the `.clone()` control.
+⇒ ⭐ **MERGED AS D01: ONE TRACK, ONE COMMIT.** `dict_box_callable.gg` needs a source edit in that commit; its
+pinned stdout is preserved — measured.
+
+⛔ **`t0873(b)` NEEDS REWRITING, NOT EXTENDING — ITS FILED MECHANISM IS MEASURED FALSE.** For `Vector` the
+element type **IS** `FnPtr`, the rewrite **does** fire, and the lookup **still misses**. **The real mechanism:
+the `GorgetClosure` TypeDef is NEVER REGISTERED in the `TypeRegistry` the LIR reads** — `register_callable_alias`
+is **never called at all**, and `GorgetClosure` is **missing from the eagerly-registered singleton set**.
+⚠ **And the two paths pass DIFFERENT STRINGS** — `"GorgetClosure"` (minted in the LIR) vs
+`"Callable__GorgetClosure"` (minted by the GIR mangler) ⇒ **a fix covering one spelling covers neither.**
+
+⭐ **THE ENUMERATION IS TOTAL OVER 60 CELLS, with two independent witnesses** — rustc exhaustiveness over
+`CollectionCtorKind` (6 variants) × the **schema-versioned SSoT** `compiler/data/resources.gg` (consumed by
+both Rust and the self-host). **All 60 built and run under LSan; Set/HashSet reject non-Hashable elements at
+check time — a REJECTION, not an omission.**
+
+⛔ **THREE NEW DEFECTS THE ORIGINAL FRAMING WOULD HAVE HIDDEN — a capped enumeration shows one Callable column;
+the total matrix shows four:** **`t1393`** `Deque[Callable]` mis-sizes its element to 8 bytes ⇒ **rc 139 SEGV,
+both lanes, CRITICAL** — and **the ctor never calls the decider, so D0's fix cannot reach it**;
+**`t1394`** `Shared[T]`/`Box[T]` as an element never reaches the ctor decider ⇒ leak; **`t1395`**
+`Vector[Box[UserStruct]]` **does not compile on either backend** (`redefinition of 'Box__Blob__drop'`).
+
+⛔ **THE ALLOWLIST PREDICTION WAS WRONG IN BOTH DIRECTIONS.** The two `httpserver` rows **DO NOT MOVE** — their
+frame #2 is `main`, a closure **literal** env (`t0953`'s class), a different allocation entirely. **But FIVE
+other rows do**, and **one is CITED ⇒ `retire_fatal`, rc 1** unless tightened in the same commit.
+⚠ **And that table is itself a SELECTION — 18 fixtures probed against a population of ~1743. The executor owes
+a FULL sweep before touching `LEAK_CEILING`.**
+
+⭐⭐ **THE REFERENCE LAGS THE SELF-HOST, AND THE SELF-HOST SAYS THE SAME THING IN ITS OWN WORDS.**
+`lir_codegen.gg` already handles **both spellings** and wires drop+clone **as a pair**, with a comment naming
+**the exact double-free the drop-only revert produces**: *"elem_drop and elem_clone MUST be wired as a pair —
+wiring drop without clone turns the prior leak into a clone-path double-free."* ⇒ **the self-host arrived at
+this design first; that is independent corroboration the shape is reference-grade. Do not touch the SH.**
+⊕ **Revert table shipped, and R3/R4 are honestly named as UNCATCHABLE by any fixture** — they need unit tests,
+and the scout says so rather than papering over it.
 
 ### ⛔⛔ G's D6 WAS WRONG TWICE, AND THE SECOND WAY MEANT THE CORPUS COULD **NEVER** BE BASELINED
 
