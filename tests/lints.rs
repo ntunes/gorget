@@ -30760,6 +30760,8 @@ fn cow_scope_boundary_hook_pairing_count() {
         collectors,
         COW_BEFORE_MUTATION_COLLECTORS,
         arm_guidance,
+    );
+}
 
 // ===========================================================================
 // The robustness map's own structural guards.
