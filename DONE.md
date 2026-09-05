@@ -46,7 +46,7 @@
   **FILED:** `t1409` (the robustness map's `asan` column pins live defects as expected — 87 rows, no citation
   requirement), `t1410` (**`+% -% *%` lower to plain signed C arithmetic ⇒ UB**; LLVM emits flagless ops and
   is correct, so the lanes differ in *defined-ness*), `t1411` (`assert_gg_sanitize_clean` builds with
-  `-fsanitize=address,undefined` but its predicate cannot match UBSan's lowercase `runtime error:` — 50 gates
+  `-fsanitize=address,undefined` but its predicate cannot match UBSan's lowercase `runtime error:` — 44 gates
   blind to half of what they enable). ⊕ `t1407` got its durable repro and its `repro` field.
 - [2026-09-05] **`t0045` + `t0403` CLOSED — THE for-LOOP STRING-ELEMENT DOUBLE FREE (R50 Track C2).**
   `for s in v: s = "zz"` over a `Vector[String]` was `gg check`-clean and SIGABRTed (rc 134, both backends,

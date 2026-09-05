@@ -905,6 +905,10 @@ test_dict_all	__gorget_closure_env_alloc*5
 test_dict_edge_cases	__gorget_closure_env_alloc*2
 test_dict_int_keys	__gorget_closure_env_alloc*2
 test_failure	gorget_format*1,str_alloc_copy*2
+# ⛔ LOAD-BEARING: str_alloc_copy*2 is the SOLE guard for gorget_map_put's UNORDERED
+# mode (HashMap/HashSet). Reverting either unordered half of t1387's fix takes it to
+# *3 and reds the sweep as a NEW LEAK CLASS. The fixture map_userkey_dup_key_drop
+# pins only the DENSE mode. Do not loosen this row as "noisy" -- measured R50.
 test_hashmap_all	__gorget_closure_env_alloc*4,str_alloc_copy*2
 test_hashset_all	__gorget_closure_env_alloc*4
 test_method_chaining	__gorget_closure_env_alloc*12

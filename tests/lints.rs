@@ -10357,9 +10357,11 @@ fn sanitize_allowlists_shrink_only() {
     // was the reconciliation; this is pure inflow with nothing retiring against
     // it, so all three of rows, pairs and records step together.
     // ⚖ 498 -> 487 pairs, 2265 -> 2232 records (R50 Track H). The eight retired
-    // rows take one pair and twelve records with them; the twelve TIGHTENED rows
-    // give up three more pairs (a class measured GONE) and twenty-one more
-    // records. ⚠ The fixed sweep reports 28 tightenings, not 12 -- the other 16
+    // rows take EIGHT pairs and twelve records with them; the twelve TIGHTENED
+    // rows give up three more pairs (a class measured GONE) and twenty-one more
+    // records. 8 + 3 = 11 = the 498 -> 487 delta; 12 + 21 = 33 = 2265 -> 2232.
+    // (Was written "one pair"; corrected by the output-review -- read literally
+    // it contradicted the very number it explains.) ⚠ The fixed sweep reports 28 tightenings, not 12 -- the other 16
     // are BYTE-IDENTICAL in the pristine control and are NOT this track's, so
     // they are deliberately left standing for their owners.
     const LEAK_CLASS_PAIRS: usize = 487;
