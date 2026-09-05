@@ -20,12 +20,45 @@
 | ✅✅ **H** | **`t1387` INTEGRATED** 2026-09-05 (`8573b12ca`+`0c137cbe0`). Output-review SIGNED OFF; 3 errata fixed at `6b4c8a544`. ⭐ **Its executor found FOUR defects in my brief; the review found a fifth in ITS filing.** | `t1409`–`t1417` |
 | ✅✅ **K** | **`t1385` INTEGRATED** 2026-09-05 (`b5c5eaabc`+`1c2513e45`); errata `9d7e9f71b`. Output-review **SIGNED OFF**. ⭐ **93 cell-lanes now gated; both allowlists ratchet BOTH ways.** | `t1434`–`t1437` |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
-| **L** | **`t1410`** — ⛔ **THE WRAPPING OPERATORS LOWER TO UB ON THE C LANE**, and `lib/std/hash.gg`'s `FxHasher` is `*% 31 +%` at **four** sites ⇒ **every `@derive(Hashable)` executes it.** LLVM is CORRECT, so the lanes differ in **DEFINED-NESS** (Core #8). 🔵 **SCOUT LAUNCHED 2026-09-05** — opened as a TRACK, not deferred. | `t1438`–`t1447` |
+| **L** | **`t1410`** — ⛔ **THE WRAPPING OPERATORS LOWER TO UB ON THE C LANE**; LLVM is CORRECT, so the lanes differ in **DEFINED-NESS** (Core #8). ✅ SCOUTED → 🔵 **pass 1. Streak 0/3.** ⭐ **Fix measured FREE (disassembly byte-identical); a FOURTH site (`Neg`) has NO subject.** | `t1441`–`t1447` |
 | **J** | **`t1407`** — `Vector.fill`. ✅ **J2 MEASURED: SHIP THE HYBRID** (23/23 clean both backends, **n** allocs, **no scratch buffer at all**) → 🔵 **pass 1 on the rebuilt design. Streak 0/3.** ⛔ **`v3`, the prescribed fallback, IS ITSELF DEFECTIVE.** | `t1422`–`t1427` |
 | **E** | **`t0953`** — ✅ **pass 1: DESIGN SOUND** (blocking measurement independently reproduced) → 🔵 **pass 2 confirming. Streak 0/3.** ⛔ **2 BLOCKING ON MY CLAIMS: the census was a SELECTION and its headline row was FALSE** (retracted `0a59a0081`). | `t1350`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ✅✅ L's SCOUT — **THE FIX IS FREE, AND MY BLAST RADIUS WAS OVERSTATED TWICE**
+
+Brief `/tmp/brief_L_v1.md`; patches `/tmp/scoutL_a5f963b6738b7e830/recover_scoutL_{1_fix,2_fixtures}.patch`.
+- ⛔⛔ **A FOURTH EMIT SITE WITH NO SUBJECT (SIX-Q #4): `Inst::Neg` CARRIES NO `Overflow` FIELD AT ALL**, so
+  `-INT64_MIN` is UB and **no widening of a rule about `Overflow` variants can reach it.** ⭐ The family's typed
+  witness — `grep -c 'overflow: Overflow }' src/lir/mod.rs` → **3** (Add/Sub/Mul), rustc-checkable — **is
+  exactly why `Neg` is invisible.** *(A lint built on that witness inherits the blindness; it must say so.)*
+- ⛔ **MY AMPLIFICATION WAS WRONG TWICE.** It is **SIX** hash sites, not four (3 inherent + 3 `equip` mirrors);
+  and ***"every `@derive(Hashable)` with a String field executes this UB"* IS TOO STRONG** — the state must
+  actually overflow int64, needing **~13+ characters**, and **0 of 24 hashing fixtures fire.** *(Positive
+  control confirms the sweep CAN see the class.)* **Real exposure, LENGTH-GATED.** Corrected in `t1410`.
+- ⛔⛔ **NO STDOUT TEST CAN EVER SEE THIS DEFECT — all 26 axis values are BYTE-IDENTICAL pre-fix.** The
+  instrument must be UBSan (Core #13). Exactly **6 UB cells** = {int32,int64} × {+%,−%,*%}, plus both `neg`;
+  int8/int16 are laundered by C integer promotion and every unsigned cell is C-defined.
+- ⭐⭐ **THE PERF QUESTION IS ANSWERED THE RIGHT WAY: NOT A WALL-CLOCK NUMBER BUT THE DISASSEMBLY.** `-O2`
+  dependent-chain, 7 interleaved reps → **−0.07%**, and **`objdump` diff = 4 LINES, all the filename.** GCC
+  emits the same instructions. **Provably free.**
+- ⚠⚠ **A TOP-LEVEL FIXTURE AUTO-ENTERS `runtime_parity_corpus`, AND THE SELF-HOST DIVERGES ON 21 OF 26 CELLS**
+  (it treats every narrow integer as int64 — `t0655`, still live) ⇒ **top-level placement of the full axis
+  would book FORBIDDEN OWN-INFLOW into `RUNTIME_DIFF_NONMATCH_CEILING`.** The fixture split is **required, not
+  stylistic**: 4 self-host-MATCHING int64 cells top-level, the full 26 in `known_gaps/` **for placement only,
+  with a LIVE test.**
+- ✅ **NO OWNER ASK — D18 ratifies that const `+%` wraps and D30 forbids signed-overflow UB in the C backend.**
+  ⛔ **But ggdef has NO wrapping variants at all** ⇒ out of subset, oracle silent — **filed `t1440`**, because a
+  cell the oracle cannot see reads as *absence of disagreement*, which is not agreement.
+- ✅ **`t1411` IS NOT A PREREQUISITE, MEASURED** — the sweep already classifies `runtime error:` as `UBSAN` at
+  ceiling 0 with a self-tested classifier, and **H's committed repro already avoided the blind helper.**
+- ⛔ **TWO ADJACENT DEFECTS FILED.** **`t1438`**: `uint8 255 + 1` prints **`0` on C** and **traps on LLVM** — a
+  divergence in the **ANSWER**, not defined-ness; D30 ratifies LLVM's behaviour, and **`t0655`'s own recorded
+  measurement has DECAYED** (it says 256; it is 0). **`t1439`**: a struct Dict-key link failure — **filed WITH a
+  committed GREEN counter-example** (H's `Dict[Named,int]` fixture uses the very shape the symptom blames), so
+  **the discriminator is explicitly UNKNOWN rather than guessed.**
 
 ### ⛔ E's PASS 1 — **THE DESIGN IS SOUND AND INDEPENDENTLY REPRODUCED; MY *CLAIMS* WERE THE PROBLEM**
 
