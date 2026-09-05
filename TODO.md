@@ -1,7 +1,31 @@
 # TODO
 
 
-### 🟢 R49 IS CLOSED (2026-09-05). R50 IS OPEN AND UNSTARTED.
+### 🚀 ROUND L (R50) IS OPEN — 2026-09-05. HEADLINE: **THE CRITICAL MEMORY-SAFETY SET + R49's DEFERRED HALVES.**
+**Owner-directed.** Safety debt first; the optimality pivot follows it, not beside it.
+
+**ROSTER — five tracks, each with a private disjoint ID BLOCK (MA-3b; a track NEVER picks its own):**
+| track | scope | ids |
+|---|---|---|
+| **A** | **`t1077`** — nested `Box[Box[T]]` read: **SIGSEGV on C, SILENT WRONG ANSWER on LLVM**, `gg check` clean. R49-found. | `t1309`–`t1318` |
+| **B** | **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
+| **C** | **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
+| **D** | **`t1225`** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
+| **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
+⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
+⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
+⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+⛔ **STANDING CONSTRAINT, UNCHANGED: the non-MATCH ceiling and the ggdef floor are at ZERO SLACK.** Any track
+adding a non-MATCH fixture reds immediately. **Own new fixtures must COMPILE + MATCH on self-host the SAME
+ROUND** (Core #9) — raising the ceiling for your own inflow is forbidden.
+
+⊕ **A DESIGN SCOUT RUNS ALONGSIDE, AND IT IS NOT A TRACK:** the CoW-cost / stored-borrow / `D41` conflict
+(`t1307`, `t0538`). It ships no diff and files nothing — **it produces input to an OWNER RATIFICATION**, which
+is the long pole because its latency is not ours. ⚖ **Owner granted a ONE-OFF Fable spawn for it
+(2026-09-05); the default remains the harness model.**
+
+### 🟢 R49 IS CLOSED (2026-09-05).
 **R49's full record is in `DONE.md`** — seven tracks, two integration tracks, both owner rulings, and the
 complete battery. **Nothing about R49 belongs in this block any more.** This handover was 5550 lines of
 running log at close; it is now pending-only, which is what AGENTS.md asks for and what a cold restart can
