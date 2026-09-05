@@ -10,7 +10,7 @@
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
-| **C1** | ⭐⭐ **`t0011` + `Box[T]`'s missing `clone_fn` as ONE change. Brief `v2` written, 🔵 pass 1.** Streak 0/3. | `t1329`–`t1333` |
+| **C1** | ⛔ **v2 pass 1: 2 BLOCKING — the measurements SURVIVE, the DESIGN CONCLUSION DOES NOT.** Re-cut to **`clone_fn` + `t0682`'s CHECK-TIME REJECT**. Streak 0/3. | `t1329`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ✅ **RULED.** `v4` written — ruling + 5 blocking + 6 errata folded; 🔵 **pass 1 on v4.** Streak 0/3. ⚠ **The SHADOW-REJECT is the bigger, least-tested half.** | `t1394`–`t1402` |
@@ -1314,6 +1314,62 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ⛔⛔ C1 v2 PASS 1 — THE MEASUREMENTS SURVIVE; **THE DESIGN CONCLUSION DOES NOT**
+
+⭐ **CONFIRMED, all of it:** HEAD aliases (one allocation, two owners; the recursive drop **emitted with ZERO
+call sites**; the escaping cell is an ASan **heap-use-after-free**) · `.clone()` on a `Box` emits **byte-identical
+C** via the `return recv` fall-through · regression #1's unreachability confirmed **BEHAVIOURALLY** (cell 7 alone
+moves `60`→`0`) · **all four ratified cites literally accurate** · ggdef's abstention **re-measured** (0 hits,
+and the `Ty` enumeration is the durable witness).
+
+⛔⛔ **BLOCKING 1 — I SHIP `t0682`'s OPEN CELL IN THE DIRECTION `t0682` RULES AGAINST.** I never quoted its
+disposition. It is decisive: `t0682` (HIGH, **open**) measures `Box[Box[String]](h.b)` as **ACCEPTED ⛔** and
+rules ***"LAND-AS-REJECTION … instead of lowering something the language says is illegal and hoping the drop
+model copes."*** **And the fixture's OWN header prescribes its end state:** *"EXPECTED (once `todo/t0682`
+lands): `gg check` FAILS with `E_MoveWithoutOperator`."*
+⇒ ⛔ **MY "PREMISE RETIRED — re-point it at the correct output" DELETES A TRUE CLAIM.** *(The retraction rule,
+broken again by its author.)*
+⇒ ⛔ **AND MY CAUSAL SENTENCE IS WRONG.** The rc 101 is **not** *"C1 correctly refusing to mint from a borrow it
+cannot materialize"* — the reviewer read it: it is a **LABELLED PLACEHOLDER FOR THE REJECT**, whose message ends
+*"a lowering-layer stopgap for `todo/t0682`, which owes the check-time diagnostic."*
+⇒ ⛔⛔ **AND THE LEDGER NAMES MY OUTCOME AS A BREACH.** D32 (owner **2026-09-04**, one day before my brief):
+a closure capturing a `Callable`/`Box`/… — ***"clone breaches the carve-out."*** And `type_utils.rs` asserts of
+`Box[T]`: *"they are NOT CoW-eligible, so there is **no implicit clone-if-live path**."* **My success criterion —
+*"both cells compile and run UNCHANGED"* — IS that path**, and would falsify that comment with **no guard
+noticing** (Core #14).
+
+⭐⭐⭐ **THE REFERENCE-GRADE SHAPE, AND IT IS STRICTLY BETTER: SHIP `clone_fn` *AND* `t0682`'s CHECK-TIME
+REJECT.** Then `Box.new(h.b)` **rejects at check with a fix-it — `h.b.clone()` — THAT NOW ACTUALLY WORKS.**
+⇒ ***closing the Core #10 hole is what MAKES the reject shippable***; the `panic!` becomes an unreachable
+backstop; the fixture is re-pointed to `check_gg_fails` **as its own header prescribes**; and **`t0682` CLOSES.**
+⚠ **THE OWNER'S "it should work" IS HONOURED — "work" MEANS *A LEGAL SPELLING EXISTS AND RUNS*, NOT *the bare
+form is accepted*. That distinction is the whole finding, and it is mine to put to the owner.**
+⊕ **SIX-Q #4 was already written down and I never asked it:** `is_constructor` matches `Variant | Newtype` only,
+so the helper never runs for `Box[Box[String]](…)` — ***"a case with no subject, which no widening of this arm
+reaches."***
+
+⛔⛔ **BLOCKING 2 — MA-5 FALSIFIED: `C1` ALONE CLOSES `t0011`, ASan-CLEAN.** Applied each half alone to pristine
+HEAD: **`t0011`'s own repro goes rc 134 → rc 0, ASan-clean, under C1 ALONE.** ⇒ **my two MA-5 clauses are each
+true of a DIFFERENT PROGRAM, presented as one:** *"clone_fn alone leaves `t0011` at 134"* ✅ true; *"C1 alone is
+rc 101"* ⛔ **FALSE for `t0011`** — true only for the scout's **nested-Box** cell, which is `t1077`/`t0682`
+territory. ⇒ ***"only together do they work" is FALSE.***
+⭐ **THE AXIS I HELD FIXED WAS THE PROGRAM — the round's signature failure, this time INSIDE THE MA-5 MATRIX
+THAT EXISTS TO CATCH IT.** ⊕ **Readiness row 4 is unsatisfiable as written:** reverting C1 leaves `t0011` **red**,
+reverting `clone_fn` leaves it **green**.
+
+⊕ **SEVEN ERRATA, and two are broken citations of mine** (`is_resource_name` is in `src/ir/types.rs`, not
+`lowering/types.rs`; `has_inner_clone` is in `src/backend/c_lir/emit_types.rs` — **the file I cited does not
+exist**). ⊕ **The ggdef subset gap is ALREADY FILED as `t1227`** — *cite it, do not re-file*. ⊕ **The LLVM cite
+shows the symbol EXISTS, not that it is unguarded — and it is about DROP wrappers while the fix adds a CLONE
+emitter.** ⊕ **The 73 B / 2-alloc residual is MATCHED, NOT MEASURED** — the allocating frame is **the fix's own
+new `Box__GorgetString__clone`**, while `t1309`'s fixture *contains no clone at all*: **same magnitude ≠ same
+cause (SIX-Q #6).** ⊕ **`ensure_shared_type_def`'s exclusion list is a SELECTION** (it enumerates wrappers built
+by a *different* function than the one that registers `Box`) — **argument from silence; drop that leg, D4 and
+D53 carry the claim alone.**
+⭐ **AND THE SHARPEST FACT WAS SITTING IN MY OWN QUOTE, UNUSED:** the `E_PartialMove` diagnostic says
+***"…or copy the sub-place with `.clone()`"*** ⇒ **THE COMPILER'S OWN FIX-IT IS THE NO-OP.** *That single
+sentence is the Core #10 argument.*
 
 ### ⭐⭐⭐ TRACK H — MY HYPOTHESIS WAS WRONG ABOUT THE SITE, AND THE DEFECT IS **UNBOUNDED**, NOT 2 BYTES
 
