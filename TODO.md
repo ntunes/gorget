@@ -27,6 +27,26 @@
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
 
+### ⚠⚠ ROUND-MANAGEMENT HAZARD, RECORDED BEFORE IT BITES — **THE FOUR LIVE BRIEFS ARE THE ROUND'S LARGEST UNDURABLE ASSET**
+
+**Measured this heartbeat:** `brief_J` **506 lines**, `brief_E` **404**, `brief_L` **279**, `brief_A2` **125** —
+**1314 lines across four `/tmp` files, carrying 2–4 precedence-ordered addenda each.** Behind them sit roughly
+**fifteen agent-hours of MEASUREMENT** that no other artifact holds: the site-attributed 5383-file census, the
+`HofOp` 28-variant witness, the 24-cell fill matrix with its `n`-partition proof, the value-identity matrix over
+26×26×8×3, the objdump identity at `-O2` and `-O3`, and the injected-UBSan negative result.
+⛔ **ROUND CLOSE DELETES ALL OF IT** (*"scouts, briefs and review checkpoints are `/tmp`-only … round close
+`git rm`s any that slipped into the repo"*).
+⇒ ⛔⛔ **IF THIS ROUND CLOSES BEFORE J / E / L / A2 INTEGRATE, THEIR BRIEFS MUST BE MADE DURABLE FIRST — the
+MEASUREMENTS and the NAMED OMISSIONS into their `todo/` items, not a promise to re-derive.** *"Nothing recorded
+what was never run"* is how a family gets declared closed, and **a track carried across a round boundary with a
+deleted brief is exactly that failure at track scale.**
+⊕ **The cheap discipline, applicable now:** every pass that produces a measurement which OUTLIVES its track
+should land it in the item **in the same fold**, not at launch. Several already have — `t1350`, `t1373`, `t1374`,
+`t1421`, `t1428`–`t1442` — **which is why those survive regardless of what happens to the briefs.**
+
+⊕ **Round shape, for the record:** **6 tracks INTEGRATED** (A1 · C2 · F1r · G · H · K) — already at the top of
+the owner's 4–6 band — with **4 more in the gauntlet and none yet at an executor.** **No new track opens.**
+
 ### ⛔⛔ E AND L — **TWO PINS THAT PIN NOTHING, AND A RED-VERIFICATION THAT CANNOT HAPPEN**
 
 **E's pass 3 (design signed a THIRD time) and L's pass 2 (blocked) landed together. Both found the same shape of
