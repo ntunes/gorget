@@ -6708,27 +6708,100 @@ fn known_gap_auto_empty_literal_push_string_raw_pointer() {
     );
 }
 
-/// KNOWN GAP (Rust gg only — the self-host lane is CORRECT): the CoW value
-/// semantics of a local collection alias are lost inside a `while` loop, in
-/// both directions. Mutating through the alias LOSES every write; mutating
-/// through the root never SEVERS the alias, so value semantics silently
-/// degrades to reference semantics. Straight-line, both directions are
-/// correct and pinned by `cow_transitive_alias`.
+/// KNOWN GAP (`todo/t1364`, Rust gg only — the SELF-HOST lane is CORRECT): a
+/// mutation inside an `on error` BLOCK makes the SUCCESS path read a `None` out
+/// of a view that is still in scope, so a run that never errors TRAPS
+/// `T_UnwrapNone`. Both backends: C prints the trap, LLVM exits 101.
 ///
-/// The expected string below is what the self-host lane prints today, i.e.
-/// the oracle's answer, and it is what the language means. Rust gg prints
-/// `alias-loop 1 1` / `root-loop 4 4`, so this test is RED at HEAD by
-/// construction.
+/// The expected string below is what the self-host driver prints, i.e. the
+/// oracle's answer. ggdef does not adjudicate — `on error` is outside its
+/// phase-0 subset — so this is Core #8's exact shape: both Rust backends agree
+/// and the agreed behaviour is wrong.
 ///
-/// NOT the `cow_loop_bare_param_*` family: both pre-header hooks filter their
-/// candidates with `ctx.is_bare_param` (`src/ir/lowering/stmts/mod.rs:2632`,
-/// `:2699`), so a local alias is outside that machinery entirely.
+/// NOT the scope-carried CoW sever class closed in R50 Track F1r: that produced
+/// a WRONG VALUE from a materialize rebind discarded at a
+/// `save_locals`/`restore_locals` boundary, and `on error` has no such boundary
+/// (`emit_on_error_cleanups` uses `lower_block`, pinned by
+/// `tests/lints.rs::cow_scope_boundary_hook_pairing_count` row 2). Measured
+/// IDENTICAL on the pre-fix and post-fix compiler, so it is pre-existing and
+/// the fix neither caused nor cured it. The fixture carries its own control:
+/// the same shape with the mutation removed prints `10` on every lane.
 #[test]
-#[ignore = "known gap (R47): a local CoW collection alias loses its value semantics inside a `while` loop — mutation through the alias loses every write, mutation through the root never severs. Rust gg only; the self-host lane prints the correct answer. Un-ignore when the sever/materialize survives the loop boundary for locals, not just bare params"]
-fn known_gap_cow_local_alias_loop_mutation_lost() {
+#[ignore = "known gap (R50): a mutation inside an `on error` block makes the success path unwrap a None and trap T_UnwrapNone, on both Rust backends; the self-host lane prints the correct answer. Un-ignore when Rust gg stops invalidating the view for the non-error path"]
+fn known_gap_cow_on_error_block_mutation_traps() {
     run_gg(
-        "known_gaps/cow_local_alias_loop_mutation_lost.gg",
+        "known_gaps/cow_on_error_block_mutation_traps.gg",
+        "trap-ok 10\nctl-ok 10",
+    );
+}
+
+/// GRADUATED (R50 Track F1r) from a Rust-lane known gap: the CoW value
+/// semantics of a local collection alias were lost inside a `while` loop, in
+/// both directions. Mutating through the alias LOST every write; mutating
+/// through the root never SEVERED the alias, so value semantics silently
+/// degraded to reference semantics (`alias-loop 1 1` / `root-loop 4 4`).
+/// Straight-line, both directions were already correct and are pinned by
+/// `cow_transitive_alias`.
+///
+/// The expected string below is what the SELF-HOST lane printed all along —
+/// the reference was the lagging lane, so this was Rust-side oracle hygiene
+/// and never a reason to dumb the self-host down.
+///
+/// ROOT CAUSE, shared with the trivial-getter view class in the same track:
+/// `cow_before_mutation` materialises by REBINDING the name to a fresh owned
+/// local, and `restore_locals` restores `func_state.locals` WHOLESALE at the
+/// enclosing loop boundary, so the sever was discarded on the way out. The two
+/// pre-header hooks that hoist the materialize outside the boundary filtered
+/// their candidates with `ctx.is_bare_param`, so a LOCAL alias reached neither;
+/// they now also admit `cow_scope_carried_candidate`. Regenerate the write
+/// sites with
+/// `grep -n "cow_scope_carried_candidate(builder" src/ir/lowering/stmts/mod.rs`
+/// and the predicate with
+/// `grep -n "fn cow_scope_carried_candidate" src/ir/lowering/context.rs`.
+///
+/// The rest of the class — every other scope-introducing construct, in all
+/// three directions — is pinned by `spectests/run/cow_scope_carried_sever.gg`
+/// (ggdef-adjudicated), `cow_scope_carried_sever_out_of_subset.gg` and
+/// `cow_scope_carried_sever_comprehension.gg` (self-host-adjudicated).
+#[test]
+fn cow_local_alias_loop_mutation() {
+    run_gg(
+        "cow_local_alias_loop_mutation_lost.gg",
         "alias-loop 1 4\nroot-loop 4 1",
+    );
+}
+
+/// Companion of `cow_local_alias_loop_mutation`: the same scope-carried CoW
+/// severance class over the constructs ggdef's phase-0 subset does not reach
+/// (`if is`, `while/else`, `for/else`, named scope, `with Arena`, and six of
+/// the seven `for` flavours including a user `Iterator` target). ggdef cannot
+/// adjudicate these, so C/LLVM agreement alone would be Core #8's trap — THE
+/// SELF-HOST LANE IS THE ORACLE and it printed this output before the Rust fix.
+#[test]
+fn cow_scope_carried_sever_out_of_subset() {
+    run_gg(
+        "cow_scope_carried_sever_out_of_subset.gg",
+        "g-if_is 10\ng-while_else 10\ng-for_else 10\ng-named_scope 10\n\
+         g-with 10\ng-for_vec 10\ng-for_str 10\ng-for_dict 10\ng-for_set 10\n\
+         g-for_enum 10\ng-for_iterable 10\na-named_scope 1 2\n\
+         a-for_iterable 1 4\nr-for_vec 4 1\nr-for_iterable 4 1",
+    );
+}
+
+/// The COMPREHENSION half of the scope-carried CoW severance class. The
+/// comprehension surface is FIVE of the EIGHT call sites of the widened loop
+/// pre-header hook (`drive_comprehension_loop` plus four sites in
+/// `exprs/collections.rs`) — regenerate with
+/// `grep -rn "materialize_loop_carried_bare_params(" src/ --include='*.rs' | grep -v "fn materialize_loop"`
+/// — and without this fixture that whole surface has a FIRE COUNT OF ZERO: the
+/// existing `cow_comprehension_*` fixtures are a no-regression control that
+/// does not exercise the widened filter at all. ggdef rejects comprehensions,
+/// so the self-host lane is the oracle here too.
+#[test]
+fn cow_scope_carried_sever_comprehension() {
+    run_gg(
+        "cow_scope_carried_sever_comprehension.gg",
+        "a-comp 1 4 3\nr-comp 4 1 3",
     );
 }
 

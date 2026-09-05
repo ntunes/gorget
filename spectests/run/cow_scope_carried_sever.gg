@@ -1,0 +1,174 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [cow, alias, sever, scope]
+# doc: |
+#   CoW severance must survive a SCOPE BOUNDARY (decisions.md C2; RFC §2.2).
+#
+#   `cow_before_mutation` materialises by REBINDING the name to a fresh owned
+#   local. `restore_locals` restores `func_state.locals` WHOLESALE at the end of
+#   an enclosing block, so a sever performed INSIDE a scope used to be thrown
+#   away on the way out and the code after the scope read the stale alias. The
+#   two pre-header hooks that hoist the materialize out of the boundary were
+#   scoped to bare params only; the fix widens them with
+#   `cow_scope_carried_candidate` (`grep -n "fn cow_scope_carried_candidate"
+#   src/ir/lowering/context.rs`).
+#
+#   Three directions, each paired with its STRAIGHT-LINE TWIN as a negative
+#   control (the twins were already correct before the fix, and staying correct
+#   is what makes them load-bearing):
+#     G — a view bound from a trivial getter, mutated through a DESCENDANT of
+#         its recorded provenance (`s.f.set(...)` against `Local(s)`)  -> 10
+#     A — a local collection alias, mutation THROUGH the alias
+#     R — a local collection alias, mutation THROUGH the root
+#
+#   Every cell in this file is inside ggdef's phase-0 subset, so ggdef is the
+#   adjudicator. The constructs ggdef does NOT reach (`if is`, `while/else`,
+#   `for/else`, named scope, `with Arena`, the non-range `for` flavours, a user
+#   `Iterator` target) are pinned by
+#   `tests/fixtures/cow_scope_carried_sever_out_of_subset.gg`, adjudicated by
+#   the SELF-HOST lane; comprehension bodies by
+#   `tests/fixtures/cow_scope_carried_sever_comprehension.gg`.
+# expect:
+#   exit: 0
+#   stdout: "g-straight 10\ng-if 10\ng-elif 10\ng-nested 10\ng-while 10\ng-for 10\ng-loop 10\ng-match-arm 10\ng-match-else 10\na-straight 1 2\na-if 1 2\na-while 1 4\nr-straight 2 1\nr-if 2 1\nr-while 4 1\n"
+#!end
+
+struct Store:
+    Vector[int] f
+
+equip Store:
+    Vector[int] getf(self):
+        return self.f
+
+bool yes():
+    return true
+
+int g_cell(int which):
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    if which == 0:
+        s.f.set(0, 777)
+    elif which == 1:
+        s.f.set(0, 777)
+    else:
+        if yes():
+            s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+int g_straight():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+int g_while():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    int i = 0
+    while i < 2:
+        s.f.set(0, 777)
+        i = i + 1
+    return c.get(0).unwrap()
+
+int g_for():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    for k in 0..2:
+        s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+int g_loop():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    int i = 0
+    loop:
+        s.f.set(0, 777)
+        i = i + 1
+        if i >= 2:
+            break
+    return c.get(0).unwrap()
+
+int g_match(int t):
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    match t:
+        case 1:
+            s.f.set(0, 777)
+        else:
+            s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+String a_straight():
+    Vector[String] v = []
+    v.push("a")
+    Vector[String] al = v
+    al.push("b")
+    return f"{v.len()} {al.len()}"
+
+String a_if():
+    Vector[String] v = []
+    v.push("a")
+    Vector[String] al = v
+    if yes():
+        al.push("b")
+    return f"{v.len()} {al.len()}"
+
+String a_while():
+    Vector[String] v = []
+    v.push("a")
+    Vector[String] al = v
+    int i = 0
+    while i < 3:
+        al.push("b")
+        i = i + 1
+    return f"{v.len()} {al.len()}"
+
+String r_straight():
+    Vector[String] v = []
+    v.push("a")
+    Vector[String] al = v
+    v.push("b")
+    return f"{v.len()} {al.len()}"
+
+String r_if():
+    Vector[String] v = []
+    v.push("a")
+    Vector[String] al = v
+    if yes():
+        v.push("b")
+    return f"{v.len()} {al.len()}"
+
+String r_while():
+    Vector[String] v = []
+    v.push("a")
+    Vector[String] al = v
+    int i = 0
+    while i < 3:
+        v.push("b")
+        i = i + 1
+    return f"{v.len()} {al.len()}"
+
+void main():
+    print(f"g-straight {g_straight()}")
+    print(f"g-if {g_cell(0)}")
+    print(f"g-elif {g_cell(1)}")
+    print(f"g-nested {g_cell(2)}")
+    print(f"g-while {g_while()}")
+    print(f"g-for {g_for()}")
+    print(f"g-loop {g_loop()}")
+    print(f"g-match-arm {g_match(1)}")
+    print(f"g-match-else {g_match(9)}")
+    print(f"a-straight {a_straight()}")
+    print(f"a-if {a_if()}")
+    print(f"a-while {a_while()}")
+    print(f"r-straight {r_straight()}")
+    print(f"r-if {r_if()}")
+    print(f"r-while {r_while()}")

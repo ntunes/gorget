@@ -1,0 +1,51 @@
+# CoW severance across the COMPREHENSION loop boundary.
+#
+# Sibling of `spectests/run/cow_scope_carried_sever.gg` (in-subset cells,
+# ggdef-adjudicated) and `cow_scope_carried_sever_out_of_subset.gg` (the
+# statement constructs ggdef does not reach). This file exists because the
+# comprehension surface is FIVE of the EIGHT call sites of the widened loop
+# pre-header hook and would otherwise have a FIRE COUNT OF ZERO:
+#
+#   grep -rn "materialize_loop_carried_bare_params(" src/ --include='*.rs' \
+#     | grep -v "fn materialize_loop"
+#
+# — `drive_comprehension_loop` plus four sites in `exprs/collections.rs`,
+# against three statement sites (`for`, `while`, `loop`).
+#
+# `cow_before_mutation` materialises by REBINDING the name to a fresh owned
+# local; `restore_locals` restores `func_state.locals` WHOLESALE at the
+# enclosing boundary, so a sever inside the comprehension body was discarded.
+# The pre-header hooks now admit `cow_scope_carried_candidate` alongside
+# `is_bare_param` (`grep -n "fn cow_scope_carried_candidate"
+# src/ir/lowering/context.rs`).
+#
+# ggdef rejects a comprehension (outside the phase-0 subset), so THE ORACLE
+# HERE IS THE SELF-HOST LANE, which prints the expected output below and did so
+# before the Rust fix — Core #8: C/LLVM agreement alone is not sufficient.
+#
+#   a-comp — mutation THROUGH the alias inside the comprehension body
+#   r-comp — mutation THROUGH the root inside the comprehension body
+# The trailing `3` on each line is the comprehension result length, pinning
+# that the hoist does not disturb the comprehension's own accumulation.
+
+int bump(Vector[String] &t):
+    t.push("b")
+    return 1
+
+String a_comp():
+    Vector[String] v = []
+    v.push("a")
+    Vector[String] al = v
+    Vector[int] xs = [bump(&al) for n in [1, 2, 3]]
+    return f"{v.len()} {al.len()} {xs.len()}"
+
+String r_comp():
+    Vector[String] v = []
+    v.push("a")
+    Vector[String] al = v
+    Vector[int] xs = [bump(&v) for n in [1, 2, 3]]
+    return f"{v.len()} {al.len()} {xs.len()}"
+
+void main():
+    print(f"a-comp {a_comp()}")
+    print(f"r-comp {r_comp()}")

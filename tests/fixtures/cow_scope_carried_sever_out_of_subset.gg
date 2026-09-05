@@ -1,0 +1,213 @@
+# CoW severance across a scope boundary — the constructs ggdef does NOT reach.
+#
+# Sibling of `spectests/run/cow_scope_carried_sever.gg`, which holds the cells
+# INSIDE ggdef's phase-0 subset and is adjudicated by ggdef. Every construct
+# here is rejected by ggdef ("outside the phase-0 subset" / unsupported), so
+# a spectest is not available for them and C/LLVM agreement alone would be
+# Core #8's exact trap. THE ORACLE HERE IS THE SELF-HOST LANE: it prints the
+# expected output below, on this fixture, and it did so BEFORE the Rust fix —
+# the reference was the lagging lane (self-host succession plan, CLAUDE.md).
+#
+# What is pinned: `cow_before_mutation` materialises by REBINDING the name to a
+# fresh owned local, and `restore_locals` restores `func_state.locals` WHOLESALE
+# at an enclosing block boundary — so a sever performed INSIDE a scope was
+# discarded on the way out. The two pre-header hooks that hoist the materialize
+# outside the boundary were scoped to bare params; they now also admit
+# `cow_scope_carried_candidate`:
+#   grep -n "fn cow_scope_carried_candidate" src/ir/lowering/context.rs
+#   grep -n "cow_scope_carried_candidate(builder" src/ir/lowering/stmts/mod.rs
+#
+# Three directions, matching the spectest's:
+#   G — view from a trivial getter, mutated through a DESCENDANT of its
+#       recorded provenance                              -> 10  (was 777)
+#   A — local collection alias, mutation THROUGH the alias
+#   R — local collection alias, mutation THROUGH the root
+#
+# CONSTRUCT COVERAGE (each is a distinct `save_locals` owner; regenerate the
+# owner set with `grep -rn "\.save_locals(" src/ --include='*.rs' | grep -v "pub fn"`):
+#   if-is · while/else · for/else · named scope · with · and SIX of the seven
+#   `for` flavours the spectest's `for k in 0..2` does not reach —
+#   `lower_for_array_with` (vec), `_string_with`, `_dict_with`, `_set_with`,
+#   `_enumerate`, `_iterable_with` (a user `Iterator`).
+# NOT covered here: `select` (needs channels/spawn) — its `save_locals` is
+# `lower_select`'s, dispatched through the SAME shared scope hook as `with` and
+# named scope, both of which ARE pinned above; and comprehension bodies, which
+# have their own fixture (`cow_scope_carried_sever_comprehension.gg`) because
+# they are 5 of the 8 loop-hook call sites and would otherwise have a fire
+# count of zero.
+
+from std.alloc import Arena
+
+struct Store:
+    Vector[int] f
+
+equip Store:
+    Vector[int] getf(self):
+        return self.f
+
+struct Counter:
+    int idx
+    int limit
+
+equip Counter with Iterator[int]:
+    Option[int] next(&self):
+        if self.idx >= self.limit:
+            return None
+        int r = self.idx
+        self.idx = self.idx + 1
+        return Some(r)
+
+Option[int] some1():
+    return Some(1)
+
+int g_if_is():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    if some1() is Some(k):
+        s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+int g_while_else():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    int i = 0
+    while i < 2:
+        s.f.set(0, 777)
+        i = i + 1
+    else:
+        i = i + 0
+    return c.get(0).unwrap()
+
+int g_for_else():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    int done = 0
+    for k in 0..2:
+        s.f.set(0, 777)
+    else:
+        done = done + 1
+    return c.get(0).unwrap()
+
+int g_named_scope():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    guarded:
+        s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+int g_with():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    with Arena(4096) as pool:
+        s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+int g_for_vec():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    Vector[int] it = [1, 2]
+    for k in it:
+        s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+int g_for_str():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    for ch in "ab":
+        s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+int g_for_dict():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    Dict[String, int] d = {"a": 1}
+    for k, v in d:
+        s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+int g_for_set():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    Set[int] st = {1, 2}
+    for k in st:
+        s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+int g_for_enum():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    Vector[int] it = [1, 2]
+    for i, k in it.enumerate():
+        s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+int g_for_iterable():
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    Counter it = Counter(0, 2)
+    for x in it:
+        s.f.set(0, 777)
+    return c.get(0).unwrap()
+
+String a_named_scope():
+    Vector[String] v = []
+    v.push("a")
+    Vector[String] al = v
+    guarded:
+        al.push("b")
+    return f"{v.len()} {al.len()}"
+
+String a_for_iterable():
+    Vector[String] v = []
+    v.push("a")
+    Vector[String] al = v
+    Counter it = Counter(0, 3)
+    for x in it:
+        al.push("b")
+    return f"{v.len()} {al.len()}"
+
+String r_for_vec():
+    Vector[String] v = []
+    v.push("a")
+    Vector[String] al = v
+    Vector[int] it = [1, 2, 3]
+    for k in it:
+        v.push("b")
+    return f"{v.len()} {al.len()}"
+
+String r_for_iterable():
+    Vector[String] v = []
+    v.push("a")
+    Vector[String] al = v
+    Counter it = Counter(0, 3)
+    for x in it:
+        v.push("b")
+    return f"{v.len()} {al.len()}"
+
+void main():
+    print(f"g-if_is {g_if_is()}")
+    print(f"g-while_else {g_while_else()}")
+    print(f"g-for_else {g_for_else()}")
+    print(f"g-named_scope {g_named_scope()}")
+    print(f"g-with {g_with()}")
+    print(f"g-for_vec {g_for_vec()}")
+    print(f"g-for_str {g_for_str()}")
+    print(f"g-for_dict {g_for_dict()}")
+    print(f"g-for_set {g_for_set()}")
+    print(f"g-for_enum {g_for_enum()}")
+    print(f"g-for_iterable {g_for_iterable()}")
+    print(f"a-named_scope {a_named_scope()}")
+    print(f"a-for_iterable {a_for_iterable()}")
+    print(f"r-for_vec {r_for_vec()}")
+    print(f"r-for_iterable {r_for_iterable()}")

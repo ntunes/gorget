@@ -420,6 +420,25 @@ const EXCLUDE: &[&str] = &[
     // above (`cow_comprehension_fresh_mint_control.gg` and its eleven
     // siblings). A second copy was a duplicate-literal RED for the
     // declared-membership guard.
+    // R50 Track F1r: the OUT-OF-SUBSET half of the scope-carried CoW severance
+    // class (`todo/t1362` + `todo/t0750`, both closed). Excluded on the
+    // ENCLOSING CONSTRUCT, never on the shape under test — the shape is
+    // identical to the in-subset half, which ggdef DOES adjudicate as
+    // `spectests/run/cow_scope_carried_sever.gg`. Verified by running the CLI
+    // on each: the first reaches "expression `unsupported` is outside the
+    // phase-0 subset" (its `if is` / `while … else` / `for … else` /
+    // named-scope / `with Arena` / dict-and-set-literal / `.enumerate()` tuple
+    // binding / user-`Iterator` `for` cells are all outside phase 0), the
+    // second the same on a comprehension. The subset gaps are ALREADY FILED
+    // (`todo/t0003` for comprehensions) — do NOT re-file them.
+    // ⭐ THESE TWO ARE NOT UNADJUDICATED. Their oracle is the SELF-HOST lane,
+    // which prints the committed expectations and did so BEFORE the Rust fix —
+    // so "both backends agree" is not what carries them (Core #8). ⛔ AND THE
+    // PLACEMENT IS FORCED, NOT STYLISTIC: seeding them into `spectests/run`
+    // instead would make each a GGDEF-SKIP, and `GGDEF_SKIP_CEILING` is
+    // shrink-only and was at ZERO SLACK.
+    "cow_scope_carried_sever_out_of_subset.gg",
+    "cow_scope_carried_sever_comprehension.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -783,5 +802,15 @@ fn corpus_b_all_match() {
     // stays IN (NOT excluded); Track γ's `cow_lazy_index_slice_join` stays IN and
     // MATCH-gated. Main's Track C cells are in the merged tree (six EXCLUDEd, two
     // adjudicated). Count = 191.
-    assert_eq!(fixtures.len(), 191, "B2 gate set drifted from 191 fixtures");
+    // R50 Track F1r: +1 = 192. Re-derived on the merged tree, not added to a
+    // number from a sibling branch. The track adds THREE top-level `cow_*`
+    // fixtures; two are EXCLUDEd above on out-of-subset constructs with cited
+    // gates, so exactly ONE joins the gate set:
+    // `cow_local_alias_loop_mutation_lost.gg`, GRADUATED out of `known_gaps/`
+    // when the scope-carried CoW sever class was closed (`todo/t1362` +
+    // `todo/t0750`). ggdef ADJUDICATES it and agrees with the committed
+    // `run_gg` expectation — `alias-loop 1 4` / `root-loop 4 1` — which is what
+    // the self-host lane printed before the Rust fix, so the definition and the
+    // lagging-lane oracle say the same thing.
+    assert_eq!(fixtures.len(), 192, "B2 gate set drifted from 192 fixtures");
 }

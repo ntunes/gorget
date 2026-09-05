@@ -228,9 +228,16 @@ use ggdef::{parse_frontmatter, Expect};
 // turned the ceiling RED. Measured after the bump:
 // `total=244 · MATCH=226 · MISMATCH=0 · GGDEF-SKIP=18` (unchanged, and
 // `total == MATCH + GGDEF-SKIP` exactly).
-const C_MATCH_FLOOR: usize = 244;
-const LLVM_MATCH_FLOOR: usize = 244;
-const SELFHOST_MATCH_FLOOR: usize = 243;
+//
+// R50 Track F1r (+1): `cow_scope_carried_sever.gg` — CoW severance must survive
+// a scope boundary (`todo/t1362` + `todo/t0750`, merged and closed). Measured on
+// the committed fixture with the fix in: ggdef, C, LLVM and the self-host driver
+// all print the same 15 rows, so all four constants rise together
+// (243/243/242/`MIN` 243 → 244/244/243/`MIN` 244) and the SH lane's sole
+// remaining mismatch is still `d22_slice_clamp.gg`.
+const C_MATCH_FLOOR: usize = 245;
+const LLVM_MATCH_FLOOR: usize = 245;
+const SELFHOST_MATCH_FLOOR: usize = 244;
 // SH lane doesn't yet reproduce d22_slice_clamp.gg — SH lowerer needs the
 // Range-in-index lowering wired (parser mirror lands the syntax, but the
 // lowerer's SIndex arm at self_host_lowerer/lower_expr.gg doesn't yet
@@ -244,7 +251,7 @@ const SELFHOST_MATCH_FLOOR: usize = 243;
 /// It equals the C and LLVM MATCH floors. The SELF-HOST floor sits ONE BELOW,
 /// on `d22_slice_clamp.gg` (see `SELFHOST_MATCH_FLOOR`); adding a fixture
 /// raises all four constants together.
-const MIN_FIXTURES: usize = 244;
+const MIN_FIXTURES: usize = 245;
 
 // ── THE RELATION ABOVE IS NOW ENFORCED, NOT ASSERTED IN PROSE (Core #14) ──
 // The doc comment on MIN_FIXTURES claims "It equals the C and LLVM MATCH

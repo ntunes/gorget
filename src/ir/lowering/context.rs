@@ -3530,6 +3530,73 @@ impl<'a> LoweringContext<'a> {
         )
     }
 
+    /// Typed predicate: would `cow_before_mutation` on `local` produce a
+    /// REBIND that a `save_locals`/`restore_locals` boundary would discard?
+    ///
+    /// The two pre-header hooks in `stmts/mod.rs`
+    /// (`materialize_loop_carried_bare_params`,
+    /// `materialize_scope_carried_bare_params`) exist because
+    /// `cow_before_mutation` materializes by REBINDING the name to a fresh
+    /// owned local (`register_local`), while `restore_locals` restores
+    /// `func_state.locals` WHOLESALE at the enclosing block boundary — so a
+    /// sever performed INSIDE a scope is thrown away on the way out and the
+    /// stale alias is what the code after the scope reads. Hoisting the
+    /// materialize into the PRE-header puts the rebind OUTSIDE the boundary,
+    /// where it survives.
+    ///
+    /// Those hooks were originally scoped to bare params (`is_bare_param`);
+    /// this predicate widens the candidate set to the remaining rebinding
+    /// cases, which have the identical boundary problem.
+    ///
+    /// Covers exactly the `cow_before_mutation` cases that END IN A REBIND:
+    ///   * Case 1  — `local` is itself an `Alias(s)` of another local;
+    ///   * Case 1b — `local` is itself a `CollectionElement`/`FieldPath` borrow;
+    ///   * Case 2  — another live local aliases `local` (`cow_aliases_of`);
+    ///   * Case 3  — a live ref points into `local`
+    ///               (`cow_collection_refs_for`).
+    ///
+    /// DELIBERATELY NOT covered — each measured already correct across the
+    /// scope-introducing constructs WITHOUT a hoist, so a disjunct for them
+    /// would be one nothing tests:
+    ///   * Case 4 (`views_of_source`) / Case 6 (`field_borrows_of`) take a
+    ///     boundary-safe route that does not leave a discarded rebind behind;
+    ///   * Case 5 (`shared_heap_aliases_of_source`) only clears a typed tag —
+    ///     it emits no clone and binds no new local.
+    ///
+    /// Re-measure before widening this: the probe is each case's own shape read
+    /// AFTER a mutation, in straight-line / `if` / `while` form — Case 4
+    /// `String v = s[0:5]` then `s = s + "!!!"`; Case 5 `String b = a` then
+    /// `a = a + "!!!"`; Case 6 `String path = imp.module_path` then
+    /// `imp = Imp(...)`. All nine cells print the pre-mutation value on the
+    /// compiler with and without this predicate. Widening to cover them buys no
+    /// measured cell and costs a materialize per scope.
+    ///
+    /// Read entirely off `Local.ownership` and the CoW alias maps — no name
+    /// matching (layering rule 2).
+    pub fn cow_scope_carried_candidate(
+        &self,
+        builder: &crate::ir::builder::FunctionBuilder,
+        local: LocalId,
+    ) -> bool {
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        let idx = local.0 as usize;
+        if idx >= builder.locals.len() { return false; }
+        let self_is_borrow = matches!(
+            &builder.locals[idx].ownership,
+            LocalOwnership::Borrowed {
+                origin: BorrowOrigin::Alias(s), ..
+            } if *s != local
+        ) || matches!(
+            &builder.locals[idx].ownership,
+            LocalOwnership::Borrowed {
+                origin: BorrowOrigin::CollectionElement(_) | BorrowOrigin::FieldPath(_), ..
+            }
+        );
+        if self_is_borrow { return true; }
+        !self.cow_aliases_of(builder, local).is_empty()
+            || !self.cow_collection_refs_for(builder, local).is_empty()
+    }
+
     /// Mark a local as a bare Ptr param borrowing from the caller.
     pub fn set_bare_param(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
         let idx = local.0 as usize;

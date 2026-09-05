@@ -1,0 +1,65 @@
+# KNOWN GAP — a mutation inside an `on error` BLOCK makes the SUCCESS path read
+# a `None` out of a view that is still in scope, so the program TRAPS
+# `T_UnwrapNone` on a run that never errors. Rust gg only, BOTH backends; the
+# SELF-HOST LANE IS CORRECT, so the oracle adjudicates and the reference is the
+# lagging lane (Core #8: "both backends agree" is necessary, not sufficient).
+#
+# MEASURED at HEAD:
+#   Rust gg, C     -> trap[T_UnwrapNone]: called `unwrap()` on a `None` value
+#   Rust gg, LLVM  -> the same trap (rc 101)
+#   self-host      -> trap-ok 10
+#                     ctl-ok 10          <- the INTENDED output, asserted below
+#   ggdef          -> does not adjudicate: "statement `on-error` is outside the
+#                     phase-0 subset"
+#
+# The control below is the SAME shape with the mutation removed from the
+# `on error` block: it prints `ctl-ok 10` on every lane. So the discriminator is
+# the MUTATION INSIDE THE `on error` BLOCK, not the `on error` statement itself
+# and not the view.
+#
+# NOT the scope-carried CoW sever class closed in R50 Track F1r (`todo/t1362` +
+# `todo/t0750`): that one produced a WRONG VALUE (`777` instead of `10`) because
+# a materialize rebind was discarded at a `save_locals`/`restore_locals`
+# boundary, and `on error` has NO such boundary — `emit_on_error_cleanups`
+# lowers its body with `lower_block`, not `lower_block_scoped` (pinned by
+# `tests/lints.rs::cow_scope_boundary_hook_pairing_count` row 2). This is a
+# TRAP on a `None`, not a stale read, and it is unchanged by that fix: measured
+# identical on the pre-fix and post-fix compiler, on both backends.
+
+struct Store:
+    Vector[int] f
+
+equip Store:
+    Vector[int] getf(self):
+        return self.f
+
+int mayfail(bool b) throws String:
+    if b:
+        throw "boom"
+    return 1
+
+# The gap: mutation inside the `on error` block, view read on the SUCCESS path.
+int g_trap(bool b) throws String:
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    on error:
+        s.f.set(0, 777)
+    int x = mayfail(b)!
+    return c.get(0).unwrap()
+
+# Control: identical shape, mutation REMOVED. Correct on every lane.
+int g_ctl(bool b) throws String:
+    Vector[int] p = [10, 20]
+    Store s = Store(p)
+    Vector[int] c = s.getf()
+    on error:
+        print("cleanup")
+    int x = mayfail(b)!
+    return c.get(0).unwrap()
+
+void main():
+    int a = g_trap(false)! catch (e): -1
+    print(f"trap-ok {a}")
+    int b = g_ctl(false)! catch (e): -1
+    print(f"ctl-ok {b}")

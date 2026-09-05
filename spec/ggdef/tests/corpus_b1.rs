@@ -220,6 +220,18 @@ const EXCLUDE: &[&str] = &[
     // `corpus_b.rs`; both gates share the phase-0 subset. Subset gap filed as
     // `todo/t0753` — do NOT re-file it.
     "cow_alias_spelled_view_via_first_getter.gg",
+    // R50 Track F1r: the OUT-OF-SUBSET half of the scope-carried CoW severance
+    // class (`todo/t1362` + `todo/t0750`, both closed). Excluded on the
+    // ENCLOSING CONSTRUCT, not on the shape under test — the identical shape in
+    // subset-reachable constructs IS adjudicated by ggdef, as
+    // `spectests/run/cow_scope_carried_sever.gg`. Verified with the CLI: both
+    // reach "expression `unsupported` is outside the phase-0 subset". Their
+    // oracle is the SELF-HOST lane, which printed the committed expectations
+    // before the Rust fix. Same rows and full rationale in `corpus_b.rs`; both
+    // gates share the phase-0 subset. Subset gap for comprehensions already
+    // filed as `todo/t0003` — do NOT re-file it.
+    "cow_scope_carried_sever_out_of_subset.gg",
+    "cow_scope_carried_sever_comprehension.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -475,5 +487,15 @@ fn corpus_b1_all_match() {
     // filter (cow_/deadwrite_ top-level, no `equip ` block, minus EXCLUDE).
     // D1's 12 EXCLUDEs stay; `cow_for_zero_trip_body_kill_control` stays IN;
     // Track γ's `cow_lazy_index_slice_join` stays IN and MATCH-gated. Count = 139.
-    assert_eq!(fixtures.len(), 139, "B1 gate set drifted from 139 fixtures");
+    // R50 Track F1r: +1 = 140. Re-derived on the merged tree, never added to a
+    // sibling branch's number (the warning two paragraphs up). The track adds
+    // THREE top-level `cow_*` fixtures and exactly ONE reaches this gate:
+    // `cow_local_alias_loop_mutation_lost.gg`, GRADUATED out of `known_gaps/`
+    // when the scope-carried CoW sever class was closed (`todo/t1362` +
+    // `todo/t0750`), no `equip` block, ggdef-adjudicated, MATCH-gated on the
+    // committed `run_gg` expectation. Of the other two,
+    // `cow_scope_carried_sever_out_of_subset.gg` and
+    // `..._comprehension.gg` are both EXCLUDEd above with cited gates, so
+    // neither is in this population. Count +1 net → 140.
+    assert_eq!(fixtures.len(), 140, "B1 gate set drifted from 140 fixtures");
 }

@@ -660,12 +660,18 @@ pub enum BorrowOrigin {
     /// `CollectionId::FieldPath(String)` shape.
     FieldPath(String),
     /// Pending CoW borrow: set_cow_borrow was called without a known
-    /// source. A subsequent set_cow_borrow_source upgrades the entry
-    /// to CollectionElement / FieldPath. Distinct from set_ref's
-    /// Alias(self) placeholder so is_cow_borrow can disambiguate.
-    /// Should never persist past D6 once eager source propagation
-    /// lands (set_cow_borrow gains a source-known-at-call-time
-    /// signature).
+    /// source. Distinct from set_ref's Alias(self) placeholder so
+    /// is_cow_borrow can disambiguate.
+    ///
+    /// A later `set_cow_borrow_source` DOES NOT upgrade this origin to
+    /// CollectionElement / FieldPath — it writes the source into the
+    /// `cow_borrow_sources` sidecar and leaves the origin at
+    /// CowBorrowPending. That is deliberate and is what
+    /// `set_cow_borrow_source`'s own docstring states: upgrading would
+    /// broaden what `cow_collection_refs_for_id` matches and pull
+    /// cow_borrow locals into the eager field-mutation sever walk. The
+    /// source reached through the sidecar (`cow_borrow_source()`) serves
+    /// the LAZY-RESCUE path instead.
     CowBorrowPending,
     /// Element source for a tuple temp. Recorded at `Inst::TupleInit`
     /// emission time so the return path can MoveZero the original

@@ -2672,14 +2672,16 @@ pub(in crate::ir::lowering) fn materialize_loop_carried_bare_params(
         .func_state
         .locals
         .iter()
-        .filter(|(_, (lid, _))| ctx.is_bare_param(builder, *lid))
+        .filter(|(_, (lid, _))| ctx.is_bare_param(builder, *lid)
+            || ctx.cow_scope_carried_candidate(builder, *lid))
         .map(|(n, (lid, _))| (n.clone(), *lid))
         .collect();
     for (name, local) in candidates {
         // Re-check is_bare_param defensively (an earlier candidate's materialize
         // rebinds only its own name, but guard against shadows) and query the
         // shared prescan set.
-        if ctx.is_bare_param(builder, local)
+        if (ctx.is_bare_param(builder, local)
+            || ctx.cow_scope_carried_candidate(builder, local))
             && crate::ir::lowering::functions::loop_set_mutates(&mut_set, &name)
         {
             ctx.cow_before_mutation_loop_preheader(builder, local, span);
@@ -2742,11 +2744,13 @@ fn materialize_scope_carried_bare_params(
         .func_state
         .locals
         .iter()
-        .filter(|(_, (lid, _))| ctx.is_bare_param(builder, *lid))
+        .filter(|(_, (lid, _))| ctx.is_bare_param(builder, *lid)
+            || ctx.cow_scope_carried_candidate(builder, *lid))
         .map(|(n, (lid, _))| (n.clone(), *lid))
         .collect();
     for (name, local) in candidates {
-        if ctx.is_bare_param(builder, local)
+        if (ctx.is_bare_param(builder, local)
+            || ctx.cow_scope_carried_candidate(builder, local))
             && crate::ir::lowering::functions::loop_set_mutates(&mut_set, &name)
         {
             ctx.apply_materialize_directive(

@@ -75,7 +75,18 @@ use ggdef::{parse_frontmatter, run_source, Outcome, DEFAULT_FUEL};
 /// Bump-on-improvement: when MATCH rises — a new run seed lands, or P1-A
 /// coverage retires a GGDEF-SKIP — raise this in the SAME commit that lands the
 /// gain, so the improvement is locked in.
-const GGDEF_MATCH_FLOOR: usize = 226;
+///
+///
+/// R50 Track F1r (+1, 225 → 226): `cow_scope_carried_sever.gg`, the in-subset
+/// half of the scope-carried CoW severance class (`todo/t1362` + `todo/t0750`).
+/// ggdef ADJUDICATES it — every cell is inside the phase-0 subset — so it lands
+/// in MATCH and GGDEF-SKIP is unmoved at 18. The out-of-subset half of that
+/// class deliberately did NOT come here: ggdef rejects `if is`, `while/else`,
+/// `for/else`, named scope, `with Arena`, a user `Iterator` target and
+/// comprehensions, so seeding them would have grown GGDEF-SKIP past the
+/// shrink-only ceiling below. They live in `tests/fixtures/` instead, with the
+/// SELF-HOST lane as their oracle.
+const GGDEF_MATCH_FLOOR: usize = 227;
 
 /// SHRINK-ONLY CEILING on GGDEF-SKIP — the second direction the floor above
 /// cannot see (Core #6: a ratchet needs BOTH directions).

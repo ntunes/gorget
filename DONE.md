@@ -54,6 +54,102 @@
   cited "resource-element twin" is a FIELD WRITE, a different mechanism, so the discriminator is the MUTATION
   SHAPE and the whole-binding rebind writes through at NO element type.
 
+- [2026-09-05] **`t1362` + `t0750` CLOSED AS ONE FIX — A CoW SEVER DID NOT SURVIVE A SCOPE BOUNDARY (R50 Track F1r).**
+  A CoW borrow bound outside a scope was not severed by a mutation inside it, in three independent directions:
+  a view from a trivial getter read `777` instead of `10`; a local collection alias LOST every write made
+  through it; and a mutation through the root never severed the alias, silently degrading value semantics to
+  reference semantics. **ONE mechanism, ONE consumer.** `cow_before_mutation` materialises by REBINDING the
+  name to a fresh owned local (`register_local`, 3 sites), and `restore_locals` restores `func_state.locals`
+  **WHOLESALE** at the enclosing block boundary — one line reverts every case. The layering-correct machinery
+  ALREADY EXISTED: two pre-header hooks that hoist the materialize outside the boundary, and **their own
+  docstrings state the `restore_locals` problem verbatim**. They were scoped to bare params. The fix widens
+  their candidate filter with `cow_scope_carried_candidate`, read entirely off `Local.ownership` and the CoW
+  alias maps — **no name matching** (layering rule 2). +2 filter lines, +2 guard lines, +1 predicate.
+  ⭐ **THE TWO ITEMS WERE FILED AS SEPARATE MECHANISMS AND THAT WAS WRONG.** `t1362` carries three corrections
+  and the third withdraws the second: *"which CASE of `cow_before_mutation` fires"* (`Alias` vs `CollectionId`)
+  is a real distinction, but it is **not** a distinction in the consumer that loses the result. A round got a
+  CLOSURE of the family instead of a fifth narrow patch.
+  **NARROW, NOT DEFENSIVE:** the predicate covers exactly the four arms that end in a rebind (Cases 1, 1b, 2,
+  3). Cases 4/5/6 were measured already correct without a hoist and are excluded WITH THEIR REASON in the
+  predicate's docstring — a disjunct with no cell behind it is a disjunct nothing tests.
+  **Shipped, every cell RED-verified against a hash-pinned pre-fix binary:** `spectests/run/cow_scope_carried_sever.gg`
+  (15 rows, ggdef-adjudicated, **12 wrong / 3 straight-line twins CORRECT pre-fix** — the twins are the
+  load-bearing negative controls) · `cow_scope_carried_sever_out_of_subset.gg` (15 rows, all 15 wrong pre-fix)
+  · `cow_scope_carried_sever_comprehension.gg` (2 rows) · and `t0750`'s own repro GRADUATED out of
+  `known_gaps/` with its `#[ignore]` removed, printing exactly what its test always asserted.
+  ⭐ **THE ORACLE FOR THE OUT-OF-SUBSET HALF IS THE SELF-HOST.** ggdef reaches neither `if is`, `while/else`,
+  `for/else`, named scope, `with Arena`, a user `Iterator` target nor comprehensions — so C/LLVM agreement
+  alone would have been Core #8's exact trap. **The self-host printed the correct answer on every one of them
+  BEFORE the Rust fix: the reference was the lagging lane, and nothing was dumbed down to match.**
+  **EVERY PARTIAL REVERT TURNS A ROW RED — the fixture set has no hole.** The diff has FOUR independently
+  revertible sub-edits, not two: each hook widens BOTH a `.filter(…)` candidate collector AND the `if` guard
+  that re-checks inside the loop, and the two compose as an AND. All four were reverted one at a time against
+  the committed fixtures, rebuilding each time. **L1** (loop `.filter`) and **L2** (loop `if` guard) turn an
+  IDENTICAL 20 rows red — spectest `g-while`/`g-for`/`g-loop`/`a-while`/`r-while`, out-of-subset
+  `g-while_else`/`g-for_else`/`g-for_{vec,str,dict,set,enum,iterable}`/`a-for_iterable`/`r-for_vec`/
+  `r-for_iterable`, both comprehension rows, and both graduated `t0750` rows. **S1** (scope `.filter`) and
+  **S2** (scope `if` guard) turn an IDENTICAL 11 red — spectest
+  `g-if`/`g-elif`/`g-nested`/`g-match-arm`/`g-match-else`/`a-if`/`r-if` and out-of-subset
+  `g-if_is`/`g-named_scope`/`g-with`/`a-named_scope`. ⭐ **20 + 11 = 31 = every non-control row, an EXACT
+  DISJOINT PARTITION with zero overlap** — the same structure the pre-launch composition check found, now
+  reproduced on the committed set rather than on throwaway cells. The only rows green under every revert are
+  the three straight-line twins, which is what a negative control is for.
+  ⭐ **THE COMPREHENSION CELL EXISTS BECAUSE THE FIRE COUNT WAS ZERO.** The comprehension surface is **5 of the
+  8** loop-hook call sites; the 10 existing `cow_comprehension_*` fixtures are a valid no-regression control
+  that **exercises the widened filter not at all**. *"Name the omission"* was not an available disposition.
+  **Guards:** a 4-assertion count ratchet (`cow_scope_boundary_hook_pairing_count`) pinning the 19 `save_locals`
+  scope boundaries **with a disposition row per site**, the `cow_before_mutation` arm/collector counts the
+  predicate must stay in sync with, and — because row 1 provably **cannot** see it — the `lower_block_scoped`
+  CALL sites at 2. That third row exists for a named trap: `emit_on_error_cleanups` uses `lower_block`, so
+  `on error` has no boundary and needs no hook; **switching it to `lower_block_scoped` does not move the
+  19-count, because that `save_locals` lives INSIDE `lower_block_scoped`.** All three rows demonstrated RED on
+  deliberately broken variants anchored **by line**, and row 2 was broken with the real trap.
+  ⛔ **THE LANDING BOUNDARY WAS SCOPED AT "SIX CONSTANTS, TWO CRATES, THREE TEST TARGETS" AND IS ACTUALLY
+  FIFTEEN DECLARATIONS ACROSS SIX FILES AND FOUR TARGETS.** The six were right as far as they went —
+  `MIN_FIXTURES`/`C_MATCH_FLOOR`/`LLVM_MATCH_FLOOR`/`SELFHOST_MATCH_FLOOR` 243/243/243/242 → 244 (the first
+  three `const_assert`ed equal, so they fail at COMPILE time) and `GGDEF_MATCH_FLOOR` 225 → 226, with
+  `GGDEF_SKIP_CEILING` verified UNMOVED at 18. **The other nine were found only by running the bare gates**,
+  and every one of them reds a round-close target: `scripts/figures.db` MIRRORS four of the constants and a
+  drift there is its own lint; a new top-level `cow_*` fixture is opted INTO the ggdef `corpus_b`/`corpus_b1`
+  lanes BY DEFAULT, so each needs a declared census row, the two ggdef cannot elaborate need a CITED `EXCLUDE`
+  entry in both corpora, and both lanes carry an EXACT gate-set pin (191 → 192, 139 → 140). ⭐ **That
+  glob-minus-exclusions default is `todo/t0801`'s recorded failure — "a new fixture reddens a lane its own
+  track never ran" — and this track walked into it despite three brief-review passes at the landing boundary.**
+  ⛔ **`GGDEF_SKIP_CEILING` being SHRINK-ONLY AND AT ZERO SLACK (18 of 243) is WHY the out-of-subset half is a
+  `tests/fixtures/*.gg` rather than a spectest** — a seed ggdef cannot elaborate becomes a SKIP and reds
+  `cargo test -p ggdef` with a message that misdiagnoses the cause. The partition is mechanical, not stylistic.
+  Measured after: `total=244 · MATCH=226 · MISMATCH=0 · GGDEF-SKIP=18`.
+  **Also fixed:** Core #14 rot on `BorrowOrigin::CowBorrowPending`, whose docstring claimed
+  `set_cow_borrow_source` *"upgrades the entry"* while the setter's own docstring said it does NOT and the body
+  writes only the sidecar.
+  ⛔ **FOUR CONSTANTS THE TRACK DELIBERATELY DID NOT MOVE, AND THE BRIEF SAID TO.** `RUNTIME_DIFF_MATCH_FLOOR`
+  and `GGDEF_ADJUDICATED_FLOOR` both rise when this fixture inflow lands, but both are `>=` floors that a MATCH
+  inflow cannot red, and the first carries its own instruction: *"RAISING IT IS A ROUND-CLOSE ACTION, on the
+  number the post-integration battery prints … a mid-round ratchet from one worktree is how a round close
+  false-reds."* Same for the two stage-0 clone pins, whose block states the pin *"has exactly one writer, the
+  integrating parent"*. **A track that writes any of the four absorbs the other in-flight tracks' inflow into
+  its own commit — the exact failure those comments record.** Left to the round close, with the measurement in
+  the track report.
+  **COST, REGENERATED IN ONE WORKTREE SO THE MEASUREMENT IS COMPARABLE.** The stage-0 clone meter
+  (`scripts/self_host_mem_baseline.sh`, the workload `scripts/clone_meter.spec` declares) was run twice in the
+  SAME checkout — once with `src/` reverted to the track base, whose rebuilt `gg` came out BYTE-IDENTICAL to
+  the pinned pre-fix binary, and once with the fix — so the `root_len` input that makes the string axis
+  checkout-dependent is identical by construction. `array_clone` **13,193,368 → 13,193,368 = EXACTLY 0**;
+  `string_clone` **+793 = +0.00252%**; `total_allocs` +793; `box_alloc` and `map_clone` 0; **peak RSS
+  −268 kB (−0.036%)**. Both stage-0 pins sit well inside the 1% band, and neither of their standing offsets is
+  this track's: against the pins the tree was ALREADY at array +1,215 and string −103,722 before the fix.
+  ⚠ **CORE #7 RISK, NAMED AND ASSIGNED, NOT SILENT.** The fix HOISTS materializations into loop and branch
+  PRE-HEADERS — new heap allocations and new drop obligations, exactly the leak/double-free axis ASan
+  adjudicates and ggdef is structurally blind to. The self-host DRIVER BINARY changes as a result (hashes
+  differ pre/post). Neither `self_host_bootstrap_fixed_point` nor `scripts/sanitize_sweep.sh` is a track-level
+  gate (MA-4), so both are assigned to the round-close battery; the track verified the reassuring half — the
+  self-host lane emits correct output on all four new fixtures and the driver rebuilds and self-compiles.
+  **Filed:** **`t1364`** 🚨 HIGH — a mutation inside an `on error` BLOCK makes the SUCCESS path unwrap a `None`
+  and **trap `T_UnwrapNone` on a run that never errors**, both Rust backends, **while the self-host prints the
+  correct answer**; found while dispositioning `on error`, measured IDENTICAL pre- and post-fix, shipped with a
+  `known_gaps/` repro that carries its own control · **`t1363`** the two-store CoW provenance split, with the
+  measured `array_clone` **+22.6%** cost of the obvious unification attached so nobody re-derives it, and the
+  correction that the sidecar has **8 live readers** and must not be deleted.
 - [2026-09-05] **`t1077` CLOSED — READ FIXED, LEAK NOT (R50 Track A1).** Nested `Box[Box[T]]` read one deref
   too many. **ONE LINE** in the value `Expr::Deref` arm (`src/ir/lowering/exprs/mod.rs`): it discriminated a
   `Box[T]` PARAMETER (internally `*Box__T`, two peels) from a plain LOCAL (one peel) by testing the RESULT of

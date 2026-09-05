@@ -1,0 +1,56 @@
+# A CoW COLLECTION ALIAS KEEPS ITS VALUE SEMANTICS INSIDE A LOOP, in BOTH
+# directions. Graduated from `known_gaps/` in R50 (Track F1r).
+#
+# Straight-line, the CoW value semantics of a second name for a collection are
+# pinned by `cow_transitive_alias.gg`:
+#
+#     Vector[String] alias = v ; alias.push("b")   ->  v=1  alias=2
+#     Vector[String] alias = v ; v.push("b")       ->  v=2  alias=1
+#
+# The SAME mutation inside a `while` loop used to break both directions:
+#
+#   A. MUTATION THROUGH THE ALIAS — every push was LOST.
+#      3x `alias.push` in a loop left `alias.len() == 1`.
+#   B. MUTATION THROUGH THE ROOT — the alias was never SEVERED, so value
+#      semantics silently degraded to REFERENCE semantics: both names reported
+#      the grown length.
+#
+# Rust gg printed `alias-loop 1 1` / `root-loop 4 4`; the SELF-HOST lane printed
+# the output below all along, so the oracle adjudicated and the reference was
+# the lagging lane.
+#
+# ROOT CAUSE: `cow_before_mutation` materialises by REBINDING the name to a
+# fresh owned local, and `restore_locals` restores `func_state.locals` WHOLESALE
+# at the enclosing loop boundary — so the sever was thrown away on the way out.
+# The two pre-header hooks that hoist the materialize OUTSIDE that boundary
+# filtered their candidates with `ctx.is_bare_param`, so a LOCAL collection
+# alias was outside the candidate set of the whole machinery. They now also
+# admit `cow_scope_carried_candidate`:
+#
+#   grep -n "fn cow_scope_carried_candidate" src/ir/lowering/context.rs
+#   grep -n "cow_scope_carried_candidate(builder" src/ir/lowering/stmts/mod.rs
+#
+# The rest of the class — the other scope-introducing constructs, and the
+# trivial-getter view direction — is pinned by
+# `spectests/run/cow_scope_carried_sever.gg` (ggdef-adjudicated),
+# `cow_scope_carried_sever_out_of_subset.gg` and
+# `cow_scope_carried_sever_comprehension.gg` (self-host-adjudicated).
+
+void main():
+    Vector[String] a = []
+    a.push("a")
+    Vector[String] a_alias = a
+    int i = 0
+    while i < 3:
+        a_alias.push("b")
+        i = i + 1
+    print(f"alias-loop {a.len()} {a_alias.len()}")
+
+    Vector[String] b = []
+    b.push("a")
+    Vector[String] b_alias = b
+    int j = 0
+    while j < 3:
+        b.push("b")
+        j = j + 1
+    print(f"root-loop {b.len()} {b_alias.len()}")

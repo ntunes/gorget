@@ -30507,3 +30507,258 @@ fn tuple_field_alias_has_exactly_one_resolver() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// R50 Track F1r — the scope-boundary ↔ CoW pre-header PAIRING
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Read a `src/` file, panicking with the path on failure.
+fn lint_read_src(rel: &str) -> String {
+    fs::read_to_string(rel).unwrap_or_else(|e| panic!("read {rel}: {e}"))
+}
+
+/// Collect `file:line` for every non-comment line in `src/` containing `needle`,
+/// skipping lines that also contain `skip` (used to drop a `fn` DEFINITION from
+/// a CALL-site census).
+fn lint_census(needle: &str, skip: Option<&str>) -> Vec<String> {
+    let mut sites: Vec<String> = Vec::new();
+    let mut files = walkdir_rs("src");
+    files.sort();
+    for f in &files {
+        let Ok(content) = fs::read_to_string(f) else { continue };
+        for (i, line) in content.lines().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            if !t.contains(needle) {
+                continue;
+            }
+            if let Some(s) = skip {
+                if t.contains(s) {
+                    continue;
+                }
+            }
+            sites.push(format!("{}:{}", f.display(), i + 1));
+        }
+    }
+    sites
+}
+
+/// Core #4 arm-count ratchet on the SCOPE-BOUNDARY ↔ CoW-PRE-HEADER PAIRING.
+///
+/// ## The class this pins
+///
+/// `cow_before_mutation` severs a CoW borrow by REBINDING the name to a fresh
+/// owned local (`register_local`). `restore_locals` restores
+/// `func_state.locals` WHOLESALE at the end of an enclosing block
+/// (`grep -n "self.func_state.locals = saved.locals;" src/ir/lowering/context.rs`
+/// → one line), so a sever performed INSIDE a scope is discarded on the way
+/// out and the code after the scope reads the stale alias. The fix is to hoist
+/// the materialize into the scope's PRE-HEADER, where the rebind sits outside
+/// the boundary — that is what `materialize_loop_carried_bare_params` and
+/// `materialize_scope_carried_bare_params` do.
+///
+/// So every `save_locals` site is a scope boundary that owes a pre-header hook,
+/// and a NEW scope-introducing construct that forgets one silently re-opens the
+/// class. That is what row 1 counts.
+///
+/// ## Row 2 exists because row 1 provably cannot see the one trap we know about
+///
+/// `emit_on_error_cleanups` lowers the `on error` body with `lower_block`, NOT
+/// `lower_block_scoped` — so `on error` has no `save_locals` boundary and needs
+/// no hook, and its cells are correct. Switching it to `lower_block_scoped`
+/// would open the gap. Row 1 CANNOT catch that: the `save_locals` call lives
+/// INSIDE `lower_block_scoped`, so the count does not move. Row 2 pins the
+/// `lower_block_scoped(` CALL sites instead, which does move.
+///
+/// ⚠ The naive `grep -rn "lower_block_scoped(" src/` returns THREE, because it
+/// catches the DEFINITION. The census below skips the `fn ` line; the number
+/// this pins is CALL sites.
+///
+/// ## Row 3 pins the arms `cow_scope_carried_candidate` must stay in sync with
+///
+/// The predicate covers exactly the `cow_before_mutation` arms that end in a
+/// rebind. A new arm is a new decision about whether it belongs there.
+///
+/// ## What this does NOT prove (Core #12: name the omitted cells)
+///
+/// It is a TEXTUAL census, so it is bookkeeping, not a class-retiring guard
+/// (see [`assert_exact_ratchet`]). Three specific blind spots, stated rather
+/// than implied:
+///   * a new construct that REUSES an existing lowering fn adds neither a
+///     `save_locals` nor a `lower_block_scoped(` call and passes both rows;
+///   * a boundary spelled some other way is invisible to the needle;
+///   * counting a hook call says nothing about whether its FILTER admits the
+///     construct's locals.
+/// The behavioural net is the fixture set: `spectests/run/cow_scope_carried_sever.gg`,
+/// `tests/fixtures/cow_scope_carried_sever_out_of_subset.gg`,
+/// `tests/fixtures/cow_scope_carried_sever_comprehension.gg` and
+/// `tests/fixtures/cow_local_alias_loop_mutation_lost.gg`.
+///
+/// The INDEPENDENT witness that the construct enumeration is total is in-tree
+/// and is not this census: `cow_after_stmt` (`src/ir/lowering/functions.rs`) is
+/// EXHAUSTIVE over `ast::Stmt` with no `_ =>` arm, so a new statement variant
+/// cannot be added without deciding its mutation set there. That forces the
+/// new variant through a decision — it does NOT force a hook call, which is
+/// why these rows exist as well.
+#[test]
+fn cow_scope_boundary_hook_pairing_count() {
+    // ── Row 1: scope boundaries ────────────────────────────────────────────
+    /// Baseline 2026-09-05: 19 `ctx.save_locals(builder)` call sites, each a
+    /// scope boundary at which a CoW materialize rebind would be discarded.
+    /// DISPOSITION, one row per site (owner fn, not line number — line numbers
+    /// rot; regenerate the mapping by grepping the needle and reading the
+    /// enclosing `fn`):
+    ///
+    ///   src/ir/lowering/stmts/for_loops.rs — 7, one per `for` FLAVOUR, all
+    ///     covered by `materialize_loop_carried_bare_params`:
+    ///       lower_for_string_with · lower_for_array_with · lower_for_enumerate
+    ///       lower_for_dict_with · lower_for_set_with · lower_for_iterable_with
+    ///       lower_for_range_with
+    ///   src/ir/lowering/stmts/mod.rs — 9:
+    ///       lower_block_scoped  (the shared block boundary; see row 2)
+    ///       lower_if ×3         (then / elif / else)  — scope hook
+    ///       lower_while         — loop hook
+    ///       lower_loop          — loop hook
+    ///       lower_named_scope   — scope hook
+    ///       lower_with          — scope hook
+    ///       lower_select        — scope hook
+    ///   src/ir/lowering/stmts/patterns.rs — 3, all in
+    ///     `stage_match_scrutinee`: two match ARMS and the match ELSE — scope
+    ///     hook, dispatched from the `Stmt::Match` arm of `lower_stmt`.
+    const SAVE_LOCALS_SITES: usize = 19;
+
+    let save_sites = lint_census(".save_locals(", Some("pub fn"));
+    assert_exact_ratchet(
+        "`save_locals` scope-boundary sites in src/",
+        save_sites.len(),
+        SAVE_LOCALS_SITES,
+        &format!(
+            "Sites found:\n  {}\n\n\
+             Regenerate with:\n  \
+             grep -rn '\\.save_locals(' src/ --include='*.rs' | grep -v 'pub fn'\n\
+             (the census above additionally skips COMMENT lines, so if a comment \
+             ever mentions the spelling the shell command returns MORE than this \
+             constant — read the site list, not just the number)\n\n\
+             A NEW SITE is a new scope boundary. Decide, and write the decision \
+             into the disposition table above this constant: does the construct \
+             reach `materialize_loop_carried_bare_params` (loop-shaped) or \
+             `materialize_scope_carried_bare_params` (non-loop)? If neither, a \
+             CoW sever inside it will be discarded by `restore_locals` and the \
+             `todo/t1362`/`todo/t0750` class is re-opened for that construct. \
+             Add a cell to `cow_scope_carried_sever_out_of_subset.gg` (or the \
+             spectest, if ggdef reaches the construct) in the same commit.",
+            save_sites.join("\n  "),
+        ),
+    );
+
+    // ── Row 2: the `on error` trap row 1 cannot see ────────────────────────
+    /// Baseline 2026-09-05: 2 CALL sites of `lower_block_scoped` — the
+    /// `while ... else` body (`src/ir/lowering/stmts/mod.rs`) and the
+    /// `for ... else` body (`src/ir/lowering/stmts/for_loops.rs`). The third
+    /// grep hit is the DEFINITION and is excluded by the census.
+    ///
+    /// `emit_on_error_cleanups` MUST STAY ON `lower_block`. It has no
+    /// `save_locals` boundary today, which is why `on error` needs no hook and
+    /// its cells are correct on every lane. Moving it to `lower_block_scoped`
+    /// gives it one — and nothing else in the tree would notice.
+    const LOWER_BLOCK_SCOPED_CALLS: usize = 2;
+
+    let scoped_calls = lint_census("lower_block_scoped(", Some("fn lower_block_scoped("));
+    assert_exact_ratchet(
+        "`lower_block_scoped` CALL sites in src/ (definition excluded)",
+        scoped_calls.len(),
+        LOWER_BLOCK_SCOPED_CALLS,
+        &format!(
+            "Sites found:\n  {}\n\n\
+             Regenerate with — and the `grep -v` is LOAD-BEARING, the naive \
+             command returns 3 because it catches the definition:\n  \
+             grep -rn 'lower_block_scoped(' src/ --include='*.rs' | grep -v 'fn lower_block_scoped('\n\n\
+             If this GREW because `emit_on_error_cleanups` moved off \
+             `lower_block`: STOP. That gives the `on error` body a \
+             `save_locals` boundary with no pre-header hook, which re-opens the \
+             scope-carried CoW sever class for it — and row 1 above cannot see \
+             it, because that `save_locals` lives INSIDE `lower_block_scoped` \
+             and the 19-count does not move. Wire the hook and add an \
+             `on error` cell to `cow_scope_carried_sever_out_of_subset.gg` \
+             first.",
+            scoped_calls.join("\n  "),
+        ),
+    );
+
+    // ── Row 3: the arms `cow_scope_carried_candidate` mirrors ──────────────
+    /// Baseline 2026-09-05: 8 arm markers inside `cow_before_mutation` —
+    /// `Phase 1c` (bare param) plus Cases 1, 1b, 2, 3, 4, 5, 6 — and 5 source
+    /// collector calls (`cow_aliases_of`, `cow_collection_refs_for`,
+    /// `views_of_source`, `shared_heap_aliases_of_source`, `field_borrows_of`).
+    ///
+    /// `cow_scope_carried_candidate` covers exactly the arms that END IN A
+    /// REBIND: 1, 1b, 2, 3 (bare params are the hooks' original
+    /// `is_bare_param` disjunct). Cases 4/5/6 are deliberately excluded and the
+    /// predicate's doc comment says why.
+    const COW_BEFORE_MUTATION_ARMS: usize = 8;
+    const COW_BEFORE_MUTATION_COLLECTORS: usize = 5;
+
+    let ctx_src = lint_read_src("src/ir/lowering/context.rs");
+    let body: Vec<&str> = {
+        let mut lines = Vec::new();
+        let mut inside = false;
+        for line in ctx_src.lines() {
+            if line.starts_with("    pub fn cow_before_mutation(") {
+                inside = true;
+                continue;
+            }
+            if inside {
+                if line == "    }" {
+                    break;
+                }
+                lines.push(line);
+            }
+        }
+        assert!(!lines.is_empty(), "cow_before_mutation body not found — did the signature change?");
+        lines
+    };
+
+    let arms = body
+        .iter()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("// Case ") || t.starts_with("// Phase 1c")
+        })
+        .count();
+    let collectors = body
+        .iter()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .filter(|l| {
+            l.contains("self.cow_aliases_of(")
+                || l.contains("self.cow_collection_refs_for(")
+                || l.contains("self.views_of_source(")
+                || l.contains("self.shared_heap_aliases_of_source(")
+                || l.contains("self.field_borrows_of(")
+        })
+        .count();
+
+    let arm_guidance = "A NEW `cow_before_mutation` arm is a decision \
+         `cow_scope_carried_candidate` owes an answer to: does it end in a \
+         REBIND (`register_local`)? If yes it MUST join the predicate, or a \
+         sever through it is discarded at every scope boundary — the \
+         `todo/t1362`/`todo/t0750` class. If no, say so in the predicate's \
+         `DELIBERATELY NOT covered` list with the reason, the way Cases 4/5/6 \
+         do. Regenerate both counts with:\n  \
+         awk '/^    pub fn cow_before_mutation\\(/{f=1} f{print} f&&/^    \\}$/{exit}' \
+         src/ir/lowering/context.rs";
+
+    assert_exact_ratchet(
+        "`cow_before_mutation` arm markers",
+        arms,
+        COW_BEFORE_MUTATION_ARMS,
+        arm_guidance,
+    );
+    assert_exact_ratchet(
+        "`cow_before_mutation` source-collector calls",
+        collectors,
+        COW_BEFORE_MUTATION_COLLECTORS,
+        arm_guidance,
+    );
+}
