@@ -11,9 +11,9 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| ✅ **C2** | **`t0045`** — **7 passes, design signed off, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| ✅ **C2** | **`t0045`** — **7 passes, executor RETURNED `7785c1221` (30 files, +836/−99), 🔵 OUTPUT-REVIEW RUNNING.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D0′** | 🔵 brief-review pass 1. **Streak 0/3.** The `elem_drop`/`elem_clone` half **+ the Deque precondition**. | `t1393`–`t1402` |
+| **D0′** | ⛔ **REBUILT as `v2` 2026-09-05 — THE ROUTE CHANGED, NOT THE MEASUREMENTS. Streak 0/3, 🔵 pass 1 on v2.** The read-site `elem_drop` route is **WITHDRAWN**; the track is the **WRITE SITE**. `t1225` + the read-site fallback are **OUT of scope, sequenced behind the owner-gated callee-borrow ruling.** | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | ✅ **G** | **6 passes, DESIGN SIGNED OFF, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⚖ owner-ratified. **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
@@ -451,6 +451,50 @@ invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
 
+### ⛔⛔ D0′ IS **REBUILT**, NOT AMENDED — ITS PRESCRIBED FIX REDS A **COMMITTED, WIRED** FIXTURE ON BOTH BACKENDS
+
+⭐⭐ **THE ROUTE WAS WRONG, AND ONLY A BUILD COULD SHOW IT.** `tests/fixtures/dict_box_callable.gg` — top-level,
+in-corpus, wired (`grep -n 'dict_box_callable' tests/integration.rs`) — is **CLEAN at HEAD** and under the
+prescribed read-site patch **aborts printing nothing**: `rc=134`, `free(): double free detected in tcache 2`.
+**On the LLVM lane too.** ⇒ the C sweep, the LLVM sweep **and** `CORRUPTION_CEILING` (an `assert_eq!`) all go
+red — not just the sanitize sweep the brief was reasoning about. ⭐ **And the reviewer reproduced it with a
+compiler IT built, not only from the pinned binary.**
+
+⛔ **IT IS NOT ONE CELL — THE PATCH SHIPS FIVE CORRUPTING CELLS.** Vector · Dict · Deque · HashMap, on the
+**bare index read** (plus Deque's `.clone()` read). ⇒ **MY BRIEF NAMED ONE CELL OF THE CLASS AND ITS REMEDY —
+*"gate the fallback to exclude the Deque ctor path"* — WOULD HAVE LEFT FOUR.** The class is *a collection
+element read that emits no `gorget_closure_clone_to_owned` while the local is still dropped as owned*.
+
+⭐ **THE SEQUENCING WAS INVERTED, AND `todo/t1225` ALREADY SAID SO IN ITS OWN WORDS** — *"do not widen the
+reject ahead of it"*. Measured: **patch + `t1225` REJECTS** all four bare-read cells at check; **patch alone
+ACCEPTS and double-frees** them. ⇒ **the read-site `elem_drop` is what makes the missing clone LETHAL**, and at
+HEAD the program is **ACCIDENTALLY CORRECT (SIX-Q #6)** — the NULL `elem_drop` exactly cancels the missing
+clone-on-read. ⊕ **It also ESCALATES a filed HIGH item**: `t1225`'s discriminator is *"the same element is read
+more than once"*, but once the container is the second owner **one bind is enough** — the property that keeps
+`httpserver.gg`'s 8 dispatch sites safe stops holding.
+
+⭐ **THE WRITE SITE WINS ON MEASUREMENT, NOT ON QUOTATION.** Over the 20 top-level collection-of-`Callable`
+fixtures, in the allowlist's own unit: **identical leak burn-down, ZERO corruption**, plus `t0873(b)`'s repro
+graduating. ⇒ the read-site route is not a *more complete* alternative — **it buys nothing extra and costs a
+double-free.**
+
+⚠ **AND THE PRESCRIBED ROUTE'S PROTOTYPE SOURCE IS LOST.** Two passes built and measured it; **neither
+checkpointed the diff**, both worktrees are gone, and the quoted build id is not a reachable commit
+(`git cat-file -t 14148dc6` → *Not a valid object name*). **Only the BINARY survives** — I copied it out of
+`/tmp` into the session scratchpad as the oracle. ⇒ **MA-9's "checkpoint EARLY" is not about crash recovery
+alone; an unsaved prototype makes the NEXT agent retype it, which is exactly how a fold ships a defect.**
+
+⛔ **TWO CLAIMS IN THIS HANDOVER WERE MEASURED FALSE AND ARE STRUCK ABOVE:** `Set`/`HashSet` do **NOT** reject
+non-`Hashable` elements at check time (they accept and leak), and `t1393`'s *"8-byte mis-size ⇒ rc 139"* is
+false in **both** halves. ⊕ **`t1393` was never a filed item at all** — it is an unallocated id, so the brief's
+instruction to *"correct the item"* was unexecutable.
+
+⭐ **THE ONE QUESTION THE REBUILT BRIEF PUTS FIRST:** the write-site fix installs a `drop_strategy` too — **so
+why does it NOT reproduce the double-free?** If the answer is *"it also supplies `clone_inplace_fn`, so drop and
+clone are wired as a PAIR"* it is reference-grade. If the answer is *"the decider is never queried with that
+spelling on the read path"* it is **accidentally correct and the same corruption is ONE registration away.**
+**The executor is told not to proceed past that question.**
+
 ### 🟢 G's EXECUTOR IS LAUNCHED — AND PASS 6 CAUGHT A SELECTION **INSIDE THE ERRATUM ABOUT SELECTIONS**
 
 ⭐⭐ **My E-c measured 198 cells — TWO of the seven shipping payloads — and generalised to 693. That was
@@ -661,12 +705,18 @@ is **never called at all**, and `GorgetClosure` is **missing from the eagerly-re
 
 ⭐ **THE ENUMERATION IS TOTAL OVER 60 CELLS, with two independent witnesses** — rustc exhaustiveness over
 `CollectionCtorKind` (6 variants) × the **schema-versioned SSoT** `compiler/data/resources.gg` (consumed by
-both Rust and the self-host). **All 60 built and run under LSan; Set/HashSet reject non-Hashable elements at
-check time — a REJECTION, not an omission.**
+both Rust and the self-host). **All 60 built and run under LSan.** ⛔ **BUT *"Set/HashSet reject non-Hashable elements at check time — a
+REJECTION, not an omission"* IS MEASURED FALSE (2026-09-05):** `Set[Callable].add(^a)` and
+`HashSet[Callable].add(^a)` are **ACCEPTED and leak 16 B**, at HEAD and under **all three** prototypes ⇒ **the
+axis is NOT closed, and a `Set` of a non-`Hashable` `Callable` compiling at all is its own soundness smell.**
 
 ⛔ **THREE NEW DEFECTS THE ORIGINAL FRAMING WOULD HAVE HIDDEN — a capped enumeration shows one Callable column;
-the total matrix shows four:** **`t1393`** `Deque[Callable]` mis-sizes its element to 8 bytes ⇒ **rc 139 SEGV,
-both lanes, CRITICAL** — and **the ctor never calls the decider, so D0's fix cannot reach it**;
+the total matrix shows four:** **`t1393`** ⛔ **MECHANISM WITHDRAWN 2026-09-05 — MEASURED FALSE, TWICE OVER.** *"mis-sizes its element to
+8 bytes ⇒ rc 139 SEGV"*: Deque and Vector emit the **SAME** ctor width (`16`), at HEAD and under the patch, and
+**both natural Deque shapes are rc 0 at HEAD** — no `139` from either. *"the ctor never calls the decider"* is
+false too: the patch demonstrably CHANGES Deque behaviour. ⭐ **The REAL mechanism: Deque's index read silently
+ELIDES `gorget_closure_clone_to_owned`** — Deque emits 2, Vector and Dict emit 3 for the same-shaped program ⇒
+**leak at HEAD, escalating to double-free the moment any `elem_drop` lands.**;
 **`t1394`** `Shared[T]`/`Box[T]` as an element never reaches the ctor decider ⇒ leak; **`t1395`**
 `Vector[Box[UserStruct]]` **does not compile on either backend** (`redefinition of 'Box__Blob__drop'`).
 
