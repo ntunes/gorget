@@ -8,7 +8,7 @@
 | track | scope | ids |
 |---|---|---|
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
-| **A2** | ⭐ **RESCOPED — NOT "nested Box": *EVERY GENERIC NEWTYPE*, both backends.** ✅ SCOUTED → 🔵 **pass 1. Streak 0/3.** ⛔ **The fix moves `Box`-inner newtypes UP the severity ladder (truncation → double-free) by unmasking `t1374` — the coupling is the decision.** | `t1375`–`t1382` |
+| **A2** | ⭐ **RESCOPED — *EVERY GENERIC NEWTYPE*, both backends.** ✅ **pass 1 signed the FIX's design** → 🔵 **pass 2. Streak 0/3.** ⛔ **My two dispositions were a FALSE BINARY — the constructor ALSO fails to move its source (`t1375`), so gating on `t1374` still double-frees.** | `t1376`–`t1382` |
 | **B** | ⚖⚖ **HELD — OWNER ASK (the capture cell). Pass 1: NOT SIGN OFF, 5 BLOCKING.** The brief was STALE BY CONSTRUCTION (my revert landed 3 min after it) and **overrode a ratified `decisions.md` clause with an agent's derivation.** Streak 0/3. Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⛔⛔ **BLOCKED A FOURTH TIME — `R`'s SUBJECT IS A SELECTION ON A THIRD AXIS. RECOMMEND CLOSE FOR R50: `R` NEEDS ITS OWN SCOUT.** Spine survives and measures STRONGER each pass. | `t1332`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
@@ -26,6 +26,38 @@
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ⛔ A2's PASS 1 — **THE FIX'S DESIGN SIGNS OFF; MY *DISPOSITION* WAS A FALSE BINARY**
+
+- ⛔⛔ **GATING ON `t1374` WOULD NOT HAVE PROTECTED THE SHAPE.** The reviewer read the emitted C and found the
+  newtype constructor carries **TWO** defects: the address store **AND a missing MOVE of the source temp**
+  (dropped, never MoveZero'd). **Fix the address store alone and both hold the same pointer and both are freed —
+  still a double free, BY CONSTRUCTION.** ⇒ **filed `t1375`.** *(`AGENTS.md` names constructors a consuming
+  position with "expression temp (last-use + owning by construction)" as move-eligible: the move is OWED.)*
+- ⛔ **AND THE REGRESSED SET IS THREE SHAPES, NOT "Box-INNER"** — `newtype NV(Vector[int])` regresses too, **with
+  a C/LLVM DIVERGENCE (LLVM clean, C panics)**. ⊕ **`t1374`'s own quoted panic and snippet were from THAT
+  Vector case, so the filing contradicted its own framing.** Corrected.
+- ⛔ **`nt_opt` IS ACCIDENTALLY CORRECT (SIX-Q #6)** — the **same bad store**, green only because `Option[int]`
+  gets **no drop glue**. **A build-level pin for the registration fix; NOT evidence the lowering is sound for a
+  droppable payload.**
+- ⇒ ⭐ **THE DISPOSITION IS A THIRD OPTION: SHIP BOTH IN THE SAME TRACK** (same class — **disjoint means a
+  different CLASS, not a different SITE**), **or SPLIT into two tracks in the SAME round.**
+- ⭐⭐ **GOOD NEWS: SITE 3 *IS* PINNABLE — "no repro reaches it" was FALSE.** `enum E: V(Callable[int(int)])` and
+  a tuple variant both differ in GIR — **and the tuple case takes the enum from `drop: None, copy: Copy` to
+  `drop: Recursive, copy: Move`** ⇒ **the fix repairs a MISSING DROP (a leak) and WRONG COPY SEMANTICS, not just
+  a codegen crash.** *(My own suggested shape was attributable to site 2 — not a clean pin.)*
+- ⭐ **THE FIX GRADUATES A KNOWN GAP NOBODY NOTICED** (`sound_amp_box_tuple_field_cc_fail`), RED-verified both
+  directions — ⚠ **but `t0104` owns that repro with an explicit *"DO NOT CLOSE"* directive on a second face the
+  reviewer COULD NOT REPRODUCE.** The executor owes a regenerated disposition + a census re-run.
+- ⛔ **MY "STRICT SUPERSET / BYTE-IDENTICAL" ARGUMENT IS FALSE AS STATED** — the mut path has **four extra
+  auto-registering branches** and diverges on Tuple/Function/Ref. **The conclusion survives via the 2250-fixture
+  GIR sweep; the STRUCTURAL argument does not.**
+- ⛔ **"43 / 39" DOES NOT REGENERATE — IT IS 44 / 40.** *(Second numeric claim of this brief to fail its own
+  header warning.)* ⊕ **AND MY LINE CITE WAS ALREADY WRONG — `register_newtype` is at 833, and
+  `try_map_ast_type`'s OWN DOC COMMENT records the precedent: *"Both were cited by line number and both had
+  rotted; cite by symbol."***
+- ⚠ **THE PAIRED LINT COUNT MUST BE ANCHORED**: `grep -rn 'StructField {' src/` → **67 lines, including the
+  struct DEFINITION itself** and 4 unrelated matches — **a figure its own command contradicts.**
 
 ### ⚠⚠ ROUND-MANAGEMENT HAZARD, RECORDED BEFORE IT BITES — **THE FOUR LIVE BRIEFS ARE THE ROUND'S LARGEST UNDURABLE ASSET**
 
