@@ -158,6 +158,7 @@ The clone case is required, not a fallback. The decision is mechanical, not heur
 - **Performance work measures MEMORY, not just time.** Track peak RSS + alloc/clone counts (`--clones=stats`, `/usr/bin/time -v`) alongside wall-clock — a memory balloon is as blocking as a time regression.
 - **Re-verify a premise against CURRENT source/tests before acting on it (Core #5)** — re-run the test, re-read the cited source, check the actual current code shape. No un-regenerated numbers: quote the *command*, not the stale value (the `*_comparison` tests are always-pass).
 - **Consult history before proposing a design** or briefing a design-heavy task: grep `DONE.md`, `todo/`, `git log`, AND the Rust impl in `src/`. Don't wait to be asked. Skip only for mechanical/greenfield changes.
+- ⛔ **AND BEFORE ANY OWNER ASK — THE LEDGER FIRST, THEN A PROBE.** An ask is a design proposal with the owner's time attached, so it carries the *strictest* form of the rule above: search `docs/define-gorget/decisions.md` for the question AND for its inverse, then measure the hinge. ⚠ **A claim of the form *"the ratified X forbids Y"* is not checkable by reading X — check whether Y ONCE EXISTED AND WAS DELIBERATELY REMOVED, and whether a general rule is overridden by a carve-out.** Both R50 asks dissolved on this: one was answered by a two-line probe showing a sibling position already rejects, the other by a ledger line collapsing the very distinction it wanted to add. **Bring the owner what the record cannot settle — never what you have not looked up.**
 
 ## Layering discipline
 
