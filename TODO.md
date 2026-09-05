@@ -10,7 +10,7 @@
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
-| **C1** | ⛔ **THE OWNER REJECTED ALL THREE OF MY OPTIONS 2026-09-05 — THE ASK IS WITHDRAWN, THE TRACK IS RE-AIMED AT *MAKE IT WORK*.** 🔵 reference-grade SCOUT running. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
+| **C1** | ⭐⭐ **SCOUT DELIVERED: THE OWNER WAS RIGHT. C1 IS *HALF* OF ONE FIX — supply `Box[T]`'s missing `clone_fn` and BOTH CELLS WORK UNCHANGED, no spelling change.** Streak 0/3, brief `v2` next. | `t1329`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ⭐ **SCOUT DELIVERED — HYPOTHESIS HALF RIGHT; the fix is REAL but it is NOT a parser fix and the ORDER REVERSES.** Streak 0/3, brief `v3` next. ⚖ one PRECISE ratification question. | `t1393`–`t1402` |
@@ -1314,6 +1314,56 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ⭐⭐⭐ C1 RESOLVED — *"IT SHOULD WORK"* WAS RIGHT, AND HEAD WAS ONE `return` FROM CORRUPTION
+
+**Q1 — HEAD ALIASES. BOTH CELLS ARE ACCIDENTALLY CORRECT (SIX-Q #6).** From the emitted C: `__v8 = *(Box__…*)`
+is a **shallow load of the raw box pointer**; `*outer` and `h.b` are **ONE ALLOCATION**. It survives only
+because **TWO BUGS CANCEL** — the scope-exit drop is the *shallow* free, and the recursive
+`Box__Box__GorgetString__drop` is **emitted but NEVER CALLED** (`t1309`).
+🚨 **AND THE ALIASING HAS TEETH, MEASURED:** make `outer` escape so `h` dies first ⇒ **ASan
+heap-use-after-free.** ⇒ ⛔ **HEAD IS NOT A PROGRAM WORTH PRESERVING — IT IS ONE `return` FROM MEMORY
+CORRUPTION.**
+
+**Q2 — BOTH PROMISED RECOURSES EXIST AND BOTH ARE SILENTLY INERT.** `^h.b` → `E_PartialMove` rc 1.
+⛔⛔ **`h.b.clone()` → rc 0, builds, runs — AND EMITS BYTE-IDENTICAL C.** An explicit `.clone()` on a `Box`
+**EVAPORATES INTO THE IDENTITY** at the `.clone()` arm's terminal fall-through
+(*"Non-resource type: .clone() is a trivial copy … return recv"*). ⇒ **A CORE #10 LOWER-OR-REJECT BREACH:
+not a missing feature — a SILENTLY WRONG one.**
+
+⭐ **AND THE RATIFIED RECORD SAYS BOX SHOULD CLONE.** D4: *"Explicit `.clone()` stays legal"*; D53 scopes
+*"must not grow one"* **specifically to Mutex/RWLock**, for a reason that does not apply to Box;
+*"Box has no orphaned invariant"*; and `ensure_shared_type_def`'s OWN comment lists the exclusions as
+*"Mutex/RWLock/Guard"* — **Box is ABSENT from it.** ⇒ **the missing `clone_fn` is an OVERSIGHT, NOT A POLICY.**
+
+**Q3/Q5 — ⭐⭐ THE ANSWER: `Box[T]` GETS A `clone_fn`, AND IT SHIPS AS *ONE* CHANGE WITH C1.** Prototyped
+end-to-end; **both cells work UNCHANGED — no user-visible spelling change** — because the ownership chokepoint
+can now **materialize** the borrow instead of refusing. `t0011`'s double-free repro **rc 134 → rc 0**.
+⛔ **MA-5 applied: the halves DO NOT COMPOSE, they only work TOGETHER.** `clone_fn` alone leaves `t0011` at
+**rc 134**; C1 alone is rc 101 with nothing to materialize.
+⇒ ⭐⭐⭐ ***C1 IS NOT "A FIX WITH A REGRESSION TO PRICE". C1 IS HALF OF ONE FIX.*** The rc 101 was **C1 correctly
+refusing to mint from a borrow it cannot materialize** — and the reason it cannot is the clone the ratified rule
+already promises. **Honest cost: a real allocation the aliasing path never paid — the correct CoW price, and
+what an expert would hand-write.** Residual **73 B / 2 allocs** = `t1309`'s pre-existing gap ⇒ **severity moves
+CORRUPTION → LEAK.**
+
+⛔⛔ **AND A CORRECTION I OWE: MY RUST REFRAMING WAS SIX-Q #1, NOT A FINDING.** I reported *"Rust ALLOWS the
+partial move ⇒ Gorget's `E_PartialMove` is unconditional"* as evidence of over-strictness. **`E_PartialMove` IS
+RATIFIED** — `grep -n '2026-09-02' docs/define-gorget/decisions.md` → **D10(a) ADDENDUM, owner 2026-09-02:
+*"NO PARTIAL MOVES, NO UNPACK"***, which **explicitly closed** the *"Rust-style destructuring partial moves
+remain a possible future widening"* sentence and closed `t0437`. ⇒ **the ledger considered Rust's exact shape
+THREE DAYS EARLIER and refused it.** ⭐ **It does not weaken the case — it NARROWS it: with `^` closed by
+ratification, `.clone()` is the ONLY ratified recourse, which makes the missing `clone_fn` the SOLE REMAINING
+ROUTE the design leaves open.** Rust stays a valid Core #8 witness that a **safe program is rejected**.
+⊕ **My `^s` hypothesis was also measured FALSE — a THIRD false recourse:** `Box.new(^s)` on a borrowed parameter
+builds at HEAD but **still heap-use-after-frees when it escapes**; `^` on a borrow transfers nothing.
+
+⊕ **TWO RESIDUALS + A BONUS THE EXECUTOR INHERITS:** a pre-existing **place-vs-value** defect unmasked
+(`*(*f) = 60` then read gives `0` — the write lands in a clone because the `Deref` **value** arm takes a *place*
+projection; **its own fixture is the independent witness — every pure-read cell passed, only the write-through
+cell moved**) · a fixture asserting a now-retired refusal, to be re-pointed at the correct output · and
+**`H__clone` deep-clones the Box but SHALLOW-COPIES the `Str` header**, so a cloned struct's boxed String
+**shares its char buffer** — structural, not yet demonstrated by a failing program.
 
 ### ⛔⛔ MY FOLD PRESCRIBED THE **OPPOSITE DISPOSITION** — AND THE EXECUTOR MEASURED IT RATHER THAN OBEYING
 
