@@ -21,7 +21,7 @@
 | ✅✅ **K** | **`t1385` INTEGRATED** 2026-09-05 (`b5c5eaabc`+`1c2513e45`); errata `9d7e9f71b`. Output-review **SIGNED OFF**. ⭐ **93 cell-lanes now gated; both allowlists ratchet BOTH ways.** | `t1434`–`t1437` |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
 | **L** | **`t1410`** — wrapping ops lower to UB on C. ✅ **DESIGN SIGNED, 5 PASSES, SHAPE UNCHANGED → 🟢 EXECUTOR LAUNCHED.** ⛔ Two of my filed items **contradicted each other on `Neg`** — fixed. | `t1444`–`t1447` |
-| **J** | **`t1407`** — `Vector.fill`. ✅✅✅ **3/3 SIGNED OFF, 🟢 EXECUTOR LAUNCHED.** ⛔ **Pass 3 RETRACTED my Addendum 4 §1 — it had retracted a TRUE claim from a superseded artifact.** | `t1422`–`t1427` |
+| **J** | **`t1407`** — committed `0214de358`, but ⛔⛔ **THE BOOTSTRAP IS RED: converged at STAGE-3 against a TIGHTEN-ONLY ceiling of 2.** Its own scout's prototype converged at **stage-2** ⇒ **the delta shipped beyond the prototype costs a generation.** **NOT integrating until compared at HEAD.** | `t1422`–`t1427` |
 | **E** | **`t0953`** — ✅✅ **EXECUTOR COMMITTED** (`119d03fc2`+`8ae5f6fd4`), sweep **rc 0**, `leaks: 251` → 🔵 **output-review.** ⭐ It **closed `t0121`** and proved the census gate was **already red at my base — Track H's, not its.** | `t1352`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
@@ -46,6 +46,36 @@ claims folded into this handover long ago. **Everything else stayed.**
 `target_v3` compilers E's executor is RED-verifying against), `gg_fuzz_lint_target` (5.3 GB — a live
 `CARGO_TARGET_DIR` for a lint; deleting it forces a full rebuild on every `cargo test --test lints`),
 `execE_01db12fc`, and `rev2_a2e446ab`. **None of them is prunable until its track integrates.**
+
+### ⛔⛔ J's BOOTSTRAP IS **RED — AND IT IS NOT THE TIMEOUT I BRIEFED FOR**
+
+```
+BOOTSTRAP rc=101
+self-host bootstrap converged at stage-3, exceeding the tighten-only ceiling
+BOOTSTRAP_MAX_CONVERGENCE_STAGE=2                       (1764.80s)
+```
+⛔ **I told the executor a stage timeout is not a regression until compared at HEAD. THIS IS NOT A TIMEOUT** —
+**convergence stage is DETERMINISTIC; sibling load does not move it.** My briefed reassurance does not cover the
+failure that actually happened.
+⭐⭐ **AND ITS OWN SCOUT'S PROTOTYPE CONVERGED AT STAGE-2** (926 s, recorded in the brief) ⇒ **something in the
+delta between that prototype and what shipped — the `CkDeque` row, the six rot-site corrections, 10 fixtures —
+COSTS AN EXTRA GENERATION TO SETTLE.** ⊕ **Prior handed to the executor to CONFIRM OR REFUTE, not accept: the
+SELF-HOST MIRROR, because a convergence generation counts what the self-host EMITS**, and the new `CkDeque fill`
+row plus the hint path change self-host output directly — where the runtime split-loop and the Rust arm change
+what **both** stages emit identically.
+⛔⛔ **RAISING `BOOTSTRAP_MAX_CONVERGENCE_STAGE` IS FORBIDDEN.** The constant's own panic message offers it as an
+option — **but it is documented TIGHTEN-ONLY, and raising a ceiling to admit your own inflow is exactly the move
+this project forbids elsewhere.** If the extra generation proves correct and unavoidable, that is an
+**owner-facing question, not a knob.**
+⇒ **The one measurement that decides it: run the same gate on pristine `1d91951dc`.** HEAD stage-3 ⇒
+pre-existing, not J's. HEAD stage-2 ⇒ J's to resolve. **Then bisect the mirror half against the runtime+Rust
+half.** ⭐ **The work is SAFE — `0214de358` is committed — so there is time to get this right, and I am NOT
+integrating until it is settled.**
+
+⊕ ✅ **THE SECOND SCRIPT GATE IS GREEN, NOW MEASURED RATHER THAN ASSUMED:**
+`GG_STAGING_MOVE_GUARD=fatal scripts/staging_move_burndown.sh --check` → **rc 0**
+(`SAMPLED=2250 TRIPS=2 CLEAN=5 promoter=fatal`). **The new every-integration rule caught one red and one green
+on its first application.**
 
 ### ⛔⛔ A ROUND-CLOSE GATE HAS BEEN **RED AT MY HEAD SINCE TRACK H INTEGRATED**, AND NOTHING NOTICED
 
