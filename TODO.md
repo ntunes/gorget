@@ -11,7 +11,7 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ✅ SCOUTED → needs brief. **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| **C2** | pass 1 BLOCKED (6) → folded → 🔵 pass 2. **Streak 0/3.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| **C2** | passes 1+2 BLOCKED → 2 folds → 🔵 pass 3. **Streak 0/3.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0** | 🆕 **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1. | `t1393`–`t1402` |
 | **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
@@ -769,6 +769,50 @@ meaning where the compiler collapses two cases — it does not undo a deliberate
 views"* — **a size criterion I INVENTED and attributed to §3.5, which says reader-vs-writer and nothing about
 size.** The charter objection also fails: under reject the user hand-writes `d.keys()` first, **the same O(n)
 copy, merely visible**; beating it needs ALGORITHM RESTRUCTURING, and the charter governs **clone placement**.
+
+### ⭐⭐ C2's PASS 2 FOUND THE FIX'S ACTUAL AUTHORITY — AND IT INVERTS THE CORE #8 ARGUMENT
+
+**Neither the body nor my fold cited the RATIFIED ledger entry that governs this fix.**
+`grep -n "MUTABLE PRIVATE COPY" docs/define-gorget/decisions.md` → **2026-08-18**: *"THE BARE `for x in coll`
+BINDING IS A **MUTABLE PRIVATE COPY**, NOT A READ-ONLY BORROW… the collection is untouched and **the program is
+ACCEPTED**. The `&` form keeps its ratified write-through semantics… only the bare form was in question.*
+**Consequences: (a) `String` (and every heap element type) is FIXED to behave like `int` — private copy, no
+crash.**"
+
+⇒ ⛔ **MY D6 WAS DEFENSIVE AND WRONG.** I argued the fix ships a known defect, justified on the severity ladder.
+**It does not: it IMPLEMENTS ratified consequence (a) VERBATIM.** ⭐ **Only the `&` cell stays open — that is
+`t1404`.** ⊕ **The same entry records the gauntlet catching this exact error before:** an executor brief
+*"leaned on"* text about a **different construct**, and *"the brief-review gauntlet caught that (Track E pass 6)
+and escalated rather than guessing."*
+
+⛔ **AND MY D4 WAS RETRACTED — THE SELF-HOST HAS NO DEFECT TO PORT.** Measured with the driver built by the
+**UNPATCHED HEAD** compiler (the control that matters): **all four cells — `Vector[String]` / `Deque[String]`,
+bare and `&` — print `aa/bb` rc 0 on the SH at HEAD**, while Rust HEAD gives **rc 134**. ⇒ ⭐ **THE FIX BRINGS
+RUST INTO LINE WITH THE SELF-HOST** — the *"reference lags the self-host"* case. **Core #9 is discharged by a
+cross-lane fixture, NOT a port.**
+⚠ **And I named the WRONG SH BRANCH:** `for s in &v` over `Vector[String]` takes the **write-through pointer**
+branch, not the bind I cited — my description fits the **bare** form only. ⭐ **The lanes gate OPPOSITELY:**
+Rust **excludes** String from that path; the SH **includes** it. **An executor told to "port the carve-out"
+edits the wrong branch entirely.**
+
+⛔ **CORE #13 — ASan IS STRUCTURALLY BLIND TO THE ESCAPE-SHAPE CLASS** (`sed -n '16769,16773p' tests/lints.rs`):
+the runtime allocates from a custom pool, so **stdout is the instrument** and those fixtures live **TOP LEVEL**,
+not under `security/`. ⇒ **the body's "four escape shapes verified ASan-clean" rests on an instrument that
+cannot see the class**, and **the placement rule SPLITS BY CLASS** — `security/` (zero inflow, no SH build) for
+the double-free; **TOP LEVEL, which DOES incur inflow against a zero-slack ceiling**, for any escape shape.
+
+⛔ **TWO GUARDS I PROPOSED CANNOT SEE THEIR OWN CLASS — THE SECOND ONE I DIAGNOSED AND THEN PRESCRIBED.**
+`VIEW_PRODUCERS_INTO_CONSUMERS` asserts **a fixture file EXISTS** (`if !path.exists()`), so **reverting a `src/`
+change cannot make it fail** — and **its own header documents that limitation.** And my typed-axis enumeration
+was **three sites, not two** (it missed the eligibility gate that decides whether the emitter runs at all).
+⭐ **PASS 2 SUPPLIED ONE THAT WORKS AND VERIFIED IT BOTH DIRECTIONS:** a grep for the unsafe cap-copying
+primitive, excluding `_view`, the runtime, and comments — **HEAD count 1 ⇒ RED; fixed count 0 ⇒ GREEN.** Closed
+over the whole tree, and it encodes the class exactly: ***never pick the unsafe borrow primitive by spelling
+its name.***
+
+⚠ **OPS — A NEW HAZARD, MEASURED:** pass 2 reported `todo/t1404.md` as **missing**. It exists, committed at
+`651471950`. **Its worktree was SNAPSHOTTED BEFORE that commit.** ⇒ ⛔ **AN AGENT'S TREE IS FROZEN AT SPAWN —
+anything filed afterwards reads as MISSING. FILE FIRST, THEN BRIEF, or state the base commit in the brief.**
 
 ⇒ ⭐ **R2's PREREQUISITE IS NOW `t1404`, FILED AND SCOPED — AND IT HAD NO OWNER UNTIL NOW.** The durable repro
 `tests/fixtures/known_gaps/sound_for_amp_scalar_elem_writethrough.gg` has existed, `#[ignore]`d and asserting
