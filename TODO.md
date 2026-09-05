@@ -83,6 +83,29 @@ capture list exists**."* **Two are measurably false:**
   single-owner type` — and the fix-it it recommends **works**: `c6 = c5.clone()` then capture, `c5` still live
   → rc 0, `41\n41`, both backends, matches ggdef, no UAF.
 
+⭐ **AND §3.5 RESOLVES IT FROM THE DESIGN, so the track does not depend on which ledger line wins** (owner asked
+2026-09-05). **`:1605` ASKED A TYPE-FAMILY QUESTION** — *is this type in the single-owner carve-out?* — which
+§3.5 forbids in its own first two bullets: ***"Overlap is about storage, not spelling"*** and ***"The test is
+ability to write, not the sigil."*** Apply the real predicate (storage overlaps × live ranges intersect × at
+least one can write) and there is **no blocked cell**:
+
+| cell | §3.5 verdict | why | measured |
+|---|---|---|---|
+| source **DEAD** | **NO CONFLICT EXISTS** | live ranges do not intersect | move → rc 0 ✔ |
+| **LIVE** `Callable` | **MATERIALIZE** | reader + `clone_fn` exists ⇒ the clone can be lazy | `.clone()` → rc 0, both backends ✔ |
+| **LIVE** `Mutex`/`RWLock` | **REJECT** | `clone_fn = None` **by design** ⇒ no lazy escape. §3.5: *"reject when the only rescue is a guess"* — a Mutex has **no clone at all** | D53 already names it: `Shared[Mutex[T]]` |
+
+⚠ **`clone_fn` PRESENCE IS THE DISCRIMINATOR AND IT SPLITS THE FAMILY** — do NOT write one rule for
+"single-owner captured live". Read it via the accessor, never by type name (Core #2).
+⛔ **A Mutex/RWLock REJECT is an ACCEPT/REJECT SURFACE CHANGE** ⇒ owes ggdef **+ a NEG fixture on EVERY lane**,
+and the SH lane is UNMEASURED with the ceiling at ZERO SLACK. If it cannot land cleanly, ship the dead-cell
+move + `Callable` live materialization and file the reject as a **NAMED** remaining cell (Core #12).
+
+⚠⚠ **THIS IS THE THIRD TIME THIS ROUND THE IMPLEMENTATION RE-DERIVED §3.5 WRONG BY REASONING ABOUT SPELLING OR
+TYPE FAMILY INSTEAD OF STORAGE AND LIVENESS** — R49's S-a2 gate read the source's SPELLING; `t0045` warns in
+its own text that the `&` IS NOT THE DISCRIMINATOR; now `:1605`. **A fix that introduces a NEW type-family test
+is a design defect regardless of whether it passes.**
+
 ⇒ **`t1067`'s "all three answers are blocked" premise is FALSE, and D7 gates neither the dead cell nor
 `Callable`'s live cell.** What is left for D7 is **ergonomics, not soundness**. ⚠ **The track does NOT wait on
 this** — the dead cell is unblocked by the ratified text as it stands; only the ledger's own consistency needs
