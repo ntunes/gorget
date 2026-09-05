@@ -20,12 +20,34 @@
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED. ⭐ **BOTH GATES NOW CLEAR** — F1r INTEGRATED, and **R1 IS RULED (Line A, signature-only, 'for now')**. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** ⏸ **QUEUED BEHIND THE SAFETY SET** per the owner's fixed order, not blocked. | `t1362`–`t1371` |
 | ✅ **H** | **`t1387`** — the map's KEY has no drop discipline. **EXECUTOR RETURNED 2026-09-05** (`c7cec057b`+`84f0b2b1b`) → 🔵 **output-review**. ⭐ **It found FOUR defects in my brief and filed `t1409`/`t1410`/`t1411`.** | `t1409`–`t1417` |
-| **K** | **`t1385`** — the SEED HALF. ✅✅ **passes 2 AND 3 SIGNED OFF** → 🔵 **pass 4 (confirming)**. **Streak 2/3.** ⭐ **H + K ARE THE ONLY TWO THINGS BETWEEN HERE AND A GREEN `--lanes all`.** | `t1432`–`t1437` (all free — `t1432` NOT filed) |
+| **K** | **`t1385`** — the SEED HALF. ✅✅✅ **3/3 SIGNED OFF, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⭐ **H + K ARE THE ONLY TWO THINGS BETWEEN HERE AND A GREEN `--lanes all`.** | `t1433`–`t1437` (`t1432` = K2) |
 | **J** | **`t1407`** — `Vector.fill`, **TWO defects**. 🔵 **RE-SCOUT (J2) measuring the HYBRID.** **Streak 0/3.** ⛔ **Pass 1 killed `v2b`: its snapshot is the `save/restore` READ-SITE shape, and its `memset` has NO possible RED row.** | `t1421`–`t1427` (`t1420` spent) |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**. 🔵 **SCOUT LAUNCHED 2026-09-05.** ⭐ **K's triage handed it a TOTAL enumeration for free: 21 of 22 sanitizer rows are exactly this frame**, + 13 already-baselined siblings. **93 of 301 allowlist rows carry `closure_env_alloc`; only 17 cite the item.** | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### 🟢 K's EXECUTOR IS LAUNCHED — **3/3 — AND PASS 4 CAUGHT A SECOND RED-ON-ARRIVAL ASSERT ONE LEVEL DOWN**
+
+**Four sequential passes; 2, 3 and 4 all signed off, and each found real defects in the earlier text.**
+- ⛔⛔ **THE SIX-Q #4 ASSERT PASS 3 ASKED FOR WOULD ITSELF HAVE BEEN RED ON ARRIVAL.** `RMAP_LANE_COLS`
+  **includes `(2, "c")` and `RMAP_COL_C == 2`** — a CONTROL row's `c` column holds the literal `"CONTROL"`,
+  **not empty** — so *"no CONTROL row has a populated lane column"* **fails on both rows immediately.** ⭐ **The
+  same trap as pass 3's, one level down, in the fix pass 3 proposed for it.** Skip `*col == RMAP_COL_C`.
+- ⛔ **TWO INSTRUCTIONS INSIDE ONE ADDENDUM CONTRADICTED EACH OTHER.** R2 said *"do not delete the tail loop
+  wholesale"*; R3, folded in the same breath, **subsumes both halves of it.** Precedence cannot break a tie
+  inside one generation ⇒ **retired R2's clause BY NAME; the whole loop goes.**
+- ⛔ **AND MY *"TOTAL — exactly five hits"* WAS FALSE, WITH NO REGENERATING GREP — the same defect I had just
+  corrected in myself one addendum earlier.** Six sites, not five. The sixth is **`TODO.md:133`**, do-not-touch
+  for a **different** reason (**MA-3**) and correct as-is because it **describes** the broken hint rather than
+  prescribing it.
+- ⛔ **FOLD 6 FIXED ONE OF *FOUR* SIBLING UNIT SLIPS** — `progress`, `drifts` and `seeded` all append per
+  **lane** while the summary calls all three **"rows"**. **Core #4: fix the class.** The slip had already
+  propagated into `t1385`'s own text.
+- ⭐⭐ **K2 IS NOW A FILED ITEM (`t1432`), NOT A PARAGRAPH IN A `/tmp` BRIEF.** Pass 4 caught that its entire
+  content — the owner ask, the three-way classification, the unfoldable regression row — lived **only** in a
+  brief round-close deletes, while K removes the only item covering that ground. **"A named omission is durable
+  content"**, caught one step before it stopped being true.
 
 ### ✅ K's PASS 3 SIGNED OFF — **AND CAUGHT TWO THINGS THAT WOULD HAVE SHIPPED BROKEN, BOTH MINE**
 
