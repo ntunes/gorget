@@ -13,7 +13,7 @@
 | **C1** | ✅ **OWNER-AGREED re-cut: `clone_fn` + `t0682`'s CHECK-TIME REJECT as ONE change.** `v3` written, 🔵 pass 1. Streak 0/3. ⭐ **`t0682` CLOSES.** | `t1329`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D0′** | ✅ **RULED.** `v4` written — ruling + 5 blocking + 6 errata folded; 🔵 **pass 1 on v4.** Streak 0/3. ⚠ **The SHADOW-REJECT is the bigger, least-tested half.** | `t1394`–`t1402` |
+| **D0′** | ⚖ **NEW OWNER ASK — the shadow-reject's TRIGGER SITE is unspecified, and the two readings are DIFFERENT SEMANTICS.** v4 pass 1: 5 BLOCKING. Streak 0/3. | `t1394`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | **G** | **`fa4a76d92`** — final pass: **3 BLOCKING + 4 errata, STREAK NOT RESET** (text-only + one fixture). 🟢 executor folding. ⭐ **`t1388`'s SEGV confirmed at the INTEGRATION TIP — and its filed MECHANISM is false.** | `t1384`–`t1392` |
@@ -1314,6 +1314,78 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ⚖⚖ OWNER ASK — **WHERE DOES THE SHADOW-REJECT FIRE?** THE TWO READINGS ARE DIFFERENT SEMANTICS
+
+⛔⛔ **THE RULING AND MY BRIEF BOTH SAY *"AT THE AMBIGUOUS SITE"*, AND BOTH OFFER
+`Vector[int] Vector = [1,2,3]` AS PROOF IT IS A REAL ACCEPT→REJECT CHANGE. THOSE TWO STATEMENTS ARE
+INCONSISTENT — that program contains NO `x[…](…)` SITE AT ALL.**
+- **(a) reject at the shadowing DECLARATION** ⇒ the example errors; **the cost is EVERY value binding whose name
+  collides with a generic type** — locals, params, for-vars, consts, statics, pattern binds.
+- **(b) reject at the ambiguous USE `x[k](v)`** ⇒ **the example STAYS ACCEPTED, my accept→reject claim is
+  FALSE**, and the cost is **provably 0** straight off the fire counter.
+⇒ **different semantics, different blast radii, different instruments. A hard error on three lanes cannot be
+built on the phrase as written.** ⚖ **Round-lifecycle 7(ii): unratified semantics ⇒ OWNER ASK.**
+
+⭐ **AND THE MEASUREMENT WAS RE-RUN WITH AN INSTRUMENT THAT RESOLVES INSTEAD OF EYEBALLING** — a probe inside
+`ScopeTable::define_with_mutability` firing when a value is defined while `lookup_type` resolves.
+**4909 files: 791 `Import` shadows + 1 `Enum` shadow, and ZERO shadowing a builtin generic type name.**
+⇒ ⭐ **MY ANSWER WAS RIGHT; MY JUSTIFICATION WAS NOT** (I classified by the type-first syntax rule; this
+resolves). ⊕ Coverage hole stated: **68 of 4909 files never reach resolution.**
+⚠⚠ **AND A HAZARD THE INSTRUMENT SURFACED: `Callable` and `Owned` ARE NOT IN THE ScopeTable's TYPE NAMESPACE**
+(`Option`/`Result`/`Set`/`Box` all are). ⇒ **any shadow-check built on the type namespace is BLIND to the two
+generic spellings most likely to be shadowed by a callable-valued local.**
+
+### ⛔ FOUR MORE BLOCKING ON D0′ v4 — AND THREE ARE MINE
+
+⛔ **B2 — THE SHADOW-REJECT BINDS ggdef WITH NO ESCAPE CLAUSE, AND MY ONLY ggdef PARAGRAPH SAYS THE OPPOSITE
+ABOUT THE *OTHER* HALF.** Measured: **ggdef ACCEPTS AND RUNS both shadow shapes** — squarely inside phase-0.
+⇒ **Core #9 requires a REAL `spec/ggdef` MIRROR plus a conformance fixture pinning the REJECT, same round.**
+**A reader carries "ggdef takes the escape clause" across the section break and mis-scopes the track.**
+⊕ **Stronger than I stated for the disambiguation half: the ALREADY-ACCEPTED literal-index sibling is itself
+out-of-subset ⇒ ggdef has NEVER adjudicated this family.**
+
+⛔⛔ **B3 — E2's BLAST RADIUS WAS MEASURED WITH AN INSTRUMENT BLIND TO THE CLASS.** *"Exactly ONE row across
+4909 files"* came from a **`gg check` rc diff** — but the walk's whole effect is on **LOWERING** (it un-blinds
+the sibling `Call → StructLiteral` rewrite). **Real radius, via a fire counter: SEVEN files** — including a
+filed **HIGH** known-gap and **SIX five-lane robustness-map cells**, three of which go **build-rc-1 → correct
+output**. ⇒ ⛔ **THE WALK CLOSES `todo/t0691`** (filed 2026-08-27, HIGH, both lanes, LLVM **silent wrong value**,
+with a durable repro and an `#[ignore]`d test) — **my E2 treated it as unfiled.** ⇒ ***not an erratum fold: a
+track, or a scoped sub-deliverable with its own lane discharge.***
+⊕ **AND MY "REDESIGN AROUND A GAP" CHARGE IS ANSWERED BY `t0691`'s OWN TEXT** — the tree has a standing rule
+that accept/reject must never be observed through an f-string, *"it changes the LOWERING"*. ⇒ **rewriting the
+repro to the plain spelling is RESTORING PROBE HYGIENE.** *The reviewer who overruled me was itself overruled.*
+
+⭐ **B4 — THE RESOLUTION-BASED RULE IS IMPLEMENTABLE. MEASURED.** The identical lookup the `Identifier` arm
+already performs answers for field and index heads, **because a postfix expression's span STARTS AT ITS ROOT
+IDENTIFIER** ⇒ **close my escape hatch and PRESCRIBE it.** ⛔ **And the arm is WRONG, not merely unguarded, with
+a witness rather than an argument from absence:** an enum-constructor head resolves to **`Enum`** — instantiate
+under the ruling — **and the unguarded arm indexes anyway.**
+⚠⚠ **THE MECHANISM RESTS ON AN UNGUARDED SPAN INVARIANT: keyed on span-start, it resolves the ROOT of the
+access path, not the head — and THE SIBLING REWRITE IN THE SAME FUNCTION DOCUMENTS THIS HAZARD AND DEFENDS
+AGAINST IT** with a name-equality check against *"span collisions from derive-generated code"*. **Require the
+same defence, or "resolution-based" is SPAN ARITHMETIC WEARING A `DefKind`.**
+⊕ **The `.or_else(scopes.lookup)` fallback is SCOPE-BLIND** (the pass never tracks scopes) ⇒ **on the shadow path
+that fallback IS the innermost-wins machinery the ruling REJECTS. It must not be consulted for that decision.**
+
+⛔ **B5 — `t1393` OVERSTATES THE FIX AND THE CELLS ARE CONSTRUCTION-SENSITIVE.** *"Already measured to close all
+THREE"* is **false** — the third face is untouched (0 fires), exactly as my own E3 says. **The item and the
+brief contradict each other on the artifact the executor works from.** ⊕ **And the crash SURVIVES in adjacent
+cells for an unrelated reason:** built by list literal instead of `.push`, `vv[0][n](7)` **still SIGSEGVs under
+the prototype** — as does the unambiguous `vv[0][0](7)`. ⇒ **the durable repro must PIN THE CONSTRUCTION, and
+neither the item nor the brief may say the shape is closed — only that ONE construction of it is** (Core #12:
+the fixture's NAME is a claim about SCOPE).
+
+⊕ **ERRATA WORTH CARRYING:** **hash counts are not file counts** — `resolve.gg` is **FOUR files / two hashes**,
+`parser.gg` **FIVE / three**; *"two copies"* leaves two drivers unported. · ⭐ **A MEASURED WAY OUT OF THE
+SANITIZER QUESTION: a leak-free exercising fixture EXISTS** (a named `int triple(int)` instead of a closure
+literal → prints `21`, **ASan CLEAN**) ⇒ **ship that top-level, keep the closure spelling in `known_gaps/`, and
+the allowlist question closes with NO owner ask.** · ⛔ **MY SYNTAX-BUDGET FRAMING IS WRONG (SIX-Q #4 AGAIN):
+the directive's SUBJECT is decisions that ADD surface syntax; this ruling adds NONE.** The section is owed on the
+**ruling's own authority** — and the real tension is sharper: ***D38/D39 established that when `[]` is ambiguous
+Gorget REJECTS the spelling and moves the operation to a named accessor. This ruling picks a reading BY
+RESOLUTION for the index half while doing the D38 thing for the shadow half. THAT ASYMMETRY is what the section
+must justify.***
 
 ### 🚨 `t1388` IS CONFIRMED AT THE INTEGRATION TIP — AND ITS FILED **MECHANISM IS MEASURABLY FALSE**
 
