@@ -8,7 +8,7 @@
 | track | scope | ids |
 |---|---|---|
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
-| **A2** | ⭐ **RESCOPED TWICE — now *lower newtype construction to `StructInit`* and DELETE two backend name-matching arms.** ✅✅ design signed twice → 🔵 **pass 3. Streak 0/3.** ⛔ **I filed a SYMPTOM as the root cause, one layer too low.** | `t1376`–`t1382` |
+| **A2** | ⭐ **THE FIX IS *ONE `DefKind` GATE*** — pass 3 inverted my "scope has grown" premise. ✅✅✅ direction signed **three times** → 🔵 **pass 4.** ⛔ **My prescribed fix as written would REJECT EVERY NEWTYPE IN THE CORPUS.** | `t1376`–`t1382` |
 | **B** | ⚖⚖ **HELD — OWNER ASK (the capture cell). Pass 1: NOT SIGN OFF, 5 BLOCKING.** The brief was STALE BY CONSTRUCTION (my revert landed 3 min after it) and **overrode a ratified `decisions.md` clause with an agent's derivation.** Streak 0/3. Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⛔⛔ **BLOCKED A FOURTH TIME — `R`'s SUBJECT IS A SELECTION ON A THIRD AXIS. RECOMMEND CLOSE FOR R50: `R` NEEDS ITS OWN SCOUT.** Spine survives and measures STRONGER each pass. | `t1332`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
@@ -20,12 +20,52 @@
 | ✅✅ **H** | **`t1387` INTEGRATED** 2026-09-05 (`8573b12ca`+`0c137cbe0`). Output-review SIGNED OFF; 3 errata fixed at `6b4c8a544`. ⭐ **Its executor found FOUR defects in my brief; the review found a fifth in ITS filing.** | `t1409`–`t1417` |
 | ✅✅ **K** | **`t1385` INTEGRATED** 2026-09-05 (`b5c5eaabc`+`1c2513e45`); errata `9d7e9f71b`. Output-review **SIGNED OFF**. ⭐ **93 cell-lanes now gated; both allowlists ratchet BOTH ways.** | `t1434`–`t1437` |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
-| **L** | **`t1410`** — wrapping ops lower to UB on C. 🔵 **pass 5.** ⛔⛔ **`Neg` SPLIT OUT — its semantics are UNRATIFIED and my brief told the executor to SUPPRESS the question** (filed `t1443`). Ships `Add`/`Sub`/`Mul`. | `t1444`–`t1447` |
+| **L** | **`t1410`** — wrapping ops lower to UB on C. ✅ **DESIGN SIGNED, 5 PASSES, SHAPE UNCHANGED → 🟢 EXECUTOR LAUNCHED.** ⛔ Two of my filed items **contradicted each other on `Neg`** — fixed. | `t1444`–`t1447` |
 | **J** | **`t1407`** — `Vector.fill`. ✅✅✅ **3/3 SIGNED OFF, 🟢 EXECUTOR LAUNCHED.** ⛔ **Pass 3 RETRACTED my Addendum 4 §1 — it had retracted a TRUE claim from a superseded artifact.** | `t1422`–`t1427` |
 | **E** | **`t0953`** — ✅✅✅✅ **DESIGN SIGNED FOUR TIMES, 🟢 EXECUTOR LAUNCHED.** ⛔ **`#[must_use]` measured by rustc NOT to catch its class; the safety premise is FALSE for the sort family.** | `t1351`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### 🟢 L LAUNCHED (5 PASSES) — AND A2's PASS 3 INVERTED MY OWN "SCOPE HAS GROWN" PREMISE
+
+**L — design signed at every one of five passes, shape never changed.** Pass 5's closing findings:
+- ⛔⛔ **THE `Neg` SPLIT LEFT THE AXIS FIXTURE RED ON ARRIVAL** — with `Neg` unfixed the neg cells fire under
+  UBSan at `-O0` **and** `-O2`, and that fixture sits in the sweep at `UBSAN_CEILING=0` ⇒ **the round-close
+  sweep would be `ubsan: 1`.** The cells move to a `known_gaps` repro — **which also discharges `t1443`'s empty
+  `repro`** — ⚠ **and that test must NOT assert sanitizer-clean: the `runtime error:` IS the finding.**
+- ⛔⛔ **TWO ITEMS I FILED IN ONE COMMIT CONTRADICTED EACH OTHER ON `INeg`**, leaving the self-host's `INeg`
+  owned by **nothing** — ***precisely* the defect that same commit had just fixed for `IShr`, one variant
+  across. SIX-Q #4.** ✅ `t1443` now owns `Neg` on **both lanes** (Core #9); `t1442` keeps the shift family.
+- ⛔⛔ **`Inst::Shr` MUST NOT READ THE SHARED ACCESSOR — it would be a SILENT-WRONG-OUTPUT MISCOMPILE at `I64`**
+  (`(int64_t)((uint64_t)l >> r)` is a **logical** shift: measured `-4` vs `9223372036854775804`). ⭐ **Narrow
+  widths agree only by luck — SIX-Q #6, and exactly why *"presumably no"* was not safe as a guess.**
+- ⛔ **MY CITATION FOR THE GUARD'S PREDICATE POINTED AT A FILE THAT DOES NOT EXIST.** Pass 5 supplied a real one
+  **with its regenerating command**, measured to **red the same-width prototype — the one failure mode UBSan is
+  blind to** — and **0 false positives BY CONSTRUCTION** (its `__v` anchor excludes the whole runtime).
+- ⛔ **AND *"THE CLASS IS TOTAL AND CLOSES WITH THIS TRACK"* IS NOW FALSE** — the **walk** is total, the
+  **closure** is not. **It closes across THREE items** (`t1410` · `t1443` · `t1442`).
+- ⭐⭐ **WHY FOUR PASSES BOUNCED OFF ONE WRONG NUMBER:** each supplied it as a **finding**, two said *"fold it as
+  an instruction"* — **but none QUOTED THE STRING.** *A fold that names a fact leaves the executor to locate the
+  sentence; a fold that quotes `old` → `new` does not.* **Now quoted.**
+
+### ⛔ A2's PASS 3 — **MY PRESCRIBED FIX WOULD HAVE REJECTED EVERY NEWTYPE IN THE CORPUS**
+- ⭐ **THE FIX IS *ONE `DefKind` GATE*, NOT A LOWERING REWRITE** — `Expr::StructLiteral` is produced at exactly
+  one site gated on `DefKind::Struct`, and a newtype carries `DefKind::Newtype`. ⇒ **my "scope has grown, maybe
+  split" framing is INVERTED: ONE track, and NO seam exists that leaves either half shippable.**
+- ⛔⛔ **BUT `typecheck.rs`'s `StructLiteral` ARM ERRORS `NotAStruct` FOR A NON-STRUCT DEF** ⇒ **admitting
+  newtypes to the rewrite WITHOUT the matching typecheck edit instantly rejects all 12 shipping `int` newtypes.**
+  **My fold named the gate and not its mandatory partner.**
+- ⛔ **AND MY SIBLING SET WAS ASSERTED TOTAL AND IS NOT (SIX-Q #3, third time in this brief)** — **two MORE
+  newtype-shape special-cases in the C emitter's `SlotStore` arm**, self-described in their own comments ⇒
+  **LLVM has ONE newtype site, C has THREE.**
+- ⭐ **A DECISIVE CONTROL SETTLES THE SEVERITY QUESTION:** the POST **read path is already correct** — only the
+  **store** is wrong, and a struct with the identical payload prints correctly ⇒ **routing through `struct_init`
+  repairs the read BY CONSTRUCTION. No Core #8 regression from the upstream fix.**
+- ⛔ **A FOURTH NUMERIC CLAIM FAILED, INSIDE THE FOLD THAT CORRECTED THE THIRD.** ⭐ **The true statement is
+  STRONGER than either pass reached: NO generic newtype payload exists anywhere in the repo, in any file type.**
+- ⭐ **THE READ-BACK RULE HAS EXACTLY ONE LIVE VIOLATOR, AND IT IS `tests/fixtures/newtype.gg` ITSELF** —
+  constructs and never reads `.0`, **green on a compiler that stores garbage.**
 
 ### ⛔⛔ A2's PASS 2 — **I FILED A SYMPTOM AS THE ROOT CAUSE, AND THE REAL ONE IS Core #2**
 
