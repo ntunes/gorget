@@ -950,14 +950,44 @@ fn lower_for_array_with(
     // route through `bind_owned_for_drop`.
     let elem = builder.index_load_borrow(Place::local(iter_local), FunctionBuilder::copy(idx), elem_type);
     ctx.register_local(var_name, elem, elem_type);
-    // String borrows are pointer copies — do NOT register for drops.
-    // The collection still owns the data; the borrow just reads through the pointer.
-    // Non-string resource types still need drops (they have separate allocations).
-    if !ctx.type_mapper.is_string_type(elem_type) {
-        ctx.drops.register_local(elem, elem_type, &ctx.type_registry);
-    }
+    // The element slot is drop-registered for EVERY resource element type,
+    // String included. The old String carve-out ("pointer copies — do NOT
+    // register") was true of `gorget_string_borrow` -- the cap-copying alias
+    // this fix DELETED from the runtime -- which copies `cap` as-is;
+    // the borrow read now mints the DROP-SAFE view (`borrow_view_fn`, cap
+    // forced to 0), and the runtime free is CAP-DRIVEN — an unmaterialized
+    // view frees nothing, a materialized owned copy frees its own buffer.
+    // Without this the materialized copy from `for s in d: s = s + "!"` had no
+    // owner and leaked. Same reasoning as `emit_lazy_loopcarried_borrow`, which
+    // drop-tracks the VarDecl form of this identical binding.
+    ctx.drops.register_local(elem, elem_type, &ctx.type_registry);
     if ctx.type_mapper.is_string_type(elem_type) {
         ctx.func_state.has_string_borrows = true;
+        // Write the OWNERSHIP axis. Without this the slot stayed
+        // `LocalOwnership::Untracked` — "no ownership decision recorded" — so
+        // every downstream consumer had to guess, and the Tier 2a consume-site
+        // validator rejects consuming it outright. `CollectionElement` is the
+        // same tag the struct/enum element takes in `bind_for_vector_element`
+        // and the same one `emit_lazy_loopcarried_borrow` writes for the
+        // VarDecl form of this binding.
+        //
+        // ⚠ `write_through` IS in scope here and is DELIBERATELY NOT CONSULTED
+        // (Core #14 — this comment is the record, not an assertion of
+        // unreachability). The sibling ~130 lines above
+        // (`bind_for_vector_element`) DOES branch on it: `&` takes
+        // `set_cow_borrow` (CowBorrowPending, writes through) and bare takes
+        // this tag. The String arm cannot follow that shape yet, because the
+        // WHOLE-BINDING REBIND `s = v` loses its write at EVERY element type
+        // and on every lane — `int`, `Vector[int]`, struct and String alike —
+        // so branching here would buy nothing and would only move the String
+        // cell into a differently-broken state. Ratified semantics for the
+        // bare form (a MUTABLE PRIVATE COPY, `docs/define-gorget/decisions.md`,
+        // 2026-08-18) are what this tag implements, and they are the same for
+        // both spellings today. The `&` cell's lost write is filed as
+        // `todo/t1404`; that item is what will consult `write_through` here.
+        let cid = iter_source_coll.clone()
+            .unwrap_or(crate::ir::lowering::context::CollectionId::Local(iter_local));
+        ctx.set_collection_ref(builder, elem, cid);
     }
 
     // If pattern is a destructuring tuple, emit bindings
@@ -1178,12 +1208,19 @@ fn lower_for_enumerate(
     if let Pattern::Binding(elem_name) = &parts[1].node {
         ctx.register_local(elem_name, elem, elem_type);
     }
-    // String borrows: don't register for drops (pointer copy, collection owns the data).
-    if !ctx.type_mapper.is_string_type(elem_type) {
-        ctx.drops.register_local(elem, elem_type, &ctx.type_registry);
-    }
+    // SIBLING of the plain-array arm above (Core #4) — same drop-disposition,
+    // same reason: the borrow read mints a cap=0 drop-safe view and the free is
+    // cap-driven, so the String element registers for drop like every other
+    // resource element.
+    ctx.drops.register_local(elem, elem_type, &ctx.type_registry);
     if ctx.type_mapper.is_string_type(elem_type) {
         ctx.func_state.has_string_borrows = true;
+        // SIBLING of the plain-array arm (Core #4) — same ownership axis, and
+        // `write_through` is deliberately unconsulted here for the same reason
+        // (`todo/t1404`); see the plain-array arm's note.
+        let cid = iter_source_coll.clone()
+            .unwrap_or(crate::ir::lowering::context::CollectionId::Local(iter_local));
+        ctx.set_collection_ref(builder, elem, cid);
     }
 
     lower_block(ctx, builder, body);

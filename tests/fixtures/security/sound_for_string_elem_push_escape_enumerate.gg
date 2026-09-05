@@ -1,0 +1,20 @@
+# SOUND — the `.enumerate()` SIBLING of
+# `sound_for_string_elem_push_escape_plain.gg`.
+#
+# The ownership tag has two write sites, one per for-loop arm, so the escape
+# row needs one fixture per sibling (Core #11). This is the ONLY fixture in the
+# set that can see the `.enumerate()` tag: reverting that call alone leaves
+# every other row — including the plain escape row — green.
+#
+# PINS the `.enumerate()` `set_collection_ref` tag. Verified rc 0 at HEAD and
+# rc 101 (`UntrackedSourceConsumed`, the Tier 2a consume-site refusal) under a
+# revert of that tag alone.
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("aa")
+    v.push("bb")
+    Vector[String] out = Vector[String]()
+    for i, s in v.enumerate():
+        out.push(s)
+    for s in out:
+        print(s)

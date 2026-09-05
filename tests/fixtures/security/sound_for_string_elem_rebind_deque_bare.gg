@@ -1,0 +1,23 @@
+# SOUND — the `Deque[String]` cell of the bare-form element rebind.
+#
+# SIBLING of `sound_for_string_elem_rebind_vector_bare.gg` across the
+# COLLECTION axis (Core #4: the defect was in the shared for-element lowering,
+# so every collection whose element read routes through `ReadMode::Borrow`
+# carried it). `Deque` was measured RED independently — this is not a
+# generalisation from the `Vector` cell.
+#
+# Ratified: the bare binding is a MUTABLE PRIVATE COPY, so the deque is
+# untouched and the program runs clean.
+#
+# PINS the `insts.rs` view half. RED-verified against the pre-fix compiler:
+# rc 134 double free.
+from std.collections import Deque
+
+void main():
+    Deque[String] d = Deque[String]()
+    d.push("aa")
+    d.push("bb")
+    for s in d:
+        s = "zz"
+    for s in d:
+        print(s)

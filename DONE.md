@@ -1,3 +1,59 @@
+- [2026-09-05] **`t0045` + `t0403` CLOSED — THE for-LOOP STRING-ELEMENT DOUBLE FREE (R50 Track C2).**
+  `for s in v: s = "zz"` over a `Vector[String]` was `gg check`-clean and SIGABRTed (rc 134, both backends,
+  ASan `heap-use-after-free`). ⚠ **THE `&` WAS NEVER THE DISCRIMINATOR** — the BARE form crashed identically,
+  and so did `Deque`, `.enumerate()` and the self-append shape.
+  **ROOT CAUSE, ONE DEFECT WITH THREE HALVES.** (1) `src/lir/lower/insts.rs` picked the String borrow
+  primitive by NAME-MATCHING a runtime symbol (`clone_fn_name == "gorget_string_clone_to_owned"` →
+  `gorget_string_borrow`) — Core #2 / devbook/24 rule 2 at the runtime-symbol boundary — and got the
+  CAP-COPYING alias, so the element slot claimed ownership of the collection's buffer and `lower_assign`'s
+  pre-rebind drop freed it out from under the collection. It now reads the typed axis
+  `TypeMetadata::borrow_view_fn`, which answers the drop-safe cap=0 view. (2)+(3) both for-loop arms
+  (`lower_for_array_with` and its `.enumerate()` sibling) carved String out of drop registration and never
+  wrote the ownership axis. **The three halves are each other's positive controls** — view-only is safe but
+  LEAKS the materialized copy, drop+tag without the view still rc 134 — and the third was found by the Tier 2a
+  validator REFUSING the second (*"untracked source consumed"*). **The runtime already shipped the right
+  primitive and documented this exact bug in a comment nothing enforced (Core #14).**
+  **⚖ CORE #8, PER CELL — the two cells have DIFFERENT dispositions and both ship:**
+  * **BARE** — this IMPLEMENTS ratified consequence (a) verbatim (`docs/define-gorget/decisions.md`,
+    2026-08-18: *"the bare `for x in coll` binding is a MUTABLE PRIVATE COPY… `String` (and every heap element
+    type) is FIXED to behave like `int` — private copy, no crash"*). ⭐ **And ggdef, the definitional
+    interpreter, ALREADY PRINTED `aa`/`bb` while Rust gg SIGABRTed — the reference lagged the definition, and
+    the fix makes Rust gg MATCH IT.** Corroborated: `Vector[Vector[int]]`, struct and dict-value elements
+    already bare-rebound as non-crashing private copies, so String was the LAST broken cell of consequence (a),
+    and the witness is structural — the only String-discriminating sites were the two `is_string_type` gates,
+    and `borrow_view_fn: Some` appears exactly once against 30 `None` protocol rows.
+  * **`&`** — ratified semantics are WRITE-THROUGH and the write is still LOST on all three lanes. It ships on
+    the severity ladder (mem-unsafety > silent-wrong-output) because the class is **PRE-EXISTING AND
+    UNIVERSAL**: the `&`-rebind write is dropped at EVERY element type (`int` `1 2`, `Vector[int]`, struct)
+    before and after this fix, so the String cell MOVES INTO an already-filed class rather than opening a new
+    disagreement. Tracked as **`t1404`** (R2's prerequisite). ⛔ Both `#[ignore]`d tests keep asserting the
+    ratified value — `attack_99…` still asserts `"zz\nzz"` and `sound_loop_string_elem_assign_double_free`
+    still asserts `"x!"`; only their REASONS were rewritten, because the old un-ignore triggers now literally
+    fire while the assertions still fail.
+  **Shipped:** 10 LIVE `tests/fixtures/security/` fixtures. **The fix has FIVE revertible atoms and every one
+  turns at least one row RED**, verified ATOM-BY-ATOM — the lattice is NON-MONOTONE, so a superset revert
+  restores the pre-fix path and greens rows its own subset fails. Rows: rebind × {Vector, Deque} × {bare, `&`}
+  (the view half) · self-append × {plain, `.enumerate()`} under **`security_safe_no_leak`**, because the only
+  failure mode is LSan 8 B/2 allocs and `security_safe`'s `detect_leaks=0` makes the row INERT · push-escape ×
+  {plain, `.enumerate()`} (the tag halves, a compile-time Tier 2a refusal, GREEN at HEAD) · and a **FieldPath**
+  and an **expression-temp** source, because the `cid` provenance axis is three-valued and the prescribed set
+  pinned one cell. Core #6 guard `borrow_primitive_is_not_name_selected` (both directions RED-verified) and the
+  caller-less `gorget_string_borrow` DELETED from the runtime. Core #9 four-lane pin:
+  `spectests/run/cow_bare_for_elem_rebind.gg`, already the `ggdef gen` fixed point, MATCHing on C, LLVM,
+  self-host AND ggdef — **the self-host already conformed at HEAD, so this is the reference being brought into
+  line with the self-host, not a port.** Five constants bumped in one commit (`MIN_FIXTURES`/`C`/`LLVM` 243→244,
+  `SELFHOST` 242→243, `GGDEF_MATCH_FLOOR` 225→226) plus four mirroring `scripts/figures.db` rows;
+  `GGDEF_SKIP_CEILING` correctly unchanged at 18 and CHECKED, not assumed (`total=244 · MATCH=226 ·
+  MISMATCH=0 · GGDEF-SKIP=18`). Doc write-through: the BARE-form clauses only in `language-reference.md`
+  (the `&` statements are a different ruling and stay intact) and `devbook/11`'s view-producer rule widened
+  with its discriminator — the tag follows the SOURCE KIND, because `View{RuntimeView}` and
+  `Borrowed{CollectionElement}` select different sever-walkers.
+  **⛔ NOT CLOSED BY THIS:** the `&` lost write (`t1404`), measured byte-identical before and after. Filed
+  `t1334` (the `elem_type_name` Core #2 residual: the DECISION is now typed, the type IDENTITY is still
+  name-reconstructed). Corrected a false claim in `sound_for_amp_scalar_elem_writethrough.gg`'s header — its
+  cited "resource-element twin" is a FIELD WRITE, a different mechanism, so the discriminator is the MUTATION
+  SHAPE and the whole-binding rebind writes through at NO element type.
+
 - [2026-09-05] **`t1077` CLOSED — READ FIXED, LEAK NOT (R50 Track A1).** Nested `Box[Box[T]]` read one deref
   too many. **ONE LINE** in the value `Expr::Deref` arm (`src/ir/lowering/exprs/mod.rs`): it discriminated a
   `Box[T]` PARAMETER (internally `*Box__T`, two peels) from a plain LOCAL (one peel) by testing the RESULT of

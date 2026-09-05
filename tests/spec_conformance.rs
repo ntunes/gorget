@@ -212,9 +212,25 @@ use ggdef::{parse_frontmatter, Expect};
 // C 237/237 · LLVM 237/237 · self-host 236/237, so both new fixtures MATCH on
 // all three lanes and the sole SH mismatch remains `d22_slice_clamp.gg` below.
 // 235/235/234/`MIN` 235 → 237/237/236/`MIN` 237.
-const C_MATCH_FLOOR: usize = 243;
-const LLVM_MATCH_FLOOR: usize = 243;
-const SELFHOST_MATCH_FLOOR: usize = 242;
+//
+// R50 Track C2 (`todo/t0045`): +1 seed, `cow_bare_for_elem_rebind.gg` — the
+// four-lane pin for the ratified BARE-form element rebind (a mutable private
+// copy: `for s in d: s = "zz"` leaves `d` intact and runs clean). It MATCHes on
+// every lane including the self-host, so all four constants rise together:
+// 243/243/242/`MIN` 243 → 244/244/243/`MIN` 244. ⚠ A FIFTH constant moves in
+// the same commit and lives in a DIFFERENT cargo target that `--test
+// spec_conformance` does not reach: `GGDEF_MATCH_FLOOR` 225 → 226 in
+// `spec/ggdef/tests/spec_conformance_ggdef.rs` (regenerate with
+// `cargo test -p ggdef`). A SIXTH, `GGDEF_SKIP_CEILING`, correctly does NOT
+// move and was checked rather than assumed: the ceiling is shrink-only and the
+// second direction the MATCH floor structurally cannot see, so an
+// OUT-OF-SUBSET seed would have landed as a SKIP, left the floor flat and
+// turned the ceiling RED. Measured after the bump:
+// `total=244 · MATCH=226 · MISMATCH=0 · GGDEF-SKIP=18` (unchanged, and
+// `total == MATCH + GGDEF-SKIP` exactly).
+const C_MATCH_FLOOR: usize = 244;
+const LLVM_MATCH_FLOOR: usize = 244;
+const SELFHOST_MATCH_FLOOR: usize = 243;
 // SH lane doesn't yet reproduce d22_slice_clamp.gg — SH lowerer needs the
 // Range-in-index lowering wired (parser mirror lands the syntax, but the
 // lowerer's SIndex arm at self_host_lowerer/lower_expr.gg doesn't yet
@@ -228,7 +244,7 @@ const SELFHOST_MATCH_FLOOR: usize = 242;
 /// It equals the C and LLVM MATCH floors. The SELF-HOST floor sits ONE BELOW,
 /// on `d22_slice_clamp.gg` (see `SELFHOST_MATCH_FLOOR`); adding a fixture
 /// raises all four constants together.
-const MIN_FIXTURES: usize = 243;
+const MIN_FIXTURES: usize = 244;
 
 // ── THE RELATION ABOVE IS NOW ENFORCED, NOT ASSERTED IN PROSE (Core #14) ──
 // The doc comment on MIN_FIXTURES claims "It equals the C and LLVM MATCH

@@ -1,0 +1,34 @@
+# SOUND — a bare for-loop String element ESCAPES into another collection.
+#
+# This is the OWNERSHIP-AXIS row: `out.push(s)` is a consuming position, so the
+# compiler must decide whether `s` is owned-and-dead (move) or borrowed (clone
+# before the call). That decision reads the element slot's `LocalOwnership`.
+#
+# ⚠ THIS ROW IS GREEN AT HEAD AND ITS INSTRUMENT IS A COMPILE-TIME REFUSAL, NOT
+# A CRASH. Registering the element for drop without also writing the ownership
+# axis leaves the slot `LocalOwnership::Untracked` — "no ownership decision
+# recorded" — and the Tier 2a consume-site validator then refuses to consume it
+# (`UntrackedSourceConsumed`, rc 101). That refusal is what identified the third
+# half of the fix as load-bearing; the tag (`CollectionElement`, the same one
+# `bind_for_vector_element` and `emit_lazy_loopcarried_borrow` write) is what
+# makes the consume legal AND correct — it selects `cow_before_mutation` Case 3,
+# the collection-source sever walker.
+#
+# ⚠ THE REVERT LATTICE IS NON-MONOTONE, which is why this row exists as its own
+# fixture rather than being folded into a broader one: reverting the drop
+# registration AND the tag together leaves this program GREEN (not
+# drop-registered => treated as a borrow => cloned => legal), while reverting
+# the tag ALONE turns it RED. A superset revert restores the pre-fix
+# configuration; only the single-atom revert creates the state that fails.
+#
+# PINS the plain-array `set_collection_ref` tag. Verified rc 0 at HEAD and
+# rc 101 (compiler refusal) under a revert of that tag alone.
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("aa")
+    v.push("bb")
+    Vector[String] out = Vector[String]()
+    for s in v:
+        out.push(s)
+    for s in out:
+        print(s)

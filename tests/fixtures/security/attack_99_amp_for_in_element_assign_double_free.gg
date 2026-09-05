@@ -1,7 +1,19 @@
+# ⚠ STATUS CHANGED — THIS IS NOW A LOST WRITE, NOT A DOUBLE FREE.
+#
+# `todo/t0045` fixed the memory-safety half: this program is accepted, runs
+# clean under ASan on both backends, and prints `aa` / `bb`. What is still
+# wrong is that the RATIFIED write-through of the `&` sigil is silently
+# dropped, so the fixture keeps asserting the specified `zz` / `zz` and keeps
+# failing. Filed as `todo/t1404`; the `&`-rebind write is lost at EVERY element
+# type on every lane, so this is one cell of a universal class rather than a
+# String bug. The historical account below is kept for provenance.
+#
+# ── AS ORIGINALLY FILED ────────────────────────────────────────────────
 # SECURITY — DOUBLE FREE from SAFE, SPEC-DOCUMENTED syntax. Both backends.
 #
 # `for x in &coll` is the documented way to mutate elements in place
-# (docs/language-reference.md:1374, and §9.6's subscript/borrow table names it
+# (regenerate: grep -n 'for x in &coll' docs/language-reference.md — the
+# §7.x iteration table row; and §9.6's subscript/borrow table names it
 # as the spelling that writes through). Assigning to the loop binding over a
 # `Vector[String]` double-frees the element storage:
 #

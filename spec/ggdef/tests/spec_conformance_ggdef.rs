@@ -75,7 +75,7 @@ use ggdef::{parse_frontmatter, run_source, Outcome, DEFAULT_FUEL};
 /// Bump-on-improvement: when MATCH rises — a new run seed lands, or P1-A
 /// coverage retires a GGDEF-SKIP — raise this in the SAME commit that lands the
 /// gain, so the improvement is locked in.
-const GGDEF_MATCH_FLOOR: usize = 225;
+const GGDEF_MATCH_FLOOR: usize = 226;
 
 /// SHRINK-ONLY CEILING on GGDEF-SKIP — the second direction the floor above
 /// cannot see (Core #6: a ratchet needs BOTH directions).

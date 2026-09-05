@@ -1,0 +1,30 @@
+# SOUND (memory safety only) — the `&` spelling of the same rebind must not
+# corrupt the heap.
+#
+# ⚠ THIS FIXTURE PINS MEMORY SAFETY, NOT THE RATIFIED VALUE. The ratified
+# semantics of `for x in &coll` are WRITE-THROUGH, so the language-correct
+# stdout here is `zz` / `zz`. It prints `aa` / `bb`: the write is LOST. That
+# residual is filed as `todo/t1404` and is NOT this fixture's subject — the
+# `&`-rebind write is dropped at EVERY element type on EVERY lane (`int`,
+# `Vector[int]`, struct and String alike), so it is a pre-existing universal
+# class, not something this fix created or widened.
+#
+# What this fixture DOES pin: the same `Vector[String]` shape used to SIGABRT
+# with a double free (rc 134) under the `&` spelling exactly as under the bare
+# one — the sigil was never the discriminator. On the severity ladder
+# (mem-unsafety > silent-wrong-output) moving this cell out of heap corruption
+# and into the already-filed lost-write class is a strict improvement, and the
+# lost write stays visible in `t1404` and in the `#[ignore]`d
+# `attack_99_amp_for_in_element_assign_double_free`, which still asserts the
+# ratified `zz` / `zz`.
+#
+# PINS the `insts.rs` view half. RED-verified against the pre-fix compiler:
+# rc 134 double free.
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("aa")
+    v.push("bb")
+    for s in &v:
+        s = "zz"
+    for s in v:
+        print(s)

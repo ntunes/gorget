@@ -8,8 +8,14 @@
 # WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): `gg check`
 # clean, then
 #   AddressSanitizer: heap-use-after-free ... READ of size 32 ...
-#   in gorget_string_borrow
+#   in gorget_string_borrow_view
 # reported at the loop's element read.
+#
+# ⚠ THE FRAME NAME WAS RENAMED, NOT THE DEFECT. `todo/t0045` made the for-loop
+# element read mint the drop-safe view (`gorget_string_borrow_view`) instead of
+# the cap-copying `gorget_string_borrow`, which it deleted. Measured both
+# sides: same heap-use-after-free, same severity, different frame. This
+# exclusivity hole is untouched by that fix and is still open.
 #
 # INTENDED: REJECTED at `gg check` with `E_BorrowConflict`, exactly as the
 # direct `v.push(...)` spelling in the same position already is. The `&` sigil

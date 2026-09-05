@@ -1,0 +1,34 @@
+# SOUND + LEAK-FREE — self-append (`s = s + "!"`) on a bare for-loop String
+# element materializes a private copy that is OWNED, and the owner drops it.
+#
+# ⚠ THE INSTRUMENT IS `security_safe_no_leak`, NOT `security_safe`. Under a
+# revert of the plain-array DROP REGISTRATION alone, this program is
+# stdout-correct, exit-0 and AddressSanitizer-clean — its ONLY failure mode is
+# a LeakSanitizer finding (8 bytes in 2 allocations). `security_safe` routes
+# through `ASAN_OPTS_NO_LEAK` (`detect_leaks=0`), which makes this row INERT.
+# `security_safe_no_leak` sets `detect_leaks=1` + `exitcode=99`.
+#
+# WHY THE SHAPE MATTERS: `s = "zz"` stores a static literal (a cap=0 view —
+# nothing to leak), so it cannot see this half of the fix at all. Self-append
+# is what forces the element slot to hold a HEAP-OWNED materialized copy, and
+# that copy needs an owner. Before the fix the String element was carved out of
+# drop registration entirely ("String borrows are pointer copies — do NOT
+# register"), which was true of the deleted cap-copying borrow primitive and
+# false of the drop-safe view the fix mints: the free is CAP-DRIVEN, so an
+# unmaterialized view frees nothing and a materialized owned copy frees its own
+# buffer. Registering unconditionally is therefore correct for both.
+#
+# PINS the plain-array drop registration. RED-verified against the pre-fix
+# compiler: rc 134 double free; and under a revert of that registration alone:
+# `LeakSanitizer: 8 byte(s) leaked in 2 allocation(s)`, rc 99.
+#
+# The collection is unchanged (bare form = mutable private copy), so the
+# expected stdout is the ORIGINAL contents.
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("aa")
+    v.push("bb")
+    for s in v:
+        s = s + "!"
+    for s in v:
+        print(s)

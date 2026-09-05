@@ -1,0 +1,32 @@
+# SOUND — the FIELD-PATH cell of the iterable's SOURCE-PROVENANCE axis.
+#
+# The ownership tag the fix writes carries a `CollectionId` derived from the
+# AST, and that identity is THREE-VALUED: `Some(Local)` for a plain identifier,
+# `Some(FieldPath)` for a field chain, and `None` — the degenerate
+# `Local(iter_local)` fallback — for anything else. Every other fixture in this
+# set iterates a plain local, so the set as prescribed changed three cells of a
+# typed axis and pinned one (Core #12: a fixture set that samples one value of a
+# typed axis is an anecdote, not a net). This fixture and
+# `sound_for_string_elem_source_temp.gg` cover the other two.
+#
+# Two loops, deliberately: the REBIND loop is what was memory-unsafe (RED at
+# HEAD, rc 134), and the ESCAPE loop is what actually READS the tag, so this
+# fixture is live against both the view half and the tag half.
+#
+# PINS the plain-array `set_collection_ref` tag on a non-`Local` source.
+# RED-verified against the pre-fix compiler: rc 134 double free; under a revert
+# of that tag alone: rc 101 (`UntrackedSourceConsumed`).
+struct Bag:
+    Vector[String] items
+
+void main():
+    Bag b = Bag(Vector[String]())
+    b.items.push("aa")
+    b.items.push("bb")
+    for s in b.items:
+        s = "zz"
+    Vector[String] out = Vector[String]()
+    for s in b.items:
+        out.push(s)
+    for s in out:
+        print(s)

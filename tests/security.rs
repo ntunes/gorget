@@ -1799,17 +1799,24 @@ fn security_closure_literal_callable_payload_overflow() {
 }
 
 #[test]
-#[ignore = "SECURITY KNOWN GAP (found + verified 2026-08-17 by the for-in idiom \
-scout, orchestrator-reproduced): `for s in &d: s = \"zz\"` over a Vector[String] \
-DOUBLE FREES and SIGABRTs on BOTH backends, while `gg check` reports \"OK: no \
-semantic errors\". The syntax is safe and spec-documented (language-reference.md:1374 \
-teaches `for x in &coll` as the in-place mutation form) — no unsafe, no ownership \
-operator. Distinct from the filed `&`-write-through gap, which silently LOSES a \
-write; this one corrupts the heap. Un-ignore when the assignment either writes \
-through or is rejected at check time."]
+#[ignore = "KNOWN GAP t1404 — A LOST WRITE, NO LONGER A DOUBLE FREE. \
+`for s in &d: s = \"zz\"` over a Vector[String] used to SIGABRT with a double \
+free on both backends; todo/t0045 fixed that, and the program now runs clean \
+and prints `aa`/`bb`. What remains is that the RATIFIED write-through of the \
+`&` sigil is silently DROPPED, so this still asserts the spec (`zz`/`zz`) and \
+still fails. ⚠ THE ASSERTION IS CORRECT AS WRITTEN — do NOT 'fix' it to \
+`aa`/`bb`; that would ratify the lost write. The `&`-rebind write is dropped \
+at EVERY element type on every lane (int, Vector[int], struct, String), so \
+this is one cell of a universal class, filed as todo/t1404. Regenerate the \
+spec citation with: grep -n 'for x in &coll' docs/language-reference.md. \
+Un-ignore when the assignment writes through, OR — the other arm of \
+lower-or-reject — when it is rejected at check time; that second arm fires if \
+R2's `for i in &v` reject lands, and the assertion must then be replaced by \
+the reject, not by the observed value."]
 fn security_amp_for_in_element_assign_double_free() {
-    // INTENDED: the documented in-place mutation writes through. Today the
-    // program is accepted and then double-frees, so this asserts the SPEC.
+    // INTENDED: the documented in-place mutation writes through. The program
+    // is accepted and memory-safe now; the write is still lost, so this
+    // asserts the SPEC.
     security_safe(
         "attack_99_amp_for_in_element_assign_double_free",
         "zz\nzz",
@@ -2350,9 +2357,11 @@ fn sound_excl_receiver_writer_rejected() {
 
 #[test]
 #[ignore = "KNOWN GAP (D10 exclusivity hole #4, for-body &-arg writer): accepted program, ASan \
-heap-use-after-free in gorget_string_borrow; the direct `v.push` spelling already rejects. \
+heap-use-after-free in gorget_string_borrow_view; the direct `v.push` spelling already rejects. \
 Asserts the INTENDED E_BorrowConflict reject; TODO.md. Un-ignore when the iterable guard sees \
-through a call boundary."]
+through a call boundary. ⚠ The reported FRAME was renamed by todo/t0045 (the element read now \
+mints the drop-safe view rather than the deleted cap-copying `gorget_string_borrow`); the \
+defect, its severity and this reject gap are unchanged — same use-after-free, different frame."]
 fn sound_excl_forbody_amp_writer_rejected() {
     security_rejected("sound_excl_forbody_amp_writer", "E_BorrowConflict");
 }
@@ -2629,28 +2638,155 @@ fn sound_amp_deref_box_field_leak_safe() {
     security_safe_no_leak("sound_amp_deref_box_field_leak", "gg-payload\n9");
 }
 
-/// KNOWN GAP — assigning to a `String` element inside `for … in &coll`
-/// DOUBLE-FREES. `gg check` passes, `gg build` succeeds, the binary aborts with
-/// "free(): double free detected in tcache 2".
+/// KNOWN GAP t1404 — assigning to a `String` element inside `for … in &coll`
+/// silently LOSES the write. It no longer double-frees: `todo/t0045` closed
+/// the memory-safety half, so `gg check` passes, `gg build` succeeds, and the
+/// binary now runs clean under ASan printing the ORIGINAL `x`.
 ///
-/// The memory-unsafe cell of a type axis that is otherwise merely wrong or
-/// correct, measured on the same loop shape: `int` element -> write LOST;
-/// struct and `Vector[int]` elements -> write through CORRECTLY; `String`
-/// element -> double free. So the reference's former blanket claim that
-/// "element write-through through a loop iterable is lost" was wrong twice —
-/// false for struct/Vector, and understating heap corruption as a lost write
-/// for String (Core #8 on top of Core #12).
+/// This was the memory-unsafe cell of a type axis that is otherwise merely
+/// wrong or correct, measured on the same loop shape: `int` element -> write
+/// LOST; struct and `Vector[int]` elements -> write through CORRECTLY;
+/// `String` element -> double free. The String cell has now MOVED from heap
+/// corruption into the same lost-write class as `int` — a strict improvement
+/// on the severity ladder (mem-unsafety > silent-wrong-output), and the
+/// remaining disagreement is the one `t1404` tracks.
+///
+/// ⚠ The struct and `Vector[int]` cells of that table write through because
+/// their mutations are IN-PLACE THROUGH the borrow (`e.v = …`, `e.push(…)`).
+/// The whole-binding REBIND in this fixture writes through at NO element type,
+/// which is why `t1404` is a class and not a String bug.
 ///
 /// Asserts the INTENDED write-through (`x!`) running clean under ASan. If the
 /// language instead rules whole-element assignment under `&`-iteration
-/// inexpressible, replace this with the check-time reject — an accepted
-/// program that double-frees is wrong under either reading.
+/// inexpressible, replace this with the check-time reject (Core #10,
+/// lower-or-reject) — the observed `x` is neither, and must not be wired in.
 #[test]
-#[ignore = "KNOWN GAP: assigning a String element inside `for e in &coll` double-frees \
-(gg check passes, binary aborts). Asserts the INTENDED write-through under ASan; TODO.md. \
-Un-ignore when the element-assign releases the old buffer, or replace with the reject."]
+#[ignore = "KNOWN GAP t1404: assigning a String element inside `for e in &coll` silently \
+LOSES the write (it no longer double-frees — todo/t0045 fixed that half, and the program \
+now runs clean under ASan printing `x`). Asserts the INTENDED write-through `x!`; TODO.md. \
+⚠ THE ASSERTION IS CORRECT AS WRITTEN — do NOT relax it to the observed `x`, which would \
+ratify the lost write. ⚠ AND THE OLD UN-IGNORE TRIGGER ('when the element-assign releases \
+the old buffer') NOW LITERALLY FIRES while the assertion still fails, which is why it is \
+restated here: un-ignore when the element-assign WRITES THROUGH, or replace this with the \
+check-time reject."]
 fn sound_loop_string_elem_assign_double_free() {
     security_safe("sound_loop_string_elem_assign_double_free", "x!");
+}
+
+// ── `todo/t0045` — the for-loop String element double free ──────────────
+//
+// LIVE regression net for a defect that WAS `gg check`-clean and SIGABRTed
+// (rc 134, both backends) from ordinary safe syntax. The two `#[ignore]`d
+// tests above (`security_amp_for_in_element_assign_double_free` and
+// `sound_loop_string_elem_assign_double_free`) both assert the RATIFIED
+// WRITE-THROUGH value for the `&` spelling, which is still lost
+// (`todo/t1404`) — so neither of them can pin that the double free is gone.
+// These can, and do.
+//
+// THE FIX HAS FIVE REVERTIBLE ATOMS AND EVERY ONE OF THEM TURNS AT LEAST ONE
+// ROW BELOW RED. Measured atom-by-atom against the FULL tree (never by
+// supersets — the lattice is NON-MONOTONE: reverting the drop registration
+// and the tag TOGETHER restores the pre-fix borrow-and-clone path and leaves
+// the escape rows GREEN, while reverting the tag ALONE fails them):
+//
+//   atom                              row(s) that go RED
+//   ---------------------------------------------------------------------
+//   insts.rs typed borrow-view read   ALL TEN (+ the `tests/lints.rs`
+//                                     `borrow_primitive_is_not_name_selected`
+//                                     guard)
+//   drop registration, plain arm      selfappend_plain    (LSan 8 B / 2)
+//   drop registration, enumerate arm  selfappend_enumerate (LSan 8 B / 2)
+//   set_collection_ref, plain arm     push_escape_plain, source_fieldpath,
+//                                     source_temp        (rc 101, Tier 2a)
+//   set_collection_ref, enumerate arm push_escape_enumerate (rc 101)
+//
+// ⚠ THE INSTRUMENT DIFFERS PER ROW, and picking the wrong one makes a row
+// inert rather than failing it: the rebind and source rows are visible to a
+// plain run, the self-append rows are visible ONLY to `security_safe_no_leak`
+// (`detect_leaks=1`), and the escape rows are compile-time refusals.
+
+/// Bare-form element rebind over `Vector[String]` — ratified consequence (a):
+/// a MUTABLE PRIVATE COPY, collection untouched, no crash.
+#[test]
+fn sound_for_string_elem_rebind_vector_bare() {
+    security_safe("sound_for_string_elem_rebind_vector_bare", "aa\nbb");
+}
+
+/// `&`-form of the same rebind. ⚠ PINS MEMORY SAFETY ONLY — the ratified
+/// value is `zz`/`zz` (write-through) and the write is still lost
+/// (`todo/t1404`, a pre-existing class at every element type). What is pinned
+/// is that the shape no longer double-frees.
+#[test]
+fn sound_for_string_elem_rebind_vector_amp() {
+    security_safe("sound_for_string_elem_rebind_vector_amp", "aa\nbb");
+}
+
+/// The `Deque[String]` cell of the collection axis — measured RED
+/// independently, not generalised from `Vector`.
+#[test]
+fn sound_for_string_elem_rebind_deque_bare() {
+    security_safe("sound_for_string_elem_rebind_deque_bare", "aa\nbb");
+}
+
+/// The fourth cell of mode × collection. Memory safety only, as with the
+/// `Vector` `&` cell.
+#[test]
+fn sound_for_string_elem_rebind_deque_amp() {
+    security_safe("sound_for_string_elem_rebind_deque_amp", "aa\nbb");
+}
+
+/// Self-append materializes a HEAP-OWNED private copy in the element slot,
+/// and the drop registration is its owner.
+///
+/// ⚠ `security_safe_no_leak`, NOT `security_safe`. Under a revert of the
+/// plain-arm drop registration this program is stdout-correct, exit-0 and
+/// ASan-clean; its only failure mode is `LeakSanitizer: 8 byte(s) leaked in
+/// 2 allocation(s)`. `security_safe` sets `detect_leaks=0`, which would make
+/// this row INERT — it would pass in exactly the configuration it exists to
+/// fail.
+#[test]
+fn sound_for_string_elem_selfappend_plain() {
+    security_safe_no_leak("sound_for_string_elem_selfappend_plain", "aa\nbb");
+}
+
+/// The `.enumerate()` sibling — the only row that can see the enumerate arm's
+/// drop registration. Same leak-checking instrument, same reason.
+#[test]
+fn sound_for_string_elem_selfappend_enumerate() {
+    security_safe_no_leak("sound_for_string_elem_selfappend_enumerate", "aa\nbb");
+}
+
+/// The element ESCAPES into another collection — the ownership-axis row.
+/// Reverting the plain arm's `set_collection_ref` leaves the slot
+/// `LocalOwnership::Untracked` and the Tier 2a consume-site validator refuses
+/// the `push` (rc 101). Green at HEAD: this row's instrument is the
+/// single-atom revert, not the pre-fix compiler.
+#[test]
+fn sound_for_string_elem_push_escape_plain() {
+    security_safe("sound_for_string_elem_push_escape_plain", "aa\nbb");
+}
+
+/// The `.enumerate()` sibling of the escape row — the only row that can see
+/// the enumerate arm's ownership tag.
+#[test]
+fn sound_for_string_elem_push_escape_enumerate() {
+    security_safe("sound_for_string_elem_push_escape_enumerate", "aa\nbb");
+}
+
+/// FIELD-PATH cell of the iterable's three-valued source-provenance axis
+/// (`Some(Local)` / `Some(FieldPath)` / `None`). Every other row iterates a
+/// plain local, so without this the fix changed three cells and pinned one.
+#[test]
+fn sound_for_string_elem_source_fieldpath() {
+    security_safe("sound_for_string_elem_source_fieldpath", "aa\nbb");
+}
+
+/// EXPRESSION-TEMP cell of the same axis — `v.reversed()` carries no
+/// AST-derived identity, so the tag takes the `None` fallback. Output is
+/// reversed because `reversed()` is the iterable.
+#[test]
+fn sound_for_string_elem_source_temp() {
+    security_safe("sound_for_string_elem_source_temp", "bb\naa");
 }
 
 // ── Round MEMORY SAFETY / ONE OWNERSHIP BOUNDARY · Track B ──────────────

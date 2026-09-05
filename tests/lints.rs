@@ -5808,6 +5808,106 @@ fn str_view_producer_enumeration_is_closed() {
     }
 }
 
+/// Core #6 guard for the class `t0045` closed: ***never pick the borrow
+/// primitive by spelling a runtime symbol's name.***
+///
+/// `src/lir/lower/insts.rs` used to choose the String borrow primitive with
+/// `clone_fn_name == "gorget_string_clone_to_owned"` → `"gorget_string_borrow"`
+/// — a name-match on a runtime symbol to decide MEANING (Core #2, devbook/24
+/// rule 2 at the runtime-symbol boundary). It answered the CAP-COPYING alias,
+/// which is a double free the moment the borrow lands in a drop-tracked value
+/// slot; a `for` element binding is exactly that slot, so `for s in v: s = "zz"`
+/// over a `Vector[String]` was `gg check`-clean and SIGABRTed.
+///
+/// The fix reads the typed axis `TypeMetadata::borrow_view_fn` instead, so the
+/// compiler side never spells the unsafe symbol at all — and the symbol itself
+/// is deleted from the runtime.
+///
+/// ⚠ WHY THIS GUARD AND NOT A WIDENING OF
+/// `str_view_producer_enumeration_is_closed`: that lint enumerates SYMBOLS, and
+/// `gorget_string_borrow_view` is already a blessed row in it — so this track's
+/// brand-new emit site was INVISIBLE to it and `--test lints` stayed green
+/// through the whole defect (Six-Questions #2: a guard that green-lights the
+/// class it was written to retire). A site-enumerating widening cannot work
+/// either: after the fix `insts.rs` never spells the symbol on a live line.
+/// The class that IS mechanically checkable is the one below — the unsafe
+/// primitive has no live speller anywhere in the compiler, and no definition.
+///
+/// VERIFIED BOTH DIRECTIONS (Core #13), regenerated in-tree:
+/// * arm a — fix reverted (`insts.rs` view half only): count 1
+///   (`src/lir/lower/insts.rs`, the `"gorget_string_borrow".to_string()` line)
+///   ⇒ RED. Fix applied: count 0 ⇒ GREEN.
+/// * arm b — restore the deleted `static inline … gorget_string_borrow(` in
+///   `src/backend/c/runtime/runtime_string.c` ⇒ RED; deleted ⇒ GREEN.
+#[test]
+fn borrow_primitive_is_not_name_selected() {
+    // Arm a — no COMPILER-side site names the cap-copying primitive on a live
+    // line. Mirrors, exactly, the shell predicate this guard was measured with:
+    //   grep -rn "gorget_string_borrow" src/ \
+    //     | grep -v "gorget_string_borrow_view" \
+    //     | grep -v "^src/backend/c/runtime/" \
+    //     | grep -vE "^[^:]+:[0-9]+:[[:space:]]*//"
+    let mut spellers: Vec<String> = Vec::new();
+    visit("src", &mut |path| {
+        let p = path.to_string_lossy().replace('\\', "/");
+        // The runtime is the one place the symbol may be DISCUSSED (arm b pins
+        // that it is not DEFINED there).
+        if p.starts_with("src/backend/c/runtime/") {
+            return;
+        }
+        let Ok(text) = fs::read_to_string(path) else {
+            return;
+        };
+        for (i, line) in text.lines().enumerate() {
+            if !line.contains("gorget_string_borrow") {
+                continue;
+            }
+            if line.contains("gorget_string_borrow_view") {
+                continue;
+            }
+            // Whole-line comments are citations, not selections.
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            spellers.push(format!("{p}:{}: {}", i + 1, line.trim()));
+        }
+    });
+    assert!(
+        spellers.is_empty(),
+        "the cap-copying borrow primitive `gorget_string_borrow` is named on a \
+         LIVE compiler line:\n  {}\n\n\
+         That symbol no longer exists — it was deleted from the runtime with \
+         `todo/t0045` because it copies `cap` as-is, which double-frees as soon \
+         as the borrow lives in a drop-tracked value slot (a `for` element \
+         binding is one).\n\
+         Pick the borrow primitive from the TYPED axis instead: read \
+         `TypeMetadata::borrow_view_fn` (`None` ⇒ the type has no drop-safe \
+         view, so keep the deep clone). Selecting a runtime primitive by \
+         matching another symbol's NAME is Core #2 / devbook/24 rule 2 at the \
+         runtime-symbol boundary, and it is what shipped the double free.",
+        spellers.join("\n  "),
+    );
+
+    // Arm b — and the footgun stays deleted, so no future site can find it.
+    let runtime = fs::read_to_string("src/backend/c/runtime/runtime_string.c")
+        .expect("src/backend/c/runtime/runtime_string.c must exist");
+    let redefined: Vec<&str> = runtime
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .filter(|l| l.contains("gorget_string_borrow(") && !l.contains("gorget_string_borrow_view"))
+        .collect();
+    assert!(
+        redefined.is_empty(),
+        "`gorget_string_borrow` was re-introduced into the runtime:\n  {}\n\n\
+         It was deleted deliberately (`todo/t0045`): it is a shallow copy that \
+         keeps `cap`, so the borrow claims ownership of a buffer it does not \
+         own. `gorget_string_borrow_view` (cap forced to 0) is the only borrow \
+         primitive — it is drop-safe in a value slot because the runtime free \
+         is cap-driven.",
+        redefined.join("\n  "),
+    );
+}
+
 /// Ratchet (the LIR-rewrite fence — the partially-fenceable blind spot): the
 /// count of view-producer callee MENTIONS in `src/lir/**/*.rs` must not grow.
 ///

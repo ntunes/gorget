@@ -161,8 +161,12 @@ pub enum Instruction {
         index: Operand,
         /// How the element flows out of the collection. Typed view of
         /// [`ReadMode`] (Phase D5 / `docs/devbook/13-ownership-in-ir.md`):
-        /// * `Borrow` — zero-copy view (e.g. `gorget_string_borrow`),
-        ///   used by for-loop iteration over string-typed elements.
+        /// * `Borrow` — zero-copy DROP-SAFE view (for `String`,
+        ///   `gorget_string_borrow_view`, cap forced to 0), used by for-loop
+        ///   iteration over string-typed elements. The primitive is chosen
+        ///   from the type's `TypeMetadata::borrow_view_fn`, never by
+        ///   name-matching a runtime symbol; a type with no drop-safe view
+        ///   keeps the deep clone.
         /// * `Clone` — deep clone via the element type's clone fn
         ///   (the default). Used everywhere else.
         /// Other variants (`Copy`, `Move`) are reserved; the LIR

@@ -236,21 +236,20 @@ static inline GorgetString gorget_string_copy_cow(const GorgetString* src) {
     return str_alloc_copy((const char*)src->data, src->len, __gorget_current_alloc);
 }
 
-// Borrow: shallow struct copy. The caller promises not to drop the borrow;
-// the compiler emits no free for Ref locals. If a borrow escapes to storage
-// the compiler materializes (clones) it at the ownership boundary.
-static inline GorgetString gorget_string_borrow(const GorgetString* src) {
-    return *src;
-}
-
 // Borrow as a TRUE view — shallow struct copy with cap FORCED to 0 so the
 // result is drop-safe (gorget_string_free no-ops cap=0) even when stored in a
 // drop-tracked VALUE slot that shares the source's heap buffer. Used by the
 // lazy loop-carried element borrow: `s` holds this view until the
 // flag-guarded in-place materialize deep-clones it (cap>0) on the first
-// mutating use. Distinct from gorget_string_borrow (which copies cap as-is —
-// fine for a Ref local the compiler never frees, but a double-free when the
-// borrow lives in a freed value slot).
+// mutating use.
+//
+// This is the ONLY borrow primitive. A cap-copying variant
+// (`gorget_string_borrow`, `return *src;`) used to live here and was picked by
+// name-matching the clone symbol in the LIR lowering; it is fine for a Ref
+// local the compiler never frees, but a DOUBLE FREE the moment the borrow
+// lives in a drop-tracked value slot — which is exactly what a for-loop
+// element binding is. It was deleted with that lowering (`todo/t0045`), and
+// `tests/lints.rs::borrow_primitive_is_not_name_selected` keeps it deleted.
 static inline GorgetString gorget_string_borrow_view(const GorgetString* src) {
     if (src->len == 0) return GORGET_EMPTY_STR;
     return (Str){ .data = src->data, .cap = 0, .len = src->len, .alloc = NULL };

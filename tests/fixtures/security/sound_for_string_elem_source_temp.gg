@@ -1,0 +1,32 @@
+# SOUND — the EXPRESSION-TEMP cell of the iterable's source-provenance axis.
+#
+# `v.reversed()` returns an unnamed temp, so the iterable carries no AST-derived
+# collection identity: `iter_source_coll` is `None` and the tag falls back to
+# `Local(iter_local)`. That is the third and last cell of the three-valued axis
+# (`Some(Local)` / `Some(FieldPath)` / `None`); the sibling fixture
+# `sound_for_string_elem_source_fieldpath.gg` covers the second.
+#
+# ⚠ The fallback is NOT a no-op that happens to coincide with the plain-local
+# derivation — the iterable temp is a FRESH local with its own `LocalId`, and
+# root resolution follows only `BorrowOrigin::Alias`, which nothing sets on it.
+# This cell has to be exercised, not reasoned about.
+#
+# Two loops, as in the field-path sibling: the rebind loop pins the view half
+# (RED at HEAD), the escape loop reads the tag.
+#
+# Expected stdout is REVERSED (`bb` then `aa`) — `reversed()` is the iterable.
+#
+# PINS the plain-array `set_collection_ref` tag on a `None`-provenance source.
+# RED-verified against the pre-fix compiler: rc 134 double free; under a revert
+# of that tag alone: rc 101 (`UntrackedSourceConsumed`).
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("aa")
+    v.push("bb")
+    for s in v.reversed():
+        s = "zz"
+    Vector[String] out = Vector[String]()
+    for s in v.reversed():
+        out.push(s)
+    for s in out:
+        print(s)

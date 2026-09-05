@@ -8,10 +8,25 @@
 #
 # INTENDED (asserted below): 11 / 12 / 13. `for x in &v` binds each element as a
 # mutable borrow, which is the whole point of the sigil (D31 full-strict: `&`
-# means the write goes through). The resource-element twins of this shape
-# already write through — `cow_for_amp_resource_elem_writethrough.gg` — so this
-# is the by-value half of the same rule, matching the by-value `&`-arg class in
-# `sound_amp_byvalue_place_writethrough.gg`.
+# means the write goes through).
+#
+# ⚠ CORRECTION — THIS HEADER USED TO CLAIM "the resource-element twins of this
+# shape already write through", citing
+# `cow_for_amp_resource_elem_writethrough.gg`. THAT IS NOT A TWIN. That fixture
+# writes a FIELD through the element place (`x.v = x.v + 100`), which is a
+# different mechanism; this one REBINDS THE WHOLE BINDING (`x = x + 10`).
+# Measured on a controlled pair — same type, same `&`, same loop — the field
+# write reaches the collection (`101`) and the whole-binding rebind does not
+# (`1`). ⇒ THE DISCRIMINATOR IS THE MUTATION SHAPE, NOT THE ELEMENT TYPE, and
+# the whole-binding rebind writes through at NO element type: `int` here,
+# `Vector[int]`, struct and `String` alike. So this is not "the by-value half
+# of a half-shipped rule" — it is a class with no working precedent in the
+# tree, filed as `todo/t1404`.
+#
+# ⊕ `todo/t0045` (the `String` cell of this same rebind shape) fixed only the
+# MEMORY-SAFETY half: `String` used to double-free here and now behaves like
+# `int` — accepted, memory-safe, write silently lost. It did NOT move this
+# fixture in either direction, which was measured, not assumed.
 #
 # ORACLE: out of ggdef's phase-0 subset ("`for &`/`for !` iteration is
 # Increment B2"), so this row is pinned against the RULE, not against a third

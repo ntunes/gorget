@@ -1376,7 +1376,7 @@ Iterates over a collection or an integer range (`0..n`, `1..=n` — see §7.10).
 
 | Form                               | Meaning                              |
 |------------------------------------|--------------------------------------|
-| `for x in coll`                     | Immutable borrow (collection intact) |
+| `for x in coll`                     | Mutable private copy (collection intact) |
 | `for x in &coll`                    | Mutable borrow (modify in-place)     |
 | `for x in ^coll`                    | Move (consumes collection)           |
 
@@ -2926,7 +2926,7 @@ Entry entry2 = v.get(i).unwrap()  # also a borrow
 Entry owned = v.get(i).unwrap().clone()  # Entry — owned copy (explicit)
 ```
 
-**Bare for-loop iteration creates a read-only borrow** (`for x in &coll` grants write-through to the elements — see §9.1). Mutating the collection *structurally* during iteration is a compile error under either spelling:
+**Bare for-loop iteration binds a mutable private copy** — writing to the loop variable is accepted, and it changes the binding, not the collection. This holds at every element type: `int`, `String` and every other heap element type alike behave the same way, so `for s in names: s = "zz"` leaves `names` untouched and runs clean. (`for x in &coll` grants write-through to the elements — see §9.1.) Mutating the collection *structurally* during iteration is a compile error under either spelling:
 
 ```gorget
 for item in items:

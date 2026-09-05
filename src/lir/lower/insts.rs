@@ -1842,8 +1842,33 @@ impl<'a> FuncLowering<'a> {
             // Borrow mode: zero-copy view instead of clone for strings.
             // ReadMode::Borrow at this site == legacy `borrow: true`.
             let is_borrow = matches!(read, crate::ir::instructions::ReadMode::Borrow);
-            let actual_fn = if is_borrow && clone_fn_name == "gorget_string_clone_to_owned" {
-                "gorget_string_borrow".to_string()
+            // The borrow primitive is chosen from the TYPED axis
+            // `TypeMetadata::borrow_view_fn` -- "this type's runtime can
+            // represent a DROP-SAFE view" -- not from a compare against the
+            // clone fn's runtime SYMBOL (devbook/24 rule 2; AGENTS.md Core #2).
+            // `None` means the type has no drop-safe view, so the read stays a
+            // deep clone rather than silently aliasing.
+            //
+            // It must be the DROP-SAFE view (`gorget_string_borrow_view`,
+            // cap forced to 0), not the raw alias `gorget_string_borrow`
+            // (cap copied as-is) that this site used to name -- that primitive
+            // was DELETED from the runtime with this fix, and
+            // `tests/lints.rs::borrow_primitive_is_not_name_selected` keeps
+            // both the symbol and this name-match from coming back.
+            // The destination here is a String VALUE slot,
+            // and `lower_assign` emits an INSTRUCTION-LEVEL pre-rebind drop off
+            // `type_registry.needs_drop(type_id)` -- which reads the TYPE, not
+            // the slot's ownership -- so `for s in coll: s = v` freed the
+            // collection's own buffer (`todo/t0045`). The runtime's comment on
+            // `gorget_string_borrow_view` names this exact case.
+            let actual_fn = if is_borrow {
+                match self.gir_types
+                    .get_type_def(elem_type_name)
+                    .and_then(|td| td.metadata.borrow_view_fn.clone())
+                {
+                    Some(view_fn) => view_fn,
+                    None => clone_fn_name,
+                }
             } else {
                 clone_fn_name
             };

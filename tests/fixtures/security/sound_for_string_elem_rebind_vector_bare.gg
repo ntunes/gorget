@@ -1,0 +1,29 @@
+# SOUND — rebinding a `String` element inside a BARE `for s in v` loop is a
+# MUTABLE PRIVATE COPY: the collection is untouched and the program runs clean.
+#
+# Ratified semantics (docs/define-gorget/decisions.md, 2026-08-18): the bare
+# `for x in coll` binding is a MUTABLE PRIVATE COPY, not a read-only borrow —
+# writing to it is ACCEPTED, the collection stays intact, and consequence (a)
+# is that `String` (and every heap element type) behaves like `int`: private
+# copy, no crash. This fixture is that consequence for `Vector[String]`.
+#
+# WAS: `gg check` clean, then `free(): double free detected in tcache 2`,
+# SIGABRT (rc 134) on BOTH backends. The LIR lowering picked the String borrow
+# primitive by NAME-MATCHING a runtime symbol (`clone_fn_name ==
+# "gorget_string_clone_to_owned"` -> `gorget_string_borrow`) and got the
+# CAP-COPYING alias, so the element slot claimed ownership of the collection's
+# buffer; `lower_assign`'s pre-rebind drop then freed it, and the collection
+# freed it again. Fixed by reading the typed `TypeMetadata::borrow_view_fn`
+# axis, which answers the drop-safe cap=0 view (`todo/t0045`).
+#
+# PINS the `insts.rs` view half of the fix. RED-verified against the pre-fix
+# compiler: rc 134 double free; and under a revert of that half alone,
+# ASan reports `double-free` (rc 99).
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("aa")
+    v.push("bb")
+    for s in v:
+        s = "zz"
+    for s in v:
+        print(s)

@@ -1411,12 +1411,44 @@ value is coming to rest in a slot that must OWN — is it a view?"*. A producer
 can be fully hooked on the first axis and still hand a dangling view to a
 bind, because the hook fires at the mutation and the bind happened earlier.
 
-So every view producer also stamps `LocalOwnership::View` on its result,
-at the producer, in the same lowering that creates it: the `returns_view`
-method dispatch and the index/slice place-arm in `lower_index_access`, and
-the `for c in s:` element in `lower_for_string`. The tag is what the read
-side's Branch E consults to clone at an ownership boundary, and what
-`views_of_source` walks to sever the alias when the base reallocates.
+So every view producer also stamps an ownership tag on its result, at the
+producer, in the same lowering that creates it. The tag is what the read
+side's Branch E consults to clone at an ownership boundary, and what the
+sever walk follows when the base reallocates.
+
+**Which tag is not a style choice — it is keyed on the SOURCE KIND, because
+the two tags select different sever-walkers.**
+
+| producer's source | tag | sever walker | materialize |
+|---|---|---|---|
+| a **string** local | `View{RuntimeView(local)}` | `views_of_source` | `cow_materialize_view` |
+| a **collection** local | `Borrowed{CollectionElement(cid)}` | `collection_ref_source` | `cow_before_mutation` **Case 3** |
+
+`RuntimeView` names *the string local whose buffer this aliases*. Stamping it
+on an element read would name the **collection** local in that slot — a
+different kind of thing — and the string-source walker would then look for
+aliases of a buffer that is not a string buffer. `CollectionElement` names
+*the collection this is an element of*, which is what Case 3 (“local is a
+collection with refs into it”) walks.
+
+The producers stamping `View{RuntimeView}`: the `returns_view` method
+dispatch, the index/slice place-arm in `lower_index_access`, and the
+`for c in s:` codepoint element in `lower_for_string`. The producers stamping
+`Borrowed{CollectionElement}`: the struct/enum element bind in
+`bind_for_vector_element`, the VarDecl loop-carried borrow in
+`emit_lazy_loopcarried_borrow`, and — the same shape, one arm per for-loop
+form — the **`String` element bind in `lower_for_array_with` and
+`lower_for_enumerate`**, whose read mints `gorget_string_borrow_view`.
+
+**Both axes are exercised for that last producer, and by different
+fixtures — the coverage is not one argument used twice.** The
+*ownership-boundary* axis is pinned by the escape shapes
+(`tests/fixtures/security/sound_for_string_elem_push_escape_plain.gg` and its
+`.enumerate()` sibling): the element comes to rest in a slot that must own,
+and dropping the tag makes the consume-site validator refuse the program
+outright rather than silently aliasing. The *sever-on-realloc* axis is Case 3
+itself — an element read whose collection is grown behind a call boundary
+during the loop.
 
 *Third-hand "the boundary clones own it" is not a covering argument, and
 saying so in a comment is how the gap survives.* The consuming positions

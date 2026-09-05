@@ -1,0 +1,14 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: bare-form for-loop element rebind over Vector[String] (todo/t0045)
+# expect:
+#   exit: 0
+#   stdout: "aa\nbb\n"
+#!end
+void main():
+    Vector[String] d = ["aa", "bb"]
+    for s in d:
+        s = "zz"
+    print(d.get(0).unwrap())
+    print(d.get(1).unwrap())

@@ -1,0 +1,24 @@
+# SOUND + LEAK-FREE — the `.enumerate()` SIBLING of
+# `sound_for_string_elem_selfappend_plain.gg`.
+#
+# `lower_for_enumerate` carried its own copy of the String drop carve-out
+# ("String borrows: don't register for drops"), so the class had exactly two
+# write sites and Core #11 wants one fixture per sibling. This is the only
+# fixture in the set that can see the enumerate drop registration: reverting
+# that hunk alone leaves EVERY other row green.
+#
+# ⚠ THE INSTRUMENT IS `security_safe_no_leak` (`detect_leaks=1`), for the same
+# reason as the plain sibling — the failure mode is a leak, and a
+# `detect_leaks=0` run cannot see it.
+#
+# PINS the `.enumerate()` drop registration. RED-verified against the pre-fix
+# compiler: rc 134 double free; and under a revert of that registration alone:
+# `LeakSanitizer: 8 byte(s) leaked in 2 allocation(s)`, rc 99.
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("aa")
+    v.push("bb")
+    for i, s in v.enumerate():
+        s = s + "!"
+    for s in v:
+        print(s)
