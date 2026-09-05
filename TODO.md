@@ -22,10 +22,40 @@
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
 | **L** | **`t1410`** — ⛔ **THE WRAPPING OPERATORS LOWER TO UB ON THE C LANE**, and `lib/std/hash.gg`'s `FxHasher` is `*% 31 +%` at **four** sites ⇒ **every `@derive(Hashable)` executes it.** LLVM is CORRECT, so the lanes differ in **DEFINED-NESS** (Core #8). 🔵 **SCOUT LAUNCHED 2026-09-05** — opened as a TRACK, not deferred. | `t1438`–`t1447` |
 | **J** | **`t1407`** — `Vector.fill`. ✅ **J2 MEASURED: SHIP THE HYBRID** (23/23 clean both backends, **n** allocs, **no scratch buffer at all**) → 🔵 **pass 1 on the rebuilt design. Streak 0/3.** ⛔ **`v3`, the prescribed fallback, IS ITSELF DEFECTIVE.** | `t1422`–`t1427` |
-| **E** | **`t0953`** — ✅ SCOUTED → 🔵 **brief-review pass 1**, brief `/tmp/brief_E_v1.md`. **Streak 0/3.** ⛔⛔ **THE LEAK IS LOAD-BEARING — the filed fix turns it into a UAF + double-free.** Ships the **provably-safe subset**; blocking half filed `t1349`. **84 of 293 rows carry the frame, 3 cite it** *(my 93/301/17 were LINE counts incl. comment prose)*. | `t1350`–`t1358` |
+| **E** | **`t0953`** — ✅ **pass 1: DESIGN SOUND** (blocking measurement independently reproduced) → 🔵 **pass 2 confirming. Streak 0/3.** ⛔ **2 BLOCKING ON MY CLAIMS: the census was a SELECTION and its headline row was FALSE** (retracted `0a59a0081`). | `t1350`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ⛔ E's PASS 1 — **THE DESIGN IS SOUND AND INDEPENDENTLY REPRODUCED; MY *CLAIMS* WERE THE PROBLEM**
+
+⭐ **The reviewer re-ran the refusal at pristine HEAD: `iter_map_after_filter` goes from FULLY CLEAN to
+heap-use-after-free, `linked_list` from an 8 B leak to attempting double-free — under a patch that is variant C
+plus ONE LINE.** ⭐ **And variant C is not "3 of N" — I undersold it.** It is **3 of the 4 call sites of
+`wrap_closure_call_args`** plus the correct no-op at **both** `VoidElem` sites — a **grep-total** set, with the
+one exclusion excluded *because draining there is measured memory corruption.* **Core #8 cuts AGAINST the full fix.**
+- ⛔⛔ **BLOCKING 1 — I FOLDED A SELECTION AS A TOTAL CENSUS, AND ITS HEADLINE ROW WAS FALSE.** The walk covered
+  **2250 of 5383** fixture files; **2733 were never walked** (`closure_identity/`, `d53_unique_lock/`,
+  `single_owner_subplace/`, `liveness/`, `security/`). Re-run over the excluded set, the *"0 of 2612, a real
+  coverage hole"* cell **FIRES** — at a **live, `run_gg`-asserted fixture** leaking **96 B / 4 allocs**.
+  ⭐ **THE INSTRUMENT WAS NEVER BLIND — THE WALK WAS SHORT.** **Retracted in `t0953` at the coverage claim's own
+  scope (`0a59a0081`); the cell and mechanism are untouched.** *(SIX-Q #3, and R49's own named lesson repeating.)*
+- ⛔ **BLOCKING 2 — THREE OF SIX PROPOSED FIXTURES LEAK UNDER THE FIX, WITH NO STATED PLACEMENT.** The allowlist
+  is explicit that a genuinely **NEW INFLOW** row is an **OWNER ASK**, and the sweep walks **uncommitted**
+  top-level files ⇒ **shipping as written REDS THE ROUND-CLOSE GATE and manufactures an unplanned owner ask.**
+  Fix: the two that pin OPEN items go to `known_gaps/` (out of corpus, costs nothing); **the third dissolves.**
+- ⭐ **N1 — THE GUARD IS STRONGER THAN THE BRIEF ADVERTISED, AND MY REVERT ROW NAMED THE WRONG INSTRUMENT.**
+  Flipping the ownership variant **fails to COMPILE**, and suppressing that it **panics the compiler on an
+  existing live fixture** — **no ASan row involved.** The pin is **rustc + `debug_assert!`**, and the proposed
+  new fixture is **unnecessary**.
+- ⛔ **N3 — Core #4's ARM-COUNT LINT IS MISSING, AND IT IS THE EXACT CLASS BEING FIXED.** `#[must_use]` catches a
+  **caller** forgetting to drain; **nothing catches a FOURTH ARM forgetting `minted.push`.**
+- ⚠⚠ **N5 COULD RESCOPE THE TRACK.** `t1349`'s filed mechanism is incomplete (the **source** predicate also
+  rejects the closure, so widening the destination alone would not fix it) — and **`AGENTS.md` already says
+  plain-call `Callable` params *"are simply borrowed"***, so **cell B may be LESS gated on an unratified rule
+  than the filing asserts.** If it is not gated, the full fix may be shippable. **Pass 2 must resolve it.**
+- ⚠ **A THIRD RECORD CLAIMS RETIREMENT ON `t0953`** (`CORPUS_MANIFEST.txt`'s `closure_identity OUT` row) — under
+  variant C it does **not** retire. **The DONE.md enumeration is THREE, not two.**
 
 ### ✅✅ K IS INTEGRATED — **AND THE ROTTED-ANCHOR RULE PROVED ITSELF ON ITS OWN CORRECTION**
 
