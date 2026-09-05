@@ -21,11 +21,43 @@
 | **K** | **`t1385`** — the SEED HALF. **EXECUTOR RETURNED** (`0730960f3`+`34096bb9c`) → 🔵 **output-review**. ⭐ **It found a THIRD instance of the red-on-arrival trap, and measured the briefed timeout protection NOT TO EXIST** (filed `t1433`). | `t1434`–`t1437` (`t1433` spent) |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
 | **L** | **`t1410`** — ⛔ **THE WRAPPING OPERATORS LOWER TO UB ON THE C LANE**, and `lib/std/hash.gg`'s `FxHasher` is `*% 31 +%` at **four** sites ⇒ **every `@derive(Hashable)` executes it.** LLVM is CORRECT, so the lanes differ in **DEFINED-NESS** (Core #8). 🔵 **SCOUT LAUNCHED 2026-09-05** — opened as a TRACK, not deferred. | `t1438`–`t1447` |
-| **J** | **`t1407`** — `Vector.fill`, **TWO defects**. 🔵 **RE-SCOUT (J2) measuring the HYBRID.** **Streak 0/3.** ⛔ **Pass 1 killed `v2b`: its snapshot is the `save/restore` READ-SITE shape, and its `memset` has NO possible RED row.** | `t1421`–`t1427` (`t1420` spent) |
+| **J** | **`t1407`** — `Vector.fill`. ✅ **J2 MEASURED: SHIP THE HYBRID** (23/23 clean both backends, **n** allocs, **no scratch buffer at all**) → 🔵 **pass 1 on the rebuilt design. Streak 0/3.** ⛔ **`v3`, the prescribed fallback, IS ITSELF DEFECTIVE.** | `t1422`–`t1427` |
 | **E** | **`t0953`** — ✅ SCOUTED → 🔵 **brief-review pass 1**, brief `/tmp/brief_E_v1.md`. **Streak 0/3.** ⛔⛔ **THE LEAK IS LOAD-BEARING — the filed fix turns it into a UAF + double-free.** Ships the **provably-safe subset**; blocking half filed `t1349`. **84 of 293 rows carry the frame, 3 cite it** *(my 93/301/17 were LINE counts incl. comment prose)*. | `t1350`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ✅✅ J's RE-SCOUT: **SHIP THE HYBRID — AND THE FALLBACK MY OWN REVIEW PRESCRIBED IS DEFECTIVE**
+
+Patch `/tmp/scoutJ2_abbd894b5fb3c7064/recover_scoutJ2_04_FINAL_hybrid_loopsplit.patch`.
+- ⭐⭐ **STRICTLY BETTER ON EVERY AXIS MEASURED, not marginally.** 24-cell matrix: HEAD **11 memory findings +
+  4 silent-wrong** → hybrid **23/23 CLEAN**, LLVM identical; allocations **n** (v3: n+1), and **n−1** for a
+  static literal because the last slot keeps the immortal view. ⭐ **THE HYBRID INTRODUCES NO SCRATCH BUFFER AT
+  ALL, so `t1419`'s hazard class is STRUCTURALLY ABSENT rather than mitigated.** Bootstrap converged.
+- ⛔⛔ **`v3` — THE FALLBACK PASS 1 PRESCRIBED — STILL DOUBLE-FREES.** Its snapshot clone is guarded
+  `if (arr->elem_clone)`, so with no clone hook the snapshot is an **unowned copy**: every slot aliases it and
+  the `n == 0` arm frees the caller's payload. **Measured. A "safe fallback" that was never safe.**
+- ⛔ **AND ADDENDUM 1's BLOCKING 1 WAS WRONG ON ITS FACTS — MINE.** I wrote *"nothing says 'deliberately'"*;
+  `methods.rs:2795-2800` **says it verbatim.** ⭐ **But its PREMISE is false** — it justifies the exclusion with
+  *"`fill` clones its value per element internally"*, **which it never did.** ⇒ **Core #14 rot, not an
+  unexplained absence — and the conclusion is STRONGER, because the recorded design is the one the ratified
+  2026-04-11 runtime contract rejects.** ⊕ **The same false premise is DUPLICATED in the self-host.**
+- ⭐ **AND THE `t0872` `known_gaps` CELL IS NOT OWED** — the brief's own discriminator was *"a temp at a
+  NON-CONSUMING position"*, so **making the position consuming REMOVES it**: those cells are **clean under the
+  hybrid and leak under v3.** *(Do not ship a `known_gaps` entry for a gap the fix closes.)*
+- ⛔ **THE SELF-HOST LANE IS MANDATORY, AND IT IS THE ONE REAL RISK: THE RUNTIME IS SHARED.** A runtime-only
+  change without the lowering mirror **IS** the measured "revert the lowering half" column — **8 double-frees,
+  3 UAFs, and a NEW defect where the `n == 0` arm frees a live source it does not own.** ⊕ The mirror adds a
+  **`CkDeque` fill row THAT DID NOT EXIST**, and the existing symmetry lint **cannot see it: its roots are Rust
+  dirs and its predicate is `strip_prefix("Vector__")` — SIX-Q #4, no subject.**
+- ⭐ **SUCCESSION-PLAN DATUM: THE SELF-HOST ALREADY FIXED THE Core #2 SMELL.** Rust name-matches
+  (`consuming_positions_by_name`) where the check-time gate for the same axis is typed; the self-host carries a
+  typed `owning_arg_positions` column **and names the Rust list as the lagging reference.**
+- ⛔ **`Vector[Box[T]]` DOES NOT COMPILE FOR ANY `T`** (`redefinition of 'Box__T__drop'`) — filed **`t1421`
+  (HIGH)**. It is the only surface route to `elem_drop && !elem_clone`, so **no fixture exercises that runtime
+  configuration at all.**
+- ⛔ **`t1407` WIDENED: any HEAP-VIEW source prints blanks** (`s[a:b]`, `v[i]`, `.get()`), **ASan-invisible**.
+  The two self-alias cells were merely the loud ones.
 
 ### ⚠ INTEGRATION HAZARD RECORDED — **K's BRANCH PREDATES H's DELETION OF `t1387`**
 
