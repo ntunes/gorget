@@ -8,7 +8,7 @@
 | track | scope | ids |
 |---|---|---|
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
-| **A2** | ⭐⭐ **HEADLINE RAISED: `newtype N(String)` — NON-generic — IS SILENTLY WRONG ON C AT HEAD.** ✅✅✅✅ design confirmed 4× and **MEASURED END-TO-END** → 🟢 **EXECUTOR LAUNCHED.** Three edits; `t1374`+`t1375`+`t0104` all close. | `t1378`–`t1382` |
+| **A2** | ⭐ **`newtype N(String)` silently wrong on C at HEAD.** Committed `426f617b5`; output-review **2 BLOCKING, both text+fixture, no re-review owed** → 🔄 **executor resumed for the follow-up.** | `t1378`–`t1382` |
 | **B** | ⚖⚖ **HELD — OWNER ASK (the capture cell). Pass 1: NOT SIGN OFF, 5 BLOCKING.** The brief was STALE BY CONSTRUCTION (my revert landed 3 min after it) and **overrode a ratified `decisions.md` clause with an agent's derivation.** Streak 0/3. Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⛔⛔ **BLOCKED A FOURTH TIME — `R`'s SUBJECT IS A SELECTION ON A THIRD AXIS. RECOMMEND CLOSE FOR R50: `R` NEEDS ITS OWN SCOUT.** Spine survives and measures STRONGER each pass. | `t1332`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
@@ -46,6 +46,33 @@ claims folded into this handover long ago. **Everything else stayed.**
 `target_v3` compilers E's executor is RED-verifying against), `gg_fuzz_lint_target` (5.3 GB — a live
 `CARGO_TARGET_DIR` for a lint; deleting it forces a full rebuild on every `cargo test --test lints`),
 `execE_01db12fc`, and `rev2_a2e446ab`. **None of them is prunable until its track integrates.**
+
+### ⛔ A2's OUTPUT-REVIEW — **A PARITY CLAIM THAT DOES NOT REGENERATE, AND A CELL FIXED BY THE TRACK THAT NOTHING PINS**
+
+**Design sound, code right; both blockers grow scope and neither resets the streak.** Returned to the executor.
+- ⛔⛔ **"PARITY WITH STRUCT" IS MEASURABLY FALSE IN THREE DURABLE ARTIFACTS** (a `known_gaps` fixture header,
+  `t1373` and `DONE.md`). The struct's read shape is `s.b.get()`; **the newtype equivalent `n.0.get()` DOES NOT
+  BUILD on either backend, at PRE or POST — it never prints anything**, so it cannot print *"the same garbage"*.
+  ⭐ **The TRUE statement is STRONGER:** `newtype N(Box[int])` is **unchanged** under `.get()` and **repaired**
+  under `*`-deref, so **it is the struct control's INVARIANCE that attributes the residual to `t1373`.**
+- ⛔⛔ **THE `Box[T]` PAYLOAD CELL IS FIXED BY THE TRACK, PINNED BY NOTHING, AND IN NO NAMED OMISSION.** Measured
+  both backends: `print(*(n.0))` is **rc 1 at PRE** and **prints `9` at POST**. ⇒ **a cell going from "compiles
+  on NEITHER backend" to "correct on BOTH" has no fixture — while the artifacts affirmatively claim parity.**
+  ⚠ **And `Box` is the payload the track OPENED on**; every shipped newtype fixture is String/Vector/Option/
+  Callable.
+- ✅ **`t1378` CONFIRMED INDEPENDENTLY** — one write to `module.fn_param_abis`, **four readers all BEFORE it**,
+  and `devbook/25` lists `CallByValueArg` among the classes the walker *"actually emits"* **two clauses before
+  correctly flagging a DIFFERENT variant as never-constructed.** **A Tier-2a guard class structurally
+  unreachable since it was written.**
+- ✅ **THE CENSUS DELTA IS ZERO, REFUTING MY BRIEF'S +1** — un-ignoring the graduated fixture REMOVES a roster
+  row, and the new live tests are not census rows.
+- ⭐ **THE `t1376`/`t1377` COLLISION IS ADJUDICATED IN THE EXECUTOR'S FAVOUR** — its files are strictly stronger
+  (`t1377` is **measured, not inferred**: `newtype Set(String)` builds rc 0 and the emitted C conflates the user
+  type with the runtime map). **My two files get dropped at integration**, with one clause and one grep folded in.
+- ⛔ **AND A DEFECT IN MY OWN REVIEW PROMPT: the commit range I gave swept in TWO OF MY HANDOVER COMMITS**, so
+  the reviewer had to isolate the artifact itself. ⊕ **Second time this round I briefed before filing.**
+- ⚠ **THREE MORE GLOB-AS-TOTAL USES NAMED** — `ls tests/fixtures/*.gg` is **2250** where recursive is **5389**,
+  and the census's own "2253" is **the three subdirectories alone**, not the set its comment names.
 
 ### ⚠⚠ MA-5 RE-MEASURED FOR THE THREE PENDING INTEGRATIONS — **MY EARLIER PREDICTION NAMED THE WRONG FILE**
 
