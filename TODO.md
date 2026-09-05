@@ -19,7 +19,7 @@
 | ✅✅ **G** | **INTEGRATED** (9 commits, `2d647456c`). 819 cells + 3 guards + 4 filings. Gates on the merged tree: lib 1187, lints **237**, gen-check, known-gaps census — all green. | `t1384`–`t1392` |
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED. ⭐ **BOTH GATES NOW CLEAR** — F1r INTEGRATED, and **R1 IS RULED (Line A, signature-only, 'for now')**. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** ⏸ **QUEUED BEHIND THE SAFETY SET** per the owner's fixed order, not blocked. | `t1362`–`t1371` |
-| ✅ **H** | **`t1387`** — the map's KEY has no drop discipline. **SIGNED OFF 3/3, 🟢 EXECUTOR LAUNCHED 2026-09-05.** | `t1409`–`t1417` |
+| ✅ **H** | **`t1387`** — the map's KEY has no drop discipline. **EXECUTOR RETURNED 2026-09-05** (`c7cec057b`+`84f0b2b1b`) → 🔵 **output-review**. ⭐ **It found FOUR defects in my brief and filed `t1409`/`t1410`/`t1411`.** | `t1409`–`t1417` |
 | **K** | **`t1385`** — the SEED HALF. ✅ **pass 2 SIGNED OFF the design** → 🔵 **pass 3**. **Streak 1/3.** ⭐ **H + K ARE THE ONLY TWO THINGS BETWEEN HERE AND A GREEN `--lanes all`.** | `t1432`–`t1437` |
 | **J** | **`t1407`** — `Vector.fill`, **TWO defects**. 🔵 **RE-SCOUT (J2) measuring the HYBRID.** **Streak 0/3.** ⛔ **Pass 1 killed `v2b`: its snapshot is the `save/restore` READ-SITE shape, and its `memset` has NO possible RED row.** | `t1421`–`t1427` (`t1420` spent) |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**. 🔵 **SCOUT LAUNCHED 2026-09-05.** ⭐ **K's triage handed it a TOTAL enumeration for free: 21 of 22 sanitizer rows are exactly this frame**, + 13 already-baselined siblings. **93 of 301 allowlist rows carry `closure_env_alloc`; only 17 cite the item.** | `t1349`–`t1358` |
@@ -2463,6 +2463,11 @@ until both are discharged.** ⭐ **Both are actionable: `t1385` clears by comman
 NO accept path and must be FIXED.**
 
 ### 🚀 TRACK H OPENED — `t1387`, THE LEAK THAT CANNOT BE ACCEPTED
+
+⛔⛔ **THE LOOP-HEAD MECHANISM BELOW IS FALSIFIED — IT IS THE OPENING HYPOTHESIS, KEPT FOR THE RECORD ONLY.** The real
+write site is **`gorget_map_put`'s duplicate-key path, which ran `val_drop` six times and `key_drop` ZERO times**
+(the executor's fire count: `total_frees` 60 → 200034, `live_bytes` 399948 → 0 — **one `free()` per duplicate
+put**). **`DONE.md` carries the corrected mechanism.** Everything below this line predates that measurement.
 
 **Scout launched, base `be3eb61b6`.** `ex_char_frequency.gg` leaks **2 bytes** via
 `gorget_string_clone_to_owned` ← `str_alloc_copy` ← `main` — a clone made at a **`for ch in s:` LOOP HEAD** and
