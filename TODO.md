@@ -16,7 +16,7 @@
 | **D0′** | ✅ **RULED.** `v4` written — ruling + 5 blocking + 6 errata folded; 🔵 **pass 1 on v4.** Streak 0/3. ⚠ **The SHADOW-REJECT is the bigger, least-tested half.** | `t1394`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| ✅ **G** | **`7f68508b0` SIGNED OFF (0 blocking, 5 errata).** 🟢 executor folding errata, then integrate. ⭐ **My `Recursive` correction verified by MECHANISM, not just measurement.** | `t1384`–`t1392` |
+| **G** | **`fa4a76d92`** — 5 errata folded; 🔵 **final confirming pass.** ⭐⭐ **Fixing the ENUMERATION AXIS surfaced a HIGH memory-safety bug (`t1388`) and a dead flag in the generator.** | `t1384`–`t1392` |
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
@@ -1314,6 +1314,39 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ⭐⭐⭐ FIXING THE **ENUMERATION AXIS** PAID FOR ITSELF TWICE — A HIGH MEMORY-SAFETY BUG AND A DEAD FLAG
+
+**`fa4a76d92`.** Re-presenting four `DropStrategy` values as **six `(CopySemantics, DropStrategy)` pairs** was
+supposed to be bookkeeping. **It was not.**
+
+🚨 **`(Trivial, Trivial)` WAS NOT MERELY UNCOVERED — IT SEGFAULTS. FILED `t1388`, HIGH.**
+**`Shared[int] b = a` — A BARE BIND, NO CALL — SEGVs ON BOTH BACKENDS** (`AddressSanitizer: SEGV in
+Shared__int64_t__get`); **delete the bind and the same program prints `7` at rc 0.**
+⭐ **DISCRIMINATED, not merged:** `t0108` is scoped to the **PARAM/boundary** model and **all three of its repros
+are CALLS**, so an executor scoped to `needs_param_drop` **would fix those and leave this one segfaulting** —
+and this repro is **smaller than every repro `t0108` carries**. `t0620` is the **leak** direction; this is the
+**double-drop** direction. ⇒ ***a row that four values could not express turned out to be a memory-safety
+defect. That is the enumeration argument, paid in full.***
+
+⊕ **`(Resource, None)` IS LEFT OPEN, NOT CLOSED** — a second live place exists but has **no observable
+payload**. ⭐ **That is precisely the third disposition four `DropStrategy` values had no room for.**
+
+⭐⭐ **AND THE RED-VERIFICATION FOUND A DEAD FLAG IN THE GENERATOR — CORE #13 PAYING OUT DIRECTLY.**
+`--force-expectation-change` **mutated the owned columns in memory and NEVER WROTE THE FILE**, because the write
+was gated on `new_rows` alone — **and on an already-landed topic there are none.** ⇒ ***the flag silently did
+nothing and exited 0.*** **Found ONLY because the executor ran the break it was told to run.** *"Without running
+the break I'd have shipped a flag that does nothing."*
+
+⊕ **E5b — THE `489` WAS DEFINITION-DEPENDENT AND I QUOTED IT AS A FACT.** Regenerating it gives **317** by a
+minimal edit script and **489** index-by-index — **neither wrong.** ⇒ ***"N rows moved" without the definition
+is not regenerable*** (Core #15a). The comment now carries **both measures, the command, and the claim that
+actually does the work: the SET IS IDENTICAL, only the ORDER changed.**
+
+⚠ **A PROCESS FAILURE THE EXECUTOR RECORDED RATHER THAN HID:** it ran `git checkout --` to undo a RED-verify
+probe and **discarded its own uncommitted work**, because the file held both the probe and real edits. Re-applied
+from context, then **checkpointed BEFORE redoing the probe.** ⇒ **the confirming pass is told to verify the final
+state is COMPLETE item-by-item — that is exactly the scenario where something goes missing silently.**
 
 ### ✅ G SIGNED OFF — AND THE FOLD THAT FIXED A FALSE ENUMERATION MADE A **FINER FALSE ENUMERATION ON THE SAME AXIS**
 
