@@ -18,7 +18,7 @@
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED. ⭐ **BOTH GATES NOW CLEAR** — F1r INTEGRATED, and **R1 IS RULED (Line A, signature-only, 'for now')**. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** ⏸ **QUEUED BEHIND THE SAFETY SET** per the owner's fixed order, not blocked. | `t1362`–`t1371` |
 | ✅✅ **H** | **`t1387` INTEGRATED** 2026-09-05 (`8573b12ca`+`0c137cbe0`). Output-review SIGNED OFF; 3 errata fixed at `6b4c8a544`. ⭐ **Its executor found FOUR defects in my brief; the review found a fifth in ITS filing.** | `t1409`–`t1417` |
-| **K** | **`t1385`** — the SEED HALF. **EXECUTOR RETURNED** (`0730960f3`+`34096bb9c`) → 🔵 **output-review**. ⭐ **It found a THIRD instance of the red-on-arrival trap, and measured the briefed timeout protection NOT TO EXIST** (filed `t1433`). | `t1434`–`t1437` (`t1433` spent) |
+| ✅✅ **K** | **`t1385` INTEGRATED** 2026-09-05 (`b5c5eaabc`+`1c2513e45`); errata `9d7e9f71b`. Output-review **SIGNED OFF**. ⭐ **93 cell-lanes now gated; both allowlists ratchet BOTH ways.** | `t1434`–`t1437` |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
 | **L** | **`t1410`** — ⛔ **THE WRAPPING OPERATORS LOWER TO UB ON THE C LANE**, and `lib/std/hash.gg`'s `FxHasher` is `*% 31 +%` at **four** sites ⇒ **every `@derive(Hashable)` executes it.** LLVM is CORRECT, so the lanes differ in **DEFINED-NESS** (Core #8). 🔵 **SCOUT LAUNCHED 2026-09-05** — opened as a TRACK, not deferred. | `t1438`–`t1447` |
 | **J** | **`t1407`** — `Vector.fill`. ✅ **J2 MEASURED: SHIP THE HYBRID** (23/23 clean both backends, **n** allocs, **no scratch buffer at all**) → 🔵 **pass 1 on the rebuilt design. Streak 0/3.** ⛔ **`v3`, the prescribed fallback, IS ITSELF DEFECTIVE.** | `t1422`–`t1427` |
@@ -26,6 +26,31 @@
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ✅✅ K IS INTEGRATED — **AND THE ROTTED-ANCHOR RULE PROVED ITSELF ON ITS OWN CORRECTION**
+
+`b5c5eaabc` + `1c2513e45`; errata `9d7e9f71b`. Merged-tree gates, every rc off the BARE command: `--test lints`
+**237 rc 0** · `--lib` **1187 rc 0** · `todo_index_is_current` rc 0 · **`--lanes all --topic "07 Dict"` rc 0 on
+the MERGED tree** — the check the review specifically asked for, since H flips ASan verdicts and K seeded 22
+`asan=SANITIZE-FAIL`. **H flipped none of them.**
+- ⭐⭐ **THE FOUR RED-DEMO ANCHORS IN `DONE.md` HAD ALREADY ROTTED INSIDE THEIR OWN COMMIT** (off by 6). ⭐ **And
+  in my merged tree they moved AGAIN, to three different lines.** *That is the argument for Core #15a's "cite
+  the grep, not the number" — demonstrated twice on one artifact in one day.* Replaced with regenerating greps.
+- ⛔ **`t1428`'s HEADLINE FIGURE DID NOT REGENERATE FROM THE CELL IT CITES.** It claimed 28 B / 6 allocations,
+  measured on a **six-element scout variant**; the committed cell holds **three** elements and measures **13 B /
+  3**. **The mechanism and the n−1 scaling stand — only the number was wrong, and it was wrong because it named
+  a cell it had never been measured on.** Corrected in place with its regenerating command.
+- ⭐ **THE REVIEW TESTED THE Core #8 ARGUMENT RATHER THAN INHERITING IT, AND FOUND A BETTER ONE:** with an empty
+  column the scorer's `if base:` **never runs at all**, so a ggdef `WRONG` there is **nothing**; seeded, the same
+  event is a DRIFT. ⇒ **there is no configuration in which the empty column reports MORE than the seeded one.**
+- ⛔ **THREE ATOMS ARE PINNED BY NOTHING** — the hint correction, the doc-prose rewrites, the four unit-message
+  fixes. Expected (they are prose), **but recorded in `DONE.md` now rather than only in a commit body**, which
+  is the least durable place a named omission can sit.
+- ⚠ **A THIRD, MILDER VARIANT OF THE REGENERATOR FAMILY:** `t1433`'s census command scopes to the **whole
+  corpus** while the claim is about **the 93**. Not a grep counting its own subject — the superset entails the
+  claim — but it does not ISOLATE its subject.
+- ⚠ **STALENESS RISK, NOT A GATE RISK:** if Track E lands anything reaching `__gorget_closure_env_alloc`, up to
+  **22 of K's asan seeds go `WORKS`** — which folds as PROGRESS and **never reds.**
 
 ### ✅✅ J's RE-SCOUT: **SHIP THE HYBRID — AND THE FALLBACK MY OWN REVIEW PRESCRIBED IS DEFECTIVE**
 
