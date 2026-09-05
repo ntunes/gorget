@@ -15,8 +15,8 @@
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D01** | ⛔ **MERGED — ONE OWNERSHIP INVARIANT, ONE COMMIT.** 🔵 brief-review pass 1. **Streak 0/3.** | `t1339`–`t1348` + `t1393`–`t1402` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| **G** | passes 1–3 BLOCKED → 3 folds → 🔵 pass 4. **Streak 0/3.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
-| **F1r** | passes 1+2 BLOCKED → 2 folds → 🔵 pass 3. **Streak 0/3.** ⭐ **Design re-measured end-to-end TWICE; 207 `cow_*` fixtures PRE vs POST all SAME.** | `t1363`–`t1372` |
+| **G** | passes 1–4 BLOCKED → 4 folds → 🔵 pass 5. **Streak 0/3.** ⭐ **Every remaining item now has a MEASURED prototype.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
+| ✅ **F1r** | **3 passes, design signed off, 🟢 EXECUTOR LAUNCHED 2026-09-05.** `t1362`+`t0750` as ONE fix. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
@@ -449,6 +449,39 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ⭐⭐ TWO TRACKS INDEPENDENTLY FOUND THE SAME UNNAMED ZERO-SLACK GATE — IT IS SYSTEMIC
+
+**C2's pass 7 and F1r's pass 3, on different fixtures, the same day, both found `GGDEF_SKIP_CEILING`** — a
+**SHRINK-ONLY** ratchet in `spec/ggdef/tests/spec_conformance_ggdef.rs`, **at ZERO SLACK** (measured:
+`total=243 · MATCH=225 · MISMATCH=0 · GGDEF-SKIP=18`, **exact**). ⛔ **`--test spec_conformance` NEVER REACHES
+IT — it is a different crate and a different cargo target.** An **out-of-subset** seed becomes a `GGDEF-SKIP`
+and **reds `cargo test -p ggdef`**, a round-close battery target, **with a message that MISDIAGNOSES the
+cause** and says *"Never raise it to make a new seed fit."*
+⇒ ⭐ **THAT CEILING IS THE ENFORCER FOR "partition per cell with ggdef" — the out-of-subset half is a
+`tests/fixtures/*.gg` because the gate SAYS SO, not as a style choice.** ⊕ **And `#!spectest` frontmatter is
+MANDATORY** — generate it with `ggdef gen`, never by hand.
+⛔ **`cargo test -p ggdef` IS NOW IN BOTH TRACKS' GATE LISTS.** ⚠ **Two independent discoveries in one day means
+the next track will hit it too.**
+
+### 🟢 F1r's EXECUTOR IS LAUNCHED — AND ITS LANDING BOUNDARY HELD THE REMAINING RISK
+
+**The design was signed off and re-measured end-to-end twice**; pass 3 added **nothing** against it. All four
+blockers were **brief completeness at the landing boundary**:
+- ⛔ **The constant set is SIX, across TWO CRATES and THREE TEST TARGETS** — the brief knew four.
+- ⛔ **Graduating `t0750` moves TWO runtime-diff constants**, because **ggdef ADJUDICATES that fixture and
+  agrees with POST** ⇒ it lands in ADJ-MATCH and `GGDEF_ADJUDICATED_FLOOR` bumps too.
+- ⛔ **"Name the omission" was not available: the firing comprehension cell EXISTS and pass 3 BUILT IT** (25
+  lines, `PRE a-comp 1 1 3 → POST 1 4 3`). **5 of the 8 loop-hook sites had fire count ZERO without it.**
+- ⛔ **The gate list omitted BOTH gates Core #7 names** — bootstrap and sanitize sweep — **on a change that
+  hoists materializations into loop pre-headers**, i.e. new heap allocations and drop obligations, *"precisely
+  the axis ASan adjudicates and ggdef is structurally blind to."*
+⭐⭐ **AND THE CORE #8 ANSWER THE BRIEF NEVER SUPPLIED: THE ORACLE FOR THE OUT-OF-SUBSET HALF IS THE SELF-HOST.**
+ggdef reaches neither user-`Iterator` `for` loops nor `on error`; **the self-host adjudicates both and agrees
+with POST.** ⇒ **no cell rests on C/LLVM agreement alone.**
+⊕ **`t1225`-style erratum caught: my *"established precedent at FOUR sites"* is off by ~32× — it is the
+DOMINANT house pattern.** **The disposition survives for a different reason**, and **the number is dropped** —
+which is the brief's own closing lesson applied to the brief.
 
 ### 🟢 C2's EXECUTOR IS LAUNCHED — SEVEN PASSES, AND THE LAST ONE SIGNED OFF THE DELIVERABLE
 
