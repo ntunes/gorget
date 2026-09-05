@@ -60,6 +60,8 @@ GG_BACKEND=llvm cargo test --test integration --release dict_user_key_hashable
 
 **Backends should be at parity**; a regression on one and not the other means the change touched a backend-specific path.
 
+⛔ **THE WORKING TREE IS A GATE *INPUT*, NOT JUST A BUILD INPUT — DO NOT EDIT `src/`, `lib/`, `compiler/` OR DRIVER SOURCES WHILE A BOOTSTRAP OR SWEEP IS IN FLIGHT, COMMENTS INCLUDED.** `driver.gg` bakes every `src/backend/c/runtime/*.c` in via `embed_file`, so a one-word comment edit mid-run makes two generations embed different bytes and **convergence slips exactly one generation** — indistinguishable from a real ratchet breach. ⚠ *"Convergence stage is deterministic, so load cannot move it"* is TRUE about load and **FALSE as a licence**: determinism holds only if the INPUTS hold still. Re-run at the same commit before concluding anything. (Measured R50: same commit, stage-3 then stage-2.)
+
 **Timeouts** (override on loaded hosts): `GG_BUILD_TIMEOUT_SECS` (outer `gg build`; default 120/180; bump to 600 on multi-agent boxes), `GG_TEST_TIMEOUT_SECS` (per-test binary; default 30; bump for `stress_*` / p2p / arena). ⚠ **The BOOTSTRAP stages obey NEITHER — they read `GG_STAGE1_TIMEOUT_SECS` (default 600), and its load auto-adjust samples `/proc/loadavg` ONCE at test start, so it cannot protect a 20-min stage on a box that loads up later. Set it to 1800 on a multi-agent box; a stage timeout is NOT a regression until compared at HEAD.**
 
 ## Documentation
