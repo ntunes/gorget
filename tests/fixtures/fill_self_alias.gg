@@ -1,0 +1,46 @@
+# `v.fill(n, v[i])` — the element source ALIASES the receiver's own storage
+# (todo/t1407).
+#
+# This is the second, independent defect in `gorget_array_fill`, and a per-slot
+# clone alone does NOT close it: `val_src` pointed INTO `arr->data`, so the
+# function's own drop loop freed it and its own `ensure_capacity` realloc moved
+# it out from under the memcpy. At small `n` that printed EMPTY STRINGS with rc
+# 0 and no sanitizer finding (silent wrong output); at `n >= 4096` the realloc
+# made it a heap-use-after-free inside the fill's own memcpy.
+#
+# The fix closes it at the WRITE SITE: making the value a consuming position
+# means the compiler hands the runtime an OWNED temp, so `val_src` can never
+# point into the receiver's buffer.
+
+from std.collections import Vector
+
+String mk(String a, String b):
+    return a + b
+
+int main():
+    # self-alias, source slot is also overwritten
+    Vector[String] a = Vector[String]()
+    a.push(mk("ab", "cd"))
+    a.fill(3, a[0])
+    print(a.len())
+    for s in a:
+        print(s)
+
+    # self-alias reading a slot other than 0, with a live sibling element
+    Vector[String] b = Vector[String]()
+    b.push(mk("ab", "cd"))
+    b.push(mk("ef", "gh"))
+    b.fill(3, b[1])
+    print(b.len())
+    for s in b:
+        print(s)
+
+    # self-alias FORCING A REALLOC: n is far past the current capacity, so
+    # `ensure_capacity` frees the buffer `val_src` points into.
+    Vector[String] c = Vector[String]()
+    c.push(mk("mn", "op"))
+    c.fill(4096, c[0])
+    print(c.len())
+    print(c[0])
+    print(c[4095])
+    return 0

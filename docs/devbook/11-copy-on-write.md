@@ -1840,13 +1840,40 @@ the stored key is already an independent owned copy — while still re-cloning
 the **value**, which the core has just `memcpy`'d from borrowed storage.
 
 **A writer that stores one source into more than one slot.** `gorget_array_fill`
-copies a single source value into N slots. One `memcpy` plus one hook call
-yields **one** owned buffer aliased N times, so the array's free releases it N
-times. The discriminator is duplication, not hook presence: `set` and `insert`
-place one value in one slot and are correct without a hook. This one is an open
-defect — `Vector[String].fill` double-frees today (`todo/t1407`, repro
-`tests/fixtures/known_gaps/t1407_array_fill_droppable_elem_double_free.gg`) — and the
-clause it violates is *a writer that duplicates a source must clone per slot.*
+copies a single source value into N slots — `Vector.fill` and `Deque.fill` are
+two spellings of it, since `DEQUE.methods = VECTOR.methods`. One `memcpy` plus
+one hook call would yield **one** owned buffer aliased N times, so the array's
+free would release it N times. The discriminator is duplication, not hook
+presence: `set` and `insert` place one value in one slot and are correct without
+a hook.
+
+The clause is *a writer that duplicates a source owes N independent values*, and
+it is split across the two layers rather than paid entirely in the runtime.
+`fill`'s value is a **consuming position**, so the call site materialises an
+owned value exactly as `push` does — clone if the source is live, move if it is
+dead — and the runtime then gives **one** slot that value and clones the other
+N−1 through `elem_clone`. N allocations in total, which is what an expert would
+hand-write; a runtime that cloned all N would allocate N+1 and free one of them
+immediately.
+
+Splitting it this way is what makes the duplicating writer safe rather than
+merely correct. A runtime that clones per slot still receives whatever pointer
+the call site handed it, and for `v.fill(n, v[0])` that pointer aims **into the
+receiver's own buffer** — which this function's own drop loop frees and its own
+`ensure_capacity` reallocates away before the copy loop reads it. Owning the
+value at the call site removes the aliasing possibility at the source instead of
+defending against it downstream, and it is the same division of labour the rest
+of the runtime already follows: *no internal deep-clone; the compiler owns
+independence at the call site.*
+
+`fill` is the first **one-to-many** consuming function, so it narrows that
+sentence rather than obeying its letter: the N−1 internal clones are duplication
+the call site cannot express, and only the *first* copy's independence is a
+call-site obligation. The one-to-one writers are unaffected. Two element
+configurations sit outside the split — a droppable element with no clone hook
+cannot be duplicated at all (the runtime asserts rather than miscompile), and
+its mirror would leak the clone-loop payloads — but neither is reachable from
+surface syntax today.
 
 `gorget_string_clone_to_owned` / `gorget_string_clone` is the unconditional
 deep-clone used by the compiler-emitted boundary clones; the `*_materialize`

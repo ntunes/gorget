@@ -4738,10 +4738,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # mutator (push→0, set/insert/put/fill/get_or_put→last).
                     # Deriving the hint POSITION from the arg count — not from
                     # `owning_arg_positions` — DECOUPLES the HINT from the
-                    # CONSUME: `fill`/`get_or_put` carry an EMPTY
-                    # `owning_arg_positions` (they clone/borrow the value per
-                    # element, so consuming would double-free a live source) yet
-                    # still get the hint. Byte-identical for the existing owning
+                    # CONSUME: `get_or_put` carries an EMPTY
+                    # `owning_arg_positions` (it BORROWS the default, which is
+                    # inserted only on a miss, so consuming would double-free a
+                    # live source) yet still gets the hint. `fill` is BOTH — it
+                    # takes the hint AND owns idx 1, because
+                    # `gorget_array_fill` gives ONE slot the caller's value and
+                    # clones the other n-1. Byte-identical for the existing owning
                     # rows (their last owning position IS the last arg). Mirrors
                     # Rust gg's split of the value-arg hint from the consume set.
                     if filled_margs.len() > 0:

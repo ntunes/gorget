@@ -1,0 +1,48 @@
+# `Vector[T].fill(n, x)` with an OWNED, HEAP-FORCED element (todo/t1407).
+#
+# `fill`'s value is a CONSUMING position: the call site materialises an owned
+# value (clone-if-live / move-if-dead) and `gorget_array_fill` gives ONE slot
+# that value and clones the other n-1. Before the fix the runtime memcpy'd one
+# source into all n slots with no per-slot clone, so every slot aliased one
+# payload and `gorget_array_free` released it n times.
+#
+# Three source shapes on one axis — the compiler picks a different action for
+# each and all three must yield n independent values:
+#   * expression TEMP        -> move (owning by construction, last use)
+#   * named local, DEAD      -> move
+#   * named local, LIVE past -> clone (the source is printed afterwards)
+#
+# The element is heap-forced via `mk()`: a string LITERAL is a `cap == 0` view
+# whose free is a no-op, which is why the pre-existing `.fill` fixtures were
+# green by accident.
+
+from std.collections import Vector
+
+String mk(String a, String b):
+    return a + b
+
+int main():
+    # temp source: owning by construction, dead at the call
+    Vector[String] a = Vector[String]()
+    a.fill(3, mk("ab", "cd"))
+    print(a.len())
+    for s in a:
+        print(s)
+
+    # named local, dead at the call: move
+    Vector[String] b = Vector[String]()
+    String dead = mk("ef", "gh")
+    b.fill(3, dead)
+    print(b.len())
+    for s in b:
+        print(s)
+
+    # named local, LIVE past the call: clone, and the source survives intact
+    Vector[String] c = Vector[String]()
+    String live = mk("ij", "kl")
+    c.fill(3, live)
+    print(c.len())
+    for s in c:
+        print(s)
+    print(live)
+    return 0

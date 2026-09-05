@@ -1,0 +1,63 @@
+# `fill`'s COUNT partition: {0}, {1}, {>= 2} (todo/t1407).
+#
+# The runtime's clone loop runs `i + 1 < n` and the last slot INHERITS the
+# caller's owned value, so `n` is partitioned into exactly three cases and the
+# boundaries are where the fix turns:
+#   * n == 0 — nothing takes ownership, so the runtime must DROP the value it
+#     was handed, or it leaks. Byte-identical stdout either way: this row is
+#     pinned only under a leak checker.
+#   * n == 1 — the clone loop does not execute at all and slot 0 IS the last
+#     slot. At n == 1 the CALL-SITE clone is the sole protection.
+#   * n >= 2 — clone loop plus inherited last slot. n == 2 and n == 3 are
+#     structurally identical, so {0, 1, 3, 4096} is the total partition and
+#     n == 2 adds no information.
+# Refill (drop-then-fill) also lives here: the second fill's drop loop must
+# release the first fill's n independent payloads.
+
+from std.collections import Vector
+
+struct S:
+    String name
+
+String mk(String a, String b):
+    return a + b
+
+int main():
+    # n == 0 with a LIVE source: the vector empties, the source is untouched,
+    # and the value the runtime was handed must not leak.
+    Vector[String] a = Vector[String]()
+    a.push(mk("xy", "zw"))
+    String keep = mk("ab", "cd")
+    a.fill(0, keep)
+    print(a.len())
+    print(keep)
+
+    # n == 0 with an inline-ctor TEMP: nothing takes ownership of it either.
+    Vector[S] b = Vector[S]()
+    b.fill(0, S(mk("ef", "gh")))
+    print(b.len())
+
+    # n == 1, source dead: the single slot inherits, zero runtime clones.
+    Vector[String] c = Vector[String]()
+    c.fill(1, mk("ij", "kl"))
+    print(c.len())
+    print(c[0])
+
+    # n == 1, source ALIASES the receiver: the call-site clone is the only
+    # thing standing between this and a freed read.
+    Vector[String] d = Vector[String]()
+    d.push(mk("mn", "op"))
+    d.push(mk("qr", "st"))
+    d.fill(1, d[1])
+    print(d.len())
+    print(d[0])
+
+    # refill: the second fill drops three independent payloads, then installs
+    # two more.
+    Vector[String] e = Vector[String]()
+    e.fill(3, mk("uv", "wx"))
+    e.fill(2, mk("yz", "ab"))
+    print(e.len())
+    for s in e:
+        print(s)
+    return 0

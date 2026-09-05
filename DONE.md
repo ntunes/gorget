@@ -1,3 +1,101 @@
+- [2026-09-05] **`t1407` CLOSED — `fill` DUPLICATED ONE HEAP PAYLOAD INTO N SLOTS AND HANDED THE RUNTIME A
+  POINTER INTO THE BUFFER IT WAS ABOUT TO REALLOC; BOTH DEFECTS CLOSE AT THE WRITE SITE (R50 Track J).**
+  `Vector[String].fill(3, mk(…))` double-freed on both backends with `gg check` clean, and
+  `v.fill(3, v[0])` printed **three empty lines** — rc 0, no sanitizer finding — because `val_src` pointed
+  into `arr->data`, which the function's own drop loop freed and its own `ensure_capacity` moved. At
+  `n >= 4096` the same shape was a heap-UAF inside `fill`'s own memcpy. **Any heap-view source**
+  (`s[a:b]`, `v[i]`, `.get()`) printed blanks, so the silent-wrong class was much wider than the two
+  self-alias cells the item was filed with.
+  ⭐ **THE FIX IS THE HYBRID, AND IT IS A LAYERING FIX, NOT A RUNTIME PATCH.** `fill`'s value became a
+  **consuming position**, so the compiler materialises an owned value once at the call site
+  (clone-if-live / move-if-dead) and the runtime gives ONE slot that value and clones the other n−1.
+  **n allocations, which is what an expert writes** — a per-slot-clone-only runtime fix costs n+1 and, far
+  worse, leaves the aliasing UAF completely alive, because a runtime that clones per slot still receives
+  whatever pointer the call site handed it. Core #1: the read-site fix (snapshot + static scratch) was
+  designed, measured, and **killed** — its scratch buffer turned out to be an **LSan ROOT that silently
+  suppressed a pre-existing `Vector[Box[Speaker]]` leak, 3 runs of 3** (`t1419`); the hybrid introduces no
+  scratch at all, so that hazard class is **structurally absent rather than mitigated**.
+  ⛔ **THE SURFACE CLASS HAS TWO MEMBERS, AND THE FIRST WITNESS UNDERCOUNTED IT.** `DEQUE.methods =
+  VECTOR.methods`, so `Deque.fill` is the same runtime function under a second spelling and double-freed
+  identically; `grep -n 'name: "fill"'` returns one row, which is exactly why a method-table enumeration
+  missed it.
+  **THE ROTTED COMMENT WAS THE ROOT.** `methods.rs` justified excluding `fill` from the consume set with
+  *"`fill` clones its value per element internally"* — **it never did**. Core #14: an invariant-asserting
+  comment with no guard. **Six sites carried that false premise** (`methods.rs`, `resources.gg`,
+  `lower_expr.gg`, `tests/integration.rs`, `compiler/data/schema.gg`, `lower.gg`); all six corrected, and
+  the `lower_expr.gg` one **narrowed rather than deleted** — it covers `fill` and `get_or_put` jointly and
+  `get_or_put` genuinely still borrows its default.
+  **LANES (Core #9), RE-MEASURED ON THE SHIPPED FIXTURES, NOT INHERITED.** All 10 fixtures: C
+  `--sanitize` CLEAN, **LLVM `--sanitize --backend=llvm` CLEAN with byte-identical stdout**, and all 10
+  MATCH on the self-host lane. The self-host mirror is `resources.gg`:
+  `CkVector` fill `[]` → `[1]`, **plus a `CkDeque` fill row that did not exist at all** — and because the
+  hint and the ownership promotion come through ONE `_mut_decl` lookup, the missing row killed both, so
+  `Deque[Option[T]].fill(n, None)` was miscompiling to a bogus `Some(0)` on the self-host. ggdef needed no
+  change: `repeat_n` consumes and clones n−1 — **the oracle already was the hybrid**.
+  **FIXTURES: 10 top-level, all MATCH on the self-host lane the same round.** Placement was measured, not
+  assumed — every first-level fixture directory is `OUT` of the sanitize sweep, so **top-level is the only
+  automatic LSan gate**, and the eight droppable-element cells run through `assert_gg_sanitize_clean`
+  rather than `run_gg` because two of the partial reverts leak with **byte-identical stdout**. The
+  `known_gaps` repro **GRADUATED** (moved out, un-ignored, upgraded to the sanitizer assertion).
+  **NINE PARTIAL REVERTS, EIGHT PINNED, EACH ANCHORED BY LINE** — the over-clone revert has an
+  identically-spelled sibling nine lines down in the same function, the Core #13 trap, live. R2 clone-loop
+  → 8 DOUBLE_FREE · R3 over-clone → 7 rows LEAK with stdout unchanged in **all 8** · R4 inherited slot →
+  8 rows, uninitialised-poison read · R5 `n==0` arm → **uniquely** `fill_count_boundaries`, LSan-only ·
+  R6 POD branch → `fill_element_types` on **stdout** (a sanitizer-only harness is blind to it) · R7
+  lowering arm → 7 rows incl. the UAF · R8 `CkVector` → all 7 Vector rows on the SH lane, Deque rows
+  untouched · R9 `CkDeque` → `fill_deque_element` crashes AND `deque_fill_bare_none` prints
+  `false false false` against the oracle's `true true true`. R1 is unpinnable — see below.
+  **THE GUARD (Core #6).** `scripts/runtime_duplication_census.py` + `tests/runtime/DUPLICATING_STORES.txt`
+  + one lint: every loop store with a loop-invariant source and a loop-varying destination, declared with
+  a reason. It **enumerates the C source**, not the runtime-symbol registry — that registry cannot produce
+  `gorget_shared_array_set`'s string-emitted wrapper (`t1418`), and an enumerator that cannot produce a
+  row cannot adjudicate it. It is **brace-tracked**, **def-tracked** (hoisting the slot into a temp is the
+  actual shape of the defect), and **not keyed on the token `memcpy`**. Each row carries CLONED or RAW, so
+  deleting a per-slot clone does not remove a row — it **flips** one and reds the set. Verified three ways:
+  green at the fix, red at pristine HEAD, red with the clone call deleted.
+  **CONTRACT NARROWING, STATED.** `fill` is the first **one-to-many** consuming function, so it does not
+  satisfy the 2026-04-11 runtime contract's letter (`grep -n "no internal deep-clone" DONE.md`): the n−1
+  internal clones are duplication the call site cannot express, and only the first copy's independence is
+  a call-site obligation. `docs/devbook/11` rewritten accordingly — its *"a writer that duplicates a
+  source must clone per slot"* clause was **violated as worded** by the shipped fix.
+
+- [2026-09-05] ⚠ **NAMED OMISSIONS AND ONE BRIEF CORRECTION FROM `t1407`'s CLOSURE (R50 Track J).**
+  - **R1 — the runtime's `n > 1 && !elem_clone && elem_drop` abort is pinned by NOTHING, by construction.**
+    The configuration is unreachable from surface syntax (`Vector[Box[T]]` does not compile for any `T`,
+    `t1083`), so no fixture can turn RED when the guard is deleted and Core #12 is unsatisfiable for it.
+    It stays a runtime backstop rather than a check-time rejection precisely *because* it cannot be
+    pinned — a check-time rejection would be an unpinnable accept→reject. Its only evidence that it works
+    is the scout's line-anchored `elem_clone`-nulling probe.
+  - **The MIRROR cell `elem_clone != NULL && elem_drop == NULL` is uncovered** — the clone loop allocates
+    n−1 payloads nothing frees, a LEAK rather than a double-free. It had no durable home; it is now
+    written into `t1083`, the item that gates both cells, so whatever makes that type combination
+    compilable owes a fixture for BOTH directions.
+  - ⛔ **AND `t1421` WAS A DUPLICATE — FOLDED INTO `t1083` AND REMOVED.** The scout filed
+    `Vector[Box[T]]`-uncompilable as a new item whose mechanism read *"the monomorphizer emits the drop
+    glue for the unsubstituted type parameter `T`"*. **Measured false: both spellings are correctly
+    substituted** (`Box__int64_t__drop`, `Box__GorgetString__drop`); the collision is between the Box
+    type's own **by-VALUE** drop and the collection element-drop hook's **by-SLOT** one — which is
+    `t1083`, filed a day earlier. ⊕ **And that item's own discriminator was wrong too:** it said the
+    element type must ALSO be trait-equipped, but `Vector[Box[int]]` emits **zero** `VTable`/`_TraitObj`
+    references and collides identically, with the by-slot address taken by the ARRAY's `elem_drop` hook
+    rather than a vtable slot. ⇒ **the scope is every `Vector[Box[T]]`**, not a trait+collection corner,
+    and a fix unifying only the vtable path would leave it red. `t1083` now carries the corrected
+    mechanism plus a second, minimal repro that pins the wider scope.
+  - **`c12_literal` / `c16_literal_source_dies` are CONTROLS, not coverage** — a `cap == 0` static view
+    has no payload, so they are green at HEAD and after on both backends. They ship (as the literal rows
+    of `fill_view_source.gg`) to keep the immortal-view path exercised beside the heap-view rows it is so
+    easily confused with, and they pin nothing.
+  - ⛔ **CORRECTION TO THE BRIEF, MEASURED: "the LLVM lane is stdout-only, blind to the leak class" is
+    FALSE for this tree's LLVM lane.** That was true only of the scout's ad-hoc harness, which compiled
+    its LLVM cell dirs without `--sanitize` at all. Built the way the repo builds it —
+    `gg build --sanitize --backend=llvm` — the over-clone revert reports
+    `SUMMARY: AddressSanitizer: 15 byte(s) leaked in 3 allocation(s)` on `fill_owned_element.gg`,
+    identical to the C lane, while the fixed compiler is clean. The runtime is compiled by `cc` with the
+    ASan flags and only generated USER code goes through `llc` uninstrumented, so a defect inside
+    `gorget_array_fill` is on the instrumented side. The real LLVM-lane gap is the one already filed as
+    `t0727` (user-code faulting accesses), and it does not apply to this class. Recording the brief's
+    sentence as written would have put a false, coverage-understating fact into the permanent record.
+
 - [2026-09-05] ⚠ **NAMED OMISSIONS FROM R50 TRACK A2, recorded here because a brief dies at round close.**
   **(1) THE SELF-HOST LANE IS NOT PORTED, DELIBERATELY.** `todo/t0400` files `INewtype` as missing from the
   self-host's `resource_types` / `optionlike_resource` fixpoints, marked LATENT because *"every newtype

@@ -1,0 +1,73 @@
+# `fill` with a VIEW element source (todo/t1407).
+#
+# A heap view — `s[a:b]`, `v[i]`, `.get()` — is a non-owning window into
+# somebody else's buffer. Before the fix `fill` memcpy'd the view struct into
+# every slot and the array's drop released the borrowed payload, so any
+# heap-view source printed BLANK LINES with rc 0 and, on the `v[i]` spelling,
+# double-freed. Nothing was allocated twice on the slice path, so ASan said
+# nothing at all — this class is invisible to a sanitizer and visible only in
+# stdout.
+#
+# The `cap == 0` STATIC-literal rows are CONTROLS, not coverage: a literal has
+# no payload, `gorget_string_free` no-ops on it, and they are green before and
+# after. They are here so the immortal-view path stays exercised alongside the
+# heap-view rows it is so easily confused with.
+
+from std.collections import Vector
+
+String mk(String a, String b):
+    return a + b
+
+Vector[String] slice_source():
+    Vector[String] v = Vector[String]()
+    String src = mk("abcd", "efgh")
+    v.fill(3, src[1:5])
+    return v
+
+Vector[String] element_source():
+    Vector[String] src = Vector[String]()
+    src.push(mk("ab", "cd"))
+    Vector[String] out = Vector[String]()
+    out.fill(3, src[0])
+    return out
+
+void slice_source_dies(Vector[String] &v):
+    String src = mk("abcd", "efgh")
+    v.fill(3, src[1:5])
+
+void literal_source(Vector[String] &v):
+    v.fill(3, "abcd")
+
+int main():
+    # heap view from a slice, source outlives the fill inside the callee
+    Vector[String] a = slice_source()
+    print(a.len())
+    for s in a:
+        print(s)
+
+    # heap view from an element read of ANOTHER vector
+    Vector[String] b = element_source()
+    print(b.len())
+    for s in b:
+        print(s)
+
+    # heap view whose SOURCE BUFFER DIES when the callee returns
+    Vector[String] c = Vector[String]()
+    slice_source_dies(&c)
+    print(c.len())
+    for s in c:
+        print(s)
+
+    # CONTROL: static literal, cap == 0, no payload to alias
+    Vector[String] d = Vector[String]()
+    d.fill(3, "wxyz")
+    print(d.len())
+    for s in d:
+        print(s)
+
+    # CONTROL: static literal materialised in a callee whose frame is gone
+    Vector[String] e = Vector[String]()
+    literal_source(&e)
+    print(e.len())
+    print(e[2])
+    return 0

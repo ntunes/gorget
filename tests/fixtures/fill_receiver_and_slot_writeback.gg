@@ -1,0 +1,49 @@
+# `fill`'s RECEIVER spelling, and writing back over a filled slot (todo/t1407).
+#
+# Two things this pins that the plain `Vector[String]` cells do not:
+#
+# 1. The POSITION is the rule, not the receiver's spelling. `h.items.fill(...)`
+#    on a struct FIELD must own its value exactly as a bare local does.
+#
+# 2. The INHERITED slot. The runtime gives the LAST slot the caller's value and
+#    clones the earlier ones, so the last slot's payload has a different
+#    provenance from its siblings. Overwriting it afterwards must free exactly
+#    one payload — an over-clone (`i < n` instead of `i + 1 < n`) leaves the
+#    inherited value with no owner and leaks it with BYTE-IDENTICAL stdout, so
+#    this row is pinned only under a leak checker.
+
+from std.collections import Vector
+
+struct Holder:
+    Vector[String] items
+
+String mk(String a, String b):
+    return a + b
+
+int main():
+    # struct-field receiver
+    Holder h = Holder(Vector[String]())
+    h.items.fill(3, mk("ab", "cd"))
+    print(h.items.len())
+    for s in h.items:
+        print(s)
+
+    # overwrite the INHERITED last slot, with the source still live
+    Vector[String] a = Vector[String]()
+    String live = mk("ef", "gh")
+    a.fill(3, live)
+    a[2] = mk("ij", "kl")
+    print(a.len())
+    for s in a:
+        print(s)
+    print(live)
+
+    # overwrite both an inherited and a cloned slot, static-literal element
+    Vector[String] b = Vector[String]()
+    b.fill(3, "mnop")
+    b[2] = mk("qr", "st")
+    b[0] = mk("uv", "wx")
+    print(b.len())
+    for s in b:
+        print(s)
+    return 0

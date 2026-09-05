@@ -1065,8 +1065,9 @@ CollectionKind collection_kind_of(GirModule &gmod, String tname):
 # `collection_builtin_method(kind, mname).owning_arg_positions`.
 #
 # Reference: Rust's `consuming_positions`
-# (`src/ir/lowering/exprs/methods.rs:1850`) is name-keyed (push/add/… →
-# [0]; put/set/insert → [0,1]) and gated only by excluding GorgetString
+# (regenerate: `grep -n "consuming_positions_by_name"
+# src/ir/lowering/exprs/methods.rs`) is name-keyed (push/add/… → [0];
+# put/set/insert → [0,1]; fill → [last]) and gated only by excluding GorgetString
 # string-builders — Rust can be name-only because it consumes BOTH
 # put/set/insert positions and the index arg is a primitive (so
 # `ensure_owned_at_consuming_arg` is a no-op there). The self-host stays
@@ -1075,7 +1076,7 @@ CollectionKind collection_kind_of(GirModule &gmod, String tname):
 # vs (value) on a Set; the resolved kind is also the safety boundary
 # against hijacking a user method that happens to share a name. Aligns
 # with the runtime by-pointer-into-storage args in lir_lower.gg's
-# `needs_ptr_arg` (gorget_array_push@1, _set@2, _insert@2,
+# `needs_ptr_arg` (gorget_array_push@1, _set@2, _insert@2, _fill@2,
 # gorget_map_put@1&2, gorget_set_add@1).
 
 # Typed-table accessors over STRING_BUILTIN_METHODS / COLLECTION_BUILTIN_METHODS

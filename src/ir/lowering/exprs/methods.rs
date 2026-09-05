@@ -2792,12 +2792,22 @@ pub(super) fn lower_method_call(
         // unifies. Mirrors the self-host `lower_expr.gg` owning-value
         // element-type hint (round-35 T3).
         //
-        // NOTE: this is a HINT ONLY. `fill`/`get_or_put` are deliberately NOT
-        // added to `consuming_positions_by_name` below — the hint-vs-consume
-        // separation is load-bearing: `fill` clones its value per element
-        // internally and `get_or_put` borrows the default, so consuming (clone +
-        // move-zero) the value here would double-free a live source
-        // (`fill(2, live_string)` / `get_or_put(k, live_default)`).
+        // NOTE: the hint is INDEPENDENT of the consume set. `get_or_put` is a
+        // hint-WITHOUT-consume position: it BORROWS the default (inserted only
+        // on a miss), so consuming it would double-free a live source
+        // (`get_or_put(k, live_default)`). `fill` is BOTH — it takes the hint
+        // AND consumes, see `consuming_positions_by_name` below.
+        //
+        // ⚠ This comment used to claim `fill` was hint-only because it "clones
+        // its value per element internally". It never did: `gorget_array_fill`
+        // was a bare `memcpy` of one source into n slots (n-way double-free),
+        // and the borrow it was handed at the call site was also freed by its
+        // own drop loop and moved by its own `ensure_capacity` realloc
+        // (`v.fill(n, v[0])` = heap-UAF / silent empty strings). Core #14: the
+        // invariant the comment asserted had no guard, so it rotted. The
+        // resolution is the ratified runtime contract — "no internal
+        // deep-clone. Compiler owns independence at the call site." — which is
+        // also ggdef's shape (`eval.rs` `repeat_n` consumes and clones n-1).
         let elem_type_hint = extract_elem_type_id_from_type_name(ctx, &type_name);
         // WHERE this method's value argument sits, and WHAT TYPE the receiver
         // holds in that slot — resolved TOGETHER, in one match, through the
@@ -2951,6 +2961,13 @@ pub(super) fn lower_method_call(
                     if lowered_method_args.len() >= 1 { p.push(0); }
                     if lowered_method_args.len() >= 2 { p.push(1); }
                     p
+                }
+                // `fill(n, v)` — only the VALUE slot (last arg) consumes; the
+                // COUNT is a scalar. `gorget_array_fill` gives ONE slot the
+                // caller's value and clones the other n-1, so the value
+                // position is a real ownership boundary, exactly like `push`.
+                "fill" if lowered_method_args.len() >= 2 => {
+                    vec![lowered_method_args.len() - 1]
                 }
                 _ => vec![],
             }

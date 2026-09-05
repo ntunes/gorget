@@ -198,7 +198,10 @@ struct RuntimeFn:
 #   - owning_arg_positions: the argument indices (0-based, non-receiver)
 #     that a collection mutator takes OWNERSHIP of. Per-(kind, method):
 #     Vector set/insert own only idx 1 (idx 0 is the index arg); Dict
-#     put/set own both 0 (key) and 1 (value); Set add owns idx 0.
+#     put/set own both 0 (key) and 1 (value); Set add owns idx 0;
+#     Vector/Deque fill owns idx 1 (idx 0 is the COUNT) — the runtime
+#     gives one slot the caller's value and clones the other n-1, so the
+#     value position is a real ownership boundary.
 #   - ret_kind: the builtin's return type category, for the lowerer's
 #     name-based return-type inference fall-through.
 #

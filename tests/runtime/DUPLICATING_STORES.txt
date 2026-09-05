@@ -1,0 +1,39 @@
+# DUPLICATING STORES IN THE C RUNTIME — the declared census.
+#
+# Every row is a store statement inside a loop whose SOURCE does not vary with
+# the loop while its DESTINATION does: one value written into many slots. The
+# enumerator is `scripts/runtime_duplication_census.py`, which reads the C
+# SOURCE (not the runtime-symbol registry, which cannot produce the
+# string-emitted wrappers and so could not adjudicate its own population).
+#
+# CATEGORY is the load-bearing column:
+#
+#   CLONED  the enclosing loop body calls an independence hook on what it stored
+#           (`elem_clone`, `*_materialize`, `*_clone_to_owned`, …), so each slot
+#           ends up owning its own payload.
+#   RAW     it does not. CORRECT whenever nothing OWNED is being duplicated —
+#           raw bytes into a fresh buffer, or an element type with no payload.
+#           A DEFECT when the element owns heap memory: N slots then alias one
+#           payload and the collection's free releases it N times (closed as todo/t1407; see DONE.md).
+#
+# The gate is set equality on (function, primitive, category). A per-slot clone
+# deleted does not remove a row, it FLIPS one CLONED → RAW — which is how this
+# census catches the class it was written for rather than green-lighting it.
+#
+# ⚠ LINE NUMBERS ARE NOT IN THE KEY, DELIBERATELY. They rot on every edit above
+# them, and a baseline that must be re-blessed for unrelated changes gets
+# re-blessed unread.
+#
+# FORMAT:  <function> TAB <primitive> TAB CLONED|RAW TAB <reason>
+#
+# Regenerate the full census (with locations) via:
+#   scripts/runtime_duplication_census.py
+# Gate:
+#   scripts/runtime_duplication_census.py --check
+
+gorget_array_fill	memcpy	CLONED	`Vector.fill` / `Deque.fill`, droppable-element branch. The last slot inherits the caller's OWNED value (the value position is a consuming position, so the call site materialised it) and every earlier slot is cloned through `elem_clone` — n independent payloads for n allocations. This is the row the fix closed as todo/t1407 (see DONE.md); if it ever reads RAW again, the per-slot clone was deleted.
+gorget_array_fill	memcpy	RAW	Same function, TRIVIAL-element branch (`elem_clone == NULL`: `Vector[int]`, `Vector[bool]`). A trivial element has no payload to alias, so a bare memcpy loop is correct — and it is kept branch-split precisely so the hot path (the self-host's liveness bitsets) pays no per-iteration cost.
+gorget_array_reverse	memcpy	RAW	Element SWAP through a scratch buffer: the "source" is the scratch holding the element just read out of the array, so nothing is duplicated — each payload still has exactly one owner when the loop ends.
+gorget_str_repeat	memcpy	RAW	Copies raw BYTES of the source string into a freshly allocated output buffer. The output owns its bytes outright; there is no element hook and no second owner of anything.
+gorget_str_pad_left	memcpy	RAW	As `gorget_str_repeat`: raw fill BYTES into a fresh buffer.
+gorget_str_pad_right	memcpy	RAW	As `gorget_str_repeat`: raw fill BYTES into a fresh buffer.

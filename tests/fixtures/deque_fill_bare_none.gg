@@ -1,0 +1,26 @@
+# `Deque[Option[T]].fill(n, None)` — the bare-`None` element-type HINT on the
+# DEQUE spelling (todo/t1407).
+#
+# Sibling of `fill_bare_none.gg`, which pins the same hint on `Vector`. The
+# self-host reads the hint and the ownership promotion through ONE lookup into
+# `COLLECTION_BUILTIN_METHODS`, and its `CkDeque` block had no `fill` row at
+# all — so the missing row killed BOTH: `Deque.fill` neither consumed its value
+# nor received the element-type hint, and a bare `None` lowered to an untagged
+# zero, i.e. a bogus `Some(0)`.
+#
+# Rust gg derives the hint kind-independently and is green here before and
+# after, so THIS CELL IS NOT A RUST-LANE PIN. It is a SELF-HOST-lane pin, and
+# the instrument is its membership in the auto-scanned `runtime_parity_corpus`:
+# the fixture must sit at the TOP LEVEL of `tests/fixtures/` for the self-host
+# to be held to it at all. That is the whole reason for its placement.
+
+from std.collections import Deque
+
+int main():
+    Deque[Option[int]] d = Deque[Option[int]]()
+    d.fill(3, None)
+    print(d.len())
+    print(d[0].is_none())
+    print(d[1].is_none())
+    print(d[2].is_none())
+    return 0

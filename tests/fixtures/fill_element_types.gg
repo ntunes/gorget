@@ -1,0 +1,80 @@
+# `fill` across the ELEMENT-TYPE axis (todo/t1407).
+#
+# The runtime splits on `elem_clone`: droppable elements take the clone loop,
+# trivial ones (`int`, `bool`) take a bare memcpy loop with no per-iteration
+# branch — byte-for-byte the pre-fix hot path, which is what keeps the
+# self-host's `Vector[bool]` liveness bitsets free. Both branches are exercised
+# here.
+#
+# The droppable rows cover the shapes whose payload is reached through a
+# DIFFERENT hook each time — a nested collection's buffer, a map's table, a
+# struct field, a vector of vectors of strings — because "one payload aliased n
+# times" looks different in each and a fix that only reaches strings would pass
+# a string-only fixture.
+
+from std.collections import Vector, Dict
+
+struct S:
+    String name
+
+String mk(String a, String b):
+    return a + b
+
+int main():
+    # nested collection element: the inner buffer is the aliased payload
+    Vector[Vector[int]] a = Vector[Vector[int]]()
+    Vector[int] inner = Vector[int]()
+    inner.push(7)
+    inner.push(8)
+    a.fill(3, inner)
+    print(a.len())
+    for iv in a:
+        print(iv[0])
+        print(iv[1])
+
+    # map element: the hash table itself is the aliased payload
+    Vector[Dict[String, int]] b = Vector[Dict[String, int]]()
+    Dict[String, int] d = Dict[String, int]()
+    d.put(mk("ke", "y1"), 11)
+    b.fill(3, d)
+    print(b.len())
+    for m in b:
+        print(m.len())
+
+    # vector-of-vectors-of-strings: two levels of payload under one element
+    Vector[Vector[String]] c = Vector[Vector[String]]()
+    Vector[String] sinner = Vector[String]()
+    sinner.push(mk("ab", "cd"))
+    c.fill(3, sinner)
+    print(c.len())
+    for iv in c:
+        print(iv[0])
+
+    # struct element from an inline ctor TEMP
+    Vector[S] e = Vector[S]()
+    e.fill(3, S(mk("ef", "gh")))
+    print(e.len())
+    for s in e:
+        print(s.name)
+
+    # struct element from a NAMED local
+    Vector[S] f = Vector[S]()
+    S named = S(mk("ij", "kl"))
+    f.fill(3, named)
+    print(f.len())
+    for s in f:
+        print(s.name)
+
+    # TRIVIAL element: the no-clone branch, which must stay a bare memcpy loop
+    Vector[int] g = Vector[int]()
+    g.fill(3, 7)
+    print(g.len())
+    print(g[0])
+    print(g[2])
+
+    Vector[bool] h = Vector[bool]()
+    h.fill(4, true)
+    print(h.len())
+    print(h[0])
+    print(h[3])
+    return 0

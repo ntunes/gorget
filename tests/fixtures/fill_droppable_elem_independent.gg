@@ -1,0 +1,21 @@
+# `Vector[String].fill(n, x)` gives every slot its OWN payload.
+#
+# GRADUATED from `known_gaps/` (todo/t1407). `gorget_array_fill` used to memcpy
+# ONE source value into n slots and never clone per slot, so all n aliased a
+# single heap payload and `gorget_array_free` released it n times. The
+# discriminator was DUPLICATION, not a missing hook: `.set` and `.insert` place
+# one value in one slot and were measured clean; `fill` is the only writer that
+# duplicates.
+#
+# The element must be HEAP-FORCED. A string LITERAL is a `cap == 0` view whose
+# free is a no-op, which is why three pre-existing `.fill` fixtures sat in the
+# supposedly-empty cell and stayed green. `mk()` builds the String at runtime so
+# it is an owned (`cap > 0`) buffer.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.fill(3, mk("ab", "cd"))
+    print(f"len={v.len()} first={v[0]} last={v[2]}")

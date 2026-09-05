@@ -5892,22 +5892,62 @@ fn wrapping_mul_signed_overflow_ub() {
     );
 }
 
-/// KNOWN GAP todo/t1407 — `Vector[String].fill(n, x)` double-frees.
-/// `gorget_array_fill` memcpys one source into N slots with no per-slot
-/// clone, so all N alias one payload and the array's free releases it N
-/// times. Discriminated from its apparent siblings by DUPLICATION, not by
-/// the missing hook: `.set`/`.insert` write one value into one slot and are
-/// measured clean. The element is heap-forced via `mk()` — every earlier
-/// `.fill` fixture used `bool`, which has no payload to alias.
+/// KNOWN GAP todo/t1083, MINIMAL CELL — `Vector[Box[T]]` does not compile for
+/// ANY `T`, with no trait and no vtable anywhere.
+///
+/// The C backend emits `Box__<T>__drop` twice with incompatible signatures —
+/// the Box type's own by-VALUE drop (`static inline void Box__int64_t__drop(
+/// Box__int64_t self)`) and the collection element-drop hook's by-SLOT one
+/// (`void Box__int64_t__drop(void* slot)`) — so `cc` fails with `error:
+/// redefinition of 'Box__int64_t__drop'` while `gg check` passes. Both
+/// spellings are correctly SUBSTITUTED; the defect is two emitters mangling to
+/// one name, which the composite destructor already avoids with its own
+/// `__gorget_dtor_{T}` prefix.
+///
+/// ⭐ THIS CELL WIDENS `t1083`, WHICH IS WHY IT SHIPS BESIDE
+/// `box_concrete_elem_drop_redefinition.gg`. That fixture reaches the collision
+/// through a trait-equipped concrete box, and the item was filed believing the
+/// trait was the DISCRIMINATOR. Measured false here: `Vector[Box[int]]` emits
+/// zero `VTable`/`_TraitObj` references and collides identically, and the
+/// by-slot definition's address is taken by the ARRAY's `elem_drop` hook rather
+/// than a vtable slot. The scope is every `Vector[Box[T]]`; `Box[String]` fails
+/// the same way. A fix that unified only the vtable path leaves this red.
+///
+/// ⭐ It is also the only surface route to the runtime element-hook
+/// configurations `elem_drop && !elem_clone` and its mirror, which
+/// `gorget_array_fill` asserts on and no fixture can reach while this is open
+/// (todo/t1407's two named omissions).
 #[test]
-#[ignore = "KNOWN GAP: Vector[String].fill duplicates one buffer into N \
-slots and double-frees — rc 134 plain, ASan double-free under --sanitize; \
-todo/t1407."]
-fn array_fill_droppable_elem_double_free() {
+#[ignore = "KNOWN GAP: Vector[Box[T]] fails to compile for any T — cc reports \
+`redefinition of 'Box__<T>__drop'` because the by-value type drop and the \
+by-slot element-drop hook mangle to one symbol. No trait involved; this is the \
+minimal cell that widens todo/t1083 beyond its filed trait discriminator."]
+fn vector_box_int_elem_drop_redefinition() {
     run_gg(
-        "known_gaps/t1407_array_fill_droppable_elem_double_free.gg",
-        "len=3 first=abcd last=abcd",
+        "known_gaps/t1083_vector_box_int_elem_drop_redefinition.gg",
+        "1\n7",
     );
+}
+
+/// GRADUATED known gap todo/t1407 — `Vector[String].fill(n, x)` gives every
+/// slot its own payload.
+///
+/// `gorget_array_fill` memcpy'd one source into N slots with no per-slot clone,
+/// so all N aliased one payload and the array's free released it N times.
+/// Discriminated from its apparent siblings by DUPLICATION, not by the missing
+/// hook: `.set`/`.insert` write one value into one slot and were measured
+/// clean. The element is heap-forced via `mk()` — the earlier `.fill` fixtures
+/// used `bool` or string literals, neither of which has a payload to alias.
+///
+/// Fixed by making `fill`'s value a consuming position (the call site
+/// materialises an owned value) plus a per-slot clone for the n-1 slots that do
+/// not inherit it. Un-ignored and moved out of `known_gaps/` the same round, per
+/// the graduation contract in `scripts/known_gaps_census.sh`. Runs under the
+/// sanitizer rather than the plain `run_gg` it was filed with, so the row is no
+/// weaker than its siblings above.
+#[test]
+fn fill_droppable_elem_independent() {
+    assert_gg_sanitize_clean("fill_droppable_elem_independent", "len=3 first=abcd last=abcd");
 }
 
 /// KNOWN GAP todo/t1089 — reading a `Vector[Option[String]]` element back
@@ -42929,15 +42969,167 @@ fn runtime_parity_corpus(manifest_dir: &Path) -> Vec<PathBuf> {
 /// self-host lowered the None to int32 0 → bogus `Some(0)`.
 ///
 /// Both compilers now agree on `fill_bare_none.gg`, so it is a real
-/// `tests/fixtures/*.gg` fixture auto-scanned into `runtime_parity_corpus`
-/// (the self-host grew the hint-WITHOUT-consume path: the `fill` row carries an
-/// EMPTY `owning_arg_positions`, so `fill(2, live_string)` is ASan-clean — no
-/// double-free). This inline `run_gg` keeps the fast direct assertion.
+/// `tests/fixtures/*.gg` fixture auto-scanned into `runtime_parity_corpus`.
+/// The HINT is derived from the LAST arg independently of the consume set, so
+/// it reaches `fill` regardless of that method's `owning_arg_positions`; `fill`
+/// carries `[1]` on both lanes (todo/t1407), which is what makes
+/// `fill(2, live_string)` ASan-clean — the call site hands the runtime an
+/// OWNED value. This inline `run_gg` keeps the fast direct assertion.
 /// (`get_or_put(k, None)` still diverges on a deeper `__gg_Option__int64_t`
 /// self-host type-registration bug — that flip stays filed as a follow-up.)
 #[test]
 fn collection_fill_bare_none() {
     run_gg("fill_bare_none.gg", "3\ntrue\ntrue\ntrue");
+}
+
+// ── `fill` ownership: the t1407 class ────────────────────────────────────────
+//
+// `gorget_array_fill` used to memcpy ONE source into n slots with no per-slot
+// clone, so every slot aliased one payload and the array's free released it n
+// times; and because the value position was NOT consuming, the pointer it was
+// handed could point INTO the receiver's own buffer, which the function's own
+// drop loop freed and its own realloc moved. The fix is BOTH halves: the value
+// became a consuming position (the call site materialises an owned value —
+// clone-if-live / move-if-dead) and the runtime gives ONE slot that value and
+// clones the other n-1. Exactly n allocations, which is what an expert writes.
+//
+// ⚠ INSTRUMENT: two of the partial reverts of this fix — over-cloning
+// (`i + 1 < n` → `i < n`) and dropping the `n == 0` arm — leak with
+// BYTE-IDENTICAL stdout, so `run_gg` is structurally blind to them. Every cell
+// whose element carries a heap payload therefore runs through
+// `assert_gg_sanitize_clean`, which asserts BOTH the stdout and the absence of
+// a LeakSanitizer report. Measured: with the over-clone revert applied by line,
+// all eight droppable-element cells leak and not one of them changes a byte of
+// stdout. Do NOT demote these to `run_gg`.
+
+/// `fill` with an OWNED heap element across the three source shapes the
+/// compiler treats differently: expression temp (move), dead named local
+/// (move), live named local (clone, source survives). Pins the runtime's
+/// per-slot clone: deleting it double-frees every row here.
+#[test]
+fn fill_owned_element_is_independent() {
+    assert_gg_sanitize_clean(
+        "fill_owned_element",
+        "3\nabcd\nabcd\nabcd\n3\nefgh\nefgh\nefgh\n3\nijkl\nijkl\nijkl\nijkl",
+    );
+}
+
+/// `v.fill(n, v[i])` — the element source aliases the receiver's own storage.
+/// Independent of the missing clone: before the fix the drop loop freed
+/// `val_src` and `ensure_capacity` reallocated it away, printing empty strings
+/// at small `n` (silent wrong output, no sanitizer finding) and a heap-UAF once
+/// `n` forced a realloc. Closed at the write site — the call site now hands the
+/// runtime an owned temp that cannot point into the buffer.
+#[test]
+fn fill_self_aliased_source_is_snapshotted_by_the_call_site() {
+    assert_gg_sanitize_clean(
+        "fill_self_alias",
+        "3\nabcd\nabcd\nabcd\n3\nefgh\nefgh\nefgh\n4096\nmnop\nmnop",
+    );
+}
+
+/// `fill`'s COUNT partition {0}, {1}, {>= 2} — the boundaries the runtime's
+/// `i + 1 < n` loop and inherited last slot turn on. Uniquely pins the
+/// `n == 0` ownership arm: with it deleted this fixture leaks two allocations
+/// and prints the same bytes, and no other cell moves.
+#[test]
+fn fill_count_boundaries_own_their_value() {
+    assert_gg_sanitize_clean(
+        "fill_count_boundaries",
+        "0\nabcd\n0\n1\nijkl\n1\nqrst\n2\nyzab\nyzab",
+    );
+}
+
+/// `fill` with a VIEW element source — `s[a:b]`, `v[i]`, and the same shapes
+/// with the source buffer already dead. Before the fix any heap view printed
+/// BLANK LINES with rc 0 and no sanitizer finding at all: nothing was freed
+/// twice on the slice path, so this class is invisible to ASan and visible only
+/// in stdout. The two static-literal rows are CONTROLS (a `cap == 0` view has
+/// no payload) and were green before and after.
+#[test]
+fn fill_view_source_materializes_per_slot() {
+    assert_gg_sanitize_clean(
+        "fill_view_source",
+        "3\nbcde\nbcde\nbcde\n3\nabcd\nabcd\nabcd\n3\nbcde\nbcde\nbcde\n\
+         3\nwxyz\nwxyz\nwxyz\n3\nabcd",
+    );
+}
+
+/// `fill` across the element-type axis, exercising BOTH runtime branches: the
+/// droppable rows (nested collection, map, vector-of-vectors, struct from a
+/// temp and from a named local) take the clone loop, and the `int`/`bool` rows
+/// take the bare memcpy loop that keeps the self-host's liveness bitsets free.
+/// Deleting the trivial branch is stdout-visible here — uninitialised poison
+/// for the `int` row and a flipped `bool` — and nowhere else.
+#[test]
+fn fill_element_types_cover_both_runtime_branches() {
+    assert_gg_sanitize_clean(
+        "fill_element_types",
+        "3\n7\n8\n7\n8\n7\n8\n3\n1\n1\n1\n3\nabcd\nabcd\nabcd\n\
+         3\nefgh\nefgh\nefgh\n3\nijkl\nijkl\nijkl\n3\n7\n7\n4\ntrue\ntrue",
+    );
+}
+
+/// `Vector[Option[T]].fill` — the element-type HINT and the CONSUME together.
+/// The hint is derived from the LAST arg independently of `owning_arg_positions`
+/// (so a bare `None` materialises TAGGED), while the consume comes from the
+/// table; this holds a payload-carrying `Some` and a bare `None` against each
+/// other in one receiver, including the refill that drops the payloads.
+#[test]
+fn fill_option_element_hint_and_consume() {
+    assert_gg_sanitize_clean(
+        "fill_option_element",
+        "3\nabcd\nabcd\nabcd\n2\nnone\nnone\n3\ntrue\ntrue\ntrue",
+    );
+}
+
+/// `Deque[T].fill` — the SECOND surface member of the class. One runtime
+/// function, two spellings (`DEQUE.methods = VECTOR.methods`), which is why an
+/// enumeration over the method table alone undercounted it.
+///
+/// ⚠ Reads use `d[i]` and iteration, NEVER `.get` — `Deque[T].get(i)` loses the
+/// element type for aggregate `T` (todo/t1087) and destroys the value before
+/// anything can observe it, so a Deque cell read through `.get` is green for
+/// reasons unrelated to what it tests.
+#[test]
+fn fill_deque_element_is_independent() {
+    assert_gg_sanitize_clean(
+        "fill_deque_element",
+        "3\nabcd\nabcd\nabcd\nabcd\nabcd\nabcd\n3\nefgh\nefgh\nefgh\nefgh\n\
+         3\nijkl\nijkl\nijkl",
+    );
+}
+
+/// `fill`'s receiver spelling and the INHERITED slot. A struct-FIELD receiver
+/// must own its value exactly as a bare local does — the POSITION is the rule,
+/// not the spelling — and overwriting the slot that inherited the caller's
+/// value must free exactly one payload.
+#[test]
+fn fill_receiver_and_slot_writeback() {
+    assert_gg_sanitize_clean(
+        "fill_receiver_and_slot_writeback",
+        "3\nabcd\nabcd\nabcd\n3\nefgh\nefgh\nijkl\nefgh\n3\nuvwx\nmnop\nqrst",
+    );
+}
+
+/// `Deque[Option[T]].fill(n, None)` — the bare-`None` element-type hint on the
+/// DEQUE spelling. Sibling of `collection_fill_bare_none`, which pins the same
+/// hint on `Vector`.
+///
+/// ⚠ THIS TEST IS NOT THE PIN, AND CANNOT BE. Rust gg derives the hint
+/// kind-independently and is green here both before and after the fix — it is a
+/// CONTROL on this lane. The self-host reads the hint and the ownership
+/// promotion through ONE lookup into `COLLECTION_BUILTIN_METHODS`, whose
+/// `CkDeque` block had no `fill` row at all, so the missing row killed both:
+/// `Deque.fill` neither consumed nor received the hint, and a bare `None`
+/// lowered to an untagged zero. The instrument that catches THAT is the
+/// fixture's membership in the auto-scanned `runtime_parity_corpus`, which is
+/// why `deque_fill_bare_none.gg` sits at the TOP LEVEL of `tests/fixtures/`.
+/// Measured with the `CkDeque` row removed: the self-host prints
+/// `3\nfalse\nfalse\nfalse` against this oracle's `3\ntrue\ntrue\ntrue`.
+#[test]
+fn collection_deque_fill_bare_none() {
+    run_gg("deque_fill_bare_none.gg", "3\ntrue\ntrue\ntrue");
 }
 
 /// RUST-ONLY regression for the R37-T1 self-host CoW under-materialize: a

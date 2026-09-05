@@ -1,0 +1,43 @@
+# KNOWN GAP todo/t1083 — `Vector[Box[T]]` does not compile for ANY `T`.
+#
+# The MINIMAL cell: no trait, no vtable, no user struct. The C backend emits
+# `Box__<T>__drop` TWICE into one translation unit with incompatible signatures:
+#
+#   static inline void Box__int64_t__drop(Box__int64_t self)   # the Box type's
+#                                                              # own drop, BY VALUE
+#   void Box__int64_t__drop(void* slot)                        # the COLLECTION
+#                                                              # element-drop hook,
+#                                                              # BY SLOT
+#
+# and `cc` refuses with `error: redefinition of 'Box__int64_t__drop'` while
+# `gg check` passes. Both spellings are correctly SUBSTITUTED — the defect is
+# two emitters mangling to one name (Layering rule 3: one axis, two locations),
+# not an unsubstituted type parameter.
+#
+# ⭐ WHY THIS CELL EXISTS BESIDE `box_concrete_elem_drop_redefinition.gg`.
+# That fixture reaches the collision through a trait-equipped concrete box, and
+# t1083 was filed believing that was the DISCRIMINATOR — "only the concrete-box
+# element of a type that is ALSO trait-equipped reaches both emitters". This
+# fixture measures that false: `Vector[Box[int]]` has no trait and no vtable
+# anywhere in the emitted C (`grep -c 'VTable\|_TraitObj'` → 0) and collides
+# identically. The by-slot definition's address is taken by the ARRAY's
+# `elem_drop` hook, not by a vtable slot. So the scope is every `Vector[Box[T]]`,
+# and a fix that only unified the vtable path would leave this cell red.
+#
+# ⭐ AND IT GATES TWO RUNTIME CELLS. This is the only surface route to the
+# element-hook configurations `elem_drop != NULL && elem_clone == NULL` and its
+# mirror, which `src/backend/c/runtime/runtime_array.c` documents as legitimate
+# and `gorget_array_fill` asserts on. While this gap is open nothing in the
+# corpus exercises either configuration, so a defect living there is invisible —
+# which is why todo/t1407 had to record both as named omissions.
+#
+# The expected output below is what the language SHOULD produce.
+
+from std.collections import Vector
+
+int main():
+    Vector[Box[int]] v = Vector[Box[int]]()
+    v.push(Box[int](7))
+    print(v.len())
+    print(v[0].get())
+    return 0

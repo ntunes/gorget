@@ -1,0 +1,46 @@
+# `Vector[Option[T]].fill` — the element-type HINT and the CONSUME, together
+# (todo/t1407).
+#
+# `fill` is BOTH a hint position and a consuming position, and the two are
+# derived independently: the hint comes from the LAST arg (so a bare `None`
+# materialises TAGGED rather than as an untagged zero), the consume comes from
+# `owning_arg_positions`. This fixture holds both halves against each other —
+# a payload-carrying `Some(...)` that must be duplicated n ways, and a bare
+# `None` that must stay a tagged `None`.
+#
+# Sibling of `fill_bare_none.gg`, which pins the bare-`None` hint alone.
+
+from std.collections import Vector
+
+String mk(String a, String b):
+    return a + b
+
+int main():
+    # payload-carrying Some: n independent payloads
+    Vector[Option[String]] a = Vector[Option[String]]()
+    a.fill(3, Some(mk("ab", "cd")))
+    print(a.len())
+    for o in a:
+        if o is Some(p):
+            print(p)
+        else:
+            print("none")
+
+    # refill the SAME vector with a bare None: the drop loop releases the three
+    # payloads above, and the None must be tagged, not a bogus Some(0)
+    a.fill(2, None)
+    print(a.len())
+    for o in a:
+        if o is Some(q):
+            print(q)
+        else:
+            print("none")
+
+    # bare None over a trivial payload type
+    Vector[Option[int]] b = Vector[Option[int]]()
+    b.fill(3, None)
+    print(b.len())
+    print(b[0].is_none())
+    print(b[1].is_none())
+    print(b[2].is_none())
+    return 0

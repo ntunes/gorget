@@ -31641,3 +31641,53 @@ fn closure_arg_temps_are_minted_at_one_site() {
         );
     }
 }
+/// Every DUPLICATING STORE in the C runtime is declared, with a category.
+///
+/// A duplicating store is a statement inside a loop whose SOURCE does not vary
+/// with the loop while its DESTINATION does — one value written into many
+/// slots. `gorget_array_fill` was one, with no per-slot clone: every slot
+/// aliased a single heap payload and the array's free released it N times
+/// (todo/t1407, memory-unsafe from ordinary safe syntax on both backends with
+/// `gg check` clean). It survived because `docs/devbook/11-copy-on-write.md`
+/// asserted a TOTAL contract over "every consuming runtime function" and
+/// nothing enforced the sentence — an invariant-asserting comment with no
+/// guard (Core #14), so the one writer that disobeyed it drifted for free.
+///
+/// The census enumerates the C SOURCE, not the runtime-symbol registry: that
+/// registry lists declared symbols, so `gorget_shared_array_set`'s per-type
+/// wrapper (string-emitted from `src/backend/c_lir/helpers.rs`) never appears
+/// in it, and an enumerator that cannot produce a row cannot adjudicate it.
+///
+/// Each row carries CLONED or RAW — whether the enclosing loop body makes each
+/// slot independent. That column is what lets this guard catch its own class
+/// (SIX-Q #2): deleting a per-slot clone does not remove a row, it FLIPS one
+/// CLONED → RAW and the declared set stops matching. Verified by line-anchored
+/// break (Core #13): with `gorget_array_fill`'s `arr->elem_clone(slot)` deleted
+/// the gate exits 1 naming that flip, and at pristine HEAD it exits 1 too.
+///
+/// A RAW row is NOT a bug — raw bytes into a fresh buffer duplicate nothing
+/// owned. The signal is "a duplicating store appeared or changed category —
+/// justify it", which is why every row in the declaration file carries a
+/// reason.
+///
+/// Regenerate the census with:
+///
+/// ```text
+/// scripts/runtime_duplication_census.py
+/// ```
+#[test]
+fn runtime_duplicating_stores_are_declared() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let out = std::process::Command::new("python3")
+        .args(["scripts/runtime_duplication_census.py", "--check"])
+        .current_dir(&root)
+        .output()
+        .expect("python3 scripts/runtime_duplication_census.py --check failed to start");
+    assert!(
+        out.status.success(),
+        "the C runtime's duplicating-store census drifted from \
+         tests/runtime/DUPLICATING_STORES.txt.\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}

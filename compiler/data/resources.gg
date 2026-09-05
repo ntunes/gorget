@@ -2862,20 +2862,22 @@ public static Vector[BuiltinMethodEntry] COLLECTION_BUILTIN_METHODS = [
         BuiltinMethodDecl("push", false, [0], BrkInfer(), true),
         BuiltinMethodDecl("set", false, [1], BrkInfer(), true),
         BuiltinMethodDecl("insert", false, [1], BrkInfer(), true),
-        # `fill(n, val)` — HINT-ONLY (EMPTY owning_arg_positions): the value is
-        # cloned into every slot, so consuming it (clone + move-zero) would
-        # double-free a live source. The lowerer derives the value-arg
-        # element-type HINT position from the LAST arg (not from
-        # owning_arg_positions), so membership in this table alone makes a bare
-        # `None` in `Vector[Option[T]].fill(n, None)` materialize TAGGED (not
-        # int32 0 == bogus Some(0)). Empty owning list ⇒ hint-WITHOUT-consume,
-        # mirroring Rust gg's split of the value-arg hint from the consume set.
-        BuiltinMethodDecl("fill", false, [], BrkInfer(), true),
+        # `fill(n, val)` OWNS idx 1. `gorget_array_fill` gives ONE slot the
+        # caller's value and clones the other n-1, so the value position is a
+        # real ownership boundary: the call site must hand it an OWNED value
+        # (clone-if-live / move-if-dead), exactly like `push`. The value-arg
+        # element-type HINT is derived from the LAST arg independently, so a
+        # bare `None` in `Vector[Option[T]].fill(n, None)` still materialises
+        # TAGGED. Mirrors Rust gg's `consuming_positions_by_name` `fill` arm.
+        BuiltinMethodDecl("fill", false, [1], BrkInfer(), true),
     ]),
     BuiltinMethodEntry(CkDeque(), [
         BuiltinMethodDecl("push", false, [0], BrkInfer(), true),
         BuiltinMethodDecl("set", false, [1], BrkInfer(), true),
         BuiltinMethodDecl("insert", false, [1], BrkInfer(), true),
+        # `Deque.fill` shares Vector's runtime (`DEQUE.methods = VECTOR.methods`)
+        # and therefore its ownership rule.
+        BuiltinMethodDecl("fill", false, [1], BrkInfer(), true),
     ]),
     BuiltinMethodEntry(CkHeap(), [
         BuiltinMethodDecl("push", false, [0], BrkInfer(), true),

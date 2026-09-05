@@ -258,14 +258,60 @@ static inline void gorget_array_ensure_capacity(GorgetArray* arr, size_t needed,
 // the size of the value (must match elem_size). Drops existing
 // elements. Used as the low-level building block for `Vector.fill(n, v)`.
 static inline void gorget_array_fill(GorgetArray* arr, size_t n, const void* val_src) {
+    // `fill`'s value is a CONSUMING POSITION (methods.rs
+    // `consuming_positions_by_name`): the compiler materialises an OWNED value
+    // at the call site — clone-if-live / move-if-dead — so `*val_src` is a
+    // freshly-owned temp that NEVER aliases `arr->data`, and this function
+    // takes ownership of it.  Two consequences:
+    //   * the drop loop and the realloc below cannot destroy or move `val_src`,
+    //     so `v.fill(n, v[0])` is safe with no snapshot;
+    //   * exactly ONE slot inherits `val_src`; the other n-1 clone.  n total
+    //     allocations, which is what an expert would hand-write.
     if (arr->elem_drop) {
         for (size_t i = 0; i < arr->len; i++) {
             arr->elem_drop((char*)arr->data + i * arr->elem_size);
         }
     }
     gorget_array_ensure_capacity(arr, n, arr->elem_size);
-    for (size_t i = 0; i < n; i++) {
-        memcpy((char*)arr->data + i * arr->elem_size, val_src, arr->elem_size);
+    // COMPILER-INVARIANT ASSERTION, not a user-facing error: a droppable
+    // element type is always given a clone hook by the lowerer
+    // (`elem_clone_fn_for_type` reads the type's `clone_inplace_fn`), so this
+    // configuration is unreachable from surface syntax.  If it ever is
+    // reached, `n>1` cannot produce independent copies at all — every slot
+    // would alias one payload and `gorget_array_free` would release it N
+    // times — so abort LOUDLY rather than miscompile.  Checked ONCE, before
+    // the loop: the hook set is fixed for the whole call.
+    //
+    // The mirror configuration (`elem_clone && !elem_drop`) is likewise
+    // uninhabited; if reached it would LEAK the n-1 clone-loop payloads,
+    // since `gorget_array_free` has no hook to release them.  Recorded as a
+    // named omission in the item that shipped this function; no fixture can
+    // pin either cell while `Vector[Box[T]]` stays uncompilable (todo/t1083).
+    if (n > 1 && !arr->elem_clone && arr->elem_drop) {
+        fprintf(stderr, "gorget: panic: fill: droppable element type has "
+                        "no clone hook - cannot produce independent copies\n");
+        exit(1);
+    }
+    // The LAST slot inherits the caller's owned value; every earlier slot gets
+    // its own payload.  The two loops are split on `elem_clone` so the trivial
+    // element path (`Vector[bool]`, `Vector[int]`) stays a bare memcpy loop
+    // with no per-iteration branch — byte-for-byte the pre-fix hot path.
+    if (arr->elem_clone) {
+        for (size_t i = 0; i + 1 < n; i++) {
+            void* slot = (char*)arr->data + i * arr->elem_size;
+            memcpy(slot, val_src, arr->elem_size);
+            arr->elem_clone(slot);
+        }
+        if (n > 0) {
+            memcpy((char*)arr->data + (n - 1) * arr->elem_size, val_src, arr->elem_size);
+        }
+    } else {
+        for (size_t i = 0; i < n; i++) {
+            memcpy((char*)arr->data + i * arr->elem_size, val_src, arr->elem_size);
+        }
+    }
+    if (n == 0 && arr->elem_drop) {
+        arr->elem_drop((void*)val_src);  // nothing took ownership of it
     }
     arr->len = n;
 }
