@@ -59,6 +59,30 @@
   a call-site obligation. `docs/devbook/11` rewritten accordingly — its *"a writer that duplicates a
   source must clone per slot"* clause was **violated as worded** by the shipped fix.
 
+- [2026-09-05] ⚠ **A FALSE RED ON THE BOOTSTRAP RATCHET, SELF-INFLICTED, AND THE RULE THAT PREVENTS IT
+  (R50 Track J).** `self_host_bootstrap_fixed_point` first reported `converged at stage-3`, rc 101,
+  against the tighten-only `BOOTSTRAP_MAX_CONVERGENCE_STAGE=2`. **It was not reproducible.** Three runs,
+  each rc read off the bare command: base `1d91951dc` → **stage-2, rc 0**; this commit's code → stage-3,
+  rc 101; the *same commit* re-run on a quiescent tree → **stage-2, rc 0**.
+  ⛔ **CAUSE: I EDITED AN `embed_file` INPUT WHILE THE MULTI-STAGE RUN WAS IN FLIGHT.**
+  `tests/fixtures/self_host_lowerer/driver.gg` bakes all 62 `src/backend/c/runtime/*.c` files into the
+  driver (`grep -n "embed_file" tests/fixtures/self_host_lowerer/driver.gg`), so the runtime's TEXT — not
+  just its behaviour — is a compile-time input to every generation. A one-word comment repoint in
+  `runtime_array.c` mid-run meant two generations embedded different bytes, so `stage2.c != stage3.c` and
+  convergence slipped by exactly one generation. The abort string I added appears **twice** in the
+  driver's emitted C, which is the mechanism in one grep.
+  ⇒ ⭐ **THE RULE: THE WORKING TREE IS A GATE INPUT, NOT JUST A BUILD INPUT. Do not touch `src/`,
+  `lib/`, `compiler/` or the driver sources — comments included — while a bootstrap or sweep is
+  running.** The convergence *stage* is deterministic in the code, which is exactly why a mid-run edit
+  reads as a real ratchet breach rather than as noise; sibling CPU load does not do this, and blaming
+  load would have hidden it.
+  ⊕ **AND `/tmp/self_host_stage{1..5}{,.c}` ARE BARE FIXED PATHS** — `run_bootstrap_stages` is handed
+  `&std::env::temp_dir()` at its `self_host_bootstrap_fixed_point` call site, and builds the stage names
+  by `format!` from it, so two concurrent bootstraps on one box write and execute the same files. That is
+  a *separate* hazard from the one above (it did not cause this RED), but it can silently corrupt the
+  same ratchet; the namespaced pattern already exists a few hundred lines away in the same file
+  (`gg_shcomp_s1_{process::id()}`). Filed as `t1448`.
+
 - [2026-09-05] ⚠ **NAMED OMISSIONS AND ONE BRIEF CORRECTION FROM `t1407`'s CLOSURE (R50 Track J).**
   - **R1 — the runtime's `n > 1 && !elem_clone && elem_drop` abort is pinned by NOTHING, by construction.**
     The configuration is unreachable from surface syntax (`Vector[Box[T]]` does not compile for any `T`,
