@@ -11,12 +11,12 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| **C2** | passes 1–4 BLOCKED → 4 folds → 🔵 pass 5. **Streak 0/3.** ⭐ **Patch reproduced 5× across 14 cells; no defect found in it.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| **C2** | 5 folds → 🔵 **pass 6 (CONFIRMING)**. ⭐ **Patch defect-free on a 6th reproduction; pass 5 was the FIRST fold of mine that HELD.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0** | 🔵 SCOUTING. **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1 (owner-named). | `t1393`–`t1402` |
 | **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | **G** | passes 1+2 BLOCKED → 2 folds → 🔵 pass 3. **Streak 0/3.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
-| **F1r** | ✅ **REBUILD CONFIRMED BY MEASUREMENT — `t1362` + `t0750` ARE ONE FIX.** 🔵 brief-review pass 1. **Streak 0/3.** | `t1363`–`t1372` |
+| **F1r** | pass 1 BLOCKED (6, all brief-completeness) → folded → 🔵 pass 2. **Streak 0/3.** | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
@@ -449,6 +449,49 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ⭐ C2's PASS 5 — THE FIRST FOLD OF MINE THIS ROUND THAT HELD, AND IT FOUND A DEEPER RULE
+
+**D17 is TOTAL.** Pass 5 derived the revert atoms **from the patch text** — five of them — built a config nobody
+had (**both drop registrations reverted while KEEPING both tags and the view**), and confirmed **every one of
+the 31 non-empty partial reverts turns a prescribed row RED.** ⇒ **no fourth generation.**
+
+⚠⚠ **BUT THE REVERT LATTICE IS NON-MONOTONE, AND THAT CHANGES HOW MY OWN RULE CAN EVER BE DISCHARGED.**
+Measured: `{De, Te}` leaves **both** push-escape rows GREEN, while its own **SUBSET** `{Te}` turns one **RED** —
+the Tier 2a refusal needs the drop-registration **present** to fire. ⇒ ⛔ **"ENUMERATE THE REVERTS" IS
+DISCHARGEABLE **ATOM-BY-ATOM ONLY**. A future fold that verifies it by testing SUPERSETS will conclude a live
+row is dead.**
+
+⛔ **One genuine gap remained: the `cid` source-provenance axis is pinned at 1 of 3 cells.** `iter_source_coll`
+is three-valued (`Local` · `FieldPath` · fallback), **and for a plain local the correct derivation and the
+degenerate fallback COINCIDE** — so **no prescribed row could tell a correct `cid` from a hardcoded one.** Five
+unpinned shapes measured rc 134 → rc 0. **Row (iv) added.**
+⊕ ⭐ **And the good news buried in it: THE TWO WRITE SITES *ARE* THE TOTAL CLASS** — the `is_string_type`
+carve-outs exist at exactly two sites, the dict/set/iterable lowerers have none, and those shapes are rc 0 at
+HEAD. **Core #4 satisfied.**
+
+⭐ **AND A STRUCTURAL DEFENCE AGAINST MY OWN FOLD PROBLEM: `ADDENDUM 5` NOW CARRIES A 14-ROW CONSOLIDATED
+DELIVERABLES CHECKLIST.** *"Five precedence layers with two retractions is itself the hazard — four folds each
+dropped a prescription."* **A flat checklist at the end is the cheapest defence left.**
+
+### ⚠ F1r's PASS 1 — SIX BLOCKING, ALL BRIEF-COMPLETENESS, AND ONE IS THE SPAWN-SNAPSHOT HAZARD IN REVERSE
+
+**The design was re-measured end-to-end and holds** — including pass 1 building its **own half-S by line** to
+confirm the halves do not interact, and measuring **Cases 4/6 correct pre-fix on six shapes**, which vindicates
+the NARROW predicate.
+⛔ **I DECLARED A BASE THAT WAS TOO OLD.** At `d0ab310df`, `t1362` carries **two** corrections; the third landed
+in `7e111d2d9`. **An executor honouring my declared base would find the SECOND correction standing — the exact
+framing the rebuild withdrew.** ⚠ **The spawn-snapshot hazard cuts both ways: file first, THEN brief, and state
+a base NO OLDER than the artifacts you cite.**
+⛔ **My placement instruction named the WRONG CORPUS:** `known_gaps/` is under `tests/fixtures/`, read
+**non-recursively**, so **graduating `t0750` ADDS A ROW TO THE RUNTIME-DIFF DENOMINATOR — the zero-slack gate**,
+and the brief was silent on it. ⊕ **And the constructs the guard must add are OUTSIDE ggdef's subset, so one
+spectest cannot carry them ⇒ TWO fixtures.**
+⛔ **My count lint PROVABLY CANNOT CATCH the `on error` trap it was paired with** — switching to
+`lower_block_scoped` does not change the `.save_locals(` count, because **that site is INSIDE it.** SIX-Q #2,
+again. **Replacement: pin `lower_block_scoped(` CALL sites at 2.**
+⛔ **And my own prose would have deleted two cases:** I wrote *"the narrowed predicate (`cow_aliases_of ||
+cow_collection_refs_for` **only**)"* — **the real predicate also carries `self_is_borrow(…)`, i.e. Cases 1/1b.**
 
 ### ⛔⛔ TRACK G's LANDING PROCEDURE WAS UNEXECUTABLE — ~210 CELLS WOULD HAVE SHIPPED **UNGATED**
 
