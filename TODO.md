@@ -17,7 +17,7 @@
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | ✅ **G** | **6 passes, DESIGN SIGNED OFF, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⚖ owner-ratified. **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
-| ✅ **F1r** | **3 passes, design signed off, 🟢 EXECUTOR LAUNCHED 2026-09-05.** `t1362`+`t0750` as ONE fix. | `t1363`–`t1372` |
+| ✅ **F1r** | **`t1362`+`t0750`** — executor RETURNED **`504bf5ad5`**, 🔵 **OUTPUT-REVIEW RUNNING.** ⭐ **BOTH of its REFUSALS are CORRECT, and both hand the work to ME at integration** (the pin's sole writer is the integrating parent). | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
@@ -486,6 +486,55 @@ path does not exist.** Filed from the spare block.
 double-free, which is fixed in `7785c1221` and **not yet on this branch**. ⚠ **The blocker CHANGES (to `t1404`'s
 lost write), it does not VANISH.** ⇒ **correct it AT integration, or a true statement is deleted early** — the
 retraction rule, one heartbeat old, applied prospectively for once.
+
+### ⭐⭐ F1r's EXECUTOR REFUSED TWO BRIEFED INSTRUCTIONS — **AND IT WAS RIGHT BOTH TIMES**
+
+⛔⛔ **MY BRIEF ASSIGNED A TRACK WORK THAT AN IN-TREE RULE RESERVES FOR THE INTEGRATING PARENT.** Regenerated in
+MY tree (`grep -n "TRACK must" tests/integration.rs`):
+> *"…which is precisely why **a TRACK must never write a pin**. The pin now has **exactly one writer, the
+> integrating parent**, and `tests/lints.rs::clone_meter_pins_carry_their_provenance` makes a pin that moves
+> without rewriting its `PINNED-BY:` line RED."*
+
+⇒ **REFUSAL (b) — declining to re-pin — IS CORRECT, and my `E2`/`E-e` *"the re-pin is a DUTY"* was wrong.**
+⊕ **E-e was worse than wrong: it required a same-`root_len`, UNSATISFIABLE across a track worktree and mine.**
+⇒ ⚠ ***An instruction that cannot be executed from where the executor stands is not a demanding instruction,
+it is a defective one.***
+⇒ **REFUSAL (a) — not moving `RUNTIME_DIFF_MATCH_FLOOR` — IS ALSO CORRECT.** The gate is
+`matched.len() >= FLOOR` (`grep -n "RUNTIME_DIFF_MATCH_FLOOR" tests/integration.rs`), so **a MATCH INFLOW
+CANNOT RED IT**, and its own text says raise it *"in the same commit"* — which, under the one-writer rule, is
+the INTEGRATING commit. ⚠ **A mid-round ratchet from one worktree is how a round close false-reds.**
+
+⭐ **THIS IS THE THIRD BRIEF DEFECT OF MINE IN ONE FAMILY THIS ROUND: ASSIGNING TO A TRACK WHAT BELONGS TO THE
+ROUND.** ⇒ ⛔ **BOTH ARE NOW MY OBLIGATIONS AT INTEGRATION, with the measurements parked in `t1365`** — the
+*"named omission is durable content"* rule doing exactly the job it was landed for, on its first live use.
+
+⚠ **AND THE CITATION DRIFTED 47 LINES** — the executor cited `tests/integration.rs:35032`; in my tree the text
+is at `:34985`, because its own commit moved it. **Core #15(a) verbatim: cite the GREP that regenerates a line,
+never the bare number.** *(Substance unaffected — but I could only confirm it BY grepping.)*
+
+### ⛔ F1r ALSO CAUGHT MY CONSTANT COUNT AT LESS THAN HALF — A FILED, RECURRING CLASS
+
+**Briefed "six". Measured: FIFTEEN declarations, SIX files, FOUR targets** — and **five of the omissions RED a
+round-close target.** Nine were found **only by running the bare gates**: `scripts/figures.db` mirrors four
+constants behind its own lint; new top-level `cow_*` fixtures are opted **INTO** `corpus_b`/`corpus_b1` **BY
+DEFAULT** (3 census rows × 2, 2 cited `EXCLUDE` × 2); plus two exact gate-set pins. ⇒ **`todo/t0801`'s recorded
+class RECURRING — *the landing boundary of a constant is not the constant.***
+
+### 🚨 `t1364` IS A SUCCESSION-PLAN EVENT: **THE REFERENCE LAGS THE SELF-HOST**
+
+**A mutation inside an `on error` block traps `T_UnwrapNone` on a run that NEVER ERRORS — on BOTH Rust
+backends — and THE SELF-HOST PRINTS THE CORRECT ANSWER.** ⇒ **the oracle adjudicates AGAINST both backends.**
+⛔ **A Core #8 filing, not a footnote**, and the direction is charter-fixed: **fix the RUST side as oracle
+hygiene; NEVER dumb the self-host down to match.** ⊕ **My brief understated it IN THE TRACK'S FAVOUR** — the
+direction a green suite never catches.
+
+### ⚠ AN UNFLAGGED MA-9 HAZARD IN A COMMITTED SCRIPT — RECORDED HERE SO IT OUTLIVES THE BRIEF
+
+`scripts/self_host_mem_baseline.sh` writes a **FIXED** `/tmp` path — regenerate:
+`grep -n 'DRIVER_EXE' scripts/self_host_mem_baseline.sh` → `:63` `DRIVER_EXE="/tmp/self_host_driver_bench"`
+(plus its generated `.c`). ⇒ **two agents running it on this box clobber each other SILENTLY.**
+⚠ ***The `/tmp`-namespacing rule is breached by a COMMITTED SCRIPT, not by an agent — the rule binds briefs,
+and NOTHING binds the repo.*** **Owed a filing from F1r's block.**
 
 ### ⭐ C2's DOC FOLD FOUND A SITE **NOBODY HAD NAMED** — WHICH IS THE POINT OF ASKING FOR A SET
 
