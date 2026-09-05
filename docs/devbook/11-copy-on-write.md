@@ -329,6 +329,49 @@ still-live owned source be bit-copied into the aggregate as an alias.
 > (`docs/language-reference.md` §9.6, kept in sync with the two enums). A fixed
 > hard-coded count in a doc drifts; the enums don't.
 
+### Temps born below the boundary set
+
+The boundaries above are GIR-level: a consuming position, a typed destination, a
+clone or a move decided from ownership state the GIR carries. Argument
+marshalling can also mint an owned value *underneath* all of that. A closure
+literal reaching a call as a `Callable` is packed into a `GorgetClosure` whose
+environment is a fresh heap block, and that block is minted in the LIR, in an
+anonymous slot GIR drop registration cannot see.
+
+Nothing upstream can own such a value, so **the emitter of the consuming call
+owns it**: it emits the free itself, immediately after the call it minted the
+temp for. That is the same rule the boundary set states — register at the
+producer — applied one layer down, where the producer is a code emitter rather
+than a lowering pass.
+
+Two things make it correct, and both are properties of the *site*, never of the
+value:
+
+**The temps travel as a returned value, not a ledger.** An emitter that can bail
+out after marshalling its arguments — a higher-order expander that gives up on a
+shape it cannot lower — must be able to drop the temps it made. A field on the
+lowering, drained "per call", would instead carry an orphaned temp into whatever
+call drained next and emit its free in an unrelated block.
+
+**The free is only sound where the value's last use is inside the emitted
+region.** A builtin higher-order call expands to an inlined loop, and its sort
+forms call only a compiler-synthesized comparator bound to dispatch through the
+closure and never store it; in both the closure is dead when the expansion ends.
+A *plain* call is different: its callee is user code, and a callee that keeps a
+borrowed `Callable` past the call — a lazy iterator adapter storing its predicate
+into the iterator it returns — becomes a second owner of an environment the
+caller just freed. Freeing there is a use-after-free, not a leak fix, so the
+temp is deliberately left to leak until callee retention is decidable. The gap
+is tracked in `todo/`.
+
+The mint is a single chokepoint that materializes, initializes and registers in
+one call, from a typed pair of *who owns the result* and *where its environment
+came from*. Both halves are load-bearing: a bare function reference packs a null
+environment, so ownership alone would hand the free a null pointer; and
+registering a slot before it is packed would free an uninitialized value, which
+is corruption rather than a leak. Splitting mint from initialization makes both
+mistakes spellable, so they are one operation.
+
 ### Widening at a boundary: the trait-object pack
 
 A boundary does not only decide *whether* to clone; where the destination is

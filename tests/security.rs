@@ -1409,9 +1409,28 @@ fn sec_59_generic_resource_monomorphization() {
 
 // ── Round 5 attacks: sort, UTF-8, allocator edges, nested types ──────────
 
+/// PIN — P4 of R50 Track E's four, and the only one of the four whose changed
+/// cell has a real CALLEE (`todo/t0953`).
+///
+/// ⛔ `security_safe` RUNS WITH `detect_leaks=0`, so this row was green today
+/// for a reason unrelated to what it tests (SIX-Q #6): it leaked 8 bytes in 1
+/// allocation through `__gorget_closure_env_alloc` and nothing looked. The
+/// one-line flip to `security_safe_no_leak` makes the leak observable.
+///
+/// WHY IT IS THE NECESSARY PIN AND NOT A BONUS. `sorted_by` is `HofOp::SortedBy`
+/// — one of the four sort ops that do NOT expand to an inlined loop. They
+/// synthesize a `sort_impl` and emit a real `Inst::Call` PASSING THE CLOSURE
+/// (`grep -n 'Direct call: sort_impl' src/bir/lower.rs`), so at this cell "a
+/// callee could retain the closure" is a live question rather than a vacuous
+/// one. It is safe because the callee is a compiler-synthesized comparator
+/// bound by the opaque-closure invariant to CALL the closure and never STORE it
+/// (`sed -n '9,17p' src/bir/synth.rs`) — and this row is what holds that.
+///
+/// RED-verified against the pre-fix compiler: `8 byte(s) leaked in 1
+/// allocation(s)`. CLEAN at HEAD, stdout `11` both sides.
 #[test]
 fn sec_60_sort_non_transitive_comparator() {
-    security_safe("attack_60_sort_non_transitive", "11");
+    security_safe_no_leak("attack_60_sort_non_transitive", "11");
 }
 
 #[test]

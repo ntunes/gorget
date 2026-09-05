@@ -11,13 +11,24 @@
 # B is the discriminator: it has no builtin HOF anywhere, and it leaks the same
 # frame. So the write site is the closure-literal ARGUMENT, not the HOF.
 #
+# ⭐ CELL A IS CLOSED, CELL B IS NOT (R50 Track E). The three builtin-HOF
+# expanders now drain the closure-argument temp they mint, so cell A is clean.
+# Cell B is deliberately NOT drained: a plain callee is USER code that may
+# RETAIN a borrowed `Callable` — `lib/std/iter.gg`'s six lazy adapters do — and
+# freeing the caller's temp there makes a SECOND owner. Measured, the naive
+# drain turned four corpus fixtures into a use-after-free and a double-free and
+# moved `scripts/sanitize_sweep.sh` from `corruption: 1` to `corruption: 5`.
+# The blocking half is `todo/t1349`; its write site is `todo/t1350`.
+#
 # HEAP-FORCED: both closures CAPTURE `base`, so each env is a real 16-byte malloc
 # rather than the 8-byte placeholder a non-capturing closure gets.
 #
 # INTENDED: prints 41 and 41, and is ASan-clean under `detect_leaks=1`, on C and
-# LLVM. At HEAD it prints both correctly and leaks 32 bytes in 2 allocations,
-# both `__gorget_closure_env_alloc`. Stdout-invisible, so this is wired to
-# `assert_gg_sanitize_clean`.
+# LLVM. At HEAD it prints both correctly and leaks **16 bytes in 1 allocation**
+# — cell B only, since R50 Track E drained cell A; it was 32 bytes in 2.
+# Stdout-invisible, so this is wired to `assert_gg_sanitize_clean`. Regenerate
+# either figure with `gg build --sanitize` on this file under
+# `ASAN_OPTIONS=detect_leaks=1:exitcode=0 LSAN_OPTIONS=use_stacks=0`.
 
 int apply(Callable[int(int)] f, int x):
     return f(x)

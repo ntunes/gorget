@@ -1,0 +1,40 @@
+# KNOWN GAP (`todo/t0953`, cell B) — a PACKED `Callable` LOCAL at a plain
+# call-argument position leaks the clone the argument marshalling made for it.
+#
+# ⚠ THIS IS COVERAGE FOR THE ITEM'S AMENDED SCOPE, NOT A PIN. No partial revert
+# of R50 Track E's change turns this row red — Track E drains only at the three
+# builtin-HOF expanders, and this shape fires at the PLAIN-CALL site, which is
+# deliberately not drained. It exists because `t0953`'s scope was amended to
+# cover this cell and the Cardinal rule owes every filed cell a durable repro.
+#
+# THE CELL. `t0953`'s original text named "the closure LITERAL argument". A
+# `Callable` LOCAL leaks identically and by a DIFFERENT mechanism: `g` itself is
+# freed by GIR drop, but the argument position deep-clones it
+# (`gorget_closure_clone_to_owned` mints a FRESH env block) and nothing frees
+# the clone. So a GIR-level fix aimed at the literal would convert a case-2 leak
+# into a case-2a leak rather than closing the class.
+#
+# WHY IT IS NOT FIXED HERE. Draining at the plain-call site turns this leak into
+# a use-after-free and a double-free, because a callee may RETAIN a borrowed
+# `Callable` — `lib/std/iter.gg`'s six lazy adapters do, which is `todo/t1349`,
+# whose own write site is `todo/t1350`. Measured, not assumed: the naive drain
+# moved `scripts/sanitize_sweep.sh` from `corruption: 1` to `corruption: 5`.
+#
+# ⊕ The clone is ALSO gratuitous at a borrowing call (the CoW charter's
+# optimality half): a plain-call `Callable` parameter is simply borrowed, so no
+# copy is owed at all.
+#
+# HEAP-FORCED: the closure CAPTURES `base`, so both the local's env and the
+# argument clone are real allocations.
+#
+# INTENDED (asserted by the #[ignore]d wired test): prints `41` and runs
+# ASan-CLEAN. The stdout is already correct today — the LEAK is the gap, so this
+# repro means nothing outside the sanitizer.
+
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    int base = 40
+    Callable[int(int)] g = (int n): n + base
+    print(f"{apply(g, 1)}")

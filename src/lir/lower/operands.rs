@@ -1611,7 +1611,18 @@ impl<'a> FuncLowering<'a> {
             if i >= gir_args.len() || i >= lir_args.len() { break; }
             if !matches!(abi, AbiKind::VoidElem) { continue; }
             let before = lir_args[i];
-            self.wrap_single_closure_arg(i, &gir_args[i], lir_args, bb);
+            // A `DestinationOwns` position registers NOTHING: the sink stays
+            // empty by CONSTRUCTION, because `mint_closure_arg_temp`'s
+            // registration `match` has no arm that pushes for this owner. The
+            // `debug_assert!` that used to guard this is DELETED rather than
+            // documented (Core #14) - it was one-directional (it could only
+            // fire on over-registration, never on the FORGET that is the leak),
+            // debug-only, and dead once the mint became a chokepoint.
+            let mut unregistered: Vec<SlotId> = Vec::new();
+            self.wrap_single_closure_arg(
+                i, &gir_args[i], lir_args, bb,
+                ClosureArgOwner::DestinationOwns, &mut unregistered,
+            );
             // Disjoint by construction — a closure is never a handle — but
             // read back rather than re-deriving "was it a closure": the
             // closure wrapper owns that question and answers it by
@@ -1694,25 +1705,23 @@ impl<'a> FuncLowering<'a> {
         gir_arg: &Operand,
         lir_args: &mut [ValueId],
         bb: BlockId,
+        owner: ClosureArgOwner,
+        minted: &mut Vec<SlotId>,
     ) {
         use crate::lir::lower::types::c_sizeof_lir_type;
 
         // Case 1: FuncRef constant → bare function ref, env = NULL.
         if let Operand::Constant(Constant::FuncRef(name)) = gir_arg {
             if let Some(&func_id) = self.func_index.get(name) {
-                let gc_sid = match self.struct_reg.lookup("GorgetClosure") {
-                    Some(sid) => sid,
+                let tmp_slot = match self.mint_closure_arg_temp(
+                    bb,
+                    owner,
+                    ClosureTempInit::NullEnv { call_func: func_id },
+                    minted,
+                ) {
+                    Some(slot) => slot,
                     None => return,
                 };
-                let tmp_slot = self.lir_func.add_slot(LirType::Struct(gc_sid), None);
-                let null_env = self.lir_func.next_value();
-                self.push_inst(bb, Inst::NullPtr { dst: null_env });
-                self.push_inst(bb, Inst::ClosurePack {
-                    slot: tmp_slot,
-                    env_ptr: null_env,
-                    call_func: func_id,
-                    needs_adapter: true,
-                });
                 let addr = self.lir_func.next_value();
                 self.push_inst(bb, Inst::SlotAddr {
                     dst: addr,
@@ -1756,32 +1765,16 @@ impl<'a> FuncLowering<'a> {
                         _ => false,
                     };
                     if is_packed_callable {
-                        let gc_sid = match self.struct_reg.lookup("GorgetClosure") {
-                            Some(sid) => sid,
+                        let src_slot = self.local_to_slot[src_idx];
+                        let tmp_slot = match self.mint_closure_arg_temp(
+                            bb,
+                            owner,
+                            ClosureTempInit::ClonedFrom { src_slot },
+                            minted,
+                        ) {
+                            Some(slot) => slot,
                             None => return,
                         };
-                        let tmp_slot = self.lir_func.add_slot(LirType::Struct(gc_sid), None);
-                        let src_slot = self.local_to_slot[src_idx];
-                        let src_addr = self.lir_func.next_value();
-                        self.push_inst(bb, Inst::SlotAddr {
-                            dst: src_addr, slot: src_slot,
-                        });
-                        let cloned = self.lir_func.next_value();
-                        self.ensure_extern(
-                            "gorget_closure_clone_to_owned",
-                            &[LirType::Ptr],
-                            &LirType::Struct(gc_sid),
-                        );
-                        let abis = self.lookup_arg_abis("gorget_closure_clone_to_owned");
-                        self.push_inst(bb, Inst::CallExtern {
-                            dst: Some(cloned),
-                            name: "gorget_closure_clone_to_owned".to_string(),
-                            args: vec![src_addr],
-                            arg_abis: abis,
-                        });
-                        self.push_inst(bb, Inst::SlotStore {
-                            slot: tmp_slot, value: cloned, is_move: false,
-                        });
                         let addr = self.lir_func.next_value();
                         self.push_inst(bb, Inst::SlotAddr {
                             dst: addr, slot: tmp_slot,
@@ -1811,12 +1804,6 @@ impl<'a> FuncLowering<'a> {
             None => return,
         };
 
-        let gc_sid = match self.struct_reg.lookup("GorgetClosure") {
-            Some(sid) => sid,
-            None => return,
-        };
-        let tmp_slot = self.lir_func.add_slot(LirType::Struct(gc_sid), None);
-
         let src_place = match gir_arg {
             Operand::Copy(place) | Operand::Move(place) => place,
             _ => unreachable!(),
@@ -1825,45 +1812,150 @@ impl<'a> FuncLowering<'a> {
         let src_ty = self.lir_func.slots[src_slot.0 as usize].ty.clone();
         let env_size = c_sizeof_lir_type(&src_ty, self.module_structs);
 
-        // Allocate via the closure-specific allocator that prefixes an 8-byte
-        // size header. `gorget_closure_free` and `gorget_closure_clone_to_owned`
-        // walk back to the header to recover the env size, so the GorgetClosure
-        // value carries enough info for both deep clone and drop without
-        // growing its 16-byte ABI (fn_ptr + env).
-        let size_val = self.emit_i64_const(bb, env_size as i64);
-        let heap_ptr = self.lir_func.next_value();
-        self.ensure_extern("__gorget_closure_env_alloc", &[LirType::I64], &LirType::Ptr);
-        let alloc_abis = self.lookup_arg_abis("__gorget_closure_env_alloc");
-        self.push_inst(bb, Inst::CallExtern {
-            dst: Some(heap_ptr),
-            name: "__gorget_closure_env_alloc".to_string(),
-            args: vec![size_val],
-            arg_abis: alloc_abis,
-        });
-
-        let src_addr = self.lir_func.next_value();
-        self.push_inst(bb, Inst::SlotAddr {
-            dst: src_addr,
-            slot: src_slot,
-        });
-        self.push_inst(bb, Inst::Memcpy {
-            dst_ptr: heap_ptr,
-            src_ptr: src_addr,
-            size: size_val,
-        });
-
-        self.push_inst(bb, Inst::ClosurePack {
-            slot: tmp_slot,
-            env_ptr: heap_ptr,
-            call_func,
-            needs_adapter: false,
-        });
+        let tmp_slot = match self.mint_closure_arg_temp(
+            bb,
+            owner,
+            ClosureTempInit::HeapEnvFrom { src_slot, env_size, call_func },
+            minted,
+        ) {
+            Some(slot) => slot,
+            None => return,
+        };
         let addr = self.lir_func.next_value();
         self.push_inst(bb, Inst::SlotAddr {
             dst: addr,
             slot: tmp_slot,
         });
         lir_args[i] = addr;
+    }
+
+    /// THE ONE PLACE a closure-argument `GorgetClosure` temp is minted - and,
+    /// in the same call, INITIALIZED and REGISTERED for its free.
+    ///
+    /// `wrap_single_closure_arg` used to open with
+    /// `self.lir_func.add_slot(LirType::Struct(gc_sid), None)` in each of its
+    /// three arms and then decide ownership separately per arm. Two of the
+    /// three forgot to register, which IS `todo/t0953`. Core #4's litmus asks
+    /// what stops arm N+1: with three identically-spelled mints, nothing did.
+    /// Centralizing at the producer makes the registration a thing an arm
+    /// cannot express itself, and lets `closure_arg_temps_are_minted_at_one_site`
+    /// pin ONE call instead of counting three lines that a helper could dodge.
+    ///
+    /// **MINT AND INITIALIZE ARE ONE CALL ON PURPOSE.** Registering a slot for
+    /// a later `gorget_closure_free` is safe only if no path can leave that
+    /// slot un-packed: freeing an uninitialized `GorgetClosure` reads a garbage
+    /// env pointer, which is memory CORRUPTION, not a leak. Taking the
+    /// initialization as a value makes "minted but never packed" unspellable.
+    ///
+    /// **REGISTRATION TAKES A PAIR, NOT AN OWNER.** `(ClosureArgOwner,
+    /// EnvProvenance)` - and it registers iff `CalleeBorrows && HeapOwned`. The
+    /// owner alone is not enough: `ClosureTempInit::NullEnv` packs `env = NULL`
+    /// at a borrowing position, and registering that would hand
+    /// `gorget_closure_free` a null env. The provenance half is carried BY the
+    /// init variant rather than passed beside it so an arm cannot declare one
+    /// and emit the other; a new variant is forced to answer in
+    /// `ClosureTempInit::env_provenance`.
+    fn mint_closure_arg_temp(
+        &mut self,
+        bb: BlockId,
+        owner: ClosureArgOwner,
+        init: ClosureTempInit,
+        minted: &mut Vec<SlotId>,
+    ) -> Option<SlotId> {
+        let gc_sid = self.struct_reg.lookup("GorgetClosure")?;
+        let tmp_slot = self.lir_func.add_slot(LirType::Struct(gc_sid), None);
+
+        // Core #3 - register the freshly-materialized owned value at its
+        // PRODUCER, from the typed pair and nothing else. Matched with `match`
+        // so a new `ClosureArgOwner` or `EnvProvenance` is a compile error here
+        // rather than a silently-defaulted answer.
+        match (owner, init.env_provenance()) {
+            // A real `malloc` at a position whose callee only borrows: nothing
+            // downstream owns it, so the call emitter frees it.
+            (ClosureArgOwner::CalleeBorrows, EnvProvenance::HeapOwned) => {
+                minted.push(tmp_slot);
+            }
+            // There is no heap block at all - `gorget_closure_free` on a null
+            // env is not a leak fix, it is a fault.
+            (ClosureArgOwner::CalleeBorrows, EnvProvenance::NullEnv) => {}
+            // The collection took ownership; its `elem_drop` frees the env.
+            (ClosureArgOwner::DestinationOwns, _) => {}
+        }
+
+        match init {
+            ClosureTempInit::NullEnv { call_func } => {
+                let null_env = self.lir_func.next_value();
+                self.push_inst(bb, Inst::NullPtr { dst: null_env });
+                self.push_inst(bb, Inst::ClosurePack {
+                    slot: tmp_slot,
+                    env_ptr: null_env,
+                    call_func,
+                    needs_adapter: true,
+                });
+            }
+            ClosureTempInit::ClonedFrom { src_slot } => {
+                let src_addr = self.lir_func.next_value();
+                self.push_inst(bb, Inst::SlotAddr {
+                    dst: src_addr, slot: src_slot,
+                });
+                let cloned = self.lir_func.next_value();
+                self.ensure_extern(
+                    "gorget_closure_clone_to_owned",
+                    &[LirType::Ptr],
+                    &LirType::Struct(gc_sid),
+                );
+                let abis = self.lookup_arg_abis("gorget_closure_clone_to_owned");
+                self.push_inst(bb, Inst::CallExtern {
+                    dst: Some(cloned),
+                    name: "gorget_closure_clone_to_owned".to_string(),
+                    args: vec![src_addr],
+                    arg_abis: abis,
+                });
+                self.push_inst(bb, Inst::SlotStore {
+                    slot: tmp_slot, value: cloned, is_move: false,
+                });
+            }
+            ClosureTempInit::HeapEnvFrom { src_slot, env_size, call_func } => {
+                // Allocate via the closure-specific allocator that prefixes an
+                // 8-byte size header. `gorget_closure_free` and
+                // `gorget_closure_clone_to_owned` walk back to the header to
+                // recover the env size, so the GorgetClosure value carries
+                // enough info for both deep clone and drop without growing its
+                // 16-byte ABI (fn_ptr + env).
+                let size_val = self.emit_i64_const(bb, env_size as i64);
+                let heap_ptr = self.lir_func.next_value();
+                self.ensure_extern(
+                    "__gorget_closure_env_alloc", &[LirType::I64], &LirType::Ptr,
+                );
+                let alloc_abis = self.lookup_arg_abis("__gorget_closure_env_alloc");
+                self.push_inst(bb, Inst::CallExtern {
+                    dst: Some(heap_ptr),
+                    name: "__gorget_closure_env_alloc".to_string(),
+                    args: vec![size_val],
+                    arg_abis: alloc_abis,
+                });
+
+                let src_addr = self.lir_func.next_value();
+                self.push_inst(bb, Inst::SlotAddr {
+                    dst: src_addr,
+                    slot: src_slot,
+                });
+                self.push_inst(bb, Inst::Memcpy {
+                    dst_ptr: heap_ptr,
+                    src_ptr: src_addr,
+                    size: size_val,
+                });
+
+                self.push_inst(bb, Inst::ClosurePack {
+                    slot: tmp_slot,
+                    env_ptr: heap_ptr,
+                    call_func,
+                    needs_adapter: false,
+                });
+            }
+        }
+
+        Some(tmp_slot)
     }
 
     /// Wrap closure/function-ref arguments at call sites into GorgetClosure slots.
@@ -1877,10 +1969,111 @@ impl<'a> FuncLowering<'a> {
         gir_args: &[Operand],
         lir_args: &mut [ValueId],
         bb: BlockId,
-    ) {
+    ) -> ClosureArgTemps {
+        let mut minted = ClosureArgTemps(Vec::new());
         for (i, gir_arg) in gir_args.iter().enumerate() {
             if i >= lir_args.len() { break; }
-            self.wrap_single_closure_arg(i, gir_arg, lir_args, bb);
+            self.wrap_single_closure_arg(
+                i, gir_arg, lir_args, bb,
+                ClosureArgOwner::CalleeBorrows, &mut minted.0,
+            );
+        }
+        minted
+    }
+}
+
+/// The `GorgetClosure` temps one call's argument marshalling minted, owed a
+/// `gorget_closure_free` once that call returns.
+///
+/// **It is a returned VALUE and not a field on the lowering ON PURPOSE.** A
+/// shared ledger drained "per call" coupled every wrap site to every drain
+/// site: `try_emit_vector_each_hof` can bail out with `?` AFTER wrapping
+/// (`result_elem_name.clone()?`, the `flat_map` arm), and a ledger would carry
+/// that orphaned temp into whatever call drained next — a free emitted in a
+/// block that has nothing to do with it. Handing the temps back makes the
+/// bail-out drop them rather than donate them.
+///
+/// ⚠ **THE `#[must_use]` BELOW DOES NOT CATCH A CALLER WHO BINDS AND FORGETS,
+/// AND THAT WAS MEASURED WITH rustc.** `mint();` warns; `let t = mint();` does
+/// NOT, and rustc even suggests `let _ =` as the way to silence it — while every
+/// call site here is `let closure_temps = …`. So the attribute is a nicety, not
+/// the guard. The guard is `closure_arg_temps_are_drained_in_every_wrapping_body`
+/// in `tests/lints.rs`, which requires every body calling
+/// `wrap_closure_call_args` to also contain a disposition.
+#[must_use = "the closure temps minted for this call must be freed with \
+               `free_closure_arg_temps` once the call returns, or the \
+               environment leaks (todo/t0953)"]
+pub(super) struct ClosureArgTemps(pub(super) Vec<SlotId>);
+
+/// Who owns the `GorgetClosure` an argument-marshalling wrap mints.
+///
+/// The two callers of `FuncLowering::wrap_single_closure_arg` sit on OPPOSITE
+/// sides of the ownership boundary, and the helper cannot recover which from
+/// the argument itself: what the position does to the storage is a property of
+/// the POSITION, never of the value (`docs/language-design.md` §3.5 — *overlap
+/// is about storage, not spelling*). Passing it explicitly is layering rule 1:
+/// the invariant crosses as typed metadata rather than being defaulted.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ClosureArgOwner {
+    /// A plain call argument. The callee BORROWS the closure — a `Callable`
+    /// parameter is one of the single-owner-by-design carve-outs, and at a
+    /// plain call those are simply borrowed (CLAUDE.md, *Ownership at
+    /// Consuming Positions*). A temp minted here has no other owner, so it is
+    /// returned in the `ClosureArgTemps` value and freed once the call returns.
+    CalleeBorrows,
+    /// An `AbiKind::VoidElem` collection-storage position (`push`, `put`,
+    /// `set`, `insert`, `send`). The runtime memcpys the 16-byte
+    /// `GorgetClosure` into the collection's slot and the collection's
+    /// `elem_drop` owns the env from then on - freeing here would double-free.
+    DestinationOwns,
+}
+
+/// Where the environment of a minted closure-arg temp came from - the second
+/// half of the pair `mint_closure_arg_temp` registers on.
+///
+/// The OWNER alone cannot decide registration: a borrowing position whose temp
+/// has no heap block at all must not be handed to `gorget_closure_free`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum EnvProvenance {
+    /// `env = NULL`. A bare function reference carries no captured state, so
+    /// there is NO heap block - registering it would free a null pointer.
+    NullEnv,
+    /// A real allocation the temp owns: `__gorget_closure_env_alloc` (case 2),
+    /// or the fresh block `gorget_closure_clone_to_owned` mints (case 2a).
+    HeapOwned,
+}
+
+/// How `mint_closure_arg_temp` INITIALIZES the temp it mints, in the same call.
+///
+/// One variant per arm of `wrap_single_closure_arg`. Passing the initialization
+/// as a value is what makes "minted but never packed" unspellable, and what
+/// forces a new arm to answer the provenance question in
+/// [`ClosureTempInit::env_provenance`] instead of defaulting it.
+pub(super) enum ClosureTempInit {
+    /// Case 1: a `FuncRef` constant. `ClosurePack` with a null env and an
+    /// adapter, because a bare function has no environment parameter.
+    NullEnv { call_func: FuncId },
+    /// Case 2a: an already-packed `Callable` local.
+    /// `gorget_closure_clone_to_owned` mints a FRESH env block and the 16-byte
+    /// value is stored into the temp, so the temp owns that block and the
+    /// source local keeps its own.
+    ClonedFrom { src_slot: SlotId },
+    /// Case 2: a closure-env local. Heap-allocate `env_size` bytes through the
+    /// size-prefixing allocator, memcpy the env in, and `ClosurePack`.
+    HeapEnvFrom { src_slot: SlotId, env_size: usize, call_func: FuncId },
+}
+
+impl ClosureTempInit {
+    /// The provenance half of the registration pair.
+    ///
+    /// ⚠ A new variant MUST answer here. Answering `NullEnv` for a heap block
+    /// re-opens `todo/t0953`; answering `HeapOwned` for a null env turns the
+    /// leak into a fault.
+    fn env_provenance(&self) -> EnvProvenance {
+        match self {
+            ClosureTempInit::NullEnv { .. } => EnvProvenance::NullEnv,
+            ClosureTempInit::ClonedFrom { .. }
+            | ClosureTempInit::HeapEnvFrom { .. } => EnvProvenance::HeapOwned,
         }
     }
 }

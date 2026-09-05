@@ -31,8 +31,17 @@
 # here keeps this round's own inflow out of `RUNTIME_DIFF_NONMATCH_CEILING`
 # (Core #9 ⊕). It moves up to top level when `todo/t1286` lands.
 #
-# NOT ASSERTED ASan-CLEAN: the closure literal leaks an 8-byte environment
-# through `todo/t0953`.
+# NOT ASSERTED ASan-CLEAN — and ⚠ THE STATED REASON IS RETIRED (R50 Track E).
+# It said "the closure literal leaks an 8-byte environment through
+# `todo/t0953`"; measured, this fixture went from `8 byte(s) leaked in 1
+# allocation(s)` to fully CLEAN, because a DEQUE receiver is name-stripped into
+# the same `try_emit_vector_each_hof` site the Vector one uses and is drained
+# with it. ⭐ THAT MAKES THIS A LIVE CHANGED CELL WITH NO LEAK INSTRUMENT: the
+# wired test is a stdout assertion, which is structurally blind to a leak, and
+# `self_host_gaps/` is out of the sanitize corpus. It is recorded as named
+# omission O1 on `todo/t0953` rather than left to inference. Regenerate:
+# `gg build --sanitize` on this file under
+# `ASAN_OPTIONS=detect_leaks=1:exitcode=0 LSAN_OPTIONS=use_stacks=0`.
 
 from std.collections import Deque
 

@@ -1,5 +1,17 @@
-# KNOWN GAP (todo/t0953) — the UNBOUNDEDNESS cell of the closure-literal
-# argument env leak.
+# LIVE PIN (todo/t0953) — the VECTOR arm of the builtin-HOF closure-argument
+# env drain, and the UNBOUNDEDNESS cell that motivated it.
+#
+# ⭐ GRADUATED R50 Track E. This was a KNOWN GAP with an `#[ignore]`d test; the
+# Vector-HOF expander now drains the temp, the fixture is ASan-CLEAN, and the
+# `#[ignore]` is dropped IN PLACE. The file stays in `known_gaps/` because
+# `assert_gg_sanitize_clean` takes a subdirectory stem and the directory is
+# `OUT` of both the sanitize corpus and `runtime_parity_corpus` — a live gate
+# at no corpus cost. `todo/t0953` STAYS OPEN on its plain-call cell (cell B).
+#
+# ⚠ THE 20-TRIP LOOP IS LOAD-BEARING. It is the only row in Track E's pin set
+# that can see a drain hoisted from per-CALL to per-FUNCTION: under a shared
+# per-function ledger an N-trip loop leaks N-1 records and a one-trip fixture
+# stays green. The pre-fix measurement below is what proves one mint per trip.
 #
 # `todo/t0953` owns the class and proves the WRITE SITE with a negative
 # control: a plain user function taking a `Callable` leaks the same frame with
@@ -22,9 +34,10 @@
 # evidence, cited from it — the UNBOUNDEDNESS axis its own two-call probes
 # cannot reach.
 #
-# INTENDED (asserted by the #[ignore]d wired test): prints `120` and runs
-# ASan-CLEAN. The stdout is already correct today — the LEAK is the gap, so
-# this repro means nothing outside the sanitizer.
+# INTENDED, AND NOW ASSERTED LIVE: prints `120` and runs ASan-CLEAN. The stdout
+# was always correct — the LEAK was the gap, so this repro means nothing outside
+# the sanitizer, which is why it is wired to `assert_gg_sanitize_clean` and
+# never to `run_gg`.
 
 void main():
     Vector[int] xs = [1, 2]

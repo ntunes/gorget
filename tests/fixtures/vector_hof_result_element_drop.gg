@@ -30,14 +30,17 @@
 # instead by `known_gap_flat_map_callee_result_vector_leak`, which goes from
 # 777 bytes to ASan-clean and requires BOTH the hooks and the husk free.
 #
-# ASSERTED ASan-CLEAN, and that is what the named callees buy. An earlier draft
-# spelled every cell as a closure literal and could not be: each literal leaks
-# an 8-byte environment through `todo/t0953`, so the program sat at that floor
-# (22 bytes in 4 allocations pre-fix) and would have needed a row in
-# `tests/sanitize/LEAK_ALLOWLIST.txt` — a shrink-only file whose own header says
-# adding one means fixing the leak instead. The expander does not care which
-# shape the callee has, so switching to named functions costs no coverage and
-# removes the leak rather than admitting it.
+# ASSERTED ASan-CLEAN. An earlier draft spelled every cell as a closure literal
+# and could not be: each literal leaked an 8-byte environment through
+# `todo/t0953`, so the program sat at that floor (22 bytes in 4 allocations
+# pre-fix) and would have needed a row in `tests/sanitize/LEAK_ALLOWLIST.txt` —
+# a shrink-only file whose own header says adding one means fixing the leak
+# instead. The expander does not care which shape the callee has, so switching
+# to named functions cost no coverage.
+# ⚠ THE LEAK IT WAS AVOIDING IS FIXED (R50 Track E): a builtin HOF now drains
+# the closure-argument temp it mints. The named-callee spelling no longer buys
+# anything here and may be relaxed on its own merits — it is kept only because
+# changing it would churn the pinned stdout for no coverage gain.
 #
 # AXIS CELLS — result element type × producer:
 #   Custom drop (`equip Drop`)  × {push control, map}
@@ -64,11 +67,12 @@ struct Pair:
 String mk(String a, String b):
     return a + b
 
-# Every callee here is a NAMED function, never a closure literal, and that is
-# deliberate: a literal would add `todo/t0953`'s 8-byte environment leak per
-# call site and this program could then never be asserted ASan-clean. The
-# defect lives in the expander and does not care which shape the callee has, so
-# the isolation costs no coverage — the same choice `todo/t0954`'s repro made.
+# Every callee here is a NAMED function, never a closure literal. That WAS
+# deliberate: a literal added `todo/t0953`'s 8-byte environment leak per call
+# site and the program could then never be asserted ASan-clean. ⚠ That reason is
+# retired (R50 Track E) — a builtin HOF drains its closure-argument temp now, so
+# a literal costs nothing here. The defect lives in the expander and does not
+# care which shape the callee has, so the spelling is free either way.
 Cust wrap_cust(String s):
     return Cust(s)
 

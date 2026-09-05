@@ -178,7 +178,11 @@ static inline void gorget_closure_free(void* p) {
 // `Callable.clone()` through the typed clone, or refcounting the env — never
 // adding a deep copy here, which would need a vtable slot the 16-byte layout
 // does not have, or name-matching on the env struct (layering rule 2).
-// `todo/t0953` owns the Rust-lane leak this constraint currently protects;
+// `todo/t0953` owns the Rust-lane leak this constraint currently protects
+// (⚠ NARROWED by R50 Track E to the PLAIN-CALL cell: the three builtin-HOF
+// expanders now free the closure-argument temp. Nothing here changes — this
+// function frees the env BLOCK only, never the captured buffers it memcpy'd
+// pointers into, and the clone arm does not fire at any drained site);
 // `todo/t1069` owns the self-host's version, where the field drop IS emitted at
 // make-sites and a clone result is exactly the cell it misses.
 static inline GorgetClosure gorget_closure_clone_to_owned(const GorgetClosure* src) {

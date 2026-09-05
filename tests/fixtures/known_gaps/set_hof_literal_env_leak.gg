@@ -1,0 +1,41 @@
+# PIN (`todo/t0953`, R50 Track E) — the SET arm of the builtin-HOF
+# closure-argument env drain. LIVE, not a gap: this fixture is expected to run
+# ASan-CLEAN at HEAD and to go RED if the set drain is reverted.
+#
+# WHY IT LIVES IN `known_gaps/` DESPITE BEING GREEN. The directory is an `OUT`
+# row of `tests/sanitize/CORPUS_MANIFEST.txt` and is out of
+# `runtime_parity_corpus`, so a fixture here costs no sanitize-corpus row and
+# owes no same-round self-host parity port. `assert_gg_sanitize_clean` takes a
+# subdirectory stem, so the ASan gate is fully live from here. A top-level
+# `*.gg` would buy nothing and cost both.
+#
+# WHY THE ENCLOSING LOOP IS MANDATORY, NOT DECORATION. Per-element
+# misplacement is already excluded — a single fold over two elements mints ONE
+# temp regardless. What a one-trip fixture CANNOT see is a drain hoisted from
+# per-CALL to per-FUNCTION: under a shared per-function ledger an N-trip loop
+# leaks N-1 records and a 1-trip fixture is green. Twenty trips, one record
+# per trip if the drain regresses.
+#
+# HEAP-FORCED: the closure CAPTURES `base`, so its environment is a real
+# `__gorget_closure_env_alloc` block rather than an 8-byte placeholder, and
+# LeakSanitizer sees it under the sweep's conservative-root setting.
+#
+# NOT A SECOND FILING: `todo/t0953` owns the class and stays OPEN on its
+# plain-call cell. This pins the SET expander cell that Track E closed.
+#
+# INTENDED: prints `4600` and runs ASan-CLEAN. Per trip the fold sums
+# 10 + 100 and 20 + 100 = 230; twenty trips = 4600.
+from std.collections import Set
+
+void main():
+    Set[int] s = Set[int]()
+    s.add(10)
+    s.add(20)
+    int base = 100
+    int total = 0
+    int i = 0
+    while i < 20:
+        int sum = s.fold(0, (int acc, int x): acc + x + base)
+        total = total + sum
+        i = i + 1
+    print(total)

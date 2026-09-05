@@ -1,14 +1,22 @@
 # POSITIVE control for scripts/sanitize_sweep.sh's LEAK detector: exactly ONE
-# leak record, of exactly ONE class. The builtin higher-order call leaks its
-# 8-byte closure environment (`__gorget_closure_env_alloc`, the largest group on
-# tests/sanitize/LEAK_ALLOWLIST.txt). Paired with selftest_leak_twice.gg, which
+# leak record, of exactly ONE class. Paired with selftest_leak_twice.gg, which
 # is the same class at two records — see this directory's README.
-from std.collections import Vector
+#
+# ⭐ THE LEAK IS DELIBERATE, NOT INHERITED FROM A COMPILER DEFECT. This control
+# used to leak through `__gorget_closure_env_alloc` — a builtin higher-order
+# call abandoning its closure environment, which was `todo/t0953`. That made the
+# gate's own positive control a hostage of the largest group on the allowlist:
+# the day the defect was fixed, all three positive controls went CLEAN at once
+# and the sweep could produce no corpus verdict at all. It happened exactly as
+# this directory's README predicted.
+# Leaking a block through the C allocator on purpose proves the same detector
+# and can never be fixed out from under the gate.
+extern int leak_one_block(int n) = "malloc"
 
 int main():
-    Vector[int] vs = Vector[int]()
-    vs.push(1)
-    vs.push(2)
-    Vector[int] doubled = vs.map((int x): x * 2)
-    print(doubled.len())
+    int p = leak_one_block(32)
+    if p == 0:
+        print(0)
+    else:
+        print(1)
     return 0

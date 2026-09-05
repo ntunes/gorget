@@ -4943,11 +4943,18 @@ fn vector_hof_result_element_drop() {
     );
 }
 
-/// The drop fixture is ASan-CLEAN, and this is what enforces it. Every callee
-/// in it is a NAMED function rather than a closure literal, so `todo/t0953`'s
-/// 8-byte-per-literal environment leak is absent and the program can be held to
-/// a full clean run instead of to a floor. That is why it needs no row in
-/// `tests/sanitize/LEAK_ALLOWLIST.txt` while its `..._sizing` sibling does.
+/// The drop fixture is ASan-CLEAN, and this is what enforces it.
+///
+/// ⚠ THE REASON RECORDED HERE IS RETIRED (R50 Track E). It said the callees are
+/// NAMED functions rather than closure literals "so `todo/t0953`'s
+/// 8-byte-per-literal environment leak is absent … which is why it needs no row
+/// in `tests/sanitize/LEAK_ALLOWLIST.txt` while its `..._sizing` sibling does".
+/// The builtin-HOF expanders now drain the closure-argument temp, so a literal
+/// callee costs nothing here: measured, `vector_hof_result_element_sizing.gg`
+/// went from `40 byte(s) leaked in 5 allocation(s)` to CLEAN, and its allowlist
+/// row is gone. The named-callee spelling is no longer load-bearing for THIS
+/// fixture and may be relaxed on its own merits.
+/// (`t0953` stays open only on its plain-call cell, which no builtin HOF hits.)
 ///
 /// RED-VERIFIED against the pre-fix compiler: 22 bytes in 4 allocations.
 #[test]
@@ -5143,10 +5150,19 @@ fn hof_result_accumulator_element_sizes() {
 /// runs off the end once the element count outgrows `gorget_array_extend`'s
 /// eight-slot minimum reserve, which is why the fixture feeds it eight inputs.
 ///
-/// Leaks are TOLERATED here and overflows are not: each closure literal in the
-/// fixture leaks an 8-byte environment through `todo/t0953`, a different defect
-/// with its own repro, so `assert_gg_sanitize_clean` would be asserting that
-/// item rather than this one.
+/// Leaks were TOLERATED here and overflows were not, because each closure
+/// literal in the fixture leaked an 8-byte environment through `todo/t0953` — a
+/// different defect with its own repro, so `assert_gg_sanitize_clean` would
+/// have been asserting that item rather than this one.
+///
+/// ⚠ THAT FLOOR IS GONE (R50 Track E): the builtin-HOF expanders drain the
+/// closure-argument temp and this fixture measures fully CLEAN
+/// (`gg build --sanitize tests/fixtures/vector_hof_result_element_sizing.gg`
+/// under `ASAN_OPTIONS=detect_leaks=1:exitcode=0 LSAN_OPTIONS=use_stacks=0`;
+/// it was `40 byte(s) leaked in 5 allocation(s)`). The test below still owns
+/// only the memory-error CLASSES on purpose — the stdout half is pinned by the
+/// ordinary `vector_hof_result_element_sizing` run — but nothing now forces
+/// that split.
 ///
 /// RED-VERIFIED against the pre-fix compiler: `AddressSanitizer:
 /// heap-buffer-overflow`, WRITE of size 32, inside `gorget_array_extend`.
@@ -5181,11 +5197,13 @@ fn vector_hof_result_element_sizing_no_overflow() {
     let stderr = String::from_utf8_lossy(&run.stderr).to_string();
     let _ = std::fs::remove_dir_all(&work);
 
-    // Stdout is NOT asserted here: LeakSanitizer's exit path can bypass the
-    // stdio flush, so the captured stdout is empty whenever the run reports
-    // the `todo/t0953` environment-leak floor this fixture cannot avoid. The
-    // values are pinned by `vector_hof_result_element_sizing` on an ordinary
-    // build; what this test owns is the memory-error classes below.
+    // Stdout is NOT asserted here. The original reason was that LeakSanitizer's
+    // exit path can bypass the stdio flush, so captured stdout came back empty
+    // whenever the run reported the `todo/t0953` environment-leak floor. ⚠ That
+    // floor is retired (R50 Track E) and this fixture is ASan-CLEAN, so the
+    // constraint no longer binds; the split is kept because the values are
+    // already pinned by `vector_hof_result_element_sizing` on an ordinary
+    // build, and what this test owns is the memory-error classes below.
     for bad in [
         "heap-buffer-overflow",
         "heap-use-after-free",
@@ -5540,9 +5558,15 @@ fn closure_forelse_freevar_outer_local() {
 // VALIDATION — before any C is emitted, and before any link — on the unrelated
 // `todo/t0987`, which MASKS the behaviour under test.
 //
-// Every closure-bearing cell here leaks exactly 8 bytes per closure literal at
-// `__gorget_closure_env_alloc` (`todo/t0953`). That is the baseline these cells
-// sit on, not a finding of theirs.
+// Every closure-bearing cell here USED TO leak exactly 8 bytes per closure
+// literal at `__gorget_closure_env_alloc` (`todo/t0953`) — a baseline these
+// cells sat on, never a finding of theirs. ⚠ THE BASELINE IS ZERO AS OF R50
+// TRACK E: the builtin-HOF expanders drain the closure-argument temp, and
+// `t0988_filter_vector_string_escape.gg` measures `16 byte(s) leaked in 2
+// allocation(s)` on the pre-fix compiler against CLEAN at HEAD. These cells are
+// `run_gg` stdout assertions and were never able to see the leak either way —
+// which is exactly why the baseline had to be written down rather than
+// observed.
 //
 // OMITTED CELLS, each with its blocker — a selection cannot show you what it
 // leaves out, so they are named rather than left to inference:
@@ -8970,13 +8994,98 @@ fn callable_unit_form_clone_segv() {
 // distinguishing axis of this cell is the UNBOUNDEDNESS (change the trip
 // count and the record count follows), never the spelling, so nothing here
 // rests on which form the body uses.
+//
+// ⭐⭐ GRADUATED TO A LIVE PIN, R50 Track E — P1 of four. The Vector-HOF
+// expander now DRAINS the closure-argument temp it minted, so this row is
+// ASan-CLEAN and prints `120`. RED-verified against the pre-fix compiler:
+// `160 byte(s) leaked in 20 allocation(s)`, every frame
+// `__gorget_closure_env_alloc`. Regenerate either side with
+// `gg build --sanitize tests/fixtures/known_gaps/hof_call_env_leak_unbounded.gg`
+// under `ASAN_OPTIONS=detect_leaks=1:exitcode=0 LSAN_OPTIONS=use_stacks=0`.
+//
+// ⚠ THE `#[ignore]` IS DROPPED IN PLACE AND THE FIXTURE STAYS IN
+// `known_gaps/`. `assert_gg_sanitize_clean` already takes a subdirectory stem,
+// `known_gaps/` is an `OUT` row of `tests/sanitize/CORPUS_MANIFEST.txt` and is
+// out of `runtime_parity_corpus`, so the gate is fully live from there at no
+// corpus cost and with no same-round self-host parity obligation. Dropping the
+// attribute also takes the row off `known_gaps_census.sh`'s roster, which is
+// what keeps `--check` green with ZERO edit to the shrink-only
+// `tests/gaps/PASSING_ALLOWLIST.txt` — "a row is NEVER a place to park a
+// graduation you did not do".
+//
+// ⚠ `todo/t0953` STAYS OPEN on its plain-call cell (cell B). This row is now a
+// PIN for the drained cell, not a gap repro; the item's remaining repro is
+// `known_gaps/closure_literal_call_arg_env_leak.gg` plus
+// `known_gaps/callable_local_at_call_arg_env_leak.gg`.
+//
+// ⚠ THE 20-TRIP LOOP IS LOAD-BEARING, NOT DECORATION. It is the only row in
+// the set that can see a drain hoisted from per-CALL to per-FUNCTION: under a
+// shared per-function ledger an N-trip loop leaks N−1 records and a one-trip
+// fixture stays green.
 #[test]
-#[ignore = "todo/t0953 — a closure-literal argument leaks its env, UNBOUNDED per call: 20 map \
-calls leak 20 records (160 bytes in 20 allocations, all `__gorget_closure_env_alloc`). The \
-distinguishing axis is the UNBOUNDEDNESS; stdout is already correct, so the gap is visible only \
-under the sanitizer. Asserts the intended ASan-clean run."]
 fn hof_call_env_leak_unbounded() {
     assert_gg_sanitize_clean("known_gaps/hof_call_env_leak_unbounded", "120");
+}
+
+/// PIN — P2 of R50 Track E's four: the **DICT** arm of the builtin-HOF
+/// closure-argument env drain (`todo/t0953`).
+///
+/// RED-verified against the pre-fix compiler: `320 byte(s) leaked in 20
+/// allocation(s)`, all `__gorget_closure_env_alloc` — sixteen bytes per trip,
+/// twenty trips. CLEAN at HEAD, stdout `5100` both sides.
+///
+/// This is the row that reds if the `try_emit_dict_hof` drain is reverted; no
+/// other row in the set covers the Dict expander.
+///
+/// ⚠ The fixture's enclosing 20-trip loop is MANDATORY. Per-element
+/// misplacement is already excluded (one fold over two entries mints one temp
+/// either way); what a one-trip fixture CANNOT see is the shared-per-function
+/// ledger regression that `#[must_use] ClosureArgTemps` exists to prevent.
+#[test]
+fn dict_hof_literal_env_leak_is_drained() {
+    assert_gg_sanitize_clean("known_gaps/dict_hof_literal_env_leak", "5100");
+}
+
+/// PIN — P3 of R50 Track E's four: the **SET** arm of the builtin-HOF
+/// closure-argument env drain (`todo/t0953`).
+///
+/// RED-verified against the pre-fix compiler: `320 byte(s) leaked in 20
+/// allocation(s)`, all `__gorget_closure_env_alloc`. CLEAN at HEAD, stdout
+/// `4600` both sides. Reds if the `try_emit_set_hof` drain is reverted.
+///
+/// ⚠ Same reason for the 20-trip loop as the Dict row above.
+#[test]
+fn set_hof_literal_env_leak_is_drained() {
+    assert_gg_sanitize_clean("known_gaps/set_hof_literal_env_leak", "4600");
+}
+
+// COVERAGE FOR `todo/t0953`'s AMENDED SCOPE — ⛔ NOT A PIN, and the
+// distinction matters. No partial revert of R50 Track E's change turns this
+// row red: Track E drains at the three builtin-HOF expanders only, and this
+// shape fires at the PLAIN-CALL site, which is deliberately NOT drained.
+//
+// THE CELL: a packed `Callable` LOCAL at a call-argument position. `t0953`'s
+// original text named "the closure LITERAL argument"; the local leaks
+// identically and by a DIFFERENT mechanism — `g` itself is freed by GIR drop,
+// but the argument marshalling deep-CLONES it and nothing frees the clone.
+// Measured stack at HEAD, `__gorget_closure_env_alloc` ←
+// `gorget_closure_clone_to_owned` ← `main`: 16 bytes in 1 allocation. So a
+// GIR-level fix aimed at the literal would convert a case-2 leak into a
+// case-2a leak rather than close the class.
+//
+// WHY IT IS NOT FIXED: draining at the plain-call site turns this leak into a
+// use-after-free AND a double-free, because a callee may RETAIN a borrowed
+// `Callable` — `lib/std/iter.gg`'s six lazy adapters do (`todo/t1349`, write
+// site `todo/t1350`). Measured: the naive drain moved
+// `scripts/sanitize_sweep.sh` from `corruption: 1` to `corruption: 5`.
+#[test]
+#[ignore = "todo/t0953 (cell B) — a packed `Callable` LOCAL at a plain call-argument position \
+leaks the clone the argument marshalling minted for it (16 bytes in 1 allocation, \
+`__gorget_closure_env_alloc` <- `gorget_closure_clone_to_owned` <- `main`). Blocked on \
+todo/t1349: draining at the plain-call site turns the leak into a use-after-free for any callee \
+that retains a borrowed `Callable`. Asserts the intended ASan-clean run."]
+fn known_gap_callable_local_at_call_arg_env_leak() {
+    assert_gg_sanitize_clean("known_gaps/callable_local_at_call_arg_env_leak", "41");
 }
 
 /// KNOWN GAP `todo/t0977` — `auto out = v.map(<closure>)` reads back a RAW
@@ -9453,10 +9562,20 @@ fn known_gap_dict_iter_ref_field_read_clone_temp_leak() {
 // discriminator: a plain USER function taking `Callable[int(int)]` leaks the
 // same frame, so this is wider than the "every builtin HOF call" wording
 // `tests/sanitize/LEAK_ALLOWLIST.txt` inherited for it. Both closures CAPTURE,
-// so the envs are real 16-byte mallocs. 32 bytes in 2 allocations, C and LLVM.
+// so the envs are real 16-byte mallocs.
+//
+// ⚠ FIGURE WRITE-THROUGH, R50 Track E. It was `32 bytes in 2 allocations`; the
+// builtin-HOF cell is now DRAINED and only the plain-call cell survives, so the
+// fixture measures **16 bytes in 1 allocation** and this row STILL FAILS. That
+// is the intended state: `t0953` keeps cell B, gated on `todo/t1349` (a callee
+// may RETAIN a borrowed `Callable`, so draining at the plain-call site turns
+// the leak into a use-after-free). Regenerate:
+// `gg build --sanitize tests/fixtures/known_gaps/closure_literal_call_arg_env_leak.gg`
+// under `ASAN_OPTIONS=detect_leaks=1:exitcode=0 LSAN_OPTIONS=use_stacks=0`.
 #[test]
-#[ignore = "todo/t0953 — a closure literal at a call-argument position leaks its environment, at \
-a builtin HOF and at a plain user call alike. Asserts the intended ASan-clean run."]
+#[ignore = "todo/t0953 (cell B) — a closure literal at a PLAIN CALL-argument position leaks its \
+environment (16 bytes in 1 allocation since R50 Track E drained the builtin-HOF cell; it was 32 \
+in 2). Blocked on todo/t1349. Asserts the intended ASan-clean run."]
 fn known_gap_closure_literal_call_arg_env_leak() {
     assert_gg_sanitize_clean("known_gaps/closure_literal_call_arg_env_leak", "41\n41");
 }
@@ -9470,9 +9589,13 @@ fn known_gap_closure_literal_call_arg_env_leak() {
 // `filter` and `sorted` are ELEMENT-PRESERVING and were always clean, which is
 // what localises it to the accumulator an element-TRANSFORMING producer mints.
 // Every callee is a NAMED function so `todo/t0953`'s env leak cannot
-// contaminate the record set — which is why this one CAN assert fully clean
-// while `vector_hof_result_element_drop` cannot. It was 201 bytes in 6
-// allocations, C and LLVM.
+// contaminate the record set. ⚠ THAT REASON IS RETIRED (R50 Track E): a
+// builtin-HOF call now drains the closure-argument temp it mints, so a literal
+// callee contaminates nothing here and the spelling is free to change on its
+// own merits. (The clause it used to justify — "which is why this one CAN
+// assert fully clean while `vector_hof_result_element_drop` cannot" — was
+// already wrong in its own terms: that sibling asserts fully clean too.)
+// It was 201 bytes in 6 allocations, C and LLVM.
 #[test]
 fn known_gap_vector_hof_accumulator_elem_drop_missing() {
     assert_gg_sanitize_clean(
@@ -9485,7 +9608,7 @@ fn known_gap_vector_hof_accumulator_elem_drop_missing() {
 // elements have been drained into the accumulator. It used to leak one backing
 // array per input element plus the Strings those husks still owned: 777 bytes
 // in 6 allocations, C and LLVM. Named callee, for the same isolation reason as
-// the sibling above.
+// the sibling above — ⚠ and that reason is retired with it (R50 Track E).
 //
 // ORDER-COUPLED, one way: the free is safe only because the accumulator now
 // carries `elem_clone`, which turns `gorget_array_extend` from an aliasing
@@ -12425,15 +12548,32 @@ drop 7",
 /// This one survives that fix because it lives on the duplicate-rejection path,
 /// which that fixture never reaches — all of its elements are distinct.
 ///
-/// Un-ignore + promote out of `known_gaps/` when the rejected key is freed.
+///
+/// ⭐⭐ GRADUATED 2026-09-05 — `todo/t0121` IS CLOSED. The defect was fixed by
+/// R50 Track H's `8573b12ca` ("gorget_map_put's duplicate-key path leaked the
+/// incoming key"), which did not un-ignore its repros, so
+/// `scripts/known_gaps_census.sh --check` was RED from that commit onward and
+/// nobody had run it since. Surfaced by R50 Track E's gate run, adjudicated
+/// there, and attributed rather than absorbed.
+///
+/// ⚠ ADJUDICATED BY MECHANISM, NOT BY EXIT CODE, which is what the census
+/// script's own header demands of a passing ignored test. All FOUR witnesses
+/// `t0121` named — this fixture, `set_comprehension_dup_elem_leak`, a
+/// `Dict[String,int]` literal with two heap-forced duplicate keys, and a plain
+/// `for i in 0..3: out.add(mk("a","b"))` — are CLEAN at HEAD, RED on a pre-Track-H
+/// compiler with the item's own recorded figures (3 B/1 and 6 B/2), and RED again
+/// when the CITED FIX SITE is broken BY LINE (`src/backend/c/runtime/runtime_map.c`,
+/// the `m->key_drop((void*)key);` on the duplicate-key hit). Core #13, both
+/// directions.
+///
+/// ⚠ THE FIXTURE STAYS IN `known_gaps/` AND THE `#[ignore]` IS DROPPED IN PLACE.
+/// `assert_gg_sanitize_clean` takes a subdirectory stem, so the gate is fully
+/// live from there; moving it top-level would enroll it into
+/// `runtime_parity_corpus` and create a same-round self-host MATCH obligation
+/// for a fixture that pins a C-runtime leak. Dropping the attribute is also what
+/// takes the row off the census roster, which greens `--check` with ZERO edit to
+/// the shrink-only `tests/gaps/PASSING_ALLOWLIST.txt`.
 #[test]
-#[ignore = "KNOWN GAP (R44 Track G): a Set[String] literal that DEDUPLICATES a \
-HEAP element leaks the rejected key -- LeakSanitizer reports `Direct leak of 3 \
-byte(s)` from gorget_str_cat, rc 99, while stdout is correct (2 / aa / bb) and \
-detect_leaks=0 exits 0. Distinct from the byte-vs-str ctor double free \
-(security/attack_101_*, now fixed and LSan-clean): this is the \
-duplicate-rejection path. Fixture: tests/fixtures/known_gaps/\
-set_string_dup_elem_leak.gg. TODO.md."]
 fn set_string_dup_elem_leak() {
     assert_gg_sanitize_clean(
         "known_gaps/set_string_dup_elem_leak",
@@ -12467,16 +12607,32 @@ bb",
 /// `cow_set_comprehension_invariant_in_condition.gg`, which runs through the
 /// CONDITION with `int` elements precisely so it pins liveness and not this.
 ///
-/// Un-ignore + promote out of `known_gaps/` when the rejected key is freed.
+///
+/// ⭐⭐ GRADUATED 2026-09-05 — `todo/t0121` IS CLOSED. The defect was fixed by
+/// R50 Track H's `8573b12ca` ("gorget_map_put's duplicate-key path leaked the
+/// incoming key"), which did not un-ignore its repros, so
+/// `scripts/known_gaps_census.sh --check` was RED from that commit onward and
+/// nobody had run it since. Surfaced by R50 Track E's gate run, adjudicated
+/// there, and attributed rather than absorbed.
+///
+/// ⚠ ADJUDICATED BY MECHANISM, NOT BY EXIT CODE, which is what the census
+/// script's own header demands of a passing ignored test. All FOUR witnesses
+/// `t0121` named — this fixture, `set_comprehension_dup_elem_leak`, a
+/// `Dict[String,int]` literal with two heap-forced duplicate keys, and a plain
+/// `for i in 0..3: out.add(mk("a","b"))` — are CLEAN at HEAD, RED on a pre-Track-H
+/// compiler with the item's own recorded figures (3 B/1 and 6 B/2), and RED again
+/// when the CITED FIX SITE is broken BY LINE (`src/backend/c/runtime/runtime_map.c`,
+/// the `m->key_drop((void*)key);` on the duplicate-key hit). Core #13, both
+/// directions.
+///
+/// ⚠ THE FIXTURE STAYS IN `known_gaps/` AND THE `#[ignore]` IS DROPPED IN PLACE.
+/// `assert_gg_sanitize_clean` takes a subdirectory stem, so the gate is fully
+/// live from there; moving it top-level would enroll it into
+/// `runtime_parity_corpus` and create a same-round self-host MATCH obligation
+/// for a fixture that pins a C-runtime leak. Dropping the attribute is also what
+/// takes the row off the census roster, which greens `--check` with ZERO edit to
+/// the shrink-only `tests/gaps/PASSING_ALLOWLIST.txt`.
 #[test]
-#[ignore = "KNOWN GAP (todo/t0121): a Set comprehension over a loop-invariant \
-heap element leaks every key dedup rejects -- LeakSanitizer reports `Direct \
-leak of 6 byte(s) in 2 object(s)`, rc 99, while stdout is correct (1 / true) \
-and detect_leaks=0 exits 0. The COMPREHENSION face of the literal defect \
-pinned by set_string_dup_elem_leak; the Dict-KEY spelling and a plain \
-`for i in 0..3: out.add(mk(\"a\",\"b\"))` leak identically, so the class is \
-the map insert path. Fixture: tests/fixtures/known_gaps/\
-set_comprehension_dup_elem_leak.gg. TODO.md."]
 fn set_comprehension_dup_elem_leak() {
     assert_gg_sanitize_clean(
         "known_gaps/set_comprehension_dup_elem_leak",
@@ -65424,7 +65580,16 @@ fn for_direct_iterator_param_not_advanced() {
 // single largest class in `tests/sanitize/LEAK_ALLOWLIST.txt`. Measured
 // IDENTICALLY at pristine HEAD (32 bytes / 1 allocation for the free-function
 // control, on the pre-fix compiler), so it is pre-existing debt, not inflow
-// from this change. Top-level `tests/fixtures/*.gg` is what
+// from this change.
+//
+// ⚠ STILL TRUE AFTER R50 Track E, AND THAT IS THE POINT. Track E drains the
+// closure-argument temp at the three builtin-HOF expanders only; every fixture
+// in this directory passes its literal at a PLAIN CALL, which is deliberately
+// NOT drained (`todo/t1349`). Measured either side:
+// `closure_arg_user_method_named_call.gg` is `96 byte(s) leaked in 4
+// allocation(s)` on BOTH the pre-fix and the post-fix compiler. So the `OUT`
+// row and its retirement condition stand — see
+// `tests/sanitize/CORPUS_MANIFEST.txt`. Top-level `tests/fixtures/*.gg` is what
 // `scripts/sanitize_sweep.sh` sweeps, so landing them there would admit six
 // NEW allowlist rows for a pre-existing class — and that list is shrink-only,
 // with new inflow an explicit owner ask. `tests/sanitize/CORPUS_MANIFEST.txt`

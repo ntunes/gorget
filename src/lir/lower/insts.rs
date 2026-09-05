@@ -569,9 +569,11 @@ impl<'a> FuncLowering<'a> {
                         .closure_call_sigs
                         .get(func)
                         .map_or(false, |sig| sig.takes_env);
-                    if !callee_takes_env {
-                        self.wrap_closure_call_args(args, &mut lir_args, bb);
-                    }
+                    let closure_temps = if !callee_takes_env {
+                        Some(self.wrap_closure_call_args(args, &mut lir_args, bb))
+                    } else {
+                        None
+                    };
                     let result = dst.map(|_| self.lir_func.next_value());
                     self.push_inst(bb, Inst::Call {
                         dst: result,
@@ -583,6 +585,36 @@ impl<'a> FuncLowering<'a> {
                     }
                     // Post-call zeroing for Move operands (Rust-style ownership).
                     self.emit_post_call_zeros(args, bb);
+                    // ⛔ NOT FREED HERE — MEASURED. A plain callee may RETAIN the
+                    // closure past the call: `lib/std/iter.gg`'s lazy adapters
+                    // store it (`FilterIter { F pred }`) and `MapIter__drop`
+                    // already calls `gorget_closure_free` on it. Freeing the
+                    // caller's temp makes a SECOND owner — measured as a
+                    // heap-use-after-free on `iter_map_after_filter` /
+                    // `iter_map_enumerate` / `iter_trait_default_trait_args` and
+                    // a double-free on `linked_list`. The temp leaks
+                    // (`todo/t0953` cell B) until the adapters stop storing a
+                    // BORROWED `Callable` into a returned struct.
+                    //
+                    // ⚠ WHAT THIS SITE WAITS ON IS SEQUENCING, NOT A RULING.
+                    // The deciding rule IS ratified — AGENTS.md states plain-call
+                    // `Callable` params "are simply borrowed" — and the compiler
+                    // simply cannot SEE it: `needs_explicit_move`'s `Generic` arm
+                    // matches only the concrete carve-out names, so a generic `F`
+                    // bound to a single-owner type is invisible to the check
+                    // (`todo/t1350`, the write site; `todo/t1349`, the six
+                    // `lib/std/iter.gg` adapters it lets through). Closing that
+                    // is a NEW REJECTION and therefore a three-lane change
+                    // (Core #9); until it lands, draining HERE turns a leak into
+                    // a use-after-free for any USER program that retains a
+                    // borrowed `Callable` — miscompile-class, unbounded radius.
+                    //
+                    // ⛔ Do NOT read `docs/devbook/11-copy-on-write.md`'s
+                    // "`Callable` borrows / `ConsumeCallable` consumes" passage
+                    // as the gate here: its subject is a callee at a bare INDEX
+                    // place (`v[i](x)`), not a `Callable` at an ARGUMENT
+                    // position. Different subject, different question.
+                    drop(closure_temps);
                 } else {
                     // Unknown function — treat as extern.
                     // Map monomorphized collection/method names to runtime function names.
@@ -2385,6 +2417,39 @@ impl<'a> FuncLowering<'a> {
         stores
     }
 
+    /// Free the `GorgetClosure` temps `wrap_closure_call_args` synthesized for
+    /// the call that just returned.
+    ///
+    /// Mirrors the `printf_str_temps` drain in `emit_extern_call`: these temps
+    /// are born at the LIR layer, BELOW GIR drop registration, so nothing
+    /// upstream can register them and the emitter that owns the consuming call
+    /// closes the boundary itself (Core #3 — register at the producer).
+    ///
+    /// `mint_closure_arg_temp` records a temp only for the typed pair
+    /// `(CalleeBorrows, HeapOwned)`, so this never touches a closure a
+    /// collection has taken ownership of, and never hands a NULL env to
+    /// `gorget_closure_free`.
+    pub(super) fn free_closure_arg_temps(
+        &mut self,
+        temps: super::operands::ClosureArgTemps,
+        bb: BlockId,
+    ) {
+        let temps = temps.0;
+        if temps.is_empty() { return; }
+        self.ensure_extern("gorget_closure_free", &[LirType::Ptr], &LirType::Void);
+        let abis = self.lookup_arg_abis("gorget_closure_free");
+        for slot in temps {
+            let addr = self.lir_func.next_value();
+            self.push_inst(bb, Inst::SlotAddr { dst: addr, slot });
+            self.push_inst(bb, Inst::CallExtern {
+                dst: None,
+                name: "gorget_closure_free".to_string(),
+                args: vec![addr],
+                arg_abis: abis.clone(),
+            });
+        }
+    }
+
     pub(super) fn emit_post_call_zeros(&mut self, args: &[Operand], bb: BlockId) {
         for arg in args {
             if let Operand::Move(place) = arg {
@@ -2756,7 +2821,7 @@ impl<'a> FuncLowering<'a> {
 
         // Wrap the closure arg into a GorgetClosure pointer.
         let mut lir_args_wrapped = lir_args.to_vec();
-        self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
+        let closure_temps = self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
 
         // filter produces a fresh GorgetMap — pre-register the runtime
         // helpers the BIR expansion will call (mirror src's config
@@ -2820,6 +2885,13 @@ impl<'a> FuncLowering<'a> {
         if let (Some(d), Some(r)) = (*dst, result_id) {
             self.store_to_local(d, r, bb);
         }
+        // SAFE TO DRAIN HERE - the closure's LAST USE is inside the expansion.
+        // Every op this site routes (`each`/`fold`/`any`/`all`/`filter`)
+        // expands to an INLINED loop, so there is no callee at all and nothing
+        // can outlive the call. NOT true of the plain-call site, whose callee
+        // is USER code that may RETAIN the closure (`lib/std/iter.gg`'s lazy
+        // adapters do - `todo/t1349`), which is why the drain is not there.
+        self.free_closure_arg_temps(closure_temps, bb);
         Some(bb)
     }
 
@@ -2925,7 +2997,7 @@ impl<'a> FuncLowering<'a> {
         };
 
         let mut lir_args_wrapped = lir_args.to_vec();
-        self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
+        let closure_temps = self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
 
         // filter / map produce a fresh GorgetSet — pre-register the
         // runtime helper the BIR expansion will call to mint the result
@@ -2990,6 +3062,13 @@ impl<'a> FuncLowering<'a> {
         if let (Some(d), Some(r)) = (*dst, result_id) {
             self.store_to_local(d, r, bb);
         }
+        // SAFE TO DRAIN HERE - the closure's LAST USE is inside the expansion.
+        // Every op this site routes (`each`/`fold`/`any`/`all`/`filter`)
+        // expands to an INLINED loop, so there is no callee at all and nothing
+        // can outlive the call. NOT true of the plain-call site, whose callee
+        // is USER code that may RETAIN the closure (`lib/std/iter.gg`'s lazy
+        // adapters do - `todo/t1349`), which is why the drain is not there.
+        self.free_closure_arg_temps(closure_temps, bb);
         Some(bb)
     }
 
@@ -3499,7 +3578,7 @@ impl<'a> FuncLowering<'a> {
         // Wrap the closure arg into a `Ptr` to `GorgetClosure` so the BIR
         // expansion can dispatch via `Inst::CallClosure { EscapedClosure }`.
         let mut lir_args_wrapped = lir_args.to_vec();
-        self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
+        let closure_temps = self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
 
         // Derive per-arg ABI from the closure's `__call` parameter
         // types when available (from `closure_call_sig` above).
@@ -3667,6 +3746,24 @@ impl<'a> FuncLowering<'a> {
         if let (Some(d), Some(r)) = (*dst, result_id) {
             self.store_to_local(d, r, bb);
         }
+        // SAFE TO DRAIN HERE - the closure's LAST USE is inside the expansion,
+        // at every op this site routes. NOT because "the loop is inlined":
+        // that sentence has NO SUBJECT for the sort family. Both halves:
+        //   * the 11 loop arms (`each`/`fold`/`map`/`filter`/...) expand to an
+        //     INLINED loop - no callee exists;
+        //   * the 4 sort arms (`sort_by`/`sorted_by`/`sort_by_key`/
+        //     `sorted_by_key`) DO emit a real `Inst::Call` into a synthesized
+        //     `sort_impl` (`grep -n 'Direct call: sort_impl' src/bir/lower.rs`),
+        //     so a callee EXISTS - but it is a compiler-synthesized comparator
+        //     bound by the opaque-closure invariant: it CALLS the closure
+        //     through `Inst::CallClosure` and NEVER STORES it
+        //     (`sed -n '9,17p' src/bir/synth.rs`). Pinned by
+        //     `security/attack_60_sort_non_transitive.gg`, the only routed
+        //     shape where "a callee could retain" is a live question.
+        // NOT true of the plain-call site, whose callee is USER code that may
+        // RETAIN the closure (`lib/std/iter.gg`'s lazy adapters do -
+        // `todo/t1349`), which is why the drain is not there.
+        self.free_closure_arg_temps(closure_temps, bb);
         Some(bb)
     }
 

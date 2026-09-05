@@ -305,8 +305,11 @@ box_trait_vector_lit	__gorget_box_alloc_Robot*1,str_alloc_copy*1
 # intended clean run.
 # Same family as the `vector_callable_two_locals` / `closure_*` rows below.
 # ⊕ THIRD COLUMN: `<class>=<item>`, the per-class citation. Rows that predate it
-# carry none; the three rows that postdate it do (`iter_trait_default_trait_args`,
-# `self_whole_move_ok`, `vector_hof_cross_type_map`).
+# carry none; the rows that postdate it do. ⚠ This used to name three
+# (`iter_trait_default_trait_args`, `self_whole_move_ok`,
+# `vector_hof_cross_type_map`); the third RETIRED at R50 Track E, measured clean,
+# and a hand-kept list is exactly what rots. Regenerate the live set:
+#   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | awk -F'\t' 'NF>2 {print $1}'
 # ⚖ ADMITTED (R49 Track L, 2026-09-04; OWNER RULING TAKEN TWICE — see below).
 # EIGHT rows, ONE root, and the root is FILED: `todo/t1210` — the Rust lane frees
 # a closure environment BLOCK and never the environment's FIELDS, because the
@@ -460,23 +463,15 @@ callable_vector_element_plain_sig_call_segv	__gorget_closure_env_alloc*2
 # the earlier stack-buffer-overflow). `t0948` does not land without a read-side
 # materializer landing with it.
 callable_literal_at_consuming_positions	__gorget_closure_env_alloc*16	__gorget_closure_env_alloc=t0948,__gorget_closure_env_alloc=t0971,__gorget_closure_env_alloc=t0972
-builtin_oracle_sync_deque	__gorget_closure_env_alloc*2
-builtin_oracle_sync_dict	__gorget_closure_env_alloc*6
-builtin_oracle_sync_hashmap	__gorget_closure_env_alloc*2
-builtin_oracle_sync_hashset	__gorget_closure_env_alloc*2
-builtin_oracle_sync_vector	__gorget_closure_env_alloc*5
 char_methods	str_alloc_copy*2
 clone_breaks_borrow_chain	__gorget_closure_env_alloc*2
 closure_as_callback	__gorget_closure_env_alloc*1
-closure_capture_patterns	__gorget_closure_env_alloc*1
 closure_capture_then_mutate_source_uaf	str_alloc_copy*1	str_alloc_copy=t0310
 closure_captures_param_then_escapes_uaf	str_alloc_copy*2	str_alloc_copy=t1210
-closure_compose	__gorget_closure_env_alloc*3
 closure_escape_capture_axis_local_literal	gorget_str_cat*1,str_alloc_copy*1	gorget_str_cat=t1210,str_alloc_copy=t1210
 closure_escape_capture_axis_param_named	str_alloc_copy*1	str_alloc_copy=t1210
 closure_float_ret	__gorget_closure_env_alloc*1
-closure_fstring_capture	__gorget_closure_env_alloc*1,str_alloc_copy*1	str_alloc_copy=t1210
-closure_higher_order_chain	__gorget_closure_env_alloc*3
+closure_fstring_capture	str_alloc_copy*1	str_alloc_copy=t1210
 # ⚖ ADMITTED (R49 Track INT-B, 2026-09-04). This row's leak is genuinely NEW
 # INFLOW — the fixture is this round's, added by `030d4d2d7` — which this file's
 # own header reserves to an OWNER ASK. The ask was MADE, as `todo/t1306`, and it
@@ -513,9 +508,18 @@ closure_higher_order_chain	__gorget_closure_env_alloc*3
 # over the top-level fixtures Track L's tree never carried, run BEFORE the
 # reconciliation rather than after it. A full corpus sweep would have found it
 # too — at round-close, as a surprise, with no time to ask.
-# RETIRES: t0953
+# ⛔ RETIREMENT CONDITION CORRECTED 2026-09-05 (R50 Track E). It read
+# `RETIRES: t0953`, and t0953 PARTLY landed without retiring this row: Track E
+# drains the closure-arg temp at the three builtin-HOF expanders only, and this
+# fixture's declared axis is a literal at a DIRECT-CALL ARGUMENT -- the plain-call
+# cell, which is deliberately NOT drained while a callee may RETAIN a borrowed
+# `Callable` (`todo/t1349`, write site `todo/t1350`). Measured: this row still
+# leaks x3, unchanged. Its sibling admissions `vector_hof_cross_type_map` and
+# `vector_hof_result_element_sizing` DID retire in that change -- so of the
+# owner's two `t0953` admissions exactly ONE clears, and saying which is the
+# point of writing it here.
+# RETIRES: t0953's PLAIN-CALL cell (cell B)
 closure_literal_ambient_return_at_call_arg	__gorget_closure_env_alloc*3	__gorget_closure_env_alloc=t0953
-closure_mixed_implicit_explicit_wiring	__gorget_closure_env_alloc*1
 closure_multiline_return	__gorget_closure_env_alloc*2,gorget_string_format*2
 closure_mutable_capture	__gorget_closure_env_alloc*3
 closure_tuple_destructure	__gorget_closure_env_alloc*5,gorget_map_clone*12,gorget_string_format*1,str_alloc_copy*1
@@ -524,11 +528,6 @@ const_match_pattern	gorget_string_format*1
 const_match_shadow	gorget_string_format*3
 consume_callable_once	__gorget_closure_env_alloc*1
 conv_stdlib	gorget_parse_float*1,gorget_parse_int*1,str_alloc_copy*3
-coroutine_chained_methods	__gorget_closure_env_alloc*3
-coroutine_collections	__gorget_closure_env_alloc*5
-coroutine_collections_advanced	__gorget_closure_env_alloc*1
-coroutine_dict_higher_order	__gorget_closure_env_alloc*5
-coroutine_dict_set	__gorget_closure_env_alloc*4
 coroutine_result_combinators	str_alloc_copy*2
 coroutine_vector_ops	__gorget_array_reserve_one*1
 cow_amp_ref_field_forward	__gorget_array_reserve_one*2
@@ -551,17 +550,13 @@ dataframe_tier2_sort_arith	gorget_parse_float*2
 dataframe_transform	__gorget_closure_env_alloc*1
 datetime_format	gorget_format_time*4
 deadwrite_ok_atomic_add	gorget_atomic_int_new*1
-deque_each_untyped_closure_str	__gorget_closure_env_alloc*1
-deque_hof_each	__gorget_closure_env_alloc*1
 derive_debuggable	str_alloc_copy*4
 deserializable	str_alloc_copy*3
 dict_drain_basic	gorget_dict_new*6,gorget_map_clone*18
 dict_drain_resource	gorget_dict_new*6,gorget_map_clone*18,str_alloc_copy*21
-dict_higher_order	__gorget_closure_env_alloc*3
 dict_iter_enumerate	gorget_map_clone*12,str_alloc_copy*5
 dict_keys_lazy	__gorget_closure_env_alloc*1,gorget_map_clone*18
 dict_keys_lazy_resource	gorget_map_clone*9,str_alloc_copy*4
-dict_keys_values	__gorget_closure_env_alloc*1
 dict_user_key_auto	str_alloc_copy*1
 dict_user_key_hashable	str_alloc_copy*1
 dict_values_lazy	__gorget_closure_env_alloc*1,gorget_map_clone*18
@@ -578,7 +573,6 @@ fstring_method_chain	__gorget_closure_env_alloc*2
 generic_callable	__gorget_closure_env_alloc*2
 guard_boxed_trait_dispatch	__gorget_box_alloc_Robot*1,gorget_mutex_new*2,gorget_str_cat*1
 guard_get_user_struct_no_leak	gorget_str_cat*1
-hashmap_unordered	__gorget_closure_env_alloc*1
 hot_reload_basic	gorget_hot_watch_init*1
 httpserver_before	gorget_dict_new*3,gorget_map_clone*3,str_alloc_copy*3
 httpserver_body_parsers	str_alloc_copy*4
@@ -648,7 +642,6 @@ iter_terminal_stmt_positions	gorget_array_reserve*1,str_alloc_copy*1
 # `known_gap_dict_iter_ref_field_read_clone_temp_leak` asserting the clean run.
 iter_trait_default_trait_args	gorget_map_clone*12,str_alloc_copy*4	gorget_map_clone=t0952,str_alloc_copy=t0952
 iterator_adapters	__gorget_closure_env_alloc*4
-iterator_lazy_chain	__gorget_closure_env_alloc*6
 json_edge_cases	str_alloc_copy*9
 json_parse	str_alloc_copy*1
 json_pretty	str_alloc_copy*1
@@ -760,9 +753,7 @@ serialize_collections	str_alloc_copy*7
 set_drain_basic	gorget_dict_new*2,gorget_set_clone*6
 set_drain_resource	gorget_dict_new*2,gorget_set_clone*6,str_alloc_copy*7
 set_filter_count	__gorget_closure_env_alloc*1,gorget_set_clone*6
-set_higher_order	__gorget_closure_env_alloc*3
 set_iter_enumerate_lir_panic	gorget_set_clone*6
-set_ordering	__gorget_closure_env_alloc*2
 set_take_values	gorget_set_clone*6
 set_user_key_hashable	str_alloc_copy*1
 # ⚖ ADMITTED (owner 2026-08-31). Owned by `todo/t0609` item (2) — a call or
@@ -840,8 +831,7 @@ stdlib_iter_join	gorget_string_push_char*3,str_alloc_copy*3
 stdlib_iter_more_terminals	gorget_string_push_char*1,str_alloc_copy*1
 stdlib_iter_set	gorget_set_clone*24
 stdlib_udp_typed	str_alloc_copy*1
-stress_alloc_closures	__gorget_closure_env_alloc*7
-stress_alloc_vectors	__gorget_closure_env_alloc*2
+stress_alloc_closures	__gorget_closure_env_alloc*1
 stress_atomic_hammer	gorget_atomic_int_new*1
 stress_channel_mpsc	gorget_channel_new*2
 stress_channel_select	gorget_channel_new*8
@@ -858,7 +848,7 @@ stress_shared_comprehensive	gorget_mutex_new*4,gorget_shared_new*4
 stress_shared_multi_token	gorget_mutex_new*6,gorget_shared_new*6
 stress_spawn_fan_out	gorget_atomic_int_new*1
 stress_taskgroup_fan	gorget_atomic_int_new*1
-string_closures_transform	__gorget_closure_env_alloc*5,gorget_str_cat*1
+string_closures_transform	gorget_str_cat*1
 string_conversions	gorget_parse_float*1,gorget_parse_int*1,str_alloc_copy*6
 # ⚖ ADMITTED (R49 Track L fold, 2026-09-04; covered by NEITHER new-inflow clause
 # and needing no owner ask — see below). Owned by `todo/t1290`.
@@ -884,7 +874,7 @@ string_conversions	gorget_parse_float*1,gorget_parse_int*1,str_alloc_copy*6
 # moment the leak stops — the row forces its own removal.
 # RETIRES: t1290
 string_enum_variants	str_alloc_copy*1	str_alloc_copy=t1290
-string_higher_order	__gorget_closure_env_alloc*15,gorget_str_cat*1
+string_higher_order	gorget_str_cat*1
 string_parsing_patterns	str_alloc_copy*1
 sync_atomics	gorget_atomic_bool_new*1,gorget_atomic_int_new*1
 sync_barrier	gorget_barrier_new*1
@@ -897,34 +887,21 @@ tensor_linalg	__gorget_array_reserve_one*12
 tensor_reduce	__gorget_array_reserve_one*7
 tensor_reshape	__gorget_array_reserve_one*2
 test_cleanup	gorget_format*1,str_alloc_copy*2
-test_closures_advanced	__gorget_closure_env_alloc*7
-test_closures_edge_cases	__gorget_closure_env_alloc*6
-test_collections_nested	__gorget_closure_env_alloc*2
-test_collections_nested_advanced	__gorget_closure_env_alloc*3
-test_dict_all	__gorget_closure_env_alloc*5
-test_dict_edge_cases	__gorget_closure_env_alloc*2
-test_dict_int_keys	__gorget_closure_env_alloc*2
+test_closures_advanced	__gorget_closure_env_alloc*4
+test_closures_edge_cases	__gorget_closure_env_alloc*4
 test_failure	gorget_format*1,str_alloc_copy*2
 # ⛔ LOAD-BEARING: str_alloc_copy*2 is the SOLE guard for gorget_map_put's UNORDERED
 # mode (HashMap/HashSet). Reverting either unordered half of t1387's fix takes it to
 # *3 and reds the sweep as a NEW LEAK CLASS. The fixture map_userkey_dup_key_drop
 # pins only the DENSE mode. Do not loosen this row as "noisy" -- measured R50.
-test_hashmap_all	__gorget_closure_env_alloc*4,str_alloc_copy*2
-test_hashset_all	__gorget_closure_env_alloc*4
-test_method_chaining	__gorget_closure_env_alloc*12
+test_hashmap_all	str_alloc_copy*2
 test_multiline_closures	__gorget_closure_env_alloc*1
 test_process_timeout	gorget_process_spawn*8
 test_result_advanced	str_alloc_copy*4
-test_set_all	__gorget_closure_env_alloc*11
-test_set_string	__gorget_closure_env_alloc*4,str_alloc_copy*1
+test_set_string	str_alloc_copy*1
 test_should_panic	gorget_format*2,str_alloc_copy*4
-test_vector_advanced	__gorget_closure_env_alloc*15
-test_vector_all	__gorget_closure_env_alloc*14,gorget_array_reserve*1
-test_vector_bool	__gorget_closure_env_alloc*9
-test_vector_edge_cases	__gorget_closure_env_alloc*14
-test_vector_float_higher_order	__gorget_closure_env_alloc*9
-test_vector_of_structs	__gorget_closure_env_alloc*2
-test_vector_str_higher_order	__gorget_closure_env_alloc*9,gorget_str_cat*2
+test_vector_all	gorget_array_reserve*1
+test_vector_str_higher_order	gorget_str_cat*2
 test_with_clause	gorget_format*1,str_alloc_copy*2
 time_format	gorget_format_time*4
 tlsf_composable	gorget_tlsf_new*2
@@ -932,85 +909,9 @@ toml_edge	str_alloc_copy*3
 toml_parse	str_alloc_copy*10
 toml_stringify	__gorget_array_reserve_one*1,gorget_dict_new*9,gorget_map_clone*9,str_alloc_copy*19
 tracking_composable	gorget_tracking_new*1
-vector_any_all_bool	__gorget_closure_env_alloc*6
 vector_callable_two_locals	__gorget_closure_env_alloc*2
-vector_higher_order	__gorget_closure_env_alloc*4
-# ⚖ ADMITTED (R48 Track T-a1, 2026-09-03; covered by the third ⚖ EXTENDED
-# paragraph in this file's header). THE FIXTURE IS R48's (added `4e0dc7811`,
-# 2026-08-31) and it read "clean" when first swept ONLY BECAUSE IT CRASHED FIRST —
-# a `heap-buffer-overflow` R48 Track γ fixed, so LSan never got to report the
-# leaks the program always had. SIX QUESTIONS #6: a green cell can be green for a
-# reason unrelated to what you think it tests.
-# THREE CLASSES, THREE DIFFERENT MECHANISMS, THREE DIFFERENT ITEMS — each isolated
-# in a 5-line probe, not grouped by top frame:
-#   * `__gorget_closure_env_alloc*10` -> `todo/t0953`. A closure LITERAL at a
-#     call-argument position leaks its environment. This fixture passes exactly
-#     ten inline literals to map/flat_map/filter and all ten records allocate
-#     directly in `main`. ⚠ WIDER THAN THIS FILE'S OWN big-groups prose, which
-#     calls the frame "every builtin HOF call": a plain USER function taking
-#     `Callable[int(int)]` leaks the same frame with no HOF in the program.
-# TWO OF THE THREE CLASSES HAVE SINCE LANDED, and this row is what tightening
-# looks like. Re-measured 2026-09-04 at 80 bytes in 10 allocations, all
-# `__gorget_closure_env_alloc`:
-#   * `gorget_array_push*6` was `todo/t0955` — the `Vector[U]` a `flat_map`
-#     CALLEE returns, never freed once its elements were drained into the
-#     accumulator, one husk per input element. GONE: the expander frees the
-#     drained husk, which is safe because the accumulator now carries
-#     `elem_clone` and the append is a deep copy rather than an aliasing memcpy.
-#   * `str_alloc_copy*13` was SPLIT by the DIRECT/INDIRECT distinction — 8
-#     INDIRECT under the husks above (`todo/t0955`) and 5 DIRECT
-#     (`todo/t0954`: the accumulator a Vector HOF mints carried a NULL
-#     `elem_drop`, so the array was freed and its heap elements were not). BOTH
-#     GONE: the accumulator is built from the RESULT element type's resolved
-#     hooks, so it drops what it holds.
-# `todo/t0953` ships a durable heap-forced `known_gaps` repro with a NAMED
-# callee where the isolation needs one, and an `#[ignore]`d
-# `assert_gg_sanitize_clean` test asserting the clean run.
-# RETIRES: t0953
-vector_hof_cross_type_map	__gorget_closure_env_alloc*10	__gorget_closure_env_alloc=t0953
-# ⚖ ADMITTED (R49 Track N2 formulated the ask, 2026-09-04; R49 Track INT-B
-# records the answer). This row's leak is genuinely NEW INFLOW, which this
-# file's own header reserves to an OWNER ASK — so the ask was MADE, and it was
-# ANSWERED. The header clause was satisfied here, not overridden.
-# ⚖⚖ OWNER RULING (2026-09-04), recorded verbatim:
-#     "Lets go with (a)."
-# THE OPTIONS WERE THE R49 ORCHESTRATOR'S FRAMING, not the owner's words:
-# (a) admit the row, one line, temporary, cited to `todo/t0953`, retiring when
-# `t0953` lands; (b) amend this file's header to permit extension-by-analogy
-# under standing autonomy; (c) argue the existing graduation clause already
-# covers it.
-# ⭐ SO THE SCOPE IS (a): ADMIT, TEMPORARY, CITED TO `todo/t0953`. That is the
-# whole of the ruling. It admits THIS ROW — it is not a rule about future
-# new-inflow rows, and nothing here may be extended to a neighbouring one.
-#
-# ⭐ THE REASONING BELOW IS R49 TRACK N2'S, which the ask carried:
-# The FIXTURE is this round's; the MECHANISM is not. Every record is
-# `__gorget_closure_env_alloc`, one per closure literal, which is `todo/t0953` —
-# filed, with its own durable heap-forced repro and an `#[ignore]`d test. That
-# is the same shape the ⚖ EXTENDED A SECOND TIME paragraph above records for
-# `iter_trait_default_trait_args` / `self_whole_move_ok` /
-# `vector_hof_cross_type_map`, but those three are covered BY NAME and this row
-# is not.
-# ⭐ THE LEAK IS IRREDUCIBLE HERE, MEASURED RATHER THAN ASSERTED, and that is
-# what distinguishes it from the sibling fixture that ships with NO row. The
-# closure literals are the defect's ENTRY CONDITION: measured against the
-# pre-fix compiler, a NAMED callee whose body is the same container literal
-# (`Vector[String] f(int n): return [mk("t","ag")]`) sizes its accumulator
-# CORRECTLY at 32 — the GIR lane refines a named callee's result type and does
-# not refine a closure literal's. Spelling these cells with named functions
-# would not reduce the leak, it would delete the defect being pinned.
-# ⊕ ITS SIBLING `vector_hof_result_element_drop` HAS NO ROW BECAUSE ITS LEAK WAS
-# FIXED, NOT ADMITTED: the expander defect does not care about callee shape, so
-# every callee there was rewritten as a named function and the fixture is now
-# asserted fully clean by `vector_hof_result_element_drop_is_sanitize_clean`.
-# That is the "fix it instead" this file asks for, applied where it was possible
-# and declined only where it is not.
-# RETIRES: t0953
-vector_hof_result_element_sizing	__gorget_closure_env_alloc*5	__gorget_closure_env_alloc=t0953
-vector_methods2	__gorget_array_reserve_one*1,__gorget_closure_env_alloc*4
-vector_sort_by	__gorget_closure_env_alloc*3
-vector_sort_by_key	__gorget_closure_env_alloc*3,str_alloc_copy*2
-vector_sort_stable	__gorget_closure_env_alloc*3
+vector_methods2	__gorget_array_reserve_one*1
+vector_sort_by_key	str_alloc_copy*2
 vector_task_get	gorget_atomic_int_new*1
 vector_task_mixed_await	gorget_atomic_int_new*1
 waitgroup_amp_param	__gorget_spawn_worker*2+

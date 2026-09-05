@@ -31,9 +31,14 @@
 # sizes its accumulator CORRECTLY at 32, because the GIR lane refines a named
 # callee's result type and does not refine a closure literal's. Swap the
 # literals for named functions and the cells stop being broken at all.
-# So the `todo/t0953` environment leak comes with the defect: 40 bytes in 5
-# allocations, one per literal, admitted with a citation in
+# So the `todo/t0953` environment leak used to come with the defect: 40 bytes in
+# 5 allocations, one per literal, admitted with a citation in
 # `tests/sanitize/LEAK_ALLOWLIST.txt` rather than hidden.
+# ⚠ RETIRED, R50 Track E: the builtin-HOF expanders now drain the
+# closure-argument temp, this fixture measures fully CLEAN, and its allowlist
+# row is DELETED. Regenerate: `gg build --sanitize` on this file under
+# `ASAN_OPTIONS=detect_leaks=1:exitcode=0 LSAN_OPTIONS=use_stacks=0`. The
+# closure literals stay — they are still the defect's entry condition.
 #
 # AXIS CELLS — direction × closure body × destination:
 #   (a) UNDERSIZED  8 -> 32  literal body, typed dst   — the heap overflow

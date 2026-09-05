@@ -27,10 +27,24 @@ is clean, run 2 leaks, run 3 is clean. A genuine coin flip would let the
 self-test pass by luck whenever all `REPS` runs landed on the same face.
 
 **If a control stops behaving, that is a real finding, not a broken test.**
-`selftest_leak.gg` and `selftest_leak_twice.gg` leak through
-`__gorget_closure_env_alloc` — every builtin higher-order call leaks its
-environment, the largest single group on `tests/sanitize/LEAK_ALLOWLIST.txt`.
-The day that defect is fixed these two go clean and the self-test fails
-**loudly**, which is the correct outcome: re-point the controls at a leak class
-that is still live, in the same commit that retires the old one. What must never
-happen is a control that quietly stops proving anything.
+This section used to say the controls leaked through
+`__gorget_closure_env_alloc` — the builtin higher-order call abandoning its
+closure environment, then the largest single group on
+`tests/sanitize/LEAK_ALLOWLIST.txt` — and that the day the defect was fixed
+they would go clean and the self-test would fail **loudly**. That is exactly
+what happened, and the prediction was short by one: it said *these two*, and
+there were **three**. `selftest_alternating_leak.gg` manufactured its leak the
+same way.
+
+**The controls no longer ride on a compiler defect.** All three now leak a
+block through the C allocator on purpose — `extern int leak_one_block(int n) =
+"malloc"` — which proves the same detector, cannot be fixed out from under the
+gate, and leaves nothing for a future round to re-point. The lesson stands for
+any control written from here on: an instrument built on a bug is a hostage of
+that bug, and the gate cannot produce a corpus verdict at all while its own
+self-test is failing.
+
+**`selftest_leak_twice.gg` needs two distinct call SITES, not a loop.**
+LeakSanitizer groups records by allocation stack, so two allocations from one
+line merge into a single record of two objects and the `*2` that control exists
+to produce reads `*1`.

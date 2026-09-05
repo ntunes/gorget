@@ -6,6 +6,7 @@
 # drained husk afterwards. One leaked backing array per input element.
 #
 # The callee is a NAMED FUNCTION on purpose, so `todo/t0953`'s closure-literal
+# ⚠ (RETIRED for builtin HOFs by R50 Track E — a literal costs nothing here now)
 # environment leak cannot contaminate the record set.
 #
 # INTENDED: prints 10 and 3, and is ASan-clean under `detect_leaks=1`, on C and

@@ -52,6 +52,18 @@ debt owned by `todo/t0953`, the single largest class in
 `tests/sanitize/LEAK_ALLOWLIST.txt` — not inflow from the changes these fixtures
 pin.
 
+⛔ **STILL TRUE AFTER `t0953` PARTLY LANDED (R50 Track E), AND THAT IS THE
+POINT.** Track E drains the closure-argument temp at the three builtin-HOF
+expanders only. Every fixture here passes its literal at a **plain call**, which
+is deliberately NOT drained: a plain callee is user code that may RETAIN a
+borrowed `Callable` (`lib/std/iter.gg`'s lazy adapters do — `todo/t1349`, write
+site `todo/t1350`), and freeing the caller's temp there makes a second owner —
+measured as a use-after-free and a double-free. So the leak these fixtures carry
+is unchanged: `closure_arg_user_method_named_call.gg` is **96 bytes in 4
+allocations on both the pre-fix and the post-fix compiler**. Regenerate with
+`gg build --sanitize <f>` under
+`ASAN_OPTIONS=detect_leaks=1:exitcode=0 LSAN_OPTIONS=use_stacks=0`.
+
 (`collide_no_closure*` and `extern_symbol*` carry no closure literal and so do
 not leak. They stay here anyway: a family split across two directories is a
 family whose next reader only finds half of it.)
@@ -105,7 +117,11 @@ expression body, and a cell ggdef cannot run is a cell with no oracle.
 
 Legitimate the moment either condition holds:
 
-1. **`todo/t0953` lands** — the leak goes away and there is nothing to admit; or
+1. **`todo/t0953`'s PLAIN-CALL cell (cell B) lands** — the leak goes away and
+   there is nothing to admit. ⚠ Sharpened 2026-09-05: this used to read
+   "`todo/t0953` lands", and R50 Track E landed the item's builtin-HOF cell
+   without moving these fixtures one byte. The condition is cell B, which is
+   gated on `todo/t1349`; or
 2. **the owner's ruling on Track A1-M's pending allowlist ask admits rows of
    this shape** — then the move is the CORRECT placement, because it buys back
    `runtime_parity_corpus` coverage of the self-host lane at the price of six

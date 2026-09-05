@@ -36,6 +36,7 @@
 #     Putting it here would merge two defects into one row.
 #   * every callee here is a NAMED FUNCTION, deliberately: a closure literal adds
 #     `todo/t0953`'s environment leak on top and the mechanisms would be reported
+#     ⚠ (that overlay is GONE for builtin HOFs — R50 Track E drains the temp)
 #     as one. `nums.map((int n): int_to_str(n * 10))` leaks
 #     `__gorget_closure_env_alloc*1` AND `str_alloc_copy*1` — the two superimposed.
 #   * the LAZY iterator adapters (`.iter().map(…).collect()`) are not sampled;

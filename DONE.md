@@ -1,3 +1,140 @@
+- [2026-09-05] ⚠ **`t0121` CLOSED — AND IT WAS ALREADY FIXED, BY ANOTHER TRACK, WITH THE ROUND-CLOSE CENSUS GATE
+  RED IN BETWEEN (found by R50 Track E's gate run; the FIX is R50 Track H's).** `scripts/known_gaps_census.sh
+  --check` exits 1 with two ignored tests now PASSING and absent from the passing-allowlist:
+  `set_string_dup_elem_leak` and `set_comprehension_dup_elem_leak`. Both are `todo/t0121` — *"a Set[String]
+  literal that DEDUPLICATES a heap element never frees the rejected key"* — and both were fixed by Track H's
+  `8573b12ca` *("gorget_map_put's duplicate-key path leaked the incoming key")*, whose own message describes
+  exactly this item's fix (*"free the key when `gorget_map_put` reports the entry already existed"*). H landed
+  the fix and did not un-ignore the repros or close the item, so the gate has been red since that commit and
+  nothing ran it. ⭐ **This is the census script's whole reason to exist, firing for real.**
+  ⛔ **PROVEN NOT TRACK E's, rather than assumed.** Track E's ENTIRE `src/` footprint is three files
+  (`src/lir/lower/{insts,operands}.rs` plus a comment in `runtime_string.c`); reverting all three to the base
+  commit and rebuilding leaves both rows **ASan-CLEAN**. The leak these fixtures carry has no closure anywhere
+  in it and its frame is `gorget_str_cat`, not `__gorget_closure_env_alloc`.
+  ⭐ **ADJUDICATED BY MECHANISM, NOT BY EXIT CODE** — the census header's own requirement, because a passing
+  ignored test is a FINDING and R44 measured 12 of 12 passing rows to be BLIND rather than fixed. All FOUR
+  witnesses `t0121` names were measured on three compilers: **CLEAN at HEAD**; **RED on a pre-Track-H
+  compiler**, reproducing the item's own recorded figures exactly (`3 byte(s) in 1 allocation` for the
+  `Set[String]` literal and the `Dict[String,int]` duplicate-key literal, `6 byte(s) in 2 allocations` for the
+  comprehension and for the plain `for i in 0..3: out.add(mk("a","b"))` statement loop); and **RED again with
+  the CITED FIX SITE broken BY LINE** (`m->key_drop((void*)key);` on the duplicate-key hit,
+  `src/backend/c/runtime/runtime_map.c`). Two of those four witnesses exist only in `t0121`'s prose — they
+  were reconstructed from it and measured, which is what makes the class-closure claim a measurement.
+  **GRADUATED THE MINIMAL WAY:** both `#[ignore]` attributes dropped IN PLACE, fixtures left in `known_gaps/`.
+  `assert_gg_sanitize_clean` takes a subdirectory stem so the gate is fully live from there, and moving them
+  top-level would enroll a C-runtime leak pin into `runtime_parity_corpus` with a same-round self-host MATCH
+  obligation. Dropping the attribute is also what takes the rows off the census roster, so `--check` greens
+  with **zero** edit to the shrink-only `tests/gaps/PASSING_ALLOWLIST.txt` — *"a row is NEVER a place to park
+  a graduation you did not do"*.
+  ⚠ **THE PROCESS FINDING IS THE DURABLE HALF:** a fix can close an item's whole class and leave every record
+  of it standing, and the only instrument that notices is a gate somebody has to run. The gate ran here
+  because it is on Track E's brief; nothing scheduled it.
+
+- [2026-09-05] **`t0953`'s BUILTIN-HOF CELL CLOSED, AND THE OBVIOUS FIX WAS BUILT AND MEASURED MAKING THINGS
+  WORSE (R50 Track E).** Freeing the closure-argument temp at the PLAIN-CALL site turns this leak into a
+  **use-after-free AND a double-free** — `lib/std/iter.gg`'s lazy adapters RETAIN the closure, so the caller's
+  free makes a second owner. Measured on four corpus fixtures by the track's SCOUT and recorded in `todo/t1349`;
+  `scripts/sanitize_sweep.sh` went `corruption: 1 (allowlisted 1)` → **`corruption: 5`**. ⭐ **SIX-Q #6 at full strength: those cells are green
+  today only because the caller's temp is never freed. The leak is not a mitigation — it is a second defect
+  cancelling the first.** The blocking half is `todo/t1349` (filed by the scout); its write site is
+  `todo/t1350`. **So the track shipped the provably-safe subset: drain at the three BIR `HofExpand`
+  expanders only.**
+  ⛔ **AND THE SAFETY PREMISE THE PATCH SHIPPED AS A CODE COMMENT WAS FALSE.** It said the expansion "is a
+  self-contained loop", at all three drain sites. `SortBy`/`SortedBy`/`SortByKey`/`SortedByKey` do NOT expand
+  to a loop — they synthesize a `sort_impl` and emit a real `Inst::Call` PASSING THE CLOSURE
+  (`grep -n 'Direct call: sort_impl' src/bir/lower.rs`), so a callee EXISTS at 4 of the 25 routed ops.
+  ⭐ **The conclusion survives for a STRONGER reason, and that is what the comments now say:** at every
+  drained site the closure's LAST USE is inside the expansion — for the 21 loop arms because no callee
+  exists, and for the 4 sort arms because the only callee is a compiler-synthesized comparator bound by the
+  opaque-closure invariant to CALL the closure and never STORE it (`sed -n '9,17p' src/bir/synth.rs`).
+  **THE WRITE SITE IS NOW A CHOKEPOINT (Core #1/#3/#4).** `wrap_single_closure_arg` opened each of its three
+  arms with its own `add_slot(LirType::Struct(gc_sid), None)` and decided ownership per arm; two of the three
+  forgot to register, which IS the item. All three now go through `mint_closure_arg_temp`, which mints,
+  INITIALIZES and REGISTERS in one call from the typed pair `(ClosureArgOwner, EnvProvenance)` — registering
+  **iff `CalleeBorrows && HeapOwned`**, because a `NullEnv` temp has no heap block and freeing it is a fault,
+  not a leak fix; and mint-with-init because freeing an UNINITIALIZED `GorgetClosure` is corruption, not a
+  leak. **Proven a PURE EXTRACTION: emitted C byte-identical on one firer of every (owner × arm) cell that
+  exists in the corpus** (5 cells; the case-2a × `DestinationOwns` firer is `dict_box_callable.gg`). The
+  now-dead `debug_assert!` was **DELETED, not documented** (Core #14) — it was one-directional (it could fire
+  only on over-registration, never on the FORGET that is the leak) and debug-only.
+  ⛔ **AND `#[must_use]` DOES NOT CATCH THIS CLASS — MEASURED WITH rustc.** `mint();` warns; `let t = mint();`
+  does not, and rustc even suggests `let _ =` as the way to SILENCE it. Every call site is `let closure_temps
+  = …`, so a fifth caller who binds and forgets gets nothing. **Two guards instead, both verified RED by
+  LINE-ANCHORED break (Core #13 — the three drain calls are identically spelled):**
+  `closure_arg_temps_are_drained_in_every_wrapping_body` (function-body-scoped, per the
+  `collection_elem_drop_routes_through_type_drop_fns` idiom: every `wrap_closure_call_args` body must also
+  contain a disposition) and `closure_arg_temps_are_minted_at_one_site` (one mint, inside the chokepoint,
+  registering on the PAIR). Six breaks, six REDs.
+  ⚠⚠ **THE SANITIZE GATE'S OWN POSITIVE CONTROLS WERE BUILT ON THIS BUG** — `selftest_leak.gg`,
+  `selftest_leak_twice.gg` **and** `selftest_alternating_leak.gg` (its README said "these two"; it was
+  THREE). With the fix in they all read CLEAN and the sweep hard-fails *"THE SANITIZE GATE'S OWN INSTRUMENT
+  IS BROKEN"* before producing any corpus verdict. All three now leak deliberately through
+  `extern int leak_one_block(int n) = "malloc"` — bug-independent, and shipped in the SAME commit, never
+  drain-first. `selftest_leak_twice` needs two distinct call SITES because LSan merges identical stacks.
+  **FOUR PINS, EACH DISCRIMINATING, EACH RED-VERIFIED AGAINST THE PRE-FIX COMPILER:** P1
+  `known_gaps/hof_call_env_leak_unbounded` **un-ignored in place** (160 B/20 → CLEAN, prints `120`;
+  dropping the attribute takes it off `known_gaps_census.sh`'s roster, so `--check` greens with ZERO edit to
+  the shrink-only passing-allowlist) · P2/P3 new `known_gaps/{dict,set}_hof_literal_env_leak` (320 B/20 →
+  CLEAN each) · P4 `security/attack_60_sort_non_transitive` flipped from `security_safe` to
+  `security_safe_no_leak` (8 B/1 → CLEAN) — ⛔ **it was green only because `security_safe` runs
+  `detect_leaks=0`**, and it is the NECESSARY pin, the only routed shape where "a callee could retain" is a
+  live question. Revert matrix measured: R1 vector → P1+P4 red, P2/P3 green; R2 dict → P2 only; R3 set → P3
+  only; R4 `DestinationOwns`→`CalleeBorrows` → **hard build error** (`variant DestinationOwns is never
+  constructed` under `[lints.rust] warnings = "deny"`). ⚠ A revert that DELETES a drain fails the BUILD, not
+  the fixture — the honest partial revert substitutes `drop(closure_temps)`, and that is how the matrix above
+  was run.
+  ⚠ **THE 20-TRIP ENCLOSING LOOP IN P1/P2/P3 IS LOAD-BEARING, NOT DECORATION.** Per-element misplacement is
+  already excluded; what a one-trip fixture CANNOT see is a drain hoisted from per-CALL to per-FUNCTION —
+  under a shared ledger an N-trip loop leaks N−1 and a one-trip fixture is green. Pre-fix these fixtures
+  measure one record PER TRIP, which is what makes the argument a measurement.
+  **`t0953` DOES NOT CLOSE — it keeps CELL B**, the plain-call cell, in both its literal and its packed-LOCAL
+  form (`known_gaps/callable_local_at_call_arg_env_leak.gg`, new, `#[ignore]`d — **coverage for the amended
+  scope, explicitly NOT a pin**: no partial revert reds it). `known_gaps/closure_literal_call_arg_env_leak`
+  went 32 B/2 → **16 B/1** and still fails, which is the intended state. ⛔ **Cell B is NOT an owner ask:**
+  `AGENTS.md` already says plain-call `Callable` params *"are simply borrowed"* and `t1350` shows the
+  deciding typed fact is ratified and merely invisible to `needs_explicit_move`'s `Generic` arm — what blocks
+  the drain is sequencing, because until the adapters stop storing a borrowed `Callable`, freeing the
+  caller's temp is miscompile-class with unbounded blast radius.
+  ⛔ **ONLY ONE OF THE TWO OWNER ADMISSIONS RETIRES.** `vector_hof_result_element_sizing` (40 B/5 → CLEAN)
+  does; the `closure_literal_ambient_return_at_call_arg` row is a DIRECT-CALL-ARGUMENT fixture, i.e. cell B,
+  and stays. ⊕ A **THIRD** record claimed retirement on this item and does not get it:
+  `CORPUS_MANIFEST.txt`'s `closure_identity OUT` row said *"RETIRES when todo/t0953 lands"* — every fixture
+  there passes its literal at a PLAIN call and measures **96 B/4 on BOTH compilers**. ⊕ A **FOURTH** was
+  found and IS retired: `self_host_gaps/deque_hof_result_element_drop.gg` (8 B/1 → CLEAN), because a DEQUE
+  receiver is name-stripped into the Vector site. **All 25 files citing `t0953` at the base commit carry a
+  disposition in the item** (`git grep -l 't0953' <base> | sort`), with `tests/integration.rs`'s 11 lines
+  folded into that table rather than carried as a second count.
+  **FOUR NAMED OMISSIONS, in `todo/t0953` where they outlive this entry:** **O1** the second receiver family
+  at each drained site — and **Deque has a live changed cell whose only instrument is a stdout assertion,
+  structurally blind, in a directory that is OUT of the sweep** · **O2** the other 21 routed `HofOp`s (one
+  drain per function exit; no op-specific revert exists) · **O3** the `flat_map` `?`-bail, which PRESERVES
+  the leak — the safe direction, pinned by nothing · **O4** dissolved by the chokepoint.
+  **LANES (Core #9):** implementation-internal codegen in shared LIR ⇒ C and LLVM both fix from one change
+  (verified on both). **Self-host lane NONE for the write site** — one `IClosurePack` emission, no
+  arg-position wrap — and the self-host fixture dirs contain ZERO live builtin-HOF-with-closure-literal
+  calls, so stage-1 emitted code is unchanged (the question Core #7 actually asks). ⚠ **The self-host's own
+  closure-env debt is `todo/t1069` and `todo/t1210`, both distinct and both OPEN — the family is NOT
+  closed.** No fixture went top-level, so no same-round parity port is owed.
+  ⊕ Filed `todo/t1351` (LOW): `printf_str_temps` is the live sibling of the shared ledger this track
+  deliberately did not build — sound today only because push and drain sit in one straight-line arm.
+  **THE ALLOWLIST, RE-MEASURED FROM THIS TRACK'S OWN TREE (Core #5, never by adding a delta).**
+  `scripts/sanitize_sweep.sh` at HEAD: `corruption: 1 (allowlisted 1)` — UNCHANGED, no corruption inflow —
+  and `leaks: 251 (allowlisted 293)`. **42 rows RETIRED** and **12 TIGHTENED**; the four pinned counters move
+  293→251 rows, 487→436 pairs, 2232→1978 records, 469→420 uncited, loose signatures unchanged at 8.
+  ⊜ **ATTRIBUTED EXACTLY, WITHOUT A SECOND SWEEP:** every one of the 42 carried
+  `__gorget_closure_env_alloc` as its ONLY class — the only allocation frame this change touches — so no other
+  owner's row is inside the set. The sweep also reports 16 further tightenings on OTHER frames
+  (`str_alloc_copy`, `gorget_string_format`, `gorget_map_clone`, `gorget_dict_new`, `gorget_array_reserve`,
+  `gorget_str_cat`); those are LEFT STANDING for their owners, the convention R50 Track H recorded.
+  ⚠ **THE FOUR COUNTERS ARE SHARED (MA-5) — the integrating parent must re-measure them from the MERGED
+  tree**, not accept these; a counter both halves bump is invisible to a two-halves-apply test.
+  ⛔ **AND THE ALLOWLIST EDIT ITSELF REPRODUCED CORE #13 ON THE FIRST TRY.** The first script anchored the two
+  orphaned `⚖ ADMITTED` blocks BY SUBSTRING; three such blocks open with the IDENTICAL two lines, `str.find`
+  matched the wrong one, and it deleted **350 lines** — 99 rows survived where 251 should have. Caught by
+  re-measuring the row count rather than by reading the diff. The second script is line-indexed on the
+  original array and asserts both edit counts. *An identically-spelled sibling absorbs the anchor, in a
+  ledger exactly as in source.*
+
 - [2026-09-05] ⚠ **NAMED OMISSIONS FROM `t1385`'s CLOSURE (R50 Track K), recorded here because a commit
   body is the least durable place for them.** Three of the track's atoms are pinned by **NOTHING**: the
   remediation-hint correction, the two doc-prose rewrites, and the four `robustness_map.py` unit-message

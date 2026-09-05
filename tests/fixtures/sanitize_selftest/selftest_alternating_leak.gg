@@ -8,8 +8,12 @@
 # The fixture must NOT be moved up into tests/fixtures/: the corpus walk is
 # `-maxdepth 1`, so it would become both an unlisted leak row and a permanently
 # flaky row, forcing the two ceilings it exists to prove.
-from std.collections import Vector
+#
+# ⭐ Same deliberate allocation as its two siblings — see selftest_leak.gg for
+# why the controls no longer ride on a compiler defect.
 from std.fs import file_exists, write_file, delete_file
+
+extern int leak_one_block(int n) = "malloc"
 
 int main():
     bool leak_this_run = false
@@ -19,10 +23,11 @@ int main():
     else:
         write_file("_sanitize_selftest_flip", "1")
     if leak_this_run:
-        Vector[int] vs = Vector[int]()
-        vs.push(1)
-        Vector[int] doubled = vs.map((int x): x * 2)
-        print(doubled.len())
+        int p = leak_one_block(32)
+        if p == 0:
+            print(0)
+        else:
+            print(1)
     else:
         print(0)
     return 0

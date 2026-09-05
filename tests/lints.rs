@@ -10073,7 +10073,24 @@ fn sanitize_allowlists_shrink_only() {
     // partial revert of the fix trip `❌ NEW LEAK` instead.
     // ⊜ ATTRIBUTED, not assumed: a PRISTINE control sweep at the same base
     // reported ZERO retirements, so the set-diff is the whole eight.
-    const LEAK_CEILING: usize = 293;
+    // 293 -> 251 (R50 Track E). FORTY-TWO rows RETIRED: their fixtures reported
+    // no leak record of ANY class once the three builtin-HOF expanders started
+    // freeing the closure-argument temp they mint (`todo/t0953`'s builtin-HOF
+    // cell). ⊜ ATTRIBUTED EXACTLY, and by a cheaper instrument than a second
+    // sweep: every one of the forty-two carried `__gorget_closure_env_alloc` as
+    // its ONLY class, which is the only allocation frame the change touches, so
+    // no other owner's row is inside the set. Two of them are CITED to
+    // `todo/t0953` (`vector_hof_cross_type_map`,
+    // `vector_hof_result_element_sizing`) and the sweep therefore forced them
+    // out with rc 1; their `⚖ ADMITTED` blocks went with them, because a block
+    // is the row's reason to exist.
+    // ⛔ `todo/t0953` DOES NOT CLOSE. Its plain-call cell stays open, gated on
+    // `todo/t1349`, and its third admitted row
+    // (`closure_literal_ambient_return_at_call_arg`) is a direct-call-argument
+    // fixture that still leaks x3 -- so exactly ONE of the owner's two `t0953`
+    // admissions clears. Regenerate:
+    //   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -vc '^$'
+    const LEAK_CEILING: usize = 251;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -10364,8 +10381,31 @@ fn sanitize_allowlists_shrink_only() {
     // it contradicted the very number it explains.) ⚠ The fixed sweep reports 28 tightenings, not 12 -- the other 16
     // are BYTE-IDENTICAL in the pristine control and are NOT this track's, so
     // they are deliberately left standing for their owners.
-    const LEAK_CLASS_PAIRS: usize = 487;
-    const LEAK_RECORDS: usize = 2232;
+    // 487 -> 436 pairs, 2232 -> 1978 records (R50 Track E). The forty-two retired
+    // rows take FORTY-TWO pairs with them (each carried exactly one class); the
+    // twelve TIGHTENED rows give up NINE more, where
+    // `__gorget_closure_env_alloc` measured GONE while another class on the row
+    // survived. 42 + 9 = 51 = the 487 -> 436 delta. The remaining three
+    // tightenings are count-only (`stress_alloc_closures` 7->1,
+    // `test_closures_advanced` 7->4, `test_closures_edge_cases` 6->4) and move
+    // records without moving pairs -- those residues are the PLAIN-CALL cell,
+    // which this change deliberately does not drain.
+    // ⚠ The sweep reports 28 tightenings, not 12; the other 16 move a DIFFERENT
+    // frame (`str_alloc_copy`, `gorget_string_format`, `gorget_map_clone`,
+    // `gorget_dict_new`, `gorget_array_reserve`, `gorget_str_cat`) and are left
+    // standing for their owners -- the same convention the R50 Track H note
+    // above records.
+    // ⚠ THESE FOUR ARE SHARED COUNTERS (MA-5): they were measured from Track E's
+    // own tree, and a two-halves-apply test cannot see a counter both halves
+    // bump. The INTEGRATING PARENT re-measures every one from the merged tree
+    // and sets it from the measured output, never by adding a delta (Core #5).
+    // Regenerate all three:
+    //   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -v '^$' | cut -f2 \
+    //     | awk -F, '{p+=NF; for(i=1;i<=NF;i++){n=$i; sub(/.*\*/,"",n); \
+    //         if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} r+=n}} \
+    //         END{print "pairs",p; print "records",r; print "loose",loose}'
+    const LEAK_CLASS_PAIRS: usize = 436;
+    const LEAK_RECORDS: usize = 1978;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────
@@ -10454,7 +10494,12 @@ fn sanitize_allowlists_shrink_only() {
     // EXIST -- eight with their retired row, three where a tightening removed
     // the class outright -- and all eleven were uncited, so none crosses the
     // cited/uncited line. Not a citation drive.
-    const UNCITED_LEAK_CLASS_PAIRS: usize = 469;
+    // ⚖ 469 -> 420 (R50 Track E). Forty-nine pairs that CEASED TO EXIST -- forty
+    // with their retired row (the forty-two retirements include the TWO CITED
+    // ones, which were never in this count) and nine where a tightening removed
+    // the class outright. None crosses the cited/uncited line; this is not a
+    // citation drive.
+    const UNCITED_LEAK_CLASS_PAIRS: usize = 420;
 
     // A `todo/` item counts as citable for a pair only if it EXISTS and its body
     // NAMES the pair's top-frame symbol. Cached: 293 rows would otherwise re-read
@@ -31379,4 +31424,220 @@ fn value_semantics_cells_are_generated_and_current() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
+}
+
+/// Guard (Core #6, BOTH directions) for `todo/t0953`'s DRAIN side: a body that
+/// WRAPS closure call arguments must also DISPOSE of the temps that wrapping
+/// minted.
+///
+/// `wrap_closure_call_args` returns a `#[must_use] ClosureArgTemps`, and
+/// `#[must_use]` was MEASURED not to catch this class: rustc warns on a bare
+/// `mint();` and says NOTHING about `let t = mint();` — which is the shape of
+/// every call site here — and it even suggests `let _ =` as the way to silence
+/// it. So `must_use` green-lights a fifth caller who binds the temps and
+/// forgets them, i.e. exactly the leak being retired (SIX-Q #2).
+///
+/// This is the drain-side counterpart of
+/// `closure_arg_temps_are_minted_at_one_site`, which guards the MINT side.
+/// Neither substitutes for the other.
+///
+/// Idiom: FUNCTION-BODY-SCOPED, per the precedent
+/// `collection_elem_drop_routes_through_type_drop_fns` — a whole-file grep
+/// would let a new wrapping body ride on some other body's drain.
+///
+/// The two accepted dispositions:
+///   * `free_closure_arg_temps(` — emit the `gorget_closure_free` calls;
+///   * `drop(closure_temps)`     — deliberately DO NOT free, which today is
+///     the plain-call site only, where a callee may RETAIN the closure and
+///     freeing turns the leak into a use-after-free (`todo/t1349`). It carries
+///     its reasoning in a comment at the site.
+#[test]
+fn closure_arg_temps_are_drained_in_every_wrapping_body() {
+    let path = "src/lir/lower/insts.rs";
+    let src = fs::read_to_string(path).expect("read src/lir/lower/insts.rs");
+
+    // Byte offsets of every method declaration in the file, so a wrap site can
+    // be attributed to the body that encloses it.
+    let mut fn_starts: Vec<usize> = Vec::new();
+    for marker in ["\n    fn ", "\n    pub fn ", "\n    pub(super) fn ", "\n    pub(crate) fn "] {
+        let mut from = 0usize;
+        while let Some(i) = src[from..].find(marker) {
+            fn_starts.push(from + i + 1);
+            from = from + i + marker.len();
+        }
+    }
+    fn_starts.sort_unstable();
+    assert!(
+        fn_starts.len() > 20,
+        "the method-declaration scan of {path} found only {} declarations — the \
+         slicing idiom broke, and a broken slicer green-lights everything.",
+        fn_starts.len(),
+    );
+
+    const WRAP: &str = "self.wrap_closure_call_args(";
+    const FREE: &str = "self.free_closure_arg_temps(";
+    const NOOP: &str = "drop(closure_temps)";
+
+    // Attribute every wrap site to the body that encloses it, then require
+    // that body to carry AT LEAST AS MANY dispositions as it has wrap sites.
+    //
+    // ⚠ THE COUNT IS WHAT MAKES THIS CATCH ITS CLASS, not a `contains`.
+    // `lower_instruction` is ~2000 lines; a mere "the body mentions a
+    // disposition somewhere" test lets a SECOND wrap site added inside it ride
+    // on the first site's `drop(closure_temps)` and leak silently (SIX-Q #2).
+    let mut sites = 0usize;
+    let mut per_body: Vec<(usize, usize)> = Vec::new(); // (body_start, wrap count)
+    let mut from = 0usize;
+    while let Some(i) = src[from..].find(WRAP) {
+        let at = from + i;
+        from = at + WRAP.len();
+        sites += 1;
+        let body_start = *fn_starts
+            .iter()
+            .filter(|&&s| s <= at)
+            .last()
+            .unwrap_or_else(|| panic!("no enclosing fn for the wrap site at byte {at}"));
+        match per_body.iter_mut().find(|(s, _)| *s == body_start) {
+            Some((_, n)) => *n += 1,
+            None => per_body.push((body_start, 1)),
+        }
+    }
+
+    for (body_start, wraps) in per_body {
+        let body_end = fn_starts
+            .iter()
+            .copied()
+            .find(|&s| s > body_start)
+            .unwrap_or(src.len());
+        let body = &src[body_start..body_end];
+        // Name the function for the message. ⚠ Slice after `fn `, never at the
+        // first `(` — `pub(super) fn lower_instruction(` would name itself
+        // "pub".
+        let name = body
+            .find("fn ")
+            .and_then(|k| body[k + 3..].find('(').map(|e| body[k + 3..k + 3 + e].trim()))
+            .unwrap_or("<unnamed>");
+        let disposals = body.matches(FREE).count() + body.matches(NOOP).count();
+        assert!(
+            disposals >= wraps,
+            "`{name}` in {path} calls `wrap_closure_call_args` {wraps} time(s) — \
+             which MINTS an owned `GorgetClosure` (a real `__gorget_closure_env_alloc` \
+             block at the case-2 and case-2a arms) — and disposes of the returned \
+             `ClosureArgTemps` only {disposals} time(s). That is `todo/t0953`: the \
+             env is never freed and the leak is unbounded per call.\n\
+             Every wrap site owes ONE of:\n  \
+               * `self.free_closure_arg_temps(closure_temps, bb);` after the call \
+                 returns — CORRECT only where the closure's LAST USE is inside \
+                 the expansion (the three `HofExpand` expanders: the loop arms \
+                 are inlined, and the sort arms' only callee is a synthesized \
+                 comparator bound by `src/bir/synth.rs`'s opaque-closure \
+                 invariant to CALL and never STORE);\n  \
+               * `drop(closure_temps);` with a comment saying why the temp must \
+                 LEAK here — at a plain call the callee is USER code that may \
+                 RETAIN the closure, and freeing turns the leak into a \
+                 use-after-free (`todo/t1349`).\n\
+             `#[must_use]` does NOT catch this: rustc is silent on \
+             `let closure_temps = ...;`, which is what every call site writes.",
+        );
+    }
+
+    // A count so the guard cannot pass by finding nothing (SIX-Q #2 — a guard
+    // that green-lights its own class is worse than none). Bump WITH a new
+    // wrapping body, never to silence a failure.
+    const EXPECTED_WRAP_SITES: usize = 4;
+    assert_eq!(
+        sites, EXPECTED_WRAP_SITES,
+        "`wrap_closure_call_args` call-site count in {path} changed: {sites} vs \
+         {EXPECTED_WRAP_SITES}. Every site owes a disposition — see the assertion \
+         above. Regenerate: \
+         `grep -c 'self.wrap_closure_call_args(' src/lir/lower/insts.rs`.",
+    );
+}
+
+/// Guard (Core #4 — centralize at the producer) for `todo/t0953`'s MINT side:
+/// a closure-argument `GorgetClosure` temp is minted at exactly ONE site.
+///
+/// `wrap_single_closure_arg` used to open each of its three arms with its own
+/// `self.lir_func.add_slot(LirType::Struct(gc_sid), None)` and then decide
+/// ownership per arm; two of the three forgot to register, which IS `t0953`.
+/// Core #4's litmus — *what stops arm N+1* — had no answer, and an arm-count
+/// ratchet over three IDENTICALLY SPELLED lines is both green on arrival and
+/// blind to an arm that mints through a helper (SIX-Q #2).
+///
+/// So the mint is a chokepoint, `mint_closure_arg_temp`, which mints AND
+/// initializes AND registers from the typed pair `(ClosureArgOwner,
+/// EnvProvenance)`. This pins that there is exactly one of it: a new arm
+/// CANNOT mint its own slot and skip the registration.
+///
+/// Drain-side counterpart: `closure_arg_temps_are_drained_in_every_wrapping_body`.
+#[test]
+fn closure_arg_temps_are_minted_at_one_site() {
+    let path = "src/lir/lower/operands.rs";
+    let raw = fs::read_to_string(path).expect("read src/lir/lower/operands.rs");
+    // Strip line comments so the ratchet reasons about EXECUTABLE code only —
+    // the chokepoint's own doc comment quotes the mint it replaced, and a
+    // ratchet that counts prose can be silenced by rewording a comment.
+    // Precedent: `collection_elem_drop_routes_through_type_drop_fns`.
+    let src: String = raw
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    const MINT: &str = "add_slot(LirType::Struct(gc_sid), None)";
+    let mints = src.matches(MINT).count();
+    assert_eq!(
+        mints, 1,
+        "`{MINT}` appears {mints} times in {path}; it must appear EXACTLY ONCE, \
+         inside `mint_closure_arg_temp`. A second mint is an arm that materializes \
+         an owned `GorgetClosure` without going through the one place that decides \
+         — from the typed `(ClosureArgOwner, EnvProvenance)` pair — whether the \
+         caller owes it a `gorget_closure_free`. Getting that wrong in the FORGET \
+         direction is `todo/t0953` (an unbounded per-call env leak); getting it \
+         wrong the other way frees an env the collection owns, or a NULL env. \
+         Regenerate: \
+         `grep -c 'add_slot(LirType::Struct(gc_sid), None)' src/lir/lower/operands.rs`.",
+    );
+
+    // …and it is inside the chokepoint, not somewhere that merely spells the
+    // same call. Slice the chokepoint body the way
+    // `collection_elem_drop_routes_through_type_drop_fns` slices its subject.
+    let sig = "fn mint_closure_arg_temp(";
+    let start = src.find(sig).unwrap_or_else(|| {
+        panic!(
+            "`mint_closure_arg_temp` is gone from {path}. It is the single \
+             producer for closure-argument `GorgetClosure` temps (Core #3/#4); \
+             re-scattering the mint across the arms of `wrap_single_closure_arg` \
+             re-opens `todo/t0953`."
+        )
+    });
+    let after_sig = start + sig.len();
+    let end = src[after_sig..]
+        .find("\n    pub(super) fn ")
+        .map(|i| after_sig + i)
+        .unwrap_or(src.len());
+    let body = &src[start..end];
+    assert!(
+        body.contains(MINT),
+        "the one `{MINT}` in {path} is NOT inside `mint_closure_arg_temp`'s body. \
+         The mint must live in the chokepoint that also registers it.",
+    );
+    // The registration is a `match` on the PAIR, never an `==` (Core #2 /
+    // layering rule 2 — a typed fact, read once, at one place).
+    for needle in [
+        "match (owner, init.env_provenance())",
+        "EnvProvenance::HeapOwned) => {",
+        "EnvProvenance::NullEnv) => {}",
+        "ClosureArgOwner::DestinationOwns, _) => {}",
+    ] {
+        assert!(
+            body.contains(needle),
+            "`mint_closure_arg_temp` in {path} no longer registers on the typed \
+             PAIR `(ClosureArgOwner, EnvProvenance)` — `{needle}` is gone. The \
+             owner ALONE is not enough: a `CalleeBorrows` position whose init is \
+             `NullEnv` has NO heap block, and registering it hands \
+             `gorget_closure_free` a null env. Match on the pair; never compare \
+             with `==`.",
+        );
+    }
 }
