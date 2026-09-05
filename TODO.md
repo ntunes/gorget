@@ -372,6 +372,47 @@ figure** — whether it is uniform across `String`/`Vector`/`Set`/nested-struct/
 first deliverable, and treating it as general would be exactly the selection-as-enumeration defect this round
 keeps paying for.
 
+⭐ **PRIOR ART SHARPENS R1 — TWO FINDINGS THAT CUT AGAINST THIS TRACK'S OWN DIRECTION. CARRY THEM.**
+- ⛔ **LAZY IS NOT MONOTONICALLY BETTER THAN EAGER.** Deferring a clone **EXTENDS the source's live range**:
+  **Lean measured 2× peak memory** on one benchmark, and **Koka refuses to ship borrow inference over exactly
+  this**; Morphic measured holding a view past a mutation **FORCING** a clone that eager-cloning would have
+  avoided (**6.4% of in-place mutations**). ⇒ **Every D40/D52 measurement must be against the EAGER baseline,
+  not only against itself.** A favourable-direction number does not license the inverse.
+- ⭐ **THE CONSERVATIVE CORE IS AGREED ACROSS THE FIELD — this IS the R1 table's spine.** Every system that
+  returns a projection without copying enforces four conditions: **C1** the signature alone identifies the
+  source *(Gorget satisfies this TODAY via sigils)* · **C2** the projection is **stored, never computed**
+  (Swift SE-0507 rejects returning a local or temporary outright) · **C3** no conflicting mutation while the
+  view is live, **by LIVENESS, not lexical scope** · **C4** the view does not escape the caller's frame.
+- **Two blind spots resolve differently:** indirect calls (`Callable`/vtable/extern) are **SETTLED — everyone
+  assumes the worst** (ARC's source literally comments *"Assume the worst"*); **clone there and stop looking
+  for a third answer.** Non-mutating `&` params are **the field's OPEN FRONTIER, not a Gorget gap** — RFC
+  2094's own listed non-goal, **unfixed in Rust for nine years**, whose intended fix is *view types*.
+- ⊕ **Gorget's position is Rust's architecture MINUS the rejection**, and declared conventions are the
+  mainstream. **Swift tried inferring the convention and gave up in writing**, which is why SE-0377 made it
+  explicit. ⇒ **the conservative line is the STANDARD architecture, not a compromise.**
+
+⛔ **AND A SEQUENCING CORRECTION TO `t0538`, WITH THE TREE AS WITNESS.** MLKit's retrospective names the region
+profiler as the one thing that made an inferred, invisible, non-rejecting memory optimization usable, and names
+***"given an apparent space leak, how would a programmer locate it?"*** as what nearly killed the project.
+**`t0538` phases the knob at stage C** (*"A(summary+arg elision) → B(spec+fixtures) → C(knob …)"*).
+⭐ **THE CONFLICT DISSOLVES ONCE D42'S KNOB IS SPLIT IN TWO, because the halves have different prerequisites:**
+- **ATTRIBUTION (diagnostics) — SHIPS WITH THE ANALYSIS.** Measured at HEAD: `--clones=stats` prints
+  `[clone-site] #0=10` — **an OPAQUE INDEX, no source line, no function name.** ⇒ **a programmer can COUNT a
+  clone but CANNOT LOCATE one**, which is MLKit's killer question with Gorget's answer being "you can't".
+  Regenerate: `./target/debug/gg run <any getter fixture> --clones=stats 2>&1 | grep clone-site`.
+- **THE `deny` CONTRACT — STAYS AFTER §3, and `t0538` is RIGHT about that:** *"§3 BEFORE §4 IS NOT
+  NEGOTIABLE — without the specified set, `deny` pins user code to optimizer internals and every analysis
+  improvement is a potential breaking change."*
+⇒ **Ship attribution early, the contract late. Neither note is wrong; they are about different halves.**
+
+⚠ **THE MAIN BODY OF F's SCOUT REPORT HAS NOT ARRIVED** — only its prior-art addendum, which references
+Lines A/B/C, an 8.9× figure, a `peek`/`advance` measurement and an F1/F2/F3 split **none of which I hold**.
+**Requested; do NOT act on F until the R1 table and the return-position matrix are in hand.**
+⚠ **OPS (self-reported by F's scout, MA-1 violation):** it spawned nested research agents **without
+`isolation: "worktree"`**, so they shared its tree. **Verified no contamination** — `git -C /workspace/gorget status --porcelain`
+and the orchestrator worktree are both clean. ⇒ **MA-1 applies to NESTED spawns and a scout will forget it;
+say so in every scout brief.**
+
 ⚖ **R1, SHARPENED — this is what the owner actually has to rule on:** `D40` says *"materialize-when-unsure,
 never reject"*; `D52` says *"unless PROVABLY FREE"*. **Those two phrasings must agree on what "provable" means
 before ANY executor can implement either — that predicate IS the mechanism.** The scout owes the **enumerated
