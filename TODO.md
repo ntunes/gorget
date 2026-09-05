@@ -8,7 +8,7 @@
 | track | scope | ids |
 |---|---|---|
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
-| **A2** | ⭐ **THE FIX IS *ONE `DefKind` GATE*** — pass 3 inverted my "scope has grown" premise. ✅✅✅ direction signed **three times** → 🔵 **pass 4.** ⛔ **My prescribed fix as written would REJECT EVERY NEWTYPE IN THE CORPUS.** | `t1376`–`t1382` |
+| **A2** | ⭐⭐ **HEADLINE RAISED: `newtype N(String)` — NON-generic — IS SILENTLY WRONG ON C AT HEAD.** ✅✅✅✅ design confirmed 4× and **MEASURED END-TO-END** → 🟢 **EXECUTOR LAUNCHED.** Three edits; `t1374`+`t1375`+`t0104` all close. | `t1378`–`t1382` |
 | **B** | ⚖⚖ **HELD — OWNER ASK (the capture cell). Pass 1: NOT SIGN OFF, 5 BLOCKING.** The brief was STALE BY CONSTRUCTION (my revert landed 3 min after it) and **overrode a ratified `decisions.md` clause with an agent's derivation.** Streak 0/3. Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⛔⛔ **BLOCKED A FOURTH TIME — `R`'s SUBJECT IS A SELECTION ON A THIRD AXIS. RECOMMEND CLOSE FOR R50: `R` NEEDS ITS OWN SCOUT.** Spine survives and measures STRONGER each pass. | `t1332`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
@@ -46,6 +46,43 @@ claims folded into this handover long ago. **Everything else stayed.**
 `target_v3` compilers E's executor is RED-verifying against), `gg_fuzz_lint_target` (5.3 GB — a live
 `CARGO_TARGET_DIR` for a lint; deleting it forces a full rebuild on every `cargo test --test lints`),
 `execE_01db12fc`, and `rev2_a2e446ab`. **None of them is prunable until its track integrates.**
+
+### 🟢 A2 LAUNCHED — **AND ITS PASS 4 RAISED THE TRACK'S SEVERITY BY MEASURING WHAT THE TITLE EXCLUDED**
+
+**Four passes, direction confirmed at every one, and pass 4 prototyped the whole design and measured it: every
+probe correct on both backends, `--lib` 1187/0, integration 3/3, and `--sanitize` clean on all eight probes —
+no double-free, no leak, no abort. The severity excursion two earlier addenda feared DOES NOT SURVIVE THE FIX.**
+- ⛔⛔ **THE TRACK'S OWN TITLE EXCLUDED ITS WORST CELL. `newtype NS(String)` — a NON-generic payload — PRINTS
+  EMPTY ON C AND `hello` ON LLVM AT PRISTINE HEAD, rc 0.** ⭐ **The GIR is already correct, so the registration
+  half is irrelevant to it — this is PURELY the StructInit half.** The emitted C brace-elides a `void*` into a
+  32-byte `Str`, so `data` takes a **stack address** and `len` stays 0.
+  ⛔ **ASan CANNOT SEE IT; `gg check` is blind by construction; `*_comparison` is always-pass. ONLY A READ-BACK
+  FIXTURE CATCHES THIS CLASS** — and **my title and my "no generic newtype payload exists" line JOINTLY implied
+  nothing shipping was affected. That was FALSE.** ⭐ **It is also the run-level RED-at-HEAD pin readiness row 4
+  said did not exist.**
+- ⛔⛔ **MY SIBLING WIDENING WAS RETIRED BY THE FIRE COUNT IT OWED.** Instrumented over **2250 fixtures + a total
+  11-file axis scan, both backends**: the two `SlotStore` arms fire **0 times PRE *and* POST**. ⭐ **The
+  instrument was verified in BOTH directions — the same harness reports 5 → 0.** ⇒ **pre-existing dead code,
+  NOT siblings — and DO NOT DELETE THEM: a deletion no row reddens is an unguarded behaviour change.**
+- ⛔ **MY N1 RETRACTION DELETED A TRUE CLAIM AND INSTALLED A FALSE ONE — FIFTH FAILED NUMERIC CLAIM, THIRD
+  MINE.** Pass 2 was right: the 2 `Dict` newtype payloads exist. **My grep missed them because `[A-Za-z_]*` does
+  not match digits.**
+- ⭐ **THE DESIGN IS EXACTLY THREE EDITS** — the `rewrite.rs` `DefKind` gate, its mandatory `typecheck.rs`
+  partner, and the registration patch. ⛔ **The patch is the REGISTRATION HALF ONLY and is unshippable alone**,
+  which my ⛔ header still told the executor to apply verbatim.
+- ⭐ **`t1375` IS REPAIRED BY THE `^arg` MOVE WRAP** — `Box[T]` is a single-owner carve-out, so the user writes
+  `NX(^b)` and the rewrite carries that into the `StructInit` so `move_zero_consumed_args` fires. **Measured
+  ASan-clean; the `call @NX(copy _2)` / `drop_if_alive _2` shape is GONE.** ⇒ **`t1374`, `t1375` and `t0104` all
+  CLOSE; `t1373` STAYS OPEN** — the struct control proves the residual C garbage is not A2's.
+- ⛔ **SELF-HOST DECIDED: fixtures land in `known_gaps/` with LIVE tests; the SH port stays `t0400`'s.**
+  A top-level fixture would make that latent gap **non-latent the same round**, and **0 of the 11
+  newtype-declaring files are under `self_host_*` — the lane has NEVER been exercised on this axis.**
+- ⛔ **TWO NAMED OMISSIONS FILED SO THEY OUTLIVE THE BRIEF:** **`t1376`** (`UserId(1, 2)` is un-arity-rejected
+  before AND after — adding the check is an accept→reject change) and **`t1377`** (SIX-Q #4: the
+  `COLLECTION_TYPES` early-return fires **before** the gate, so a name-colliding newtype is **never reached by
+  any widening of it**, and the cell is **untested by anything**).
+- ⭐ **THE LESSON THAT GENERALISES: SHAPE-GREPS ENUMERATE COSTUMES. THE ONLY WITNESS THAT WAS TOTAL FOR THE LIVE
+  CLASS WAS THE FIRE COUNT** — three of this brief's enumerations were asserted total from greps and were wrong.
 
 ### 🟢 L LAUNCHED (5 PASSES) — AND A2's PASS 3 INVERTED MY OWN "SCOPE HAS GROWN" PREMISE
 
@@ -5261,6 +5298,8 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t1068`](todo/t1068.md) **MED** — 🆕⛔ [OVER-REJECTION — a correct program is refused, and the refusal's stated premise is false; found R49 Track L while wi…
 - [`t1405`](todo/t1405.md) **MED** — 🆕📐 [MED — CAMPAIGN, owner-ratified 2026-09-05: D27's ^ MIGRATION EXTENDS EVERYWHERE, superseding the earlier src/tests/l…
 - [`t1408`](todo/t1408.md) **MED** — 🆕🧹 [MED — LAYERING RULE 3 + CORE #2: TWO SOURCES OF TRUTH FOR "IS THIS NAME A TYPE", ONE OF THEM A STRING MATCH; surface…
+- [`t1376`](todo/t1376.md) **MED** — 🆕 [MED — A NAMED OMISSION FROM R50 TRACK A2, RECORDED BECAUSE A BRIEF IS DELETED AT ROUND CLOSE. Measured 2026-09-05 by…
+- [`t1377`](todo/t1377.md) **MED** — 🆕 [MED — SIX-Q #4: A CASE WITH NO SUBJECT. Found 2026-09-05 by R50 Track A2's brief-review pass 4; untested by anything…
 ### Low
 
 - [`t0452`](todo/t0452.md) **LOW** — 🆕 [LOW — diagnostic ergonomics follow-up from Round XXIX Track A close 2026-08-03] E_NotIndexable message text should na…
