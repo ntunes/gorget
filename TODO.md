@@ -11,13 +11,13 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⛔ **THE OWNER REJECTED ALL THREE OF MY OPTIONS 2026-09-05 — THE ASK IS WITHDRAWN, THE TRACK IS RE-AIMED AT *MAKE IT WORK*.** 🔵 reference-grade SCOUT running. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| **C2** | **`t0045`** — code SIGNED OFF. ⛔⛔ **DOC ROT IS ON ITS THIRD GENERATION — a phrase-scoped "zero hits repo-wide" that the ORCHESTRATOR falsified with one grep. NOT INTEGRATED.** 🟢 executor resumed. ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| ✅ **C2** | **`t0045`** — **`635d98496`: the executor replaced the phrase-grep with a CONSTRUCT-SCOPED instrument and found 2 MORE sites than I reported.** Ready to integrate. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ⭐ **SCOUT DELIVERED — HYPOTHESIS HALF RIGHT; the fix is REAL but it is NOT a parser fix and the ORDER REVERSES.** Streak 0/3, brief `v3` next. ⚖ one PRECISE ratification question. | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | ✅ **G** | **6 passes, DESIGN SIGNED OFF, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⚖ owner-ratified. **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
-| ✅ **F1r** | **`t1362`+`t0750`** — executor RETURNED **`504bf5ad5`**, 🔵 **OUTPUT-REVIEW RUNNING.** ⭐ **BOTH of its REFUSALS are CORRECT, and both hand the work to ME at integration** (the pin's sole writer is the integrating parent). | `t1363`–`t1372` |
+| ✅ **F1r** | **`t1362`+`t0750`** — **`504bf5ad5` OUTPUT-REVIEW: SIGN OFF, integrate.** 2 errata to fold. ⭐ It delivered the PER-FIXTURE/PER-ROUND split and a `figures.db` mirror map the parent needs. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
@@ -1274,6 +1274,97 @@ TOP LEVEL** (measured MATCH, zero non-MATCH inflow); memory-safety rows and the 
 fix **moves the String cell OUT of memory-unsafety INTO an already-filed class**; and **String was the LAST
 broken cell of ratified consequence (a)** — nested Vector, struct and dict-value already bare-rebind as
 non-crashing private copies. ⇒ **the fix COMPLETES the ratified rule.**
+
+### ✅ RULED — **`d[k](v)` MEANS INDEX-THEN-CALL** (owner 2026-09-05), AND THE COMPETING READING IS REAL
+
+⭐ **THE OTHER INTERPRETATION IS GENERIC INSTANTIATION** — `d[k](v)` = call `d` with TYPE ARG `k` (Rust's
+`d::<k>(v)`) — **and it is the one the parser picks today, for a good reason: it is the DOMINANT construct.**
+Measured by the scout over 4894 `.gg` files: **4762 sites, 1167 with the ambiguous all-bare-name shape**;
+heads are `Vector` **2829**, `Dict` **563**, … ⇒ **the parser is serving a real, heavily-used form; `d[k](v)`
+merely falls into it because a bare identifier is a syntactically valid TYPE NAME.**
+
+⭐⭐ **WHAT MAKES THE RULING SAFE IS A MEASUREMENT, NOT A PREFERENCE: across all 4762 sites NO HEAD IS EVER A
+VALUE.** Every head is a type constructor or a generic free function. ⇒ **the two readings are DISJOINT AFTER
+NAME RESOLUTION** — head resolves to a VALUE of collection type ⇒ index-then-call; head resolves to a TYPE or
+generic fn ⇒ instantiation. **Nothing is given up.**
+
+⛔ **AND THAT IS EXACTLY WHY IT CANNOT BE A PARSER FIX: the parser does not know what `d` IS.** It belongs
+after resolution — `src/semantic/rewrite.rs`, which already disambiguates the SAME class
+(`Expr::Call`→`Expr::StructLiteral`).
+
+⛔ **THE SHORTCUT THAT LOOKS RIGHT AND IS WRONG:** *"non-`Identifier` head ⇒ indexing"* — **10 sites have a
+non-Identifier head** (`None[String](...)` in the self-host parsers) **and it would break them.** ⇒ **the
+discriminator is WHAT THE HEAD RESOLVES TO, never how it is SPELLED.** *(Core #2, at the grammar.)*
+⊕ **No third reading:** the colon-slice `v[a:b]` (D22) is a distinct grammar and single-index `d[k]` does not
+collide with it.
+
+### ⭐⭐⭐ C2 FINALLY FIXED THE **INSTRUMENT**, NOT THE HITS — AND IT FOUND 2 MORE THAN I DID
+
+**`635d98496`.** After three generations of string-bounded sets, the executor built a **CONSTRUCT-SCOPED**
+scanner (`/tmp/recover_execC2_affaa7f6_construct_scan.py`, described in full in the commit message because
+`/tmp` is not durable): anchor on the CONSTRUCT (a bare `for X in Y`, or one of its NAMES) · prose positions
+**repo-wide, every file type** · a **±4-line window** *(because the description routinely sits on an adjacent
+line — **both blockers did**)* · flag any window carrying a retired-concept word, where that vocabulary is the
+**CLOSED COMPLEMENT of the ratified rule**: if the binding is a mutable private copy then *immutable /
+read-only / const / frozen / unmodifiable / "cannot be modified"* are all wrong **however spelled**.
+⇒ ⭐ **THAT LAST CLAUSE IS WHAT STOPS GEN 3 RECURRING** — it bounds by MEANING, not by string.
+
+**85 candidates, each read and dispositioned. It found 2 sites BEYOND the 2 I reported** — including
+`src/ir/lowering/stmts/for_loops.rs`, **the compiler's own doc comment**, saying *"(§3.1 immutable
+for-element)"* — **attributing the retired label to the section that retired it.**
+⭐ **AND IT STATED ITS BLIND SPOT INSTEAD OF CLAIMING TOTALITY (Core #13):** it cannot see a site that describes
+the construct without naming it in-window, nor a retired concept outside that vocabulary. ***"Strictly better
+than a phrase-grep — not a proof of totality, and I'm not claiming one."***
+
+⊕ **My judgment call came back MEASURED, not argued:** `docs/book/12-borrowing.md:189` —
+`String x = v.get(0).unwrap(); x = "zz"` prints `zz`, collection still `aa` ⇒ **the same looseness at a position
+the ledger never ruled on.** Out of scope, filed **`t1336`** as an owner/ledger question. ⛔ **Correcting one of
+the three identical sentences alone would manufacture exactly the inconsistency this track spent three commits
+removing.**
+
+### ✅ F1r IS SIGNED OFF — AND THE REVIEW HANDED ME THE MERGED-TREE CONSTANT MAP
+
+**Both refusals CORRECT on the merits**, re-verified: the parity floor is `matched.len() >= FLOOR` **and its own
+comment says raising it is a ROUND-CLOSE action**; the clone pins say *"a TRACK must never write a pin. The pin
+now has exactly one writer, the integrating parent."* ⚠ **The rule text is at `:35059`, not the cited `:35032`**
+— and **`grep "a TRACK must never write a pin"` returns NOTHING because the phrase WRAPS across two comment
+lines.** Use `grep -n "never write a pin"`. *(Core #15(a), demonstrated by the reviewer needing it.)*
+
+⭐ **THE PARTIAL-REVERT MATRIX IS EXACT, AND L1≡L2 WAS ESTABLISHED TWO WAYS** — structurally (the pair composes
+as a logical AND) **and empirically (the row SETS are byte-identical, not merely equal in cardinality)**.
+⚠ **That distinction is the whole point: equal counts are also consistent with a MIS-LANDED break.**
+**20 ∪ 11 = 31 = exactly the PRE-wrong set; intersection 0; the 3 straight-line twins green under all four.**
+
+⭐ **SIX-Q #2 ANSWERED HONESTLY BY THE REVIEWER'S OWN PROBE:** it applied the real trap and found **guard row 1
+stays at 19 — BLIND** (the `save_locals` lives inside the callee) while **row 2 goes 2 → 3 — RED.**
+⇒ *"row 1 cannot catch its own class's known trap, which is exactly why row 2 exists."*
+
+⛔ **TWO ERRATA I OWE:**
+- **E1 — a Core #14 defect:** the predicate's docstring says Cases 4 **and 6** *"take a boundary-safe route"*.
+  **True of 4, FALSE of 6** — Case 6 calls `cow_materialize_alias`, the SAME rebinding materializer as Cases 1
+  and 2. **The DECISION is sound (probed: prints the pre-mutation value on both PRE and POST)** — but the
+  recorded MECHANISM is wrong *in exactly the way that stops the next editor from re-measuring.*
+- **E2 — `t1365` names the four deferred constants but NOT their `figures.db` MIRRORS**, every one of which
+  `figures_db_mirrors_agree` enforces. ⇒ ⛔ **`t1365` is the record ROUND CLOSE INHERITS: without the mirrors
+  the PARENT moves a constant and REDS the lint.** Map given (`grep -n "\.home = " scripts/figures.db`).
+
+### ▸ THE MERGED-TREE CONSTANT PASS — ALL FIFTEEN ARE **PER-FIXTURE**, SO THEY MOVE **TWICE**
+
+**Per new `spectests/run/*.gg` (C2 1 + F1r 1 ⇒ +2 each):** `MIN_FIXTURES` (EXACT PIN) · `C_MATCH_FLOOR` ·
+`LLVM_MATCH_FLOOR` (both `const_assert`ed `== MIN`) · `SELFHOST_MATCH_FLOOR` (`<= MIN`; +1 **only if the seed
+MATCHes on SH**) · the four `figures.db` mirrors · **`GGDEF_MATCH_FLOOR`** (+1 per in-subset MATCHing seed).
+⚠ **`GGDEF_SKIP_CEILING` is SHRINK-ONLY AT ZERO SLACK** — an out-of-subset seed becomes a SKIP and REDS
+`-p ggdef`. ⭐ **CHECKED: BOTH seeds carry `adjudicator: ggdef` and BOTH tracks measured `GGDEF-SKIP=18`
+unchanged with MATCH 225→226 each** ⇒ merged expectation MATCH **227**, SKIP **18**. ⛔ **STILL RE-MEASURED AT
+THE MERGED TREE, NEVER DERIVED (Core #5).**
+**Per new top-level `tests/fixtures/*.gg` matching `cow_`/`deadwrite_`/`combinator_` (F1r 3):** `corpus_b.rs`
+(exact) · `corpus_b1.rs` (exact) · the two cited `EXCLUDE` arrays · one census row each in
+`GGDEF_CORPUS_B{,1}_CENSUS`.
+**PER-ROUND, mine, once:** `RUNTIME_DIFF_MATCH_FLOOR` · `GGDEF_ADJUDICATED_FLOOR` ·
+`SELF_COMPILE_{ARRAY,STRING}_CLONE_PIN` + their `_ROUND_OPEN` anchors · **plus
+`RUNTIME_DIFF_NONMATCH_CEILING`, which is NOT a constant to bump but an OBLIGATION TO DISCHARGE.**
+⭐ **F1r's three top-level fixtures were self-host-verified BY HAND and all three MATCH** ⇒ **the ceiling cannot
+grow from that inflow.**
 
 ### ⭐⭐ D0′ v3 SCOUT — THE HYPOTHESIS IS **HALF RIGHT, AND THE WRONG HALF REVERSES THE ORDER**
 
