@@ -1,0 +1,8 @@
+void main():
+    Vector[int] v = [10, 20]
+    Vector[int] b = v
+    Vector[int] c = b
+    Vector[int] __xs = [1]
+    for __x in __xs:
+        v.set(0, 777)
+    print(f"{c.get(0).unwrap()}")

@@ -1,0 +1,9 @@
+struct Store:
+    String f
+void main():
+    String __p = "ab"
+    Store s = Store(__p)
+    String c = s.f
+    c.push("Z")
+    print(s.f)
+    print(c)

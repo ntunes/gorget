@@ -1,0 +1,18 @@
+struct Inner:
+    Set[int] f
+struct Outer:
+    Inner i
+equip Outer:
+    Set[int] getf(&self):
+        return self.i.f
+void main():
+    Set[int] __p = {10}
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    Set[int] c = o.getf()
+    match 1:
+        case 1:
+            o.i.f.add(777)
+        else:
+            pass
+    print(f"{c.len()}")

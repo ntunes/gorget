@@ -1,0 +1,17 @@
+struct Inner:
+    Vector[int] f
+struct Outer:
+    Inner i
+equip Outer:
+    Vector[int] getf(&self):
+        return self.i.f
+void main():
+    Vector[int] __p = [10, 20]
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    Vector[int] c = o.getf()
+    if 1 == 2:
+        pass
+    elif 1 == 1:
+        o.i.f.push(777)
+    print(f"{c.len()}")

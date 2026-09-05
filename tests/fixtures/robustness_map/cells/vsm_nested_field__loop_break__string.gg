@@ -1,0 +1,13 @@
+struct Inner:
+    String f
+struct Outer:
+    Inner i
+void main():
+    String __p = "ab"
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    String c = o.i.f
+    loop:
+        o.i.f.push("Z")
+        break
+    print(c)

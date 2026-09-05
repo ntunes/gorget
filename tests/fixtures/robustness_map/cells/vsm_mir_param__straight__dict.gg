@@ -1,0 +1,8 @@
+void probe(Dict[String,int] &v):
+    Dict[String,int] c = v
+    c.put("k2", 777)
+    print(f"{v.len()}")
+    print(f"{c.len()}")
+void main():
+    Dict[String,int] q = {"k": 10}
+    probe(&q)

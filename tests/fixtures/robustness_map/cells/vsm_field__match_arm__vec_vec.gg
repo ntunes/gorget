@@ -1,0 +1,12 @@
+struct Store:
+    Vector[Vector[int]] f
+void main():
+    Vector[Vector[int]] __p = [[10], [20]]
+    Store s = Store(__p)
+    Vector[Vector[int]] c = s.f
+    match 1:
+        case 1:
+            s.f.set(0, [777])
+        else:
+            pass
+    print(f"{c.get(0).unwrap().get(0).unwrap()}")

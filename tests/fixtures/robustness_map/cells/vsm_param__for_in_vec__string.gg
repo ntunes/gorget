@@ -1,0 +1,9 @@
+void probe(String &v):
+    String c = v
+    Vector[int] __xs = [1]
+    for __x in __xs:
+        v.push("Z")
+    print(c)
+void main():
+    String q = "ab"
+    probe(&q)

@@ -1,0 +1,9 @@
+void main():
+    Set[int] v = {10}
+    Set[int] b = v
+    Set[int] c = b
+    if 1 == 2:
+        pass
+    elif 1 == 1:
+        v.add(777)
+    print(f"{c.len()}")

@@ -1,0 +1,11 @@
+struct Store:
+    String f
+void main():
+    String __p = "ab"
+    Store s = Store(__p)
+    String c = s.f
+    if 1 == 2:
+        pass
+    elif 1 == 1:
+        s.f.push("Z")
+    print(c)

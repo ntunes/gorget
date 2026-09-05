@@ -1,0 +1,7 @@
+void main():
+    Vector[String] v = ["ab"]
+    String c = v.get(0).unwrap()
+    loop:
+        v.get(0).unwrap().push("Z")
+        break
+    print(c)

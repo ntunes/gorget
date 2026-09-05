@@ -1,0 +1,9 @@
+void main():
+    Vector[String] v = ["aa", "bb"]
+    Vector[String] c = v
+    int __w = 0
+    while __w < 1:
+        c.set(0, "ZZ")
+        __w += 1
+    print(v.get(0).unwrap())
+    print(c.get(0).unwrap())

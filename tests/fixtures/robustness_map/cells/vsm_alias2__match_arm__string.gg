@@ -1,0 +1,10 @@
+void main():
+    String v = "ab"
+    String b = v
+    String c = b
+    match 1:
+        case 1:
+            v.push("Z")
+        else:
+            pass
+    print(c)

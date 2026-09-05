@@ -1,0 +1,10 @@
+struct Store:
+    Dict[String,int] f
+void main():
+    Dict[String,int] __p = {"k": 10}
+    Store s = Store(__p)
+    Dict[String,int] c = s.f
+    loop:
+        s.f.put("k2", 777)
+        break
+    print(f"{c.len()}")

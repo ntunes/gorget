@@ -1,0 +1,9 @@
+void main():
+    Vector[Vector[int]] v = [[10], [20]]
+    Vector[Vector[int]] c = v
+    int __w = 0
+    while __w < 1:
+        c.set(0, [777])
+        __w += 1
+    print(f"{v.get(0).unwrap().get(0).unwrap()}")
+    print(f"{c.get(0).unwrap().get(0).unwrap()}")

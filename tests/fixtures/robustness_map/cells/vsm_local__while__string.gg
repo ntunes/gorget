@@ -1,0 +1,8 @@
+void main():
+    String v = "ab"
+    String c = v
+    int __w = 0
+    while __w < 1:
+        v.push("Z")
+        __w += 1
+    print(c)

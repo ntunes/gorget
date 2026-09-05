@@ -1,0 +1,10 @@
+struct Store:
+    Vector[String] f
+void main():
+    Vector[String] __p = ["aa", "bb"]
+    Store s = Store(__p)
+    Vector[String] c = s.f
+    loop:
+        s.f.set(0, "ZZ")
+        break
+    print(c.get(0).unwrap())

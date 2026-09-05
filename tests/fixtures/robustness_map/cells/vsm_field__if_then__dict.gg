@@ -1,0 +1,9 @@
+struct Store:
+    Dict[String,int] f
+void main():
+    Dict[String,int] __p = {"k": 10}
+    Store s = Store(__p)
+    Dict[String,int] c = s.f
+    if 1 == 1:
+        s.f.put("k2", 777)
+    print(f"{c.len()}")

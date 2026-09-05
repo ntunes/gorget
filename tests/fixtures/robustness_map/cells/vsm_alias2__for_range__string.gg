@@ -1,0 +1,7 @@
+void main():
+    String v = "ab"
+    String b = v
+    String c = b
+    for __i in 0..1:
+        v.push("Z")
+    print(c)

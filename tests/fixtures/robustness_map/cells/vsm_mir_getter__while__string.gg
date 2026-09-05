@@ -1,0 +1,15 @@
+struct Store:
+    String f
+equip Store:
+    String getf(&self):
+        return self.f
+void main():
+    String __p = "ab"
+    Store s = Store(__p)
+    String c = s.getf()
+    int __w = 0
+    while __w < 1:
+        c.push("Z")
+        __w += 1
+    print(s.f)
+    print(c)

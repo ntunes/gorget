@@ -1,0 +1,13 @@
+struct Store:
+    Vector[Dict[String,int]] f
+equip Store:
+    Dict[String,int] getf(&self):
+        return self.f.get(0).unwrap()
+void main():
+    Vector[Dict[String,int]] __p = [{"k": 10}]
+    Store s = Store(__p)
+    Dict[String,int] c = s.getf()
+    Vector[int] __xs = [1]
+    for __x in __xs:
+        s.f.get(0).unwrap().put("k2", 777)
+    print(f"{c.len()}")

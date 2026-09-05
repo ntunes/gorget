@@ -1,0 +1,12 @@
+struct Store:
+    Vector[int] f
+equip Store:
+    Vector[int] getf(&self):
+        return self.f
+void main():
+    Vector[int] __p = [10, 20]
+    Store s = Store(__p)
+    Vector[int] c = s.getf()
+    c.push(777)
+    print(f"{s.f.len()}")
+    print(f"{c.len()}")

@@ -1,0 +1,12 @@
+struct Inner:
+    Vector[int] f
+struct Outer:
+    Inner i
+void main():
+    Vector[int] __p = [10, 20]
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    Vector[int] c = o.i.f
+    blk:
+        o.i.f.push(777)
+    print(f"{c.len()}")

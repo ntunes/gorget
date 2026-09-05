@@ -1,0 +1,8 @@
+void probe(String &v):
+    String c = v
+    for __i in 0..1:
+        v.push("Z")
+    print(c)
+void main():
+    String q = "ab"
+    probe(&q)

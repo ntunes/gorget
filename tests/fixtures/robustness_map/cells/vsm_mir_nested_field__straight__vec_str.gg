@@ -1,0 +1,12 @@
+struct Inner:
+    Vector[String] f
+struct Outer:
+    Inner i
+void main():
+    Vector[String] __p = ["aa", "bb"]
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    Vector[String] c = o.i.f
+    c.set(0, "ZZ")
+    print(o.i.f.get(0).unwrap())
+    print(c.get(0).unwrap())

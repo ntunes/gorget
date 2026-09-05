@@ -1,0 +1,9 @@
+void main():
+    Vector[String] v = ["ab"]
+    String c = v.get(0).unwrap()
+    match 1:
+        case 1:
+            v.get(0).unwrap().push("Z")
+        else:
+            pass
+    print(c)

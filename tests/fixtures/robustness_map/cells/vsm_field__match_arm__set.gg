@@ -1,0 +1,12 @@
+struct Store:
+    Set[int] f
+void main():
+    Set[int] __p = {10}
+    Store s = Store(__p)
+    Set[int] c = s.f
+    match 1:
+        case 1:
+            s.f.add(777)
+        else:
+            pass
+    print(f"{c.len()}")

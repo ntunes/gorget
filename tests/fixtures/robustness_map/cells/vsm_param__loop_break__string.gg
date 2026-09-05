@@ -1,0 +1,9 @@
+void probe(String &v):
+    String c = v
+    loop:
+        v.push("Z")
+        break
+    print(c)
+void main():
+    String q = "ab"
+    probe(&q)

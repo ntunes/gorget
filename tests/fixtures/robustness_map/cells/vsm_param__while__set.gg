@@ -1,0 +1,10 @@
+void probe(Set[int] &v):
+    Set[int] c = v
+    int __w = 0
+    while __w < 1:
+        v.add(777)
+        __w += 1
+    print(f"{c.len()}")
+void main():
+    Set[int] q = {10}
+    probe(&q)

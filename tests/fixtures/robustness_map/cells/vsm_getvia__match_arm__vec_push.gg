@@ -1,0 +1,9 @@
+void main():
+    Vector[Vector[int]] v = [[10, 20]]
+    Vector[int] c = v.get(0).unwrap()
+    match 1:
+        case 1:
+            v.get(0).unwrap().push(777)
+        else:
+            pass
+    print(f"{c.len()}")

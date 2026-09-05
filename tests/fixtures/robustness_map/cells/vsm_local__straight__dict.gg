@@ -1,0 +1,5 @@
+void main():
+    Dict[String,int] v = {"k": 10}
+    Dict[String,int] c = v
+    v.put("k2", 777)
+    print(f"{c.len()}")

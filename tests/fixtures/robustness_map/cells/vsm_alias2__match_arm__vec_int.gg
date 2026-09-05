@@ -1,0 +1,10 @@
+void main():
+    Vector[int] v = [10, 20]
+    Vector[int] b = v
+    Vector[int] c = b
+    match 1:
+        case 1:
+            v.set(0, 777)
+        else:
+            pass
+    print(f"{c.get(0).unwrap()}")

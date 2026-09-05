@@ -1,0 +1,10 @@
+void main():
+    Dict[String,int] v = {"k": 10}
+    Dict[String,int] b = v
+    Dict[String,int] c = b
+    int __w = 0
+    while __w < 1:
+        c.put("k2", 777)
+        __w += 1
+    print(f"{v.len()}")
+    print(f"{c.len()}")

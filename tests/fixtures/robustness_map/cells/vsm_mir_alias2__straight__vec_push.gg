@@ -1,0 +1,7 @@
+void main():
+    Vector[int] v = [10, 20]
+    Vector[int] b = v
+    Vector[int] c = b
+    c.push(777)
+    print(f"{v.len()}")
+    print(f"{c.len()}")

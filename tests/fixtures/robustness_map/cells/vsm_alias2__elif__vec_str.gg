@@ -1,0 +1,9 @@
+void main():
+    Vector[String] v = ["aa", "bb"]
+    Vector[String] b = v
+    Vector[String] c = b
+    if 1 == 2:
+        pass
+    elif 1 == 1:
+        v.set(0, "ZZ")
+    print(c.get(0).unwrap())

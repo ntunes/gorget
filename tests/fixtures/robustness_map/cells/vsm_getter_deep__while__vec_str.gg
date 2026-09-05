@@ -1,0 +1,17 @@
+struct Inner:
+    Vector[String] f
+struct Outer:
+    Inner i
+equip Outer:
+    Vector[String] getf(&self):
+        return self.i.f
+void main():
+    Vector[String] __p = ["aa", "bb"]
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    Vector[String] c = o.getf()
+    int __w = 0
+    while __w < 1:
+        o.i.f.set(0, "ZZ")
+        __w += 1
+    print(c.get(0).unwrap())

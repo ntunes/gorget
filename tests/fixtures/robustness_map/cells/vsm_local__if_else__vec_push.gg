@@ -1,0 +1,8 @@
+void main():
+    Vector[int] v = [10, 20]
+    Vector[int] c = v
+    if 1 == 2:
+        pass
+    else:
+        v.push(777)
+    print(f"{c.len()}")

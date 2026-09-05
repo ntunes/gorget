@@ -1,0 +1,15 @@
+struct Store:
+    Dict[String,int] f
+equip Store:
+    Dict[String,int] getf(&self):
+        return self.f
+void main():
+    Dict[String,int] __p = {"k": 10}
+    Store s = Store(__p)
+    Dict[String,int] c = s.getf()
+    int __w = 0
+    while __w < 1:
+        c.put("k2", 777)
+        __w += 1
+    print(f"{s.f.len()}")
+    print(f"{c.len()}")

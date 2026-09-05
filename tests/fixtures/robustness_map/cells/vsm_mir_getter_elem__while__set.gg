@@ -1,0 +1,15 @@
+struct Store:
+    Vector[Set[int]] f
+equip Store:
+    Set[int] getf(&self):
+        return self.f.get(0).unwrap()
+void main():
+    Vector[Set[int]] __p = [{10}]
+    Store s = Store(__p)
+    Set[int] c = s.getf()
+    int __w = 0
+    while __w < 1:
+        c.add(777)
+        __w += 1
+    print(f"{s.f.get(0).unwrap().len()}")
+    print(f"{c.len()}")

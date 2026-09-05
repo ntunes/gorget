@@ -1,0 +1,6 @@
+void main():
+    Vector[String] v = ["ab"]
+    String c = v.get(0).unwrap()
+    c.push("Z")
+    print(v.get(0).unwrap())
+    print(c)

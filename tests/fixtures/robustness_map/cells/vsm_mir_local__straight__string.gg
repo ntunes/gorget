@@ -1,0 +1,6 @@
+void main():
+    String v = "ab"
+    String c = v
+    c.push("Z")
+    print(v)
+    print(c)

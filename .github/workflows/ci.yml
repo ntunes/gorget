@@ -79,10 +79,21 @@ jobs:
       # guards -- a grade calculator returning "A" for every input -- survived
       # 2113 fixtures and was caught here on the first run.
       #
-      # Fails on any WORKS -> broken regression. ~9s for the whole corpus, so
-      # there is no excuse for running it only at round close: a guard CI does
-      # not run is not a guard. (Regenerate the timing with
-      # `time python3 scripts/robustness_map.py`; never quote a stale figure.)
+      # Fails on any WORKS -> broken regression, so there is no excuse for
+      # running it only at round close: a guard CI does not run is not a guard.
+      # (Regenerate the timing with `time python3 scripts/robustness_map.py`;
+      # never quote a stale figure -- and the "~9s" that used to stand here was
+      # stale by more than an order of magnitude on at least one dev box.)
+      #
+      # THIS STEP AND THE FIVE-LANE ONE BELOW BOTH RUN ON EVERY PULL REQUEST --
+      # they are in the same `test` job and the workflow triggers on both
+      # push[main] and pull_request. There is no round-close-only map step, and
+      # `--topic` is INCLUSION-only, so a topic cannot be excluded from CI. That
+      # is a deliberate trade rather than an oversight: topic 30 grew the corpus
+      # by ~79% (820 cells of 1038, one commit), and both steps grew with it.
+      # Keeping the topic in CI is the whole argument for its shape -- a corpus
+      # CI does not run is a script nobody runs, which is how the 2026-07-06
+      # sweep of the same bug family disappeared.
       #
       # The LLVM lane runs the SAME cells through --backend=llvm and adds a
       # CROSS-LANE DIVERGENCE gate: a cell where two backends disagree fails the
@@ -218,10 +229,13 @@ jobs:
       # correct than Rust gg on this corpus, so every cell where they disagree is
       # a defect in one of them and this is the gate that names which.
       #
-      # Cost, measured per lane over the whole corpus: c ~9s, llvm ~92s,
-      # selfhost ~7s, asan ~75s, ggdef ~5s. Regenerate with
-      # `time python3 scripts/robustness_map.py --lanes <lane>`; never quote a
-      # stale figure.
+      # Cost: regenerate per lane with
+      # `time python3 scripts/robustness_map.py --lanes <lane>` over the WHOLE
+      # corpus. Never quote a stale figure, and never extrapolate from one topic
+      # -- a topic that is mostly BUILD-FAIL is ~15x cheaper per cell than one
+      # that builds and runs, so a per-topic rate is not a corpus rate. The
+      # per-lane figures that used to stand here predated topic 30 (+~79% cells)
+      # and were already stale by a large factor before that.
       - name: Beginner-code robustness map (all five lanes)
         run: |
           cargo build -p ggdef --bin ggdef

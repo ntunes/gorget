@@ -1,0 +1,13 @@
+struct Inner:
+    Set[int] f
+struct Outer:
+    Inner i
+void main():
+    Set[int] __p = {10}
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    Set[int] c = o.i.f
+    if 1 == 1:
+        if 1 == 1:
+            o.i.f.add(777)
+    print(f"{c.len()}")

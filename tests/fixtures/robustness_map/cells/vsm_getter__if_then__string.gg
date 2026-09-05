@@ -1,0 +1,12 @@
+struct Store:
+    String f
+equip Store:
+    String getf(&self):
+        return self.f
+void main():
+    String __p = "ab"
+    Store s = Store(__p)
+    String c = s.getf()
+    if 1 == 1:
+        s.f.push("Z")
+    print(c)

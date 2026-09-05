@@ -1,0 +1,11 @@
+void probe(Vector[int] &v):
+    Vector[int] c = v
+    match 1:
+        case 1:
+            v.set(0, 777)
+        else:
+            pass
+    print(f"{c.get(0).unwrap()}")
+void main():
+    Vector[int] q = [10, 20]
+    probe(&q)

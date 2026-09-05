@@ -1,0 +1,9 @@
+void main():
+    Vector[Dict[String,int]] v = [{"k": 10}]
+    Dict[String,int] c = v.get(0).unwrap()
+    int __w = 0
+    while __w < 1:
+        c.put("k2", 777)
+        __w += 1
+    print(f"{v.get(0).unwrap().len()}")
+    print(f"{c.len()}")

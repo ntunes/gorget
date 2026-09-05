@@ -1,0 +1,13 @@
+struct Store:
+    Set[int] f
+equip Store:
+    Set[int] getf(&self):
+        return self.f
+void main():
+    Set[int] __p = {10}
+    Store s = Store(__p)
+    Set[int] c = s.getf()
+    loop:
+        s.f.add(777)
+        break
+    print(f"{c.len()}")

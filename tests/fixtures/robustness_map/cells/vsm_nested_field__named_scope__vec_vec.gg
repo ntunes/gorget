@@ -1,0 +1,12 @@
+struct Inner:
+    Vector[Vector[int]] f
+struct Outer:
+    Inner i
+void main():
+    Vector[Vector[int]] __p = [[10], [20]]
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    Vector[Vector[int]] c = o.i.f
+    blk:
+        o.i.f.set(0, [777])
+    print(f"{c.get(0).unwrap().get(0).unwrap()}")

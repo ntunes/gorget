@@ -1,0 +1,9 @@
+struct Store:
+    Set[int] f
+void main():
+    Set[int] __p = {10}
+    Store s = Store(__p)
+    Set[int] c = s.f
+    c.add(777)
+    print(f"{s.f.len()}")
+    print(f"{c.len()}")

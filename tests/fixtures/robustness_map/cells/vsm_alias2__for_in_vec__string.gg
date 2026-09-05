@@ -1,0 +1,8 @@
+void main():
+    String v = "ab"
+    String b = v
+    String c = b
+    Vector[int] __xs = [1]
+    for __x in __xs:
+        v.push("Z")
+    print(c)

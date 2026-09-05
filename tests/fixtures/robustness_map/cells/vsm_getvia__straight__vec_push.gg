@@ -1,0 +1,5 @@
+void main():
+    Vector[Vector[int]] v = [[10, 20]]
+    Vector[int] c = v.get(0).unwrap()
+    v.get(0).unwrap().push(777)
+    print(f"{c.len()}")

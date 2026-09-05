@@ -1,0 +1,9 @@
+void main():
+    String v = "ab"
+    String b = v
+    String c = b
+    if 1 == 2:
+        pass
+    elif 1 == 1:
+        v.push("Z")
+    print(c)

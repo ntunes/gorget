@@ -1,0 +1,15 @@
+struct Inner:
+    Dict[String,int] f
+struct Outer:
+    Inner i
+void main():
+    Dict[String,int] __p = {"k": 10}
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    Dict[String,int] c = o.i.f
+    int __w = 0
+    while __w < 1:
+        c.put("k2", 777)
+        __w += 1
+    print(f"{o.i.f.len()}")
+    print(f"{c.len()}")

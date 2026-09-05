@@ -1,0 +1,11 @@
+void probe(Vector[String] &v):
+    Vector[String] c = v
+    match 1:
+        case 1:
+            v.set(0, "ZZ")
+        else:
+            pass
+    print(c.get(0).unwrap())
+void main():
+    Vector[String] q = ["aa", "bb"]
+    probe(&q)

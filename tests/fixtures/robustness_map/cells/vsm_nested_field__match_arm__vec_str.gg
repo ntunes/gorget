@@ -1,0 +1,15 @@
+struct Inner:
+    Vector[String] f
+struct Outer:
+    Inner i
+void main():
+    Vector[String] __p = ["aa", "bb"]
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    Vector[String] c = o.i.f
+    match 1:
+        case 1:
+            o.i.f.set(0, "ZZ")
+        else:
+            pass
+    print(c.get(0).unwrap())

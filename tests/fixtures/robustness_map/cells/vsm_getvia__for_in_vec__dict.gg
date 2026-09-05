@@ -1,0 +1,7 @@
+void main():
+    Vector[Dict[String,int]] v = [{"k": 10}]
+    Dict[String,int] c = v.get(0).unwrap()
+    Vector[int] __xs = [1]
+    for __x in __xs:
+        v.get(0).unwrap().put("k2", 777)
+    print(f"{c.len()}")

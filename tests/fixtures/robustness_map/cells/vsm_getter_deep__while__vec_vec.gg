@@ -1,0 +1,17 @@
+struct Inner:
+    Vector[Vector[int]] f
+struct Outer:
+    Inner i
+equip Outer:
+    Vector[Vector[int]] getf(&self):
+        return self.i.f
+void main():
+    Vector[Vector[int]] __p = [[10], [20]]
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    Vector[Vector[int]] c = o.getf()
+    int __w = 0
+    while __w < 1:
+        o.i.f.set(0, [777])
+        __w += 1
+    print(f"{c.get(0).unwrap().get(0).unwrap()}")

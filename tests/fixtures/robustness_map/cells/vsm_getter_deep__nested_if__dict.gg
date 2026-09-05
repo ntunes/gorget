@@ -1,0 +1,16 @@
+struct Inner:
+    Dict[String,int] f
+struct Outer:
+    Inner i
+equip Outer:
+    Dict[String,int] getf(&self):
+        return self.i.f
+void main():
+    Dict[String,int] __p = {"k": 10}
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    Dict[String,int] c = o.getf()
+    if 1 == 1:
+        if 1 == 1:
+            o.i.f.put("k2", 777)
+    print(f"{c.len()}")

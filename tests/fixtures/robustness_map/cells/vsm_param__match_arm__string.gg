@@ -1,0 +1,11 @@
+void probe(String &v):
+    String c = v
+    match 1:
+        case 1:
+            v.push("Z")
+        else:
+            pass
+    print(c)
+void main():
+    String q = "ab"
+    probe(&q)

@@ -1,0 +1,9 @@
+void probe(Vector[String] &v):
+    Vector[String] c = v
+    Vector[int] __xs = [1]
+    for __x in __xs:
+        v.set(0, "ZZ")
+    print(c.get(0).unwrap())
+void main():
+    Vector[String] q = ["aa", "bb"]
+    probe(&q)

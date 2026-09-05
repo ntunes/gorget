@@ -1,0 +1,7 @@
+void probe(Vector[int] &v):
+    Vector[int] c = v
+    v.set(0, 777)
+    print(f"{c.get(0).unwrap()}")
+void main():
+    Vector[int] q = [10, 20]
+    probe(&q)

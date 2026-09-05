@@ -30760,5 +30760,399 @@ fn cow_scope_boundary_hook_pairing_count() {
         collectors,
         COW_BEFORE_MUTATION_COLLECTORS,
         arm_guidance,
+
+// ===========================================================================
+// The robustness map's own structural guards.
+//
+// `scripts/robustness_map.py` is a round-close gate and a CI step, and its
+// corpus is a 1858-row TSV beside 1859 `.gg` files. Nothing reconciled the two
+// until topic 30 landed 820 rows at once and the question "did the topic
+// measure what it says it measures" became unanswerable by reading the report.
+// ===========================================================================
+
+/// Columns of `tests/fixtures/robustness_map/MANIFEST.tsv`, mirroring
+/// `scripts/robustness_map.py`'s `COL_*` constants.
+const RMAP_COL_TOPIC: usize = 0;
+const RMAP_COL_CELL: usize = 1;
+const RMAP_COL_C: usize = 2;
+/// The five lane-baseline columns: `c`, `llvm`, `selfhost`, `asan`, `ggdef`.
+const RMAP_LANE_COLS: &[(usize, &str)] = &[
+    (2, "c"),
+    (6, "llvm"),
+    (7, "selfhost"),
+    (9, "asan"),
+    (10, "ggdef"),
+];
+
+fn rmap_rows() -> Vec<Vec<String>> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let text = fs::read_to_string(root.join("tests/fixtures/robustness_map/MANIFEST.tsv"))
+        .expect("cannot read tests/fixtures/robustness_map/MANIFEST.tsv");
+    text.lines()
+        .skip(1)
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let mut f: Vec<String> = l.split('\t').map(str::to_string).collect();
+            f.resize(11, String::new());
+            f
+        })
+        .collect()
+}
+
+/// **THE MAP'S MANIFEST AND ITS CELL FILES MUST BE THE SAME SET, BOTH WAYS —
+/// and every measured row must actually carry a baseline.**
+///
+/// # The silent drop this retires
+///
+/// `scripts/robustness_map.py` selects rows with
+/// `… and (MAP / "cells" / f"{r[COL_CELL]}.gg").exists()`. A MANIFEST row whose
+/// `.gg` file is missing is therefore **skipped in silence**: not measured, not
+/// reported, not counted, and invisible in the per-topic table because that
+/// table is built from the rows that were measured. Deleting one cell file
+/// shrinks the map by one and nothing anywhere says so. That is the same class
+/// as `todo/t1360` in a second instrument, and adding 820 rows to an
+/// unreconciled manifest is how a topic quietly measures 640.
+///
+/// The reverse direction was unguarded too, and was **non-empty already**: 1039
+/// cell files against 1038 rows. The orphan is a legitimate topic-28 helper, so
+/// the fix is a DECLARED allowlist rather than a deletion — a helper is a file
+/// the map compiles as part of another cell, never a cell of its own.
+///
+/// # The empty-baseline half, and why a name allowlist would be wrong for it
+///
+/// A lane column is empty exactly when the row was never measured on that lane,
+/// and `robustness_map.py`'s scoring branch is `if base:` — so an empty baseline
+/// means **the regression branch never runs for that cell-lane**. A row that is
+/// measured every run but has no baseline is not "clean", it is UNGATED:
+/// `WRONG → CRASH` on it is invisible. Topic 30 exists to pin a family that
+/// `D52` predicts will turn into use-after-free, so leaving a third of it
+/// ungated would have neutralised the corpus's own central argument.
+///
+/// ⚠ **THE CONTROL CARVE-OUT IS A PREDICATE, NOT A NAME.** A CONTROL row's
+/// verdict is INVERTED by the runner (`if row[COL_C] == "CONTROL": … continue`)
+/// and it `continue`s before the lane loop, so its lane columns are empty
+/// FOREVER, by construction. Written as a by-name allowlist this assertion goes
+/// red the moment anyone adds a control — which is exactly what topic 30 does,
+/// so it would have been red on arrival, from its own required precondition.
+/// The carve-out therefore keys on the CONTROL marker itself.
+///
+/// The 31 named exemptions are the real, legacy thing: `hof_*` rows whose
+/// `selfhost` / `asan` / `ggdef` columns predate those lanes existing. They are a
+/// **shrink-only** list — measure one and delete its line; never add to it,
+/// because `--seed-new` is the reviewed way to record a first measurement.
+#[test]
+fn robustness_map_manifest_and_cells_reconcile() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let cells_dir = root.join("tests/fixtures/robustness_map/cells");
+
+    /// Files under `cells/` that are deliberately NOT cells: a multi-file
+    /// topic's helper module, compiled as part of another cell. Shrink-only.
+    const DECLARED_HELPERS: &[&str] = &["modhelp_shapes"];
+
+    /// Rows whose `selfhost` / `asan` / `ggdef` baselines predate those lanes.
+    /// SHRINK-ONLY: measure the row (`--lanes all --accept --seed-new --topic`)
+    /// and delete its entry. Never grow this list.
+    const LEGACY_UNBASELINED: &[&str] = &[
+        "hof_all_strings_untyped",
+        "hof_any_strings_untyped",
+        "hof_count_strings_untyped",
+        "hof_deque_each_untyped",
+        "hof_deque_map_untyped",
+        "hof_deque_sort_by_key_untyped",
+        "hof_dict_filter_untyped",
+        "hof_dict_fold_key_len",
+        "hof_dict_fold_value_sum",
+        "hof_each_strings_untyped",
+        "hof_each_strings_untyped_import",
+        "hof_filter_strings_untyped",
+        "hof_find_index_bound_untyped",
+        "hof_find_index_discard_untyped",
+        "hof_flat_map_strings_untyped",
+        "hof_fold_len_accumulator",
+        "hof_fold_nonconstant_accumulator",
+        "hof_fold_string_accumulator",
+        "hof_for_each_strings_import",
+        "hof_for_each_strings_import_closure",
+        "hof_for_each_strings_import_typed",
+        "hof_for_each_strings_noimport_namedfn",
+        "hof_for_each_strings_untyped",
+        "hof_hashset_each_untyped",
+        "hof_map_strings_untyped",
+        "hof_option_map_untyped",
+        "hof_reduce_strings_untyped",
+        "hof_set_fold_len_accumulator",
+        "hof_sort_by_strings_untyped",
+        "hof_sort_by_structs_untyped",
+        "hof_sorted_by_strings_untyped",
+    ];
+
+    let rows = rmap_rows();
+    // FIRE COUNT. A vacuous walk over an unreadable manifest would pass every
+    // assertion below; the floor proves the parse produced the corpus.
+    assert!(
+        rows.len() > 1500,
+        "only {} MANIFEST rows parsed — the walk is vacuous, not the corpus small",
+        rows.len()
+    );
+
+    let mut on_disk: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for entry in fs::read_dir(&cells_dir).expect("cannot read robustness_map/cells") {
+        let path = entry.expect("bad dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) == Some("gg") {
+            on_disk.insert(
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .expect("non-utf8 cell name")
+                    .to_string(),
+            );
+        }
+    }
+    assert!(
+        on_disk.len() > 1500,
+        "only {} cell files found — the walk is vacuous",
+        on_disk.len()
+    );
+
+    // --- duplicates first: a repeated cell name makes set equality lie -----
+    let mut seen = std::collections::BTreeSet::new();
+    let dups: Vec<&str> = rows
+        .iter()
+        .filter(|r| !seen.insert(r[RMAP_COL_CELL].as_str()))
+        .map(|r| r[RMAP_COL_CELL].as_str())
+        .collect();
+    assert!(
+        dups.is_empty(),
+        "MANIFEST.tsv names these cells more than once: {dups:?}. Every scoring \
+         branch keys on the cell name, so a duplicate row is measured once and \
+         scored twice against two different baselines."
+    );
+
+    // --- direction 1: a row whose cell file is gone -----------------------
+    let phantom: Vec<&str> = rows
+        .iter()
+        .map(|r| r[RMAP_COL_CELL].as_str())
+        .filter(|c| !on_disk.contains(*c))
+        .collect();
+    assert!(
+        phantom.is_empty(),
+        "MANIFEST.tsv rows have no cell file: {phantom:?}.\n\
+         robustness_map.py SILENTLY DROPS such a row from `selected` — it is not \
+         measured, not reported and not counted, so the map shrinks with no \
+         diagnostic anywhere. Restore the .gg or delete the row."
+    );
+
+    // --- direction 2: a cell file no row names ----------------------------
+    let orphans: Vec<&str> = on_disk
+        .iter()
+        .map(String::as_str)
+        .filter(|c| !seen.contains(*c) && !DECLARED_HELPERS.contains(c))
+        .collect();
+    assert!(
+        orphans.is_empty(),
+        "cells/ holds .gg files that no MANIFEST row names: {orphans:?}.\n\
+         An unlisted cell is never built, never run and never scored — it looks \
+         like coverage and is none. Add a row for it, or (if it is a helper \
+         module compiled as part of another cell) add it to DECLARED_HELPERS \
+         with a reason."
+    );
+
+    // --- the empty-baseline half ------------------------------------------
+    let mut ungated: Vec<String> = Vec::new();
+    let mut control_rows = 0usize;
+    for row in &rows {
+        // PREDICATE, not a name: the runner inverts a CONTROL row's verdict and
+        // `continue`s before the lane loop, so its lane columns are empty by
+        // construction and forever.
+        if row[RMAP_COL_C] == "CONTROL" {
+            control_rows += 1;
+            continue;
+        }
+        if LEGACY_UNBASELINED.contains(&row[RMAP_COL_CELL].as_str()) {
+            continue;
+        }
+        for (col, lane) in RMAP_LANE_COLS {
+            if row[*col].is_empty() {
+                ungated.push(format!("{} [{}]", row[RMAP_COL_CELL], lane));
+            }
+        }
+    }
+    assert!(
+        control_rows >= 2,
+        "expected at least two CONTROL rows (the harness's own \
+         `_POSITIVE_CONTROL_broken` and topic 30's), found {control_rows}. A \
+         positive control proves the comparison can FAIL; deleting one makes the \
+         gate unfalsifiable."
+    );
+    assert!(
+        ungated.is_empty(),
+        "{} cell-lane(s) are measured every run but have an EMPTY baseline, so \
+         `robustness_map.py`'s `if base:` scoring branch never runs for them — \
+         a WRONG -> CRASH there is invisible to the gate:\n  {}\n\
+         Seed them in ONE five-lane run:\n    \
+         python3 scripts/robustness_map.py --lanes all --accept --seed-new --topic \"<topic>\"",
+        ungated.len(),
+        ungated.join("\n  ")
+    );
+
+    // A shrink-only list that never shrinks is prose. Assert every named
+    // exemption is still a real row, so a retired cell cannot leave a dead
+    // entry behind that quietly widens the carve-out for a future namesake.
+    for name in LEGACY_UNBASELINED {
+        assert!(
+            seen.contains(name),
+            "LEGACY_UNBASELINED names {name:?}, which is no longer a MANIFEST \
+             row. Delete the entry — a stale exemption pre-authorises the next \
+             cell that happens to take the name."
+        );
+    }
+    for name in DECLARED_HELPERS {
+        assert!(
+            on_disk.contains(*name),
+            "DECLARED_HELPERS names {name:?}, which is no longer a file under \
+             robustness_map/cells. Delete the entry."
+        );
+    }
+}
+
+/// **The map's drift ratchet reached stage 3 on exactly one topic, and the
+/// mechanism that does it is a `startswith` on a STRING — so it rots silently
+/// in the direction nobody watches.**
+///
+/// `FATAL_DRIFT_TOPIC_PREFIX` in `scripts/robustness_map.py` is a **FATAL
+/// ALLOWLIST**, not an exempt list. That inverts the usual rot direction: rename
+/// the topic, or renumber it, and the prefix matches ZERO rows — at which point
+/// the promotion becomes INERT, drift in the topic silently returns to
+/// report-only, and the map exits 0 while measuring nothing it was promoted to
+/// measure. A guard that green-lights the class it was written to retire is
+/// worse than no guard (AGENTS.md Core #6, Core #14).
+///
+/// So this asserts **both directions**:
+///
+///   1. the prefix matches **at least one** MANIFEST row — it is live, not inert;
+///   2. it matches **exactly one distinct topic string** — it gates what it was
+///      meant to gate and nothing else.
+///
+/// The second half is not hypothetical. `20`, `21` and `22` each name TWO
+/// different topics in `MANIFEST.tsv` today (`20 docs/book examples` and
+/// `20 smart pointers: Shared & Weak`, and so on), and the report groups by topic
+/// STRING — so a bare-number prefix silently captures a topic it was never meant
+/// to touch. The trailing SPACE in the constant is what keeps `30 …` from also
+/// matching a future `30x`, and it is load-bearing for the same reason.
+#[test]
+fn robustness_map_fatal_drift_prefix_is_live() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let script = fs::read_to_string(root.join("scripts/robustness_map.py"))
+        .expect("cannot read scripts/robustness_map.py");
+
+    // Read the prefix from the SCRIPT, never a second copy of the literal here:
+    // a duplicated constant is two sources of truth for one axis, and this lint
+    // exists precisely to catch the two drifting apart.
+    let marker = "FATAL_DRIFT_TOPIC_PREFIX = \"";
+    let start = script.find(marker).unwrap_or_else(|| {
+        panic!(
+            "scripts/robustness_map.py no longer defines FATAL_DRIFT_TOPIC_PREFIX. \
+             If the drift promotion was deliberately retired, delete this lint in \
+             the same commit and say so; if it was renamed, this lint is the thing \
+             that was supposed to notice."
+        )
+    }) + marker.len();
+    let prefix = &script[start..start + script[start..].find('"').expect("unterminated literal")];
+    assert!(
+        !prefix.is_empty(),
+        "FATAL_DRIFT_TOPIC_PREFIX is empty — an empty prefix matches EVERY topic \
+         and would make intra-quadrant drift fatal across the whole legacy map, \
+         which is the one thing the ratchet's staging forbids."
+    );
+    assert!(
+        prefix.ends_with(' '),
+        "FATAL_DRIFT_TOPIC_PREFIX is {prefix:?} and does not end with a space. \
+         Topic strings start with a number and MANIFEST.tsv already has numeric \
+         collisions, so a prefix without the separator can capture a topic it was \
+         never meant to gate."
+    );
+
+    // The promotion must actually be wired into BOTH gates, not just defined.
+    for needle in [
+        "fatal_drifts.append(",
+        "if regressions or new_div or (fatal_drifts and not args.accept_drift):",
+    ] {
+        assert!(
+            script.contains(needle),
+            "scripts/robustness_map.py no longer contains {needle:?}. \
+             FATAL_DRIFT_TOPIC_PREFIX is defined but the fatal-drift branch is not \
+             wired to the exit code and the --accept refusal, so the promotion is \
+             decorative."
+        );
+    }
+
+    let rows = rmap_rows();
+    assert!(rows.len() > 1500, "vacuous walk: {} rows", rows.len());
+    let matching: std::collections::BTreeSet<&str> = rows
+        .iter()
+        .map(|r| r[RMAP_COL_TOPIC].as_str())
+        .filter(|t| t.starts_with(prefix))
+        .collect();
+
+    assert!(
+        !matching.is_empty(),
+        "FATAL_DRIFT_TOPIC_PREFIX is {prefix:?} and matches ZERO rows in \
+         MANIFEST.tsv.\n\
+         This is a FATAL ALLOWLIST: with no match the drift promotion is INERT, \
+         topic drift silently returns to report-only, and the map exits 0. \
+         Renaming or renumbering the topic requires updating the constant in the \
+         same commit."
+    );
+    assert_eq!(
+        matching.len(),
+        1,
+        "FATAL_DRIFT_TOPIC_PREFIX is {prefix:?} and matches {} DISTINCT topic \
+         strings: {:?}.\n\
+         The report groups by topic STRING and MANIFEST.tsv has live numeric \
+         collisions (`20`, `21`, `22` each name two topics), so a prefix matching \
+         more than one topic makes drift fatal for a topic nobody promoted.",
+        matching.len(),
+        matching
+    );
+}
+
+/// **Topic 30's cells and MANIFEST rows are GENERATED, and a hand edit to a
+/// generated artifact is a silent fork.**
+///
+/// `scripts/gen_value_semantics_cells.py` derives all 820 cells and their
+/// expectations from one sentence — *a mutation through one place is observable
+/// through that place only; every other place reads the value it had before* —
+/// applied mechanically to SOURCE × SITE × PAYLOAD. That is what makes generating
+/// them admissible at all under the map's first standing property (expectations
+/// are hand-derived, NEVER captured from the compiler): nothing is run to produce
+/// an expectation, and a reviewer diffs the RULE rather than 820 strings.
+///
+/// The property only holds while the committed artifacts still equal what the
+/// rule produces. Edit one cell to make it pass and the corpus has silently
+/// become 819 generated cells plus one captured expectation — the exact failure
+/// the "never update an expectation to match what the compiler prints" rule
+/// exists to prevent, arriving through the back door.
+///
+/// `--check` writes nothing. Regenerate with:
+///
+/// ```text
+/// python3 scripts/gen_value_semantics_cells.py
+/// ```
+#[test]
+fn value_semantics_cells_are_generated_and_current() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let out = std::process::Command::new("python3")
+        .args(["scripts/gen_value_semantics_cells.py", "--check"])
+        .current_dir(&root)
+        .output()
+        .expect("python3 scripts/gen_value_semantics_cells.py --check failed to start");
+    assert!(
+        out.status.success(),
+        "topic 30's generated cells / MANIFEST rows are stale or hand-edited.\n{}{}\n\
+         Regenerate with:\n    python3 scripts/gen_value_semantics_cells.py\n\
+         If the EXPECTATION RULE itself changed, that invalidates the baseline: \
+         pass --force-expectation-change and re-seed with --seed-new in the same \
+         commit.",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
     );
 }

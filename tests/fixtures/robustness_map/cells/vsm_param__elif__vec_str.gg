@@ -1,0 +1,10 @@
+void probe(Vector[String] &v):
+    Vector[String] c = v
+    if 1 == 2:
+        pass
+    elif 1 == 1:
+        v.set(0, "ZZ")
+    print(c.get(0).unwrap())
+void main():
+    Vector[String] q = ["aa", "bb"]
+    probe(&q)

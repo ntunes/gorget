@@ -1,0 +1,8 @@
+struct Store:
+    Vector[int] f
+void main():
+    Vector[int] __p = [10, 20]
+    Store s = Store(__p)
+    Vector[int] c = s.f
+    s.f.set(0, 777)
+    print(f"{c.get(0).unwrap()}")

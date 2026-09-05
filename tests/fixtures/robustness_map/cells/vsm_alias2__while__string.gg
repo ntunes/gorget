@@ -1,0 +1,9 @@
+void main():
+    String v = "ab"
+    String b = v
+    String c = b
+    int __w = 0
+    while __w < 1:
+        v.push("Z")
+        __w += 1
+    print(c)

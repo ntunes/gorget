@@ -1,0 +1,14 @@
+struct Store:
+    Vector[Vector[int]] f
+equip Store:
+    Vector[int] getf(&self):
+        return self.f.get(0).unwrap()
+void main():
+    Vector[Vector[int]] __p = [[10, 20]]
+    Store s = Store(__p)
+    Vector[int] c = s.getf()
+    if 1 == 2:
+        pass
+    else:
+        s.f.get(0).unwrap().set(0, 777)
+    print(f"{c.get(0).unwrap()}")

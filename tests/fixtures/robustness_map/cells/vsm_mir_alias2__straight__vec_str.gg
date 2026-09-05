@@ -1,0 +1,7 @@
+void main():
+    Vector[String] v = ["aa", "bb"]
+    Vector[String] b = v
+    Vector[String] c = b
+    c.set(0, "ZZ")
+    print(v.get(0).unwrap())
+    print(c.get(0).unwrap())

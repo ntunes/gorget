@@ -1,0 +1,14 @@
+struct Store:
+    Vector[String] f
+equip Store:
+    String getf(&self):
+        return self.f.get(0).unwrap()
+void main():
+    Vector[String] __p = ["ab"]
+    Store s = Store(__p)
+    String c = s.getf()
+    int __w = 0
+    while __w < 1:
+        s.f.get(0).unwrap().push("Z")
+        __w += 1
+    print(c)

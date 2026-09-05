@@ -145,6 +145,36 @@ NCOLS = 11
 LANE_COL = {"c": COL_C, "llvm": COL_LLVM, "selfhost": COL_SELFHOST,
             "asan": COL_ASAN, "ggdef": COL_GGDEF}
 ALL_LANES = ["c", "llvm", "selfhost", "asan", "ggdef"]
+# STAGE 3 OF THE DRIFT RATCHET, FOR ONE TOPIC. The intra-quadrant DRIFT branch
+# below is report-only for the 33 legacy topics, deliberately: 1242 cell-lanes
+# sit at a non-good baseline and none has ever been checked for drift, so making
+# it fatal in one step would red the map on drift nobody caused. Its own comment
+# carries the staging -- "report -> measure the whole map -> burn the census
+# down -> THEN promote" -- and the standing instruction "do not leave it
+# report-only forever, a ratchet needs both directions" (AGENTS.md Core #6).
+# The legacy census is stage 2 and is filed as `todo/t0993`; this constant does
+# NOT discharge it, it discharges stage 3 for ONE topic that never had a census.
+#
+# A topic that is born FULLY SEEDED satisfies that staging on day one BY
+# CONSTRUCTION: its day-one drift is zero, measured, so there is no census to
+# burn down and it can start at stage 3 while the legacy topics stay at stage 1.
+# Topic 30 is the first such topic. Its 200+ non-good baselines EXIST TO CHANGE
+# -- `WRONG -> BUILD-FAIL` is what happens when the language starts REJECTING
+# these programs, which is the direction Core #8 prefers -- so a fatal drift
+# here is cleared the reviewed way, with `--accept --accept-drift --topic`,
+# never by widening this prefix.
+#
+# WARNING: THIS IS A FATAL ALLOWLIST, NOT AN EXEMPT LIST, AND THE ROT DIRECTION
+# IS THEREFORE INVERTED. Rename the topic and this prefix matches ZERO rows, the
+# promotion silently becomes inert, and the map returns to report-only at rc 0
+# -- a guard green-lighting the class it was written to retire. That is why
+# `robustness_map_fatal_drift_prefix_is_live` (tests/lints.rs) asserts BOTH
+# directions: this prefix matches at least one MANIFEST row, AND exactly one
+# distinct topic string. The second half is not hypothetical -- `20`, `21` and
+# `22` each name TWO different topics in MANIFEST.tsv today, so a bare-number
+# prefix can silently capture a topic it was never meant to gate. The trailing
+# SPACE is load-bearing for the same reason.
+FATAL_DRIFT_TOPIC_PREFIX = "30 "
 # Named hang census. A hang/spin/timeout is a ROW, never a shrinking integer
 # (`EXPECTED_HANGS` does not exist in this script). C-lane TIMEOUT must equal
 # this set on a C-lane run; a new hang is a REGRESSION, a retirement must
@@ -511,12 +541,28 @@ def main():
                     help="fold PROGRESS rows into the baseline (never expectations); "
                          "refuses to write MANIFEST.tsv if any REGRESSION or NEW "
                          "divergence is present")
+    ap.add_argument("--seed-new", action="store_true", dest="seed_new",
+                    help="record a MEASURED bucket into an EMPTY baseline column "
+                         "(and an empty divergence flag). This is the ONLY way a "
+                         "non-good bucket enters the baseline for a row that was "
+                         "never measured, and it is deliberately NOT implied by "
+                         "--accept: seeding is a REVIEWED act on a NEW topic, not "
+                         "a side effect of folding progress. --topic scopes a RUN; "
+                         "it is not a branch guard.")
     ap.add_argument("--accept-drift", action="store_true", dest="accept_drift",
                     help="ALSO record intra-quadrant DRIFT rows (non-good -> a "
                          "DIFFERENT non-good). Separate from --accept on purpose: "
                          "a drift can be a SEVERITY ESCALATION (WRONG -> CRASH), and "
                          "recording one must be a deliberate act after triage, never "
-                         "a side effect of folding progress. Same refusal rules.")
+                         "a side effect of folding progress. Same refusal rules. "
+                         "SCOPE IT WITH --topic: this branch records EVERY drifted "
+                         "row on the run, so clearing one topic's drift unscoped "
+                         "silently ratchets the legacy census into the baseline. "
+                         "Here the problem genuinely IS run scope -- an unselected "
+                         "row can never be `drifted` -- which is why this branch is "
+                         "NOT behind --seed-new; that flag guards the two branches "
+                         "that write into an EMPTY column, where --topic cannot help "
+                         "because the leak is WITHIN the selected topic.")
     args = ap.parse_args()
     if args.accept_drift and not args.accept:
         ap.error("--accept-drift requires --accept (it widens what --accept writes)")
@@ -558,6 +604,8 @@ def main():
     div_lanes = [l for l in lanes if l in VALUE_LANES]
     topics, regressions, progress, divergences, new_div = {}, [], [], [], []
     drifts = []
+    fatal_drifts = []
+    seeded = []
     both_wrong_ggdef_right, ggdef_disagree = [], []
     for row in rows:
         res = measured.get(row[COL_CELL])
@@ -578,11 +626,21 @@ def main():
         baseline_lanes = {lane: row[LANE_COL[lane]] for lane in div_lanes}
         # A divergence the baseline already records is a KNOWN one: it stays in
         # the report (that is the point of the category) but does not gate.
+        # A row on its FIRST measurement (no baseline on ANY value lane) is being
+        # SEEDED, not regressing: record what it diverges as, do not gate on it.
+        # Without this a brand-new topic can never be baselined at all -- every
+        # divergent row is a NEW DIVERGENCE, and the file write below is refused
+        # wholesale, on every run, forever.
+        first_seen = bool(args.accept and args.seed_new and div_lanes
+                          and not any(baseline_lanes.values()))
         baseline_diverges = (row[COL_DIVERGE] == "DIVERGENT"
                              or len({b for b in baseline_lanes.values() if b}) > 1)
         if diverges:
-            divergences.append((row[COL_CELL], res, baseline_diverges))
-            if not baseline_diverges:
+            divergences.append((row[COL_CELL], res, baseline_diverges or first_seen))
+            if baseline_diverges or first_seen:
+                if first_seen:
+                    row[COL_DIVERGE] = "DIVERGENT"
+            else:
                 new_div.append(row[COL_CELL])
 
         # ggdef adjudication. Two categories, and the difference matters:
@@ -662,7 +720,13 @@ def main():
                     # forever either -- a ratchet needs both directions.
                     drifts.append((row[COL_CELL], f"[{lane}] {base} -> {bucket}: {actual}"))
                     drifted = True
+                    if row[COL_TOPIC].startswith(FATAL_DRIFT_TOPIC_PREFIX):
+                        fatal_drifts.append(
+                            (row[COL_CELL], f"[{lane}] {base} -> {bucket}: {actual}"))
+            if (args.accept and args.seed_new and not base):
+                seeded.append((row[COL_CELL], f"[{lane}] (empty) -> {bucket}"))
             if (args.accept and bucket == good and base != good) or \
+               (args.accept and args.seed_new and not base) or \
                (args.accept_drift and drifted):
                 # PROGRESS folds under `--accept`. DRIFT folds ONLY under the
                 # separate `--accept_drift`, and the separation is the point.
@@ -801,24 +865,46 @@ def main():
                     print(f"  {bucket:<10} [{lane}] {row[COL_CELL]}: got {actual!r} "
                           f"want {row[COL_EXPECTED]!r}")
 
+    fatal_cells = {c for c, _ in fatal_drifts}
     if drifts:
         # Its own heading, because it is neither of the two verdicts the map has
         # always printed: the cell was broken and is still broken, in a
-        # different way. NOT part of the exit code -- see the scoring branch.
+        # different way.
+        #
+        # THE HEADING MUST NOT SAY "does not gate" FLATLY ANY MORE, and the
+        # distinction is the whole point of the ratchet reaching stage 3 on one
+        # topic. Drift under FATAL_DRIFT_TOPIC_PREFIX GATES -- it refuses a bare
+        # --accept and it sets the exit code; drift anywhere else is still
+        # report-only. A heading asserting the old invariant for both would be
+        # an invariant-claiming comment with no enforcing guard (Core #14), on a
+        # gate whose own exit code contradicts it.
         print(f"\n=== intra-quadrant DRIFT: {len(drifts)} "
-              f"(non-good -> a DIFFERENT non-good; report-only, does not gate) ===")
+              f"(non-good -> a DIFFERENT non-good; report-only EXCEPT under "
+              f"topic {FATAL_DRIFT_TOPIC_PREFIX!r}, where it GATES: "
+              f"{len(fatal_drifts)} fatal) ===")
 
     for cell, why in progress:
         print(f"  PROGRESS   {cell}: {why}")
     for cell, why in drifts:
-        print(f"  DRIFT      {cell}: {why}")
+        print(f"  {'FATAL DRIFT' if cell in fatal_cells else 'DRIFT      '} "
+              f"{cell}: {why}")
     for cell, why in regressions:
         print(f"  REGRESSION {cell}: {why}")
 
     if args.accept:
-        if regressions or new_div:
+        if regressions or new_div or (fatal_drifts and not args.accept_drift):
+            # NAME EVERY REASON. This message used to list only regressions and
+            # new divergences, so a refusal caused SOLELY by a fatal drift
+            # printed "(0 REGRESSION(S), 0 NEW DIVERGENCE(S))" and read as a
+            # refusal with no cause -- after which the operator's next move is
+            # to re-run, not to triage. `--accept-drift` (scoped with --topic,
+            # so clearing a topic-30 drift cannot silently ratchet legacy drift)
+            # is the reviewed way to clear the third one.
+            hint = (" - pass --accept-drift --topic after triage"
+                    if fatal_drifts and not regressions and not new_div else "")
             print("\n--accept refused: MANIFEST.tsv NOT written "
-                  f"({len(regressions)} REGRESSION(S), {len(new_div)} NEW DIVERGENCE(S))")
+                  f"({len(regressions)} REGRESSION(S), {len(new_div)} NEW "
+                  f"DIVERGENCE(S), {len(fatal_drifts)} FATAL DRIFT(S){hint})")
         else:
             (MAP / "MANIFEST.tsv").write_text(
                 header + "\n" + "\n".join("\t".join(r) for r in rows) + "\n")
@@ -826,11 +912,13 @@ def main():
                         if args.accept_drift else
                         f" ({len(drifts)} DRIFT rows LEFT ALONE — "
                         f"pass --accept-drift after triage)" if drifts else "")
+            seedmsg = f", {len(seeded)} rows SEEDED" if seeded else ""
             print(f"\nbaseline updated ({len(progress)} progress rows folded"
-                  f"{recorded}) - review this diff")
+                  f"{seedmsg}{recorded}) - review this diff")
 
-    if regressions or new_div:
-        print(f"\n{len(regressions)} REGRESSION(S), {len(new_div)} NEW DIVERGENCE(S)")
+    if regressions or new_div or (fatal_drifts and not args.accept_drift):
+        print(f"\n{len(regressions)} REGRESSION(S), {len(new_div)} NEW DIVERGENCE(S), "
+              f"{len(fatal_drifts)} FATAL DRIFT(S)")
         return 1
     return 0
 

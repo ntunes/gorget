@@ -1,0 +1,10 @@
+void probe(Vector[Vector[int]] &v):
+    Vector[Vector[int]] c = v
+    if 1 == 2:
+        pass
+    elif 1 == 1:
+        v.set(0, [777])
+    print(f"{c.get(0).unwrap().get(0).unwrap()}")
+void main():
+    Vector[Vector[int]] q = [[10], [20]]
+    probe(&q)

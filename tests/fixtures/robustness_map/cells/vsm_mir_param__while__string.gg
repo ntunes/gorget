@@ -1,0 +1,11 @@
+void probe(String &v):
+    String c = v
+    int __w = 0
+    while __w < 1:
+        c.push("Z")
+        __w += 1
+    print(v)
+    print(c)
+void main():
+    String q = "ab"
+    probe(&q)

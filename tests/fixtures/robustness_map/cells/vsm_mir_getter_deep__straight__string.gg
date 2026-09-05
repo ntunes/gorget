@@ -1,0 +1,15 @@
+struct Inner:
+    String f
+struct Outer:
+    Inner i
+equip Outer:
+    String getf(&self):
+        return self.i.f
+void main():
+    String __p = "ab"
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    String c = o.getf()
+    c.push("Z")
+    print(o.i.f)
+    print(c)

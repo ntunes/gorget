@@ -1,0 +1,9 @@
+void main():
+    Vector[Set[int]] v = [{10}]
+    Set[int] c = v.get(0).unwrap()
+    int __w = 0
+    while __w < 1:
+        c.add(777)
+        __w += 1
+    print(f"{v.get(0).unwrap().len()}")
+    print(f"{c.len()}")

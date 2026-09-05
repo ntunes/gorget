@@ -1,0 +1,9 @@
+void main():
+    Set[int] v = {10}
+    Set[int] c = v
+    int __w = 0
+    while __w < 1:
+        c.add(777)
+        __w += 1
+    print(f"{v.len()}")
+    print(f"{c.len()}")

@@ -1,0 +1,15 @@
+struct Inner:
+    Vector[int] f
+struct Outer:
+    Inner i
+void main():
+    Vector[int] __p = [10, 20]
+    Inner __in = Inner(__p)
+    Outer o = Outer(__in)
+    Vector[int] c = o.i.f
+    match 1:
+        case 1:
+            o.i.f.set(0, 777)
+        else:
+            pass
+    print(f"{c.get(0).unwrap()}")

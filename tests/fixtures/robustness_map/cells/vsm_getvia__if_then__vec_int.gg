@@ -1,0 +1,6 @@
+void main():
+    Vector[Vector[int]] v = [[10, 20]]
+    Vector[int] c = v.get(0).unwrap()
+    if 1 == 1:
+        v.get(0).unwrap().set(0, 777)
+    print(f"{c.get(0).unwrap()}")

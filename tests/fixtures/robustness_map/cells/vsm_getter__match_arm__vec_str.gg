@@ -1,0 +1,15 @@
+struct Store:
+    Vector[String] f
+equip Store:
+    Vector[String] getf(&self):
+        return self.f
+void main():
+    Vector[String] __p = ["aa", "bb"]
+    Store s = Store(__p)
+    Vector[String] c = s.getf()
+    match 1:
+        case 1:
+            s.f.set(0, "ZZ")
+        else:
+            pass
+    print(c.get(0).unwrap())

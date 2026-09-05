@@ -1,0 +1,9 @@
+void probe(Vector[int] &v):
+    Vector[int] c = v
+    loop:
+        v.push(777)
+        break
+    print(f"{c.len()}")
+void main():
+    Vector[int] q = [10, 20]
+    probe(&q)

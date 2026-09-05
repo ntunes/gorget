@@ -1,0 +1,9 @@
+void probe(Set[int] &v):
+    Set[int] c = v
+    loop:
+        v.add(777)
+        break
+    print(f"{c.len()}")
+void main():
+    Set[int] q = {10}
+    probe(&q)

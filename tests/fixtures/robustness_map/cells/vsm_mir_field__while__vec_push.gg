@@ -1,0 +1,12 @@
+struct Store:
+    Vector[int] f
+void main():
+    Vector[int] __p = [10, 20]
+    Store s = Store(__p)
+    Vector[int] c = s.f
+    int __w = 0
+    while __w < 1:
+        c.push(777)
+        __w += 1
+    print(f"{s.f.len()}")
+    print(f"{c.len()}")
