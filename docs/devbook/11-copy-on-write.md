@@ -1748,11 +1748,11 @@ list: `builtin_returns_view` (`context.rs:778`) reads
 ### Runtime `*_materialize` hooks
 
 Pushing a view into an owning collection is where the runtime earns its keep.
-Every consuming runtime function (`gorget_array_push`, `gorget_map_put`, …)
-obeys the same three-step shape (`gorget_array_push`, `c_runtime.rs:5244`):
-`memcpy` the caller's bytes into the slot, then call the `elem_materialize`
-function-pointer hook, then return. For string elements the hook is
-`gorget_string_materialize_inplace` (`c_runtime.rs:1653`):
+A consuming runtime function that stores **exactly one** caller value into
+**exactly one** slot obeys the same three-step shape (`gorget_array_push`,
+`c_runtime.rs:5244`): `memcpy` the caller's bytes into the slot, then call the
+`elem_materialize` function-pointer hook, then return. For string elements the
+hook is `gorget_string_materialize_inplace` (`c_runtime.rs:1653`):
 
 ```c
 static inline void gorget_string_materialize_inplace(void* p) {
@@ -1771,6 +1771,39 @@ on maps) are wired by the LIR collection-constructor pass, not the C backend —
 see the inventory comment at `emit_call_extern.rs:887`. Return boundaries use the
 bulk variants `gorget_array_materialize_all` (`c_runtime.rs:5286`) and
 `gorget_map_materialize_keys` (`c_runtime.rs:5298`).
+
+#### The two departures from one-value-one-slot
+
+The three-step shape is a rule about a writer that takes one value and stores
+it once. Two writers do something else, and neither is reached by widening that
+rule — the shape simply has no subject to talk about, so each departure carries
+its own clause.
+
+**A writer that may not store at all.** `gorget_map_put` probes first: on a
+miss the `memcpy` transfers the caller's key into the slot, but on a **hit** the
+map keeps the key it already has and the incoming key is stored nowhere. Nothing
+in the three-step shape covers a value the callee declined to take, so the rule
+is stated separately: *a consuming function that can decline a value must
+dispose of the value it did not take.* The map's key side is the only place in
+the runtime where this arises — arrays always store, and the map's **value**
+side already drops the old value before overwriting it. `gorget_map_put`
+therefore splits into a hit-reporting core plus two wrappers that differ only in
+who owns the key: the ownership-transfer wrapper (`.put`/`.set`/`.add`/
+`.insert`, `d[k] = v`, container literals, comprehensions) drops the incoming
+key on a hit, and the borrow wrapper `gorget_map_put_cloned` (`Dict.update`,
+`Set.union` and its siblings) never drops, because its caller still owns the
+key. The borrow wrapper additionally skips re-cloning the **key** on a hit —
+the stored key is already an independent owned copy — while still re-cloning
+the **value**, which the core has just `memcpy`'d from borrowed storage.
+
+**A writer that stores one source into more than one slot.** `gorget_array_fill`
+copies a single source value into N slots. One `memcpy` plus one hook call
+yields **one** owned buffer aliased N times, so the array's free releases it N
+times. The discriminator is duplication, not hook presence: `set` and `insert`
+place one value in one slot and are correct without a hook. This one is an open
+defect — `Vector[String].fill` double-frees today (`todo/t1407`, repro
+`tests/fixtures/known_gaps/t1407_array_fill_droppable_elem_double_free.gg`) — and the
+clause it violates is *a writer that duplicates a source must clone per slot.*
 
 `gorget_string_clone_to_owned` / `gorget_string_clone` is the unconditional
 deep-clone used by the compiler-emitted boundary clones; the `*_materialize`

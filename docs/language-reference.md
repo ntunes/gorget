@@ -3948,7 +3948,7 @@ Mutating a `Dict` during iteration (`put`, `remove`, `swap_remove`, `clear`) lea
 | `clear()` | `→ void` | Remove all entries |
 | `get_or(key, default)` | `K, V → V` | Get value for key, or return `default` |
 | `get_or_put(key, default)` | `K, V → V` | Get value for key, or insert `default` and return it |
-| `update(other)` | `Dict[K, V] → void` | Merge all entries from `other` (overwrites existing keys) |
+| `update(other)` | `Dict[K, V] → void` | Merge all entries from `other` (for a key already present, the stored key is kept and its value overwritten) |
 | `keys()` | `→ Vector[K]` | All keys in insertion order |
 | `values()` | `→ Vector[V]` | All values in insertion order |
 | `items()` | `→ Vector[(K, V)]` | All key-value pairs in insertion order |

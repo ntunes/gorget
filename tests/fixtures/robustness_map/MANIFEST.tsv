@@ -136,7 +136,7 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 07 Dict/Set basics	dict_compound_add_get_unwrap	WRONG	4	187651056370960 (garbage)	NEW. Same defect through a Dict receiver.	WRONG	WORKS	DIVERGENT	WRONG	WORKS
 07 Dict/Set basics	dict_contains_remove	WORKS	true / false / 30 / 0	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 07 Dict/Set basics	dict_count_words	REJECTED	a=2 / b=1	E_DefaultOpRhsTypeMismatch (build)	The canonical word-frequency exercise, killed by the filed root above.	REJECTED	REJECTED		REJECTED	NO-VERDICT
-07 Dict/Set basics	dict_count_words_unwrap_or	WORKS	a=2 / b=1	(matches)		WORKS	WORKS		SANITIZE-FAIL	NO-VERDICT
+07 Dict/Set basics	dict_count_words_unwrap_or	WORKS	a=2 / b=1	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 07 Dict/Set basics	dict_get_bound_first	WORKS	30 / missing	(matches)		WORKS	WORKS		WORKS	WORKS
 07 Dict/Set basics	dict_get_or_default	REJECTED	30 / 0	E_DefaultOpRhsTypeMismatch (build)	BOOK Ch5 verbatim: `int age = ages.get("Alice") ?? 0`. ALREADY FILED as HIGH (TODO.md ~248, from docs/language-design.md:2609).	REJECTED	REJECTED		REJECTED	NO-VERDICT
 07 Dict/Set basics	dict_get_unwrap_or	WORKS	30 / 0	(matches)		WORKS	WORKS		WORKS	WORKS
@@ -156,7 +156,7 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 07 Dict/Set basics	hof_set_fold_len_accumulator	WORKS	5	(matches)	Per-protocol sibling of hof_fold_len_accumulator. ICE at emit_types.rs:850 at HEAD.	WORKS				
 07 Dict/Set basics	set_basic	WORKS	2 / found / absent	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 07 Dict/Set basics	set_iterate	WORKS	3 / 1 / 2	(matches)		WORKS	WORKS		WORKS	WORKS
-07 Dict/Set basics	set_of_strings	WORKS	2	(matches)		WORKS	WORKS		SANITIZE-FAIL	WORKS
+07 Dict/Set basics	set_of_strings	WORKS	2	(matches)		WORKS	WORKS		WORKS	WORKS
 07 Dict/Set basics	set_operations	WORKS	2 / 4 / 1 / false	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 08 structs & methods	newtype_basic	WORKS	42	(matches)		WORKS	WORKS		WORKS	NO-VERDICT
 08 structs & methods	struct_basic	WORKS	1 / 2	(matches)		WORKS	WORKS		WORKS	WORKS
@@ -315,9 +315,9 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 16 spelling-equivalence pairs	pair_buildvec_d_comprehension	WORKS	3 / n0 / n2	(matches)	pair:build_strvec.	WORKS	WORKS		WORKS	NO-VERDICT
 16 spelling-equivalence pairs	pair_chain_a_chained	WORKS	2 / 8	(matches)	pair:chain_vs_temps.	WORKS	WORKS		SANITIZE-FAIL	REJECTED
 16 spelling-equivalence pairs	pair_chain_b_temps	WORKS	2 / 8	(matches)	pair:chain_vs_temps.	WORKS	WORKS		SANITIZE-FAIL	REJECTED
-16 spelling-equivalence pairs	pair_count_a_unwrap_or	WORKS	a=2 / b=1	(matches)	pair:dict_count.	WORKS	WORKS		SANITIZE-FAIL	NO-VERDICT
-16 spelling-equivalence pairs	pair_count_b_contains_subscript	WORKS	a=2 / b=1	(matches)	pair:dict_count.	WORKS	WORKS		SANITIZE-FAIL	NO-VERDICT
-16 spelling-equivalence pairs	pair_count_c_match	WORKS	a=2 / b=1	(matches)	pair:dict_count.	WORKS	WORKS		SANITIZE-FAIL	NO-VERDICT
+16 spelling-equivalence pairs	pair_count_a_unwrap_or	WORKS	a=2 / b=1	(matches)	pair:dict_count.	WORKS	WORKS		WORKS	NO-VERDICT
+16 spelling-equivalence pairs	pair_count_b_contains_subscript	WORKS	a=2 / b=1	(matches)	pair:dict_count.	WORKS	WORKS		WORKS	NO-VERDICT
+16 spelling-equivalence pairs	pair_count_c_match	WORKS	a=2 / b=1	(matches)	pair:dict_count.	WORKS	WORKS		WORKS	NO-VERDICT
 16 spelling-equivalence pairs	pair_countdown_a_while	WORKS	3 / 2 / 1		pair:countdown.	WORKS	WORKS		WORKS	WORKS
 16 spelling-equivalence pairs	pair_countdown_b_for_sub	WORKS	3 / 2 / 1		pair:countdown.	WORKS	WORKS		WORKS	WORKS
 16 spelling-equivalence pairs	pair_countdown_c_recursion	WORKS	3 / 2 / 1		pair:countdown.	WORKS	WORKS		WORKS	WORKS
@@ -531,7 +531,7 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 16 spelling-equivalence pairs	pair_upper_a_comprehension	WORKS	ALPHA / BETA	(matches)	pair:upper_strings.	WORKS	WORKS		WORKS	NO-VERDICT
 16 spelling-equivalence pairs	pair_upper_b_looppush	WORKS	ALPHA / BETA	(matches)	pair:upper_strings.	WORKS	WORKS		WORKS	NO-VERDICT
 16 spelling-equivalence pairs	pair_upper_c_map_inline	WORKS	ALPHA / BETA	(matches)	pair:upper_strings.	WORKS	WORKS		SANITIZE-FAIL	NO-VERDICT
-16 spelling-equivalence pairs	pair_upper_d_map_named	WORKS	ALPHA / BETA	(matches)	pair:upper_strings.	WORKS	WORKS		SANITIZE-FAIL	NO-VERDICT
+16 spelling-equivalence pairs	pair_upper_d_map_named	WORKS	ALPHA / BETA	(matches)	pair:upper_strings.	WORKS	WORKS		WORKS	NO-VERDICT
 16 spelling-equivalence pairs	pair_upperstr_a_method	WORKS	HELLO		pair:upperstr.	WORKS	WORKS		WORKS	NO-VERDICT
 16 spelling-equivalence pairs	pair_upperstr_b_char_loop	WORKS	HELLO		pair:upperstr.	WORKS	WORKS		WORKS	NO-VERDICT
 16 spelling-equivalence pairs	pair_upperstr_c_map_join	WORKS	HELLO		pair:upperstr.	TRAP	WORKS	DIVERGENT	SANITIZE-FAIL	NO-VERDICT

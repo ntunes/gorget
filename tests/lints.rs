@@ -10065,7 +10065,15 @@ fn sanitize_allowlists_shrink_only() {
     // ⊜ FOUND BY A FIVE-BUILD PRE-FLIGHT before the reconciliation, not by the
     // round-close battery after it — which is the difference between an owner
     // decision and an owner surprise.
-    const LEAK_CEILING: usize = 301;
+    // ⚖ 301 -> 293 (R50 Track H). Eight rows RETIRED: their fixtures reported
+    // no leak record of ANY class once `gorget_map_put` started dropping the
+    // incoming key on a duplicate-key hit. All eight are pure `str_alloc_copy`
+    // rows -- the leaked-key signature -- and all eight are UNCITED, so the
+    // sweep reported them advisory (rc 0); deleting them is what makes a
+    // partial revert of the fix trip `❌ NEW LEAK` instead.
+    // ⊜ ATTRIBUTED, not assumed: a PRISTINE control sweep at the same base
+    // reported ZERO retirements, so the set-diff is the whole eight.
+    const LEAK_CEILING: usize = 293;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -10348,8 +10356,14 @@ fn sanitize_allowlists_shrink_only() {
     // ⚠ AND THIS TIME THE ROW COUNT REALLY MOVES. The +1/-1 wash recorded above
     // was the reconciliation; this is pure inflow with nothing retiring against
     // it, so all three of rows, pairs and records step together.
-    const LEAK_CLASS_PAIRS: usize = 498;
-    const LEAK_RECORDS: usize = 2265;
+    // ⚖ 498 -> 487 pairs, 2265 -> 2232 records (R50 Track H). The eight retired
+    // rows take one pair and twelve records with them; the twelve TIGHTENED rows
+    // give up three more pairs (a class measured GONE) and twenty-one more
+    // records. ⚠ The fixed sweep reports 28 tightenings, not 12 -- the other 16
+    // are BYTE-IDENTICAL in the pristine control and are NOT this track's, so
+    // they are deliberately left standing for their owners.
+    const LEAK_CLASS_PAIRS: usize = 487;
+    const LEAK_RECORDS: usize = 2232;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────
@@ -10434,7 +10448,11 @@ fn sanitize_allowlists_shrink_only() {
     // `test_higher_order_named_fn`'s whole row. The one pair ADDED in the same
     // commit — `vector_hof_result_element_sizing` — is CITED to `todo/t0953`, so
     // it lands on the other side of this count and does not offset the 13.
-    const UNCITED_LEAK_CLASS_PAIRS: usize = 480;
+    // ⚖ 480 -> 469 (R50 Track H). Every one of the 11 is a pair that CEASED TO
+    // EXIST -- eight with their retired row, three where a tightening removed
+    // the class outright -- and all eleven were uncited, so none crosses the
+    // cited/uncited line. Not a citation drive.
+    const UNCITED_LEAK_CLASS_PAIRS: usize = 469;
 
     // A `todo/` item counts as citable for a pair only if it EXISTS and its body
     // NAMES the pair's top-frame symbol. Cached: 293 rows would otherwise re-read

@@ -1,3 +1,53 @@
+- [2026-09-05] **`t1387` CLOSED — `gorget_map_put`'s KEY HAD NO DROP DISCIPLINE (R50 Track H).**
+  ⛔ **THE FILED MECHANISM WAS WRONG, AND IT POINTED READERS AT THE WRONG LAYER.** `t1387` said the leak was
+  *"a clone at a `for ch in s:` LOOP HEAD never registered for drop"* and warned *"DO NOT fix it by making
+  `put` steal the loop variable"*. **The producer is correct** — the loop element is a view and IS registered.
+  **The leak is at the `.put()` CONSUMING POSITION, and the consumer drops ownership on the DUPLICATE-KEY
+  path.** ⊕ The warning is nonetheless respected: the fix drops the map's OWN copy, never the caller's — the
+  fixture prints the source local intact afterwards.
+  **PROOF, scoped to the function body** (the unscoped grep returns 32 and does not reproduce):
+  `sed -n '/^static inline void gorget_map_put(GorgetMap\* m/,/^}/p' src/backend/c/runtime/runtime_map.c |
+  grep -c val_drop` → **6**, same with `key_drop` → **0**. *The VALUE had a drop discipline; the KEY had none.*
+  On a miss the memcpy transfers the key; on a **hit** the branches `val_drop` the old value and `return`,
+  and the incoming key is left with no owner.
+  **THE FIX.** `gorget_map_put` splits into a hit-reporting core `__gorget_map_put_core` plus two wrappers
+  that differ only in who owns the key: the ownership-transfer wrapper drops the incoming key on a hit; the
+  borrow wrapper `gorget_map_put_cloned` never drops **and** skips only the redundant key re-clone. ⭐ **The
+  `val_clone` block is deliberately untouched — the core just memcpy'd a BORROWED value, so skipping the whole
+  re-probe would have been an aliasing bug; skipping only the key is exactly correct.**
+  **FIRE COUNT (200k puts over a 26-key alphabet, `--clones=stats`):** `total_frees` **60 → 200034**,
+  `live_bytes` **399948 → 0**, `peak_rss_kb` **7488 → 1248**, with `string_clone` (200026) and `total_allocs`
+  (200033) **IDENTICAL** ⇒ **199,974 = 200,000 − 26 = exactly one `free()` per duplicate put**, no added clones.
+  **COST:** −15% on the `-O2` hit path; every `-O0` cell inside a measured ±10–16% noise floor; **no regression
+  established.** `always_inline` was measured inert and is NOT added (it would also collide with the LLVM
+  path's `.replace("static inline ", "")`).
+  **WHAT IT MOVED.** 8 `LEAK_ALLOWLIST` retirements + 12 tightenings, and **5** robustness-map `asan` cells
+  (`dict_count_words_unwrap_or`, `set_of_strings`, `pair_count_a_unwrap_or`,
+  `pair_count_b_contains_subscript`, `pair_count_c_match`) — **five separately-pinned rows that were five
+  instances of one defect.** ⊕ It also clears `ex_char_frequency`'s REGRESSION, which was blocking the
+  round-close robustness-map step, with **no allowlist or baseline edit**.
+  ⚠ **The topic-16 fold also carries `pair_upper_d_map_named`, which is NOT this fix's** — measured green on a
+  pristine control at this base, i.e. a stale baseline. Disclosed rather than hand-edited; filed as `t1409`.
+  **COVERAGE (Core #12 — the whole prior evidence base was String-keyed).** New fixture
+  `map_userkey_dup_key_drop.gg` covers the generated-`<T>__drop` key path (`Dict[Named,int]` **and**
+  `Set[Named]`), which no committed fixture pinned. It is the row that pins **both halves independently**:
+  pristine **38 B / 7 allocs**; transfer-wrapper drop alone reverted **28 B / 5 allocs**; `put_cloned`'s
+  `!__gg_hit` alone reverted **10 B / 2 allocs**; fixed **rc 0, clean** — and the caller's live locals print
+  intact, which is the assertion that an arbitrary generated drop ran on the map's copy and not on theirs.
+  **LANES (Core #9):** stdout is byte-identical everywhere ⇒ implementation-internal runtime hygiene, no
+  conformance fixture owed. C via `include_str!`; LLVM shares the embedded runtime; **self-host measured
+  end-to-end** — the driver's emitted C carries `__gorget_map_put_core`, compiles, runs, and MATCHES Rust gg
+  on the new fixture and on `dict_user_key_hashable` / `set_user_key_hashable` / `dict_update`, with **zero
+  `.gg` changes**. ggdef is structurally blind to memory.
+  **DOCS:** `docs/devbook/11-copy-on-write.md`'s *"every consuming runtime function obeys the same three-step
+  shape"* was a TOTAL claim with no guard and false in two places (Core #14 / SIX-Q #4 — the case had no
+  SUBJECT). Rewritten as one-value-one-slot plus **two named departures**: a writer that may decline a value
+  must dispose of it, and a writer that duplicates a source must clone per slot (`t1407`).
+  **FILED:** `t1409` (the robustness map's `asan` column pins live defects as expected — 87 rows, no citation
+  requirement), `t1410` (**`+% -% *%` lower to plain signed C arithmetic ⇒ UB**; LLVM emits flagless ops and
+  is correct, so the lanes differ in *defined-ness*), `t1411` (`assert_gg_sanitize_clean` builds with
+  `-fsanitize=address,undefined` but its predicate cannot match UBSan's lowercase `runtime error:` — 50 gates
+  blind to half of what they enable). ⊕ `t1407` got its durable repro and its `repro` field.
 - [2026-09-05] **`t0045` + `t0403` CLOSED — THE for-LOOP STRING-ELEMENT DOUBLE FREE (R50 Track C2).**
   `for s in v: s = "zz"` over a `Vector[String]` was `gg check`-clean and SIGABRTed (rc 134, both backends,
   ASan `heap-use-after-free`). ⚠ **THE `&` WAS NEVER THE DISCRIMINATOR** — the BARE form crashed identically,

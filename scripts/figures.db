@@ -912,7 +912,7 @@ parity.runtime_diff.ggdef_adjudicated_floor.input = none
 # value has not — but only for someone who RUNS it. See each row's caveat.
 
 row = sanitize.leak.rows.pin
-sanitize.leak.rows.pin.value = 301
+sanitize.leak.rows.pin.value = 293
 sanitize.leak.rows.pin.unit = rows in tests/sanitize/LEAK_ALLOWLIST.txt (one per leaking fixture)
 sanitize.leak.rows.pin.polarity = exact-pin
 sanitize.leak.rows.pin.provenance = derived
@@ -950,7 +950,7 @@ sanitize.leak.rows.round_open.mirror = none
 sanitize.leak.rows.round_open.input = none
 
 row = sanitize.leak.records.pin
-sanitize.leak.records.pin.value = 2265
+sanitize.leak.records.pin.value = 2232
 sanitize.leak.records.pin.unit = leak records the allowlist tolerates in total
 sanitize.leak.records.pin.polarity = exact-pin
 sanitize.leak.records.pin.provenance = derived
@@ -988,7 +988,7 @@ sanitize.leak.records.round_open.mirror = none
 sanitize.leak.records.round_open.input = none
 
 row = sanitize.leak.class_pairs.pin
-sanitize.leak.class_pairs.pin.value = 498
+sanitize.leak.class_pairs.pin.value = 487
 sanitize.leak.class_pairs.pin.unit = (fixture, leak-class) pairs the allowlist names
 sanitize.leak.class_pairs.pin.polarity = exact-pin
 sanitize.leak.class_pairs.pin.provenance = derived
@@ -1045,7 +1045,7 @@ sanitize.leak.loose_signatures.pin.mirror = tests/lints.rs:LEAK_LOOSE_SIGNATURES
 sanitize.leak.loose_signatures.pin.input = none
 
 row = sanitize.leak.uncited_class_pairs.pin
-sanitize.leak.uncited_class_pairs.pin.value = 480
+sanitize.leak.uncited_class_pairs.pin.value = 469
 sanitize.leak.uncited_class_pairs.pin.unit = (fixture, leak-class) pairs with no citation naming a todo/ item that exists AND names the pair's top frame
 sanitize.leak.uncited_class_pairs.pin.polarity = exact-pin
 sanitize.leak.uncited_class_pairs.pin.provenance = derived
@@ -1061,9 +1061,8 @@ sanitize.leak.uncited_class_pairs.pin.scan = standard
 sanitize.leak.uncited_class_pairs.pin.caveat = TARGET IS 0, so this number is EVIDENCE OF A GAP, not of health. ⚠ AND THE TOKEN CHECK IS A FLOOR, NOT A LOCK: two frames account for the majority of rows, so one item naming both would satisfy a pair on every one of them. What stops that is the pair granularity plus a reviewer reading the row's ⚖ ADMITTED block — the number says how much is uncited, the block says whether the citation is true
 sanitize.leak.uncited_class_pairs.pin.cost_secs = 120
 sanitize.leak.uncited_class_pairs.pin.mirror = tests/lints.rs:UNCITED_LEAK_CLASS_PAIRS
-sanitize.leak.uncited_class_pairs.pin.waiver = tests/lints.rs 1 declared the constant's own re-seed log, which spells `493 → 480` directly above the declaration. The log is the evidence for WHY the number moved and by what; deleting it to satisfy the scanner would trade a readable history for a silent one
-sanitize.leak.uncited_class_pairs.pin.waiver = docs/devbook/25-structural-guards.md 1 declared NOT A SPELLING BUT A COLLISION, and the one the citation-masker structurally cannot see: `:480` there is a BARE LINE CITATION into src/lir/validate.rs (`check_args_match_params`), not a figure. The masker recognises `file.rs:480` but a citation written as a bare `:480` beside a symbol name carries no filename to key on. ⚠ KEYED TO THE DIGITS, NOT THE MEANING — re-check when the value moves off 480, exactly as its `todo/t0614.md` predecessor had to be
-sanitize.leak.uncited_class_pairs.pin.waiver = docs/devbook/appendix-a-file-map.md 1 declared NOT A SPELLING BUT A COLLISION: `~480 total` is the approximate LINE COUNT of c_lir/emit_printf.rs + c_lir/emit_hof.rs in the file-map table. The sibling `~2,480` on the same table is masked by its thousands separator; this one is a bare three-digit count and is not. Keyed to the digits
+sanitize.leak.uncited_class_pairs.pin.waiver = tests/lints.rs 1 declared the constant's own re-seed log, which spells `480 -> 469` directly above the declaration. The log is the evidence for WHY the number moved and by what; deleting it to satisfy the scanner would trade a readable history for a silent one
+sanitize.leak.uncited_class_pairs.pin.waiver = todo/t0714.md 1 declared NOT A SPELLING BUT A COLLISION: `the 469-row inventory` there is the row count of the RETIRED AGENTS.md clause-level probe suite, unrelated to leak pairs. ⚠ KEYED TO THE DIGITS, NOT THE MEANING — re-check when the value moves off 469, exactly as the two 480-keyed collisions this replaces had to be
 sanitize.leak.uncited_class_pairs.pin.input = none
 
 # ── grow-only × policy ─────────────────────────────────────────────────────

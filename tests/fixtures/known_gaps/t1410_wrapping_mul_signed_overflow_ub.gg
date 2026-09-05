@@ -1,0 +1,42 @@
+# KNOWN GAP todo/t1410 — `*%` (and `+%` / `-%`) lower to PLAIN SIGNED C
+# arithmetic on the C backend, which is UNDEFINED on overflow.
+#
+# The wrapping operators exist to say "wrap, do not trap". `Inst::Mul`'s
+# emit site in src/backend/c_lir/mod.rs tests `overflow == Overflow::Trap`
+# and emits `__builtin_mul_overflow` when it holds; the `else` branch --
+# which is exactly the `Overflow::Wrap` case -- emits `{d} = (int64_t)l *
+# (int64_t)r;`. The wrapping tag survives GIR and LIR intact and evaporates
+# at the C-emit boundary.
+#
+# THE OPERANDS MUST BE NON-CONSTANT. With literals the whole expression is
+# constant-folded and the multiply never runs, so the probe is green for a
+# reason unrelated to what it tests -- `seed()` launders the values through
+# runtime string work the folder cannot see through.
+#
+# TODAY (C lane): `gg build --sanitize` then run ->
+#   runtime error: signed integer overflow: 3335314298909070346 * 31
+#   cannot be represented in type 'long int'
+# The printed value is nonetheless the correct two's-complement wrap, so a
+# stdout-only test cannot see this; the LLVM lane emits a flagless `mul`,
+# which LLVM defines as wrapping, and is correct.
+#
+# INTENDED: the value below, with NO sanitizer diagnostic of any kind.
+
+String mk(String a, String b):
+    return a + b
+
+
+int seed(String s):
+    int acc = 0
+    int i = 0
+    int n = s.byte_len()
+    while i < n:
+        acc = acc + (s.byte_at(i) as int)
+        i = i + 1
+    return acc
+
+
+void main():
+    int a = 3335314298909070151 + seed(mk("a", "b"))
+    int b = 31 - seed(mk("", ""))
+    print(f"mul={a *% b}")

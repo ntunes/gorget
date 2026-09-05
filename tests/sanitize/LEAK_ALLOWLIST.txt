@@ -466,7 +466,6 @@ builtin_oracle_sync_hashmap	__gorget_closure_env_alloc*2
 builtin_oracle_sync_hashset	__gorget_closure_env_alloc*2
 builtin_oracle_sync_vector	__gorget_closure_env_alloc*5
 char_methods	str_alloc_copy*2
-cli_basic	str_alloc_copy*1
 clone_breaks_borrow_chain	__gorget_closure_env_alloc*2
 closure_as_callback	__gorget_closure_env_alloc*1
 closure_capture_patterns	__gorget_closure_env_alloc*1
@@ -527,7 +526,7 @@ consume_callable_once	__gorget_closure_env_alloc*1
 conv_stdlib	gorget_parse_float*1,gorget_parse_int*1,str_alloc_copy*3
 coroutine_chained_methods	__gorget_closure_env_alloc*3
 coroutine_collections	__gorget_closure_env_alloc*5
-coroutine_collections_advanced	__gorget_closure_env_alloc*1,str_alloc_copy*1
+coroutine_collections_advanced	__gorget_closure_env_alloc*1
 coroutine_dict_higher_order	__gorget_closure_env_alloc*5
 coroutine_dict_set	__gorget_closure_env_alloc*4
 coroutine_result_combinators	str_alloc_copy*2
@@ -539,18 +538,15 @@ crypto_hash	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*11,OPENSSL_sk_deep_co
 crypto_x25519	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*17,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
 csv_delimiters	__gorget_array_reserve_one*1,gorget_array_reserve*2,str_alloc_copy*2
 d29_hardening_stdlib_shape	gorget_string_format*3
-dataframe_agg	str_alloc_copy*1
 dataframe_cast	gorget_array_reserve*14,gorget_parse_int*1,str_alloc_copy*3
 dataframe_clip	gorget_array_reserve*8,str_alloc_copy*6
 dataframe_csv	str_alloc_copy*4
-dataframe_extra	str_alloc_copy*1
 dataframe_filter	str_alloc_copy*3
 dataframe_filter_sort	gorget_parse_float*2,str_alloc_copy*4
-dataframe_groupby	__gorget_array_reserve_one*5,gorget_array_reserve*20,gorget_dict_new*15,str_alloc_copy*20
+dataframe_groupby	__gorget_array_reserve_one*5,gorget_array_reserve*20,gorget_dict_new*15,str_alloc_copy*15
 dataframe_nulls	__gorget_closure_env_alloc*2
 dataframe_ops	str_alloc_copy*1
 dataframe_tier2_groupby	__gorget_array_reserve_one*2,gorget_array_reserve*8,gorget_dict_new*6,str_alloc_copy*8
-dataframe_tier2_joins	str_alloc_copy*2
 dataframe_tier2_sort_arith	gorget_parse_float*2
 dataframe_transform	__gorget_closure_env_alloc*1
 datetime_format	gorget_format_time*4
@@ -566,13 +562,11 @@ dict_iter_enumerate	gorget_map_clone*12,str_alloc_copy*5
 dict_keys_lazy	__gorget_closure_env_alloc*1,gorget_map_clone*18
 dict_keys_lazy_resource	gorget_map_clone*9,str_alloc_copy*4
 dict_keys_values	__gorget_closure_env_alloc*1
-dict_update	str_alloc_copy*1
 dict_user_key_auto	str_alloc_copy*1
 dict_user_key_hashable	str_alloc_copy*1
 dict_values_lazy	__gorget_closure_env_alloc*1,gorget_map_clone*18
 dict_values_lazy_resource	gorget_map_clone*9,str_alloc_copy*4
 dop_throw_rhs	str_alloc_copy*1
-drop_dict_loop	str_alloc_copy*1
 ecs_advanced	__gorget_closure_env_alloc*1
 ecs_basics	__gorget_closure_env_alloc*1,gorget_array_reserve*1
 fallback_basic	gorget_arena_new*2,gorget_fba_new*1
@@ -658,7 +652,6 @@ iterator_lazy_chain	__gorget_closure_env_alloc*6
 json_edge_cases	str_alloc_copy*9
 json_parse	str_alloc_copy*1
 json_pretty	str_alloc_copy*1
-leak_cow_boundaries	str_alloc_copy*1
 linked_list	__gorget_closure_env_alloc*1
 lint_suggest_throws_negative_nonresult	str_alloc_copy*1
 mutex_async_contention	gorget_mutex_new*2,gorget_shared_new*2
@@ -723,7 +716,7 @@ path_normalize	gorget_path_normalize*6
 pool_composable	gorget_pool_new*2
 process_pipe	gorget_process_spawn*1
 process_spawn	gorget_process_spawn*2
-query_basic	gorget_map_clone*3,str_alloc_copy*13
+query_basic	gorget_map_clone*3,str_alloc_copy*11
 readdir	gorget_readdir*1
 regex_basic	gorget_array_reserve*2,str_alloc_copy*3
 regex_corpus	gorget_array_reserve*102,str_alloc_copy*63
@@ -842,7 +835,7 @@ stdlib_io_stdout_typed	str_alloc_copy*2
 stdlib_io_writer	gorget_array_reserve*3,str_alloc_copy*1
 stdlib_iter_bounds_coverage	gorget_string_push_char*4,str_alloc_copy*3
 stdlib_iter_dict	gorget_map_clone*36
-stdlib_iter_drain	__gorget_array_reserve_one*3,str_alloc_copy*5
+stdlib_iter_drain	__gorget_array_reserve_one*3,str_alloc_copy*4
 stdlib_iter_join	gorget_string_push_char*3,str_alloc_copy*3
 stdlib_iter_more_terminals	gorget_string_push_char*1,str_alloc_copy*1
 stdlib_iter_set	gorget_set_clone*24
@@ -892,8 +885,7 @@ string_conversions	gorget_parse_float*1,gorget_parse_int*1,str_alloc_copy*6
 # RETIRES: t1290
 string_enum_variants	str_alloc_copy*1	str_alloc_copy=t1290
 string_higher_order	__gorget_closure_env_alloc*15,gorget_str_cat*1
-string_parsing_patterns	str_alloc_copy*2
-string_word_frequency	str_alloc_copy*4
+string_parsing_patterns	str_alloc_copy*1
 sync_atomics	gorget_atomic_bool_new*1,gorget_atomic_int_new*1
 sync_barrier	gorget_barrier_new*1
 tensor_arithmetic	__gorget_array_reserve_one*14
@@ -909,18 +901,18 @@ test_closures_advanced	__gorget_closure_env_alloc*7
 test_closures_edge_cases	__gorget_closure_env_alloc*6
 test_collections_nested	__gorget_closure_env_alloc*2
 test_collections_nested_advanced	__gorget_closure_env_alloc*3
-test_dict_all	__gorget_closure_env_alloc*5,str_alloc_copy*1
-test_dict_edge_cases	__gorget_closure_env_alloc*2,str_alloc_copy*1
+test_dict_all	__gorget_closure_env_alloc*5
+test_dict_edge_cases	__gorget_closure_env_alloc*2
 test_dict_int_keys	__gorget_closure_env_alloc*2
 test_failure	gorget_format*1,str_alloc_copy*2
-test_hashmap_all	__gorget_closure_env_alloc*4,str_alloc_copy*3
+test_hashmap_all	__gorget_closure_env_alloc*4,str_alloc_copy*2
 test_hashset_all	__gorget_closure_env_alloc*4
 test_method_chaining	__gorget_closure_env_alloc*12
 test_multiline_closures	__gorget_closure_env_alloc*1
 test_process_timeout	gorget_process_spawn*8
 test_result_advanced	str_alloc_copy*4
 test_set_all	__gorget_closure_env_alloc*11
-test_set_string	__gorget_closure_env_alloc*4,str_alloc_copy*3
+test_set_string	__gorget_closure_env_alloc*4,str_alloc_copy*1
 test_should_panic	gorget_format*2,str_alloc_copy*4
 test_vector_advanced	__gorget_closure_env_alloc*15
 test_vector_all	__gorget_closure_env_alloc*14,gorget_array_reserve*1
@@ -933,8 +925,8 @@ test_with_clause	gorget_format*1,str_alloc_copy*2
 time_format	gorget_format_time*4
 tlsf_composable	gorget_tlsf_new*2
 toml_edge	str_alloc_copy*3
-toml_parse	str_alloc_copy*13
-toml_stringify	__gorget_array_reserve_one*1,gorget_dict_new*9,gorget_map_clone*9,str_alloc_copy*21
+toml_parse	str_alloc_copy*10
+toml_stringify	__gorget_array_reserve_one*1,gorget_dict_new*9,gorget_map_clone*9,str_alloc_copy*19
 tracking_composable	gorget_tracking_new*1
 vector_any_all_bool	__gorget_closure_env_alloc*6
 vector_callable_two_locals	__gorget_closure_env_alloc*2
@@ -1020,4 +1012,4 @@ vector_task_mixed_await	gorget_atomic_int_new*1
 waitgroup_amp_param	__gorget_spawn_worker*2+
 waitgroup_basic	__gorget_spawn_worker*2+
 xml_parse	str_alloc_copy*2
-yaml_parse	str_alloc_copy*3
+yaml_parse	str_alloc_copy*2

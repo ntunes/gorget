@@ -4734,6 +4734,64 @@ missing ok
     );
 }
 
+/// `gorget_map_put`'s DUPLICATE-KEY path on a NON-STRING key — the
+/// generated-`<T>__drop` half of the map's key-ownership contract.
+///
+/// The hit branch keeps the map's EXISTING key, so the incoming key is left
+/// with no owner. The whole rest of the evidence for that contract is
+/// String-keyed, where `key_drop` is `gorget_string_free` — cap==0-safe and
+/// idempotent. A user-struct key stores a GENERATED `Named__drop`, which has
+/// neither property, so this is the cell where dropping the wrong storage
+/// would be a memory-UNSAFETY change rather than a leak fix (Core #12: one
+/// value of a typed axis is an anecdote).
+///
+/// The VALUE half of the same run: `owner`/`tag` stay live across their
+/// duplicate put/add, so the two `name=` lines are the assertion that the
+/// caller's storage was NOT the thing dropped.
+#[test]
+fn map_userkey_dup_key_drop() {
+    run_gg(
+        "map_userkey_dup_key_drop.gg",
+        "\
+dict len=2
+dict len=3
+owner name=carol
+owner id=3
+set len=2
+tag name=dave
+union len=3
+dict len=4",
+    );
+}
+
+/// MEMORY half of `map_userkey_dup_key_drop` — and the row that pins BOTH
+/// halves of the fix independently, which is why it is a live sanitize
+/// assertion rather than a `LEAK_ALLOWLIST` retirement.
+///
+/// Measured against this fixture (`gg build --sanitize`, LeakSanitizer):
+///   both halves reverted (pristine)  -> 38 bytes in 7 allocations, rc 1
+///   ONLY the transfer wrapper's drop -> 28 bytes in 5 allocations, rc 1
+///   ONLY `put_cloned`'s `!__gg_hit`  -> 10 bytes in 2 allocations, rc 1
+///   fixed                            -> rc 0, clean
+/// The 28/10 split is the two wrappers: five duplicate `put`/`add` keys reach
+/// `gorget_map_put`, and the `update`+`union` overlaps reach
+/// `gorget_map_put_cloned`. A partial revert of either half trips this test.
+#[test]
+fn map_userkey_dup_key_drop_no_leak() {
+    assert_gg_sanitize_clean(
+        "map_userkey_dup_key_drop",
+        "\
+dict len=2
+dict len=3
+owner name=carol
+owner id=3
+set len=2
+tag name=dave
+union len=3
+dict len=4",
+    );
+}
+
 #[test]
 fn sigil_type_args() {
     run_gg("sigil_type_args.gg", "6\nada\nbob\n30");
@@ -5665,6 +5723,77 @@ fn deque_string_get_loses_element_type() {
 C and LLVM, no HOF involved; todo/t1088."]
 fn vector_set_element_double_free() {
     run_gg("known_gaps/t1088_vector_set_element_double_free.gg", "aabc");
+}
+
+/// KNOWN GAP todo/t1410 — `*%` / `+%` / `-%` lower to plain SIGNED C
+/// arithmetic, which is UB on overflow, on the exact input the wrapping
+/// operator exists to handle.
+///
+/// ⚠ THIS TEST DOES NOT USE `assert_gg_sanitize_clean`, ON PURPOSE. That
+/// helper's predicate matches only `LeakSanitizer` / `AddressSanitizer` /
+/// `ERROR:` / `SUMMARY:`, and a non-fatal UBSan finding prints lowercase
+/// `runtime error:` and exits 0 — so it is structurally blind to this class
+/// (`todo/t1411`). Core #13: pick an instrument that can SEE the failure.
+/// The value itself is already correct, so a `run_gg` cannot see it either.
+#[test]
+#[ignore = "KNOWN GAP: the wrapping operators emit plain signed C arithmetic \
+— UBSan `signed integer overflow` on the C lane; LLVM emits a flagless `mul` \
+and is correct; todo/t1410."]
+fn wrapping_mul_signed_overflow_ub() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/t1410_wrapping_mul_signed_overflow_ub.gg");
+    assert!(fixture.exists(), "fixture not found: {}", fixture.display());
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_ubsan_wrapmul_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let bin = tmp_root.join("wrapmul_ubsan");
+
+    let build = build_with_timeout(
+        gg_command("build").arg("--sanitize").arg(&fixture).arg("-o").arg(&bin),
+        "wrapping_mul_signed_overflow_ub",
+    );
+    assert!(build.status.success(), "gg build --sanitize failed");
+
+    let run = run_with_timeout(&mut Command::new(&bin), "wrapping_mul_signed_overflow_ub");
+    let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&run.stdout).trim_end().to_string();
+    let _ = std::fs::remove_dir_all(&tmp_root);
+
+    // The VALUE is already right — two's-complement wrap. What is wrong is
+    // that the C the backend emitted has undefined behaviour on this input.
+    assert_eq!(stdout, "mul=-7285721176076128970");
+    assert!(
+        !stderr.contains("runtime error:"),
+        "`*%` must lower to DEFINED wraparound (do the op in the unsigned \
+         counterpart and cast back), not to a plain signed C multiply; \
+         todo/t1410. UBSan said:\n{stderr}",
+    );
+}
+
+/// KNOWN GAP todo/t1407 — `Vector[String].fill(n, x)` double-frees.
+/// `gorget_array_fill` memcpys one source into N slots with no per-slot
+/// clone, so all N alias one payload and the array's free releases it N
+/// times. Discriminated from its apparent siblings by DUPLICATION, not by
+/// the missing hook: `.set`/`.insert` write one value into one slot and are
+/// measured clean. The element is heap-forced via `mk()` — every earlier
+/// `.fill` fixture used `bool`, which has no payload to alias.
+#[test]
+#[ignore = "KNOWN GAP: Vector[String].fill duplicates one buffer into N \
+slots and double-frees — rc 134 plain, ASan double-free under --sanitize; \
+todo/t1407."]
+fn array_fill_droppable_elem_double_free() {
+    run_gg(
+        "known_gaps/t1407_array_fill_droppable_elem_double_free.gg",
+        "len=3 first=abcd last=abcd",
+    );
 }
 
 /// KNOWN GAP todo/t1089 — reading a `Vector[Option[String]]` element back

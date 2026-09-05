@@ -1,0 +1,90 @@
+# Duplicate put/add on a NON-STRING key: the generated-`<T>__drop` half of
+# the map's key-ownership contract.
+#
+# `gorget_map_put`'s hit branch keeps the map's EXISTING key, so the
+# INCOMING key is left with no owner and must be dropped there. Every other
+# fixture pinning that contract is String-keyed, where `key_drop` is
+# `gorget_string_free` -- a function that is cap==0-safe and idempotent. A
+# Dict/Set keyed by a user struct stores a GENERATED `Named__drop` instead,
+# which has neither property, so this is the sharpest cell in the class: an
+# arbitrary generated drop running on the incoming key.
+#
+# The keys are built by runtime concatenation rather than written as
+# literals, so each carries its own heap buffer instead of a static view.
+# `owner` and `tag` stay LIVE across their duplicate put/add: the compiler
+# clones at the consuming position, the map keeps the first clone, and the
+# second clone is what the hit branch must drop. If it dropped the CALLER's
+# storage instead, the `owner.name` / `tag.name` prints below would read
+# freed memory.
+#
+# `union` and `update` cover the same key axis through the BORROW wrapper
+# (`gorget_map_put_cloned`), whose hit path must NOT drop and must not
+# re-clone the already-owned stored key.
+#
+# Key strings and `id` values are deliberately SMALL: `@derive(Hashable)`
+# folds fields with `h * 31` on int64, which trips the UBSan signed-overflow
+# check on long keys and would make this cell sanitize-fail for a reason
+# unrelated to what it pins.
+
+from std.hash import hash_of
+
+@derive(Equatable, Hashable)
+struct Named:
+    int id
+    String name
+
+
+String mk(String a, String b):
+    return a + b
+
+
+int main():
+    # Keep the derived Hashable + Equatable methods reachable so the
+    # `emit_hashable_key_bridges` wiring has targets to point at.
+    int _h = hash_of[Named](Named(0, "x"))
+    Named probe = Named(0, "x")
+    if probe == probe:
+        _h = _h + 0
+
+    # ── Dict, ownership-transfer wrapper (gorget_map_put) ──
+    Dict[Named, int] d = Dict[Named, int]()
+    d.put(Named(1, mk("al", "ice")), 100)
+    # Duplicate keys: each HITS, so each incoming key needs `Named__drop`.
+    d.put(Named(1, mk("al", "ice")), 200)
+    d.put(Named(1, mk("al", "ice")), 300)
+    d.put(Named(2, mk("b", "ob")), 400)
+    print(f"dict len={d.len()}")
+
+    # A live local as the key: cloned at the consuming position, and the
+    # clone made for the DUPLICATE put is the one the hit branch drops.
+    Named owner = Named(3, mk("ca", "rol"))
+    d.put(owner, 10)
+    d.put(owner, 20)
+    print(f"dict len={d.len()}")
+    print(f"owner name={owner.name}")
+    print(f"owner id={owner.id}")
+
+    # ── Set, same wrapper via gorget_set_add ──
+    Set[Named] s = Set[Named]()
+    Named tag = Named(4, mk("d", "ave"))
+    s.add(tag)
+    s.add(tag)
+    s.add(Named(4, mk("d", "ave")))
+    s.add(Named(5, mk("e", "ve")))
+    print(f"set len={s.len()}")
+    print(f"tag name={tag.name}")
+
+    # ── Borrow wrapper (gorget_map_put_cloned) on the same key axis ──
+    Set[Named] other = Set[Named]()
+    other.add(Named(5, mk("e", "ve")))
+    other.add(Named(6, mk("f", "ay")))
+    Set[Named] u = s.union(other)
+    print(f"union len={u.len()}")
+
+    Dict[Named, int] d2 = Dict[Named, int]()
+    d2.put(Named(1, mk("al", "ice")), 999)
+    d2.put(Named(7, mk("g", "us")), 7)
+    d.update(d2)
+    print(f"dict len={d.len()}")
+
+    return 0

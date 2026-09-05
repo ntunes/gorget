@@ -288,7 +288,12 @@ static inline void __gorget_map_materialize_value(GorgetMap* m, size_t idx) {
     }
 }
 
-static inline void gorget_map_put(GorgetMap* m, const void* key, const void* value) {
+// Core probe/insert. Returns true when an EXISTING entry was hit (the map
+// kept its own key, so the incoming key was NOT consumed), false when the
+// key was memcpy'd into a slot (ownership of the incoming key moved into
+// the map). Callers differ on what to do with a non-consumed key, so the
+// decision belongs to them, not here.
+static inline bool __gorget_map_put_core(GorgetMap* m, const void* key, const void* value) {
     // D39 DENSE MODE (LIVE after A.2c activation): append to entries[entries_len]
     // on miss, overwrite in place on hit. Grow when entries_len == entries_cap.
     // Insertion order is naturally preserved by the append; no separate order
@@ -319,7 +324,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                 m->indices[insert_slot] = (int32_t)new_i;
                 m->entries_len++;
                 m->count++;
-                return;
+                return false;
             }
             if (ei == -2) {
                 // Tombstone: remember earliest for possible reuse; keep probing
@@ -337,7 +342,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                     memcpy((char*)m->entries_values + (size_t)ei * m->val_size, value, m->val_size);
                     __gorget_map_materialize_value(m, (size_t)ei);
                 }
-                return;
+                return true;
             }
             idx = (idx + 1) & mask;
         }
@@ -363,7 +368,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                 m->states[idx] = 1;
                 m->count++;
                 m->order[m->order_len++] = idx;
-                return;
+                return false;
             }
             if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
                 if (m->val_size > 0 && value != NULL) {
@@ -373,11 +378,15 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                     memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
                     __gorget_map_materialize_value(m, idx);
                 }
-                return;
+                return true;
             }
             idx = (idx + 1) & mask;
         }
-        return;
+        // Fell out of the probe loop: neither the empty-slot store nor the
+        // hit branch above ran, so nothing was stored and the incoming key
+        // was not consumed. Reporting not-consumed can at worst leak;
+        // reporting consumed would double-free.
+        return false;
     }
     // Unordered mode (HashMap/Set): reuse tombstones for efficiency
     if (m->cap == 0 || m->count * 4 >= m->cap * 3) {
@@ -398,7 +407,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
             }
             m->states[target] = 1;
             m->count++;
-            return;
+            return false;
         }
         if (m->states[idx] == 2 && first_tombstone == (size_t)-1) {
             first_tombstone = idx;
@@ -411,7 +420,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                 memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
                 __gorget_map_materialize_value(m, idx);
             }
-            return;
+            return true;
         }
         idx = (idx + 1) & mask;
     }
@@ -424,6 +433,22 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         }
         m->states[first_tombstone] = 1;
         m->count++;
+        return false;
+    }
+    // Fell out of the probe loop and no tombstone was reusable: nothing was
+    // stored, so the key was not consumed. Same conservative direction.
+    return false;
+}
+
+// Ownership-transfer put: used at `Dict[k] = v`, `.put()`, `.set()`,
+// `Set.add()` / `.insert()` and set/dict literal + comprehension lowering.
+// The compiler clones-or-moves at the consuming position, so the incoming
+// key is OWNED by us. On a miss the memcpy transfers it into the slot; on a
+// HIT the map keeps its existing key, leaving the incoming key with no
+// owner — drop it here or it leaks once per duplicate put.
+static inline void gorget_map_put(GorgetMap* m, const void* key, const void* value) {
+    if (__gorget_map_put_core(m, key, value) && m->key_drop) {
+        m->key_drop((void*)key);
     }
 }
 
@@ -436,7 +461,11 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
 // ownership). Skips the second clone for static literals (cap==0) — those
 // were already cloned by gorget_string_materialize_inplace via key_materialize.
 static inline void gorget_map_put_cloned(GorgetMap* m, const void* key, const void* value) {
-    gorget_map_put(m, key, value);
+    // BORROW contract: the caller does not own `key`, so it is never dropped
+    // here. On a hit the stored key is already an independent owned copy from
+    // the earlier insert — re-cloning it would overwrite (and leak) that
+    // buffer, so the key clone below is skipped.
+    bool __gg_hit = __gorget_map_put_core(m, key, value);
     // D39 DENSE MODE (LIVE after A.2c activation): re-probe indices to locate
     // the entries index of the just-inserted key, then deep-clone key/value in
     // place. Skip past -2 tombstones (put may reuse a tombstone slot, so the
@@ -453,7 +482,7 @@ static inline void gorget_map_put_cloned(GorgetMap* m, const void* key, const vo
             if (ei == -2) { idx = (idx + 1) & mask; continue; }
             if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
                 size_t entries_i = (size_t)ei;
-                if (m->key_clone) {
+                if (m->key_clone && !__gg_hit) {
                     void* kp = (char*)m->entries_keys + entries_i * m->key_size;
                     if (m->key_materialize == (__gorget_drop_fn)gorget_string_materialize_inplace) {
                         Str* ks = (Str*)kp;
@@ -485,7 +514,7 @@ static inline void gorget_map_put_cloned(GorgetMap* m, const void* key, const vo
     size_t idx = (size_t)(h & mask);
     for (size_t __probes = 0; __probes < m->cap; __probes++) {
         if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
-            if (m->key_clone) {
+            if (m->key_clone && !__gg_hit) {
                 // For strings, key_materialize handles cap==0 views; owned (cap>0)
                 // strings still need a deep clone here to avoid buffer aliasing.
                 void* kp = (char*)m->keys + idx * m->key_size;
