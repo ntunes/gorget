@@ -494,7 +494,7 @@ both lanes, CRITICAL** — and **the ctor never calls the decider, so D0's fix c
 ⛔ **THE ALLOWLIST PREDICTION WAS WRONG IN BOTH DIRECTIONS.** The two `httpserver` rows **DO NOT MOVE** — their
 frame #2 is `main`, a closure **literal** env (`t0953`'s class), a different allocation entirely. **But FIVE
 other rows do**, and **one is CITED ⇒ `retire_fatal`, rc 1** unless tightened in the same commit.
-⚠ **And that table is itself a SELECTION — 18 fixtures probed against a population of ~1743. The executor owes
+⚠ **And that table is itself a SELECTION — 18 fixtures probed against the WHOLE SWEEP POPULATION (regenerate: `grep -n 'sanitize.coverage_floor' scripts/figures.db`). The executor owes
 a FULL sweep before touching `LEAK_CEILING`.**
 
 ⭐⭐ **THE REFERENCE LAGS THE SELF-HOST, AND THE SELF-HOST SAYS THE SAME THING IN ITS OWN WORDS.**
