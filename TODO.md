@@ -11,7 +11,7 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | 🔵 brief-review pass 1. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| **C2** | passes 1+2 BLOCKED → 2 folds → 🔵 pass 3. **Streak 0/3.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| **C2** | passes 1–3 BLOCKED → 3 folds → 🔵 pass 4. **Streak 0/3.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0** | 🆕 **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1. | `t1393`–`t1402` |
 | **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
@@ -769,6 +769,35 @@ meaning where the compiler collapses two cases — it does not undo a deliberate
 views"* — **a size criterion I INVENTED and attributed to §3.5, which says reader-vs-writer and nothing about
 size.** The charter objection also fails: under reject the user hand-writes `d.keys()` first, **the same O(n)
 copy, merely visible**; beating it needs ALGORITHM RESTRUCTURING, and the charter governs **clone placement**.
+
+### ⛔⛔ THE ROUND'S REAL LESSON ABOUT ME: **EVERY FOLD I WRITE INTRODUCES A DEFECT IN THE FOLD ITSELF**
+
+**Measured across two tracks, six generations, and it is now the most reliable pattern of the round:**
+
+| track | generation | the fold's own defect |
+|---|---|---|
+| F1 | body → N5 | ICE prescribed on an unmeasured path |
+| F1 | N5 → **D9** | retraction correct; **replacement guard FALSE on the committed corpus** (would ICE 10 shipping fixtures) |
+| F1 | D8 | caught ADDENDUM 1 aiming at a **rationale** site, then made the **mirror error** one site over |
+| F1 | E7 | folded a reviewer's *"plausible mechanism"* as *"say so"* — **illustration promoted to prescription** |
+| F1 | **D2/D9** | **inverted the root cause**; the brief's own body contained the refutation |
+| C2 | **D7** | **over-retracted** D6 — dropped the ratified entry's own scoping clause |
+| C2 | **D10** | quoted a `tests/lints.rs` comment scoped to a **DIFFERENT producer family** and derived a placement rule from it |
+| C2 | **ADDENDUM 1's fixture set** | **greens a two-thirds revert** — readiness row (4) unenforced |
+
+⭐ **THE CAUSES ARE THREE, AND THEY REPEAT:**
+1. **I quote text scoped to a different case.** ⚠ **The ratified ledger records this exact failure happening
+   BEFORE** — *"an executor brief leaned on"* text about a **different construct**, caught at Track E pass 6.
+   **I then did it twice more.**
+2. **I over-correct.** A retraction that drops the retracted claim's *scoping clause* is a new defect pointing
+   the other way (D7).
+3. **I promote an illustration to a prescription** — a reviewer's *"plausible mechanism"* becomes *"say so"*,
+   and a hypothesis lands in a durable filing.
+
+⇒ ⛔ **STANDING RULE, BINDING ON EVERY FOLD FROM HERE:** **a fold may only assert what a command in that same
+fold regenerates; a retraction must quote the retracted claim's OWN scope; and a reviewer's hypothesis stays a
+hypothesis until measured.** ⭐ **The gauntlet is catching all of these — that is the system working — but each
+one costs a pass, and passes are the expensive part.**
 
 ### ⭐⭐ C2's PASS 2 FOUND THE FIX'S ACTUAL AUTHORITY — AND IT INVERTS THE CORE #8 ARGUMENT
 
