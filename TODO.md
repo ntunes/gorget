@@ -487,6 +487,38 @@ double-free, which is fixed in `7785c1221` and **not yet on this branch**. ⚠ *
 lost write), it does not VANISH.** ⇒ **correct it AT integration, or a true statement is deleted early** — the
 retraction rule, one heartbeat old, applied prospectively for once.
 
+### ⛔⛔ C2 AND F1r COLLIDE ON THE CORPUS PINS — **BOTH CORRECT ALONE, RED TOGETHER, AND NEITHER COULD SEE IT**
+
+⭐ **Found BEFORE integration, by comparing the two diffs rather than by integrating and misreading the red.**
+Regenerated on this branch:
+
+| | `C_` | `LLVM_` | `SELFHOST_` | `MIN_FIXTURES` | new `spectests/run/*.gg` |
+|---|---|---|---|---|---|
+| **this branch** (`ls spectests/run/*.gg \| wc -l` → **243**) | 243 | 243 | 242 | 243 | — |
+| **C2** `a1e57be97` | 244 | 244 | 243 | 244 | `cow_bare_for_elem_rebind.gg` |
+| **F1r** `504bf5ad5` | 244 | 244 | 243 | 244 | `cow_scope_carried_sever.gg` |
+
+⇒ **BOTH LANDED = 245 FILES AGAINST A PIN OF 244**, and `MIN_FIXTURES` is an **EXACT PIN**, not a `>=`
+(`grep -n "EXACT PIN as of R48 close" -B 4 tests/spec_conformance.rs`). ⛔ **`spec_conformance` REDS AT
+INTEGRATION ON ARITHMETIC, NOT ON BEHAVIOUR** — and a parent who did not know this would read it as a track
+regression and bisect a green patch.
+
+⭐⭐ **THIS IS MA-5's WARNING WITH REAL NUMBERS: *a diff of two PROGRAMS cannot show whether two PATCHES
+compose*.** File-zone disjointness was never the issue — **the two tracks never touch the same `src/` line.**
+They collide on a SHARED COUNTER, and **each measured the only tree it could see: base + its own fixture.**
+⇒ ***Neither executor could have caught this, and no per-track review can either.*** **It is visible ONLY from
+the round.**
+
+⇒ ⛔ **AT INTEGRATION, EVERY ONE OF THESE IS RE-MEASURED FROM THE MERGED TREE AND SET FROM THE MEASURED OUTPUT —
+NEVER BY ADDING ONE** (Core #5: regenerate, do not derive). ⊕ **And the same applies to `GGDEF_MATCH_FLOOR`,
+`corpus_b`/`corpus_b1`'s opt-in-by-default census rows and cited `EXCLUDE` entries, `figures.db`'s mirrors, and
+the two exact gate-set pins** — F1r measured **fifteen declarations, six files, four targets**, and **the
+per-FIXTURE members move TWICE when both land while the per-ROUND members move once.** ⚠ **That
+per-fixture-vs-per-round split is NOT in either track's report; it is asked of F1r's reviewer.**
+
+⊕ **This joins `todo/t0801`'s class from the other side:** t0801 says *the landing boundary of a constant is not
+the constant*; **this says the landing boundary is not even a property of ONE TRACK.**
+
 ### ⭐⭐ F1r's EXECUTOR REFUSED TWO BRIEFED INSTRUCTIONS — **AND IT WAS RIGHT BOTH TIMES**
 
 ⛔⛔ **MY BRIEF ASSIGNED A TRACK WORK THAT AN IN-TREE RULE RESERVES FOR THE INTEGRATING PARENT.** Regenerated in
