@@ -8,7 +8,7 @@
 | track | scope | ids |
 |---|---|---|
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
-| **A2** | ⭐ **RESCOPED — *EVERY GENERIC NEWTYPE*, both backends.** ✅ **pass 1 signed the FIX's design** → 🔵 **pass 2. Streak 0/3.** ⛔ **My two dispositions were a FALSE BINARY — the constructor ALSO fails to move its source (`t1375`), so gating on `t1374` still double-frees.** | `t1376`–`t1382` |
+| **A2** | ⭐ **RESCOPED TWICE — now *lower newtype construction to `StructInit`* and DELETE two backend name-matching arms.** ✅✅ design signed twice → 🔵 **pass 3. Streak 0/3.** ⛔ **I filed a SYMPTOM as the root cause, one layer too low.** | `t1376`–`t1382` |
 | **B** | ⚖⚖ **HELD — OWNER ASK (the capture cell). Pass 1: NOT SIGN OFF, 5 BLOCKING.** The brief was STALE BY CONSTRUCTION (my revert landed 3 min after it) and **overrode a ratified `decisions.md` clause with an agent's derivation.** Streak 0/3. Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⛔⛔ **BLOCKED A FOURTH TIME — `R`'s SUBJECT IS A SELECTION ON A THIRD AXIS. RECOMMEND CLOSE FOR R50: `R` NEEDS ITS OWN SCOUT.** Spine survives and measures STRONGER each pass. | `t1332`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
@@ -26,6 +26,41 @@
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ⛔⛔ A2's PASS 2 — **I FILED A SYMPTOM AS THE ROOT CAUSE, AND THE REAL ONE IS Core #2**
+
+**It read the GIR instead of the emitted C, and the three constructor forms settle it:**
+```
+newtype:  _3 = call @NX(copy _2)          <- a CALL. no move_zero. and: drop_if_alive _2
+struct:   _3 = struct_init S { copy _2 }  +  move_zero _2   <- the move IS emitted
+enum:     _3 = enum_init E::V { copy _2 } <- source correctly not dropped
+```
+- ⭐ **THE OWNERSHIP MACHINERY IS CORRECT — THE STRUCT SIBLING PROVES IT.** The newtype path **never reaches
+  it**: it stays a `Call` to a synthesized `extern fn`. ⇒ **filing `t1375` as `areas = ["cow"]` would have sent
+  the executor to a layer where nothing is wrong.** ✅ **Both items corrected in place (`b1f58c106`).**
+- ⛔⛔ **AND BOTH BACKENDS RE-DERIVE THE CONSTRUCTION BY NAME-MATCHING** (`s.name == *name && s.fields.len() ==
+  1`, in **both** arms) — **Core #2 / Layering rule 2, sitting directly UNDER the defect.** ⇒ **`t1374` is the
+  SAME root cause, not a sibling** — the C arm has **no pointer/value adaptation** where **LLVM's does**, and
+  **that asymmetry IS the measured C/LLVM divergence.**
+- ⇒ ⭐ **ONE TRACK, AND THE FIX IS UPSTREAM: lower newtype construction to `StructInit` — WHICH ALSO DELETES
+  BOTH NAME-MATCHING ARMS.** *(Splitting would split ONE write-site fix across two worktrees.)*
+- ⛔⛔ **MY DAMAGE ASSESSMENT ONLY MEASURED *CONSTRUCTION*. READING THE PAYLOAD BACK IS SILENTLY WRONG ON C** —
+  `NO(Some(5))` prints **`none`**, deterministic; `NV`/`NS` **trap bounds on valid indices** — where PRE was a
+  **loud build failure.** ⇒ **a Core #8 excursion up the ladder.**
+- ⛔ **AND IT BREAKS MY OWN PIN:** I called `nt_opt` *"a valid BUILD-level pin"* — **it asserts `"built"`, so it
+  is GREEN on a compiler that returns `none` for `Some(5)`.** ⇒ ⭐ **EVERY newtype fixture MUST READ THE PAYLOAD
+  BACK, never print `"built"`.**
+- ⛔ **THE CENSUS GATE IS ALREADY RED AT HEAD** (2 rows, both **`t0121`, not A2's**); **A2's delta is exactly
+  +1.** **Say so, or the executor chases a failure it did not cause.**
+- ⭐⭐ **`t0104`'s SECOND FACE *DOES* REPRODUCE — ITS SPELLING IN THE ITEM WAS WRONG.** With **no `Result`
+  anywhere**, `Box[(P, int)]` + `&(*b).0.x` fails on **both** backends at PRE and works at POST ⇒ **pin 6's
+  claim is TRUE and the fix graduates BOTH faces — CLOSE it.** ⊕ **Bonus run-level pin: `&(*b).1` prints `0` at
+  PRE and `1` at POST — a silent wrong answer on BOTH backends that this fix repairs.**
+- ⛔ **A THIRD NUMERIC CLAIM DID NOT REGENERATE** — *"33 declarations, ZERO generics anywhere"* is **17: 12 int,
+  3 float, 2 `Dict`**. ⭐ **The generics are REAL but live in a FORMATTER-ONLY fixture** ⇒ the defensible claim
+  is sharper: ***"no COMPILED fixture has a generic newtype payload."***
+- ⭐ **DO NOT REDISCOVER THE SELF-HOST HALF — `t0400` ALREADY FILES IT**; ⊕ **`t0351` already flags the LLVM
+  newtype-ctor arm**, which this fix makes live for pointer payloads for the first time.
 
 ### ⚠⚠ MA-5 PREDICTED FOR J × E — **RECORDED BEFORE EITHER RETURNS, BECAUSE THE PARENT IS THE ONE WHO RE-MEASURES**
 
