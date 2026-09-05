@@ -2614,9 +2614,11 @@ pub fn validate_clone_reasons(module: &Module) -> CloneReasonCensus {
 // under `GG_VALIDATE_CTOR_LOWERING`, and the reason is measured, not
 // cautionary — THE CENSUS IS NOT YET AT ZERO.
 //
-// Measured over `tests/fixtures/*.gg` + `known_gaps/` +
-// `robustness_map/cells/` + `examples/` (2253 files, 2082 modules
-// reporting): EIGHT sites in six files, and every one of them is an
+// Measured in TWO scans, and the split matters: `tests/fixtures/*.gg`
+// (2250 files, 1839 modules reporting) reports ZERO, while
+// `known_gaps/` + `robustness_map/cells/` + `examples/` (2253 files,
+// 2082 modules reporting) reports EIGHT sites in SEVEN files — one file
+// contributes two. Every one of them is an
 // inline constructor inside an f-string interpolation — `todo/t0691`,
 // already filed, where `gg check` is clean, C refuses to compile and
 // LLVM prints garbage. The guard rediscovered that class from typed
@@ -2677,7 +2679,10 @@ pub fn validate_ctor_lowering(module: &Module) -> CtorLoweringCensus {
                 if let Instruction::Call { func: callee, .. } = inst {
                     census.calls_walked += 1;
                     let Some(td) = registry.get_type_def(callee) else { continue };
-                    if td.metadata.collection_kind.is_some() {
+                    // Layering rule 3 — one accessor per axis. This asks the
+                    // registry, which reads `collection_kind`; it must never
+                    // become an inline field poke or a name prefix here.
+                    if registry.is_collection_type_name(callee) {
                         continue;
                     }
                     let kind = match &td.kind {

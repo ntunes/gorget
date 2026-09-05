@@ -20,11 +20,28 @@
 # (Core #12). Do not merge this into `t0685` or `t0684` — a fix aimed at payload
 # types leaves it alive.
 #
-# ⚠ WHY IT IS FILED HERE RATHER THAN ABSORBED BY R50 TRACK A2: A2 made
-# `newtype NX(Box[int])` reach PARITY WITH THIS STRUCT CONTROL. The newtype and
-# the struct now print the SAME garbage on C and the SAME 9 on LLVM, at every
-# state of A2's patch including pristine HEAD. The control is what proves the
-# residual wrongness is NOT A2's — it is this, one layer down in the C emitter.
+# ⚠ WHY IT IS FILED HERE RATHER THAN ABSORBED BY R50 TRACK A2 — and the claim
+# is about THIS PROGRAM'S INVARIANCE, not about the newtype's. Measured on both
+# backends, at pristine HEAD and after A2's fix:
+#
+#     program / read shape          PRE C     PRE LLVM   POST C     POST LLVM
+#     THIS FILE   s.b.get()         garbage   9          garbage    9
+#     struct      *(s.b)            9         9          9          9
+#     newtype     n.0.get()         rc 1      rc 1       garbage    9
+#     newtype     *(n.0)            rc 1      rc 1       9          9
+#
+# THIS PROGRAM IS BYTE-INVARIANT ACROSS A2 — pristine HEAD, every partial
+# revert, and the full fix all print the same garbage on C and the same 9 on
+# LLVM. THAT INVARIANCE IS THE WHOLE ARGUMENT: A2 cannot have caused a
+# wrongness that predates it and that its patch does not move.
+#
+# ⚠ AND NOTE WHAT THE TABLE DOES *NOT* SAY. The newtype rows are rc 1 at PRE,
+# so newtype and struct are NOT alike at pristine HEAD — A2 is what brings the
+# newtype up to the struct's behaviour, exactly (garbage/9 under `.get()`,
+# 9/9 under `*`). An earlier draft of this comment claimed the two matched "at
+# every state including pristine HEAD"; that was false, and the corrected
+# statement is the stronger one: A2 REACHES parity, and the residual C garbage
+# under `.get()` is a property both shapes inherit from the defect below.
 #
 # INTENDED (asserted by the `#[ignore]`d test): `9` on C and on LLVM.
 # Un-ignore when the field-receiver call emit derefs like its sibling.

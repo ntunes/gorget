@@ -1,0 +1,42 @@
+# REGRESSION PIN — a `newtype` over `Box[int]`, the payload the whole track
+# opened on, read back through the `*` deref.
+#
+# WRONG BEFORE THE FIX (measured at pristine HEAD, both backends): `gg build`
+# rc 1. `register_newtype` read the inner type through the NON-registering
+# `mapper.map_ast_type(...)`, so `Box[int]` was never registered and `_0`
+# lowered to `Unit` — LLVM's `llc` refused ("void type only allowed for
+# function results"), and the C lane truncated the payload pointer into a
+# one-byte field.
+#
+# CORRECT AFTER THE FIX: `9` on C AND on LLVM. A cell that goes from
+# "compiles on neither backend" to "correct on both" — reverting
+# `register_newtype` ALONE brings rc 1 back on both, verified.
+#
+# ⚠ THIS FIXTURE EXISTS BECAUSE THE FIRST ROUND OF A2's FIXTURE SET MISSED IT
+# (Core #12). The set pinned `String`, `Vector[int]`, `Option[int]` and an enum
+# payload, and named `Box` nowhere — while the track's own artifacts asserted
+# that the `Box` cell had reached parity with its struct twin. An affirmative
+# claim about a cell that no row pins is exactly the gap the fixture-coverage
+# gate exists to catch.
+#
+# ⚠ THE READ SHAPE IS LOAD-BEARING — do not "simplify" it to `.get()`. The two
+# reads have DIFFERENT outcomes and only this one is clean on both backends:
+#
+#     read shape        PRE C   PRE LLVM   POST C     POST LLVM
+#     *(n.0)  (here)    rc 1    rc 1       9          9
+#     n.0.get()         rc 1    rc 1       garbage    9
+#
+# The `.get()` row's residual C garbage is `todo/t1373` (a `Box[T].get()`
+# through a STRUCT-FIELD receiver is handed the field's ADDRESS where the
+# by-value `__get` expects the value), NOT this fix's: the struct control
+# `known_gaps/box_get_through_struct_field_receiver_garbage.gg` prints the same
+# garbage on C and the same `9` on LLVM at pristine HEAD, under every partial
+# revert, and after the full fix. That INVARIANCE is what attributes the
+# residual to `t1373`. Switching this fixture to `.get()` would park a known
+# open defect in a live test.
+newtype NX(Box[int])
+
+void main():
+    Box[int] b = Box(9)
+    NX n = NX(^b)
+    print(*(n.0))

@@ -2579,7 +2579,7 @@ fn newtype() {
 // ══════════════════════════════════════════════════════════════
 // R50 Track A2 — `newtype` construction lowers to `StructInit`.
 //
-// These four fixtures live in `known_gaps/` but their tests are LIVE, not
+// These five fixtures live in `known_gaps/` but their tests are LIVE, not
 // `#[ignore]`d: a top-level fixture auto-joins the self-host parity corpus, and
 // `todo/t0400` files the matching self-host gap (`INewtype` missing from
 // `lower.gg`'s `resource_types` / `optionlike_resource` fixpoints) as LATENT
@@ -2594,6 +2594,7 @@ fn newtype() {
 //                                                 (+ the vector and option rows)
 //   revert `register_newtype`                    → `newtype_vector_payload_reads_back`
 //                                                 + `newtype_option_payload_reads_back`
+//                                                 + `newtype_box_payload_reads_back`
 //   revert `register_collection_alias`           → `sound_amp_box_tuple_field_cc_fail`
 //                                                 + `sound_amp_box_tuple_field_nonprimitive`
 //   revert `register_enum_type`                  → `enum_variant_payload_registered_unit`
@@ -2640,6 +2641,24 @@ fn newtype_option_payload_reads_back() {
 #[test]
 fn enum_variant_payload_registered_unit() {
     run_gg("known_gaps/enum_variant_payload_registered_unit.gg", "42");
+}
+
+/// R50 Track A2 — the `Box[int]` payload the track opened on: rc 1 on BOTH
+/// backends at pristine HEAD, `9` on both after the fix. Reverting
+/// `register_newtype` alone brings rc 1 back.
+///
+/// ⚠ ADDED BY THE OUTPUT-REVIEW FOLLOW-UP. A2's first fixture set pinned
+/// `String`, `Vector[int]`, `Option[int]` and an enum payload and left `Box`
+/// unpinned — while the track's own artifacts asserted the `Box` cell had
+/// reached parity with its struct twin. An affirmative claim with no reddening
+/// row is precisely the Core #12 gap the fixture-coverage gate exists to catch.
+///
+/// ⚠ The `*`-deref read shape is load-bearing; `n.0.get()` is a DIFFERENT cell
+/// that still prints garbage on C (`todo/t1373`, pinned by its own struct
+/// control). See the fixture header for the four-cell table.
+#[test]
+fn newtype_box_payload_reads_back() {
+    run_gg("known_gaps/newtype_box_payload_reads_back.gg", "9");
 }
 
 #[test]

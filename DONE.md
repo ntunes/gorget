@@ -10,8 +10,15 @@
   not alter. It was changed **for uniformity with its three siblings**, and that is stated rather than argued.
   **(3) `examples/comprehensive.gg` declares a newtype and never constructs it** — 0 fires on both backends. It
   is the second read-back violator after `tests/fixtures/newtype.gg`; the fixture was fixed, the example was
-  left. **(4) THE `GG_VALIDATE_CTOR_LOWERING` CENSUS IS NOT AT ZERO** — 8 sites in 6 files, all `t0691`, which
+  left. **(4) THE `GG_VALIDATE_CTOR_LOWERING` CENSUS IS NOT AT ZERO** — 8 sites in 7 files, all `t0691`, which
   now carries the table. **(5) FULL C AND LLVM SWEEPS ARE THE PARENT'S** and were not run by the track.
+  ⭐ **(6) RETIRED BY THE OUTPUT-REVIEW FOLLOW-UP, AND IT WAS THE ONE THAT MATTERED:** the `Box[int]` payload
+  cell — the payload the track OPENED on — was **fixed by the diff, pinned by nothing, and named in no
+  omission.** `newtype NX(Box[int])` + `print(*(n.0))` is rc 1 on BOTH backends at pristine HEAD and prints
+  `9` on both after the fix, while the track's own artifacts affirmatively claimed that cell had reached
+  parity with its struct twin. An affirmative claim with no reddening row is exactly the Core #12 gap the
+  fixture-coverage gate exists to catch. Now pinned by `known_gaps/newtype_box_payload_reads_back.gg` with a
+  live test, RED-verified at PRE on both backends and reddened by the `register_newtype` revert alone.
 
 - [2026-09-05] **`t1374` + `t1375` + `t0104` CLOSED — `newtype` CONSTRUCTION NEVER BECAME A `StructInit`, SO
   BOTH BACKENDS RE-DERIVED IT BY NAME-MATCHING, AND `newtype N(String)` PRINTED EMPTY ON C (R50 Track A2).**
@@ -46,7 +53,9 @@
   `newtype_string_payload_reads_empty`; `register_newtype` → the vector + option rows; `register_collection_alias`
   → **`sound_amp_box_tuple_field_cc_fail`**, which is `t0104`'s own repro and turned out to be this site's
   run-level pin, not merely a graduation; `register_enum_type` → `enum_variant_payload_registered_unit`;
-  `monomorphize_struct` → nothing (named omission above).
+  `monomorphize_struct` → nothing (named omission above). ⊕ The follow-up added
+  `newtype_box_payload_reads_back` to `register_newtype`'s row, closing the one changed cell the first
+  fixture set left unpinned.
   ⭐ **`t0104` CLOSES ON BOTH FACES, INCLUDING THE ONE ITS "DO NOT CLOSE" RESERVATION WAS HOLDING OPEN.** That
   face's filed spelling — `Box[(int, int)]` + `&(*b).1`, a PRIMITIVE tuple field — is **green at pristine
   HEAD** and pinned nothing; the discriminating axis is a NON-PRIMITIVE element, and `Box[(P, int)]` +
@@ -67,15 +76,27 @@
   to catch. ⭐⭐ **AND IT INDEPENDENTLY REDISCOVERED `t0691`** — inline struct constructors inside f-strings —
   **finding six robustness-map cells nobody had connected to that filing.** Report-only, because the census is
   **not** at zero: those 8 sites are the documented burn-down, and `t0691` now carries the table, the
-  regenerating command and the promotion condition.
-  ⛔ **THE TWO `SlotStore` COERCION ARMS WERE *NOT* DELETED.** An env-gated fire count over 2250 fixtures on
-  both backends measured **0 fires PRE and POST, corpus-wide**, from a harness that reports 5→0 on the sibling
-  arm — so they are pre-existing dead code, not siblings, and a deletion no row reddens is an unguarded
-  behaviour change (Core #12). The proposed widening was retracted at its own scope.
+  regenerating command and the promotion condition. **8 sites in SEVEN files** — one file contributes two.
+  ⛔ **THE TWO `SlotStore` COERCION ARMS WERE *NOT* DELETED.** An env-gated fire count over the 2250
+  `tests/fixtures/*.gg` programs plus a targeted 11-file axis scan, on both backends, measured **0 fires PRE
+  and POST**, from a harness that reports 5→0 on the sibling arm — so they are pre-existing dead code, not
+  siblings, and a deletion no row reddens is an unguarded behaviour change (Core #12). The proposed widening
+  was retracted at its own scope. ⚠ **NAMED SCOPE, NOT "corpus-wide":** that scan is the TOP-LEVEL glob, so
+  it does not walk `tests/fixtures/`'s SUBDIRECTORIES — the same selection-as-enumeration trap this track's
+  own census fell into (`tests/fixtures/*.gg` reports zero NOT-INIT sites; all eight live in subdirectories).
+  The direction is conservative — a wider scan can only ADD fires, and any fire would strengthen rather than
+  weaken the "do not delete" conclusion — but the figure is a SELECTION and is labelled as one.
   ⛔ **`t1373` STAYS OPEN AND NOW HAS ITS DURABLE REPRO** — `Box[T].get()` through a STRUCT-FIELD receiver
-  prints garbage on C and `9` on LLVM. **The struct control is what proves the residual wrongness is not
-  A2's:** a struct with the identical payload and read shape is identically wrong at pristine HEAD, under
-  every partial revert, and after the full fix. **The fix takes newtype to PARITY WITH STRUCT.**
+  prints garbage on C and `9` on LLVM. **What proves the residual is not A2's is the STRUCT CONTROL'S
+  INVARIANCE:** that program is identically wrong at pristine HEAD, under every partial revert, and after
+  the full fix. A2 cannot have caused a wrongness that predates it and that its patch does not move.
+  ⚠ **THE READ SHAPE IS ITS OWN AXIS, AND AN EARLIER DRAFT OF THIS ENTRY GOT IT WRONG.** Measured, both
+  backends, both states: struct `s.b.get()` garbage/`9` at PRE **and** POST · struct `*(s.b)` `9`/`9`
+  throughout · newtype `n.0.get()` **rc 1 at PRE**, garbage/`9` at POST · newtype `*(n.0)` **rc 1 at PRE**,
+  `9`/`9` at POST. So newtype and struct are **NOT** alike at pristine HEAD — the newtype does not build at
+  all. The draft claim *"identical at every state including pristine HEAD"* was false; the corrected one is
+  stronger: **A2 REACHES parity under BOTH read shapes**, taking `Box`-payload newtypes from "compiles on
+  neither backend" to exactly the struct's behaviour.
   ⭐ **`tests/fixtures/newtype.gg` WAS A LIVE VIOLATOR OF THE RULE THIS TRACK ESTABLISHED** — it constructed a
   newtype and printed `"newtype works"`, never reading `.0` back, so it was green on a compiler that stored
   garbage, for the entire lifetime of the defect. Now reads the payload. **Filed for follow-up:** `t1376`
