@@ -35070,14 +35070,14 @@ const SELF_COMPILE_ARRAY_CLONE_PIN: u64 = 13_192_153;
 // and it fails GREEN. `todo/t0851` is re-opened on it; the loud half is
 // `tests/lints.rs::done_md_round_close_shapes_are_pinned`, which pins both
 // populations so a close in an unseeable shape cannot pass silently.
-// ROUND-OPEN-DATE: 2026-09-03
+// ROUND-OPEN-DATE: 2026-09-05
 // ⚖ OWNER-AUTHORIZED RE-ANCHOR AT R48 CLOSE (2026-09-03), not a routine round-open
 // reset: stage-1 array_clone measured +1.016%, past the ~1% band, and the owner
 // authorized it on the attribution that Track U's self-host lowerer edits ARE the
 // stage-1 meter's workload. Both .pin and .round_open moved because the band is
 // computed FROM the anchor — pinning .pin alone would have left the gate red
 // against a stale anchor, i.e. the authorization would have been inert.
-// ROUND-OPENED-BY: 886e5f032 VALUE: 13_192_153
+// ROUND-OPENED-BY: 63f90173f VALUE: 13_192_153
 const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_192_153;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
@@ -35173,7 +35173,7 @@ const SELF_COMPILE_STRING_CLONE_PIN: u64 = 31_635_281;
 // stage-1 meter's workload. Both .pin and .round_open moved because the band is
 // computed FROM the anchor — pinning .pin alone would have left the gate red
 // against a stale anchor, i.e. the authorization would have been inert.
-// ROUND-OPENED-BY: 886e5f032 VALUE: 31_635_281
+// ROUND-OPENED-BY: 63f90173f VALUE: 31_635_281
 const SELF_COMPILE_STRING_CLONE_ROUND_OPEN: u64 = 31_635_281;
 
 // ── Shared clone-ceiling machinery ─────────────────────────────────────────
@@ -35881,7 +35881,7 @@ const STAGE1_ARRAY_CLONE_PIN: u64 = 1_141_929_646;
 // stage-1 meter's workload. Both .pin and .round_open moved because the band is
 // computed FROM the anchor — pinning .pin alone would have left the gate red
 // against a stale anchor, i.e. the authorization would have been inert.
-// ROUND-OPENED-BY: 886e5f032 VALUE: 1_141_929_646
+// ROUND-OPENED-BY: 63f90173f VALUE: 1_141_929_646
 const STAGE1_ARRAY_CLONE_ROUND_OPEN: u64 = 1_141_929_646;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
@@ -36053,7 +36053,7 @@ const STAGE1_STRING_CLONE_PIN: u64 = 2_394_484_334;
 // stage-1 meter's workload. Both .pin and .round_open moved because the band is
 // computed FROM the anchor — pinning .pin alone would have left the gate red
 // against a stale anchor, i.e. the authorization would have been inert.
-// ROUND-OPENED-BY: 886e5f032 VALUE: 2_394_484_334
+// ROUND-OPENED-BY: 63f90173f VALUE: 2_394_484_334
 const STAGE1_STRING_CLONE_ROUND_OPEN: u64 = 2_394_484_334;
 
 #[test]

@@ -1,3 +1,33 @@
+- [2026-09-05] **ROUND XLIX (R49) CLOSED — SEVEN TRACKS, TWO INTEGRATION TRACKS, AND A ROUND THAT LEARNED TO ENUMERATE.**
+  **Landed:** T1 (self-host ambient `Callable` return outranks body inference; 7 RED-verified pins) · L
+  (closure-capture ownership) · N2 (Vector-HOF result element drop + sizing) · S-a2 (single-owner sub-place
+  gate reads the POSITION, not the source's spelling) · RS (27 leak-class keys re-seeded after a frame
+  rename) · **INT-A** (five-branch merge) · **INT-B** (allowlist reconciliation).
+  **Owner rulings, both recorded verbatim, both admitting exactly one row:** `vector_hof_result_element_sizing`
+  and `closure_literal_ambient_return_at_call_arg`, temporary, cited to `t0953`, retiring when it lands.
+  **New guard:** every `⚖ ADMITTED` block must carry a `# RETIRES: <id>…` line whose ids exist — which
+  incidentally made the deferred-work census a grep.
+  **The round's own lesson, paid for repeatedly: A SELECTION PRESENTED AS AN ENUMERATION.** It fired on a
+  budget constant censused without the branch that moved it, on parity figures inherited rather than
+  regenerated, on a re-key premise measured inside the one window guaranteed to make its class vanish, on an
+  end-state table measured on a tree that was green only because the rest of the change was absent, and on a
+  `/tmp` sweep that filtered `-type d` while the largest leftovers were files. Five brief-review passes on one
+  brief found five uncovered acceptance axes, one per pass, each closed by an instrument the executor does not
+  author.
+  **Battery, every rc off the bare command:** C 2747/0/256 · LLVM 2747/0/256 (exact parity) · ggdef 201 ·
+  spec_conformance 3 · security 213 · lints 231 · c_runtime 2 · lib 1187 · known_gaps_census · staging-move
+  burndown · figures scan+validate · sanitize sweep (ubsan 0, crash 0, flaky 0, class-drift 0) ·
+  robustness_map 874/1037 = 84.3% with three `[c] CRASH → WORKS` on trait-object dispatch ·
+  **parity 1566/1712 = 91.5%, non-MATCH held at 146, all three gates ARMED (0 SKIPPED)** — measured on the
+  COMPOSED tree, which settled a composition risk nothing else in the round could see.
+  Convergence: `known_gaps=17 todo_items=887`
+
+  Seen RED both ways, anchored by line — a landed item still named, and a block with its condition removed.
+  **AND THE SWEEP'S ADVISORY HALF, ACCOUNTED FOR RATHER THAN READ.** `fixed_leak` named exactly one row
+  corpus-wide, and it is the one deleted above. `shrunk_class` named 51: 35 are this reconciliation, and the
+  other 16 were measured against a compiler built at the merge base and come back BYTE-IDENTICAL — pre-existing
+  `todo/t0572` debt, proven rather than assumed, and appended there as evidence.
+
 - [2026-09-04] **`t1306` CLOSED BY AN OWNER RULING — the R49 inflow fixture that leaked `t0953`'s mechanism with no allowlist row is ADMITTED, one line, temporary, cited (R49 Track INT-B). It reached the owner as a DECISION because a five-build pre-flight ran before the reconciliation instead of a corpus sweep after it.**
   **WHAT IT WAS.** `closure_literal_ambient_return_at_call_arg` (R49 inflow, `030d4d2d7`) leaks
   `__gorget_closure_env_alloc*3` — one record per closure literal at a call-argument position, which is
@@ -48,11 +78,7 @@
   (the block was never deleted), and "every id named anywhere must exist" red-lights the CORRECT answer (the
   replacement narrates both retired items in the past tense). `sanitize_leak_admitting_blocks_declare_a_live_retire_condition`
   reads the `# RETIRES:` line only: ≥1 per admitting block, `t[0-9]{4}` tokens, every one must still exist.
-  Seen RED both ways, anchored by line — a landed item still named, and a block with its condition removed.
-  **AND THE SWEEP'S ADVISORY HALF, ACCOUNTED FOR RATHER THAN READ.** `fixed_leak` named exactly one row
-  corpus-wide, and it is the one deleted above. `shrunk_class` named 51: 35 are this reconciliation, and the
-  other 16 were measured against a compiler built at the merge base and come back BYTE-IDENTICAL — pre-existing
-  `todo/t0572` debt, proven rather than assumed, and appended there as evidence.
+
 - [2026-09-04] **`t0877` RE-SCOPED BY POSITION, NOT CLOSED (R49 Track T1) — the self-host inferred a closure's
   return type from its BODY while the DECLARATION already named it, and a read site does not get to disagree
   with its writer. 13 lines; SIX cells CC-FAIL → MATCH and a seventh CC-FAIL → CRASH; and the one cell it does NOT fix is
