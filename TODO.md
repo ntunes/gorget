@@ -16,7 +16,7 @@
 | **D0** | 🆕 **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1. | `t1393`–`t1402` |
 | **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | **G** | 🔵 brief-review pass 1. **Streak 0/3.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
-| **F1** | ⛔ **REBUILT 2026-09-05 — `t1362` + `t0750` AS ONE FIX AT THE SHARED CONSUMER.** Passes 1–3 all blocked; **pass 3 found the root cause INVERTED by my own folds.** Needs a FRESH SCOUT. **Streak 0/3.** | `t1363`–`t1372` |
+| **F1r** | ✅ **REBUILD CONFIRMED BY MEASUREMENT — `t1362` + `t0750` ARE ONE FIX.** 🔵 brief-review pass 1. **Streak 0/3.** | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
@@ -449,6 +449,49 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ✅ THE F1 REBUILD IS CONFIRMED — ONE FIX, ONE CONSUMER, AND `array_clone` MOVES BY ZERO
+
+⭐ **THE MACHINERY ALREADY EXISTED AND WAS SCOPED TOO NARROWLY.**
+`grep -n "ctx.is_bare_param(builder, \*lid)" src/ir/lowering/stmts/mod.rs` → **exactly 2 hits**: the candidate
+filters of the two **existing** pre-header hoist hooks — the layering-correct machinery, **whose own docstrings
+state the `restore_locals` problem verbatim**, scoped to bare params only. **The fix widens that filter to
+`is_bare_param || cow_scope_carried_candidate`, read entirely off `Local.ownership` — no names.
++2 filter lines, +2 guard lines, +1 predicate.**
+
+**MEASURED, BOTH REPROS, BOTH BACKENDS:** `t1362` `777` → **`10`**; `t0750` `1 1`/`4 4` → **`1 4`/`4 1`** —
+exactly what `t0750`'s `#[ignore]`d test asserts, **so it GRADUATES.**
+⭐ **MA-5 DONE PROPERLY, 51 cells:** PRE-wrong 48 · half-L fixes **exactly** the 18 loop cells and **zero**
+non-loop · half-S **exactly** the 30 non-loop and **zero** loop · **18 + 30 = 48, an exact disjoint partition.**
+Each half applied **alone to pristine HEAD**, four distinct binaries.
+⭐⭐ **COST: `array_clone` moves by EXACTLY 0** on the declared meter; peak RSS **−404 kB**. ⇒ **NO CEILING
+BUMP.** Contrast the disable-the-arm negative: **8.93× site hits, +13.6% RSS.**
+⭐ **The guard fixture is entirely inside ggdef's phase-0 subset and COMPILEs + MATCHes on self-host the same
+round** ⇒ it lands in the **MAIN CORPUS**, not `known_gaps/`, with the three MATCH floors **rising together**.
+
+⛔ **AND IT CORRECTS `t1362`'s OWN SECOND CORRECTION — WHICH I WROTE.** *"Gate 2 is not a root cause… `t0750`
+owes the fix in its own track"* is **measured false**. The Case 1/2 vs Case 3 distinction is about **which case
+of `cow_before_mutation` fires**, **not** about the **consumer that loses the result** — both end in the
+identical `register_local` rebind and **one wholesale line reverts both.** ⇒ **the two items MERGE; the round
+gets a CLOSURE of the family.**
+
+⛔ **AND IT CORRECTS ME AGAIN, PRECISELY:** I wrote *"the sidecar, which the severance path NEVER READS."*
+**TRUE of `cow_collection_refs_for_id` specifically; FALSE generally —
+`grep -rn "\.cow_borrow_source(" src/ --include='*.rs'` → 8 LIVE READERS** serving the lazy-rescue mechanism.
+⚠ **An executor told the sidecar is unread would DELETE LIVE CODE.**
+⊕ **DO NOT COLLAPSE THE STORES — the collapse was MEASURED:** behaviourally green (222/222 `cow_`) but
+**`array_clone` +22.6%**, wall +14% — **real cost, zero behavioural gain, orthogonal to this fix.** ⭐ **The
+genuine Layering-3 defect is CORE #14 ROT:** the `BorrowOrigin::CowBorrowPending` docstring says a later
+`set_cow_borrow_source` *"upgrades the entry"*; the setter says it *"Does NOT upgrade"*; **the body writes only
+the sidecar.** **The enum docstring is the rot.**
+
+⭐ **SIX-QUESTIONS #4 ANSWERED BY MEASUREMENT: `Stmt::OnError` is the construct with NO SUBJECT — and needs
+none.** `emit_on_error_cleanups` uses **`lower_block`, not `lower_block_scoped`**, so there is **no
+`save_locals` boundary to lose the rebind at**. ⚠ **A LIVE TRAP: switching it to `lower_block_scoped` would
+silently open the gap with NO CELL WATCHING IT.**
+⊕ **The scout caught its own SIX-Q #3 defect and named the rule:** its first `save_locals` grep was **truncated
+at 60 lines, reporting 16 sites where the true count is 19.** ⭐ ***"A capped grep is a selection wearing an
+enumeration's clothes."***
 
 ### ⛔⛔ F1 IS REBUILT — PASS 3 FOUND MY TWO FOLDS HAD INVERTED THE ROOT CAUSE
 
