@@ -30765,9 +30765,13 @@ fn cow_scope_boundary_hook_pairing_count() {
 // The robustness map's own structural guards.
 //
 // `scripts/robustness_map.py` is a round-close gate and a CI step, and its
-// corpus is a 1858-row TSV beside 1859 `.gg` files. Nothing reconciled the two
-// until topic 30 landed 820 rows at once and the question "did the topic
-// measure what it says it measures" became unanswerable by reading the report.
+// corpus is a big TSV beside a directory of `.gg` files kept in step by hand.
+// Nothing reconciled the two until topic 30 landed eight hundred-odd rows at
+// once and the question "did the topic measure what it says it measures"
+// stopped being answerable by reading the report. Regenerate the sizes with
+//   wc -l tests/fixtures/robustness_map/MANIFEST.tsv
+//   ls tests/fixtures/robustness_map/cells/*.gg | wc -l
+// rather than trusting a figure written into a comment.
 // ===========================================================================
 
 /// Columns of `tests/fixtures/robustness_map/MANIFEST.tsv`, mirroring

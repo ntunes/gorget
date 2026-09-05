@@ -374,10 +374,15 @@ MIRROR_SITES = ["straight", "while"]
 # On the source x payload rows where the compiler is ALREADY BROKEN it already
 # prints the mutated value, so a control drawn from one of those MATCHES, scores
 # WORKS, and fires "CONTROL PASSED - harness is blind" on arrival: red, and worse
-# than red, because the control's meaning is then silently inverted. Measured: 30%
-# of naive picks land there. This one is drawn from a row that is GREEN ON EVERY
-# LANE at HEAD -- verify with
-#   python3 scripts/robustness_map.py --lanes all --topic "30 " --detail
+# than red, because the control's meaning is then silently inverted. The size of
+# the trap is the FORWARD half's own WRONG fraction -- a forward cell picked at
+# random has exactly that chance of landing on it -- so regenerate it rather than
+# trusting a number here:
+#   awk -F'\t' 'NR>1 && $1 ~ /^30 / && $2 ~ /^vsm_/ && $2 !~ /^vsm_mir_/ \
+#     && $3 != "CONTROL" {n++; if ($3=="WRONG") w++} END {print w"/"n}' \
+#     tests/fixtures/robustness_map/MANIFEST.tsv
+# This control is drawn from a row that is GREEN ON EVERY LANE at HEAD -- verify
+# with `python3 scripts/robustness_map.py --lanes all --topic "30 " --detail`,
 # and re-point it, never widen it, if that row ever stops being green.
 CONTROL_SOURCE, CONTROL_SITE, CONTROL_PAYLOAD = "field", "straight", "vec_int"
 CONTROL_CELL = f"{PREFIX}POSITIVE_CONTROL_view_reads_pre_mutation"

@@ -146,19 +146,21 @@ LANE_COL = {"c": COL_C, "llvm": COL_LLVM, "selfhost": COL_SELFHOST,
             "asan": COL_ASAN, "ggdef": COL_GGDEF}
 ALL_LANES = ["c", "llvm", "selfhost", "asan", "ggdef"]
 # STAGE 3 OF THE DRIFT RATCHET, FOR ONE TOPIC. The intra-quadrant DRIFT branch
-# below is report-only for the 33 legacy topics, deliberately: 1242 cell-lanes
-# sit at a non-good baseline and none has ever been checked for drift, so making
-# it fatal in one step would red the map on drift nobody caused. Its own comment
-# carries the staging -- "report -> measure the whole map -> burn the census
-# down -> THEN promote" -- and the standing instruction "do not leave it
-# report-only forever, a ratchet needs both directions" (AGENTS.md Core #6).
+# below is report-only for every legacy topic, deliberately: a large number of
+# cell-lanes sit at a non-good baseline and none has ever been checked for
+# drift, so making it fatal in one step would red the map on drift nobody
+# caused. Its own comment carries the staging -- "report -> measure the whole
+# map -> burn the census down -> THEN promote" -- and the standing instruction
+# "do not leave it report-only forever, a ratchet needs both directions"
+# (AGENTS.md Core #6). The census is `todo/t0993`; REGENERATE it rather than
+# trusting any figure written into a comment here.
 # The legacy census is stage 2 and is filed as `todo/t0993`; this constant does
 # NOT discharge it, it discharges stage 3 for ONE topic that never had a census.
 #
 # A topic that is born FULLY SEEDED satisfies that staging on day one BY
 # CONSTRUCTION: its day-one drift is zero, measured, so there is no census to
 # burn down and it can start at stage 3 while the legacy topics stay at stage 1.
-# Topic 30 is the first such topic. Its 200+ non-good baselines EXIST TO CHANGE
+# Topic 30 is the first such topic. Its non-good baselines EXIST TO CHANGE
 # -- `WRONG -> BUILD-FAIL` is what happens when the language starts REJECTING
 # these programs, which is the direction Core #8 prefers -- so a fatal drift
 # here is cleared the reviewed way, with `--accept --accept-drift --topic`,
