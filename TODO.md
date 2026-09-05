@@ -685,7 +685,7 @@ self-host closure — a bound on PLACES, not on clone VOLUME**, so one hot-path 
 ⚠ **F3 is unblocked; F2 remains gated on F1**, and ⛔ **row 4 of the decision table IS `t1362` — unsound at
 HEAD.** The ruling sits on top of a mechanism that is currently broken.
 
-### ⚖ R2 — OWNER LEANS **BARE = SNAPSHOT, `&` = REJECT**, AND THE SIGIL ALREADY CARRIES THAT MEANING
+### ✅ R2 — RULED, WITH TWO CONDITIONS THE OWNER RATIFIED (2026-09-05)
 
 **Owner 2026-09-05: *"We have the `for i in v` vs `for i in &v` distinction. I think I would lean snapshot in
 the bare version."*** ⭐ **This is §3.5 read LITERALLY, through a sigil the compiler currently ignores at this
@@ -711,7 +711,7 @@ views"* — **a size criterion I INVENTED and attributed to §3.5, which says re
 size.** The charter objection also fails: under reject the user hand-writes `d.keys()` first, **the same O(n)
 copy, merely visible**; beating it needs ALGORITHM RESTRUCTURING, and the charter governs **clone placement**.
 
-**TWO CONDITIONS, both load-bearing:**
+**TWO CONDITIONS — ⚖ OWNER RATIFIED THEM VERBATIM: *"I agree with your conditions."*** They are therefore part of the ruling, not advice:
 1. ⛔ **`implicit_clones=warn` SHIPS WITH IT, NOT AFTER.** The rule **UN-REJECTS** — a compile error becomes a
    silent O(n) **inside a loop**, the worst place for an invisible cost. ⭐ **Track F's scout reached the same
    sequencing from MLKit's retrospective, independently and from the cost axis. Two lines landing on one
@@ -722,6 +722,17 @@ copy, merely visible**; beating it needs ALGORITHM RESTRUCTURING, and the charte
    not have. Already scoped as [[t0045]] with a live pinned test asserting the correct answer.
 ⊕ **A good property of the ruling: the implicit clone is ESCAPABLE BY A ONE-CHARACTER EDIT.** Writing `&v`
 gets an error telling you to restructure, instead of a snapshot you did not ask for.
+⭐ **CONSEQUENCES ALREADY ACTED ON:**
+- **`t0538`'s PHASING IS AMENDED** — `warn` moves OUT of stage C to ship **with** the analysis; **`deny` stays
+  behind §3's guaranteed-elision set**, whose own reasoning is untouched. ⊕ **Cheap, because the instrument is
+  largely built:** `--clones=sites-tsv=PATH` already emits file · line · column · type · **reason** · bytes ·
+  symbol per CloneId. **`warn` is the SURFACING, not new analysis.**
+- **`t1403` FILED** — the `.iter()` hang, deliberately kept **separate from the ruling** because it is wrong
+  under **either** side of it.
+- ⭐ **`t0045` (Track C2) MOVES ONTO R2's CRITICAL PATH.** It is no longer routine safety work: **`&` cannot be
+  the discriminator while writing through it is silently dropped.** Brief it as a prerequisite for a ratified
+  ruling, not as a filed double-free.
+
 ⛔ **AND IT IS A DEFECT UNDER EITHER RULING TODAY:** `for k, v in d.iter(): d.put(...)` **HANGS and is
 OOM-KILLED (rc 137)** — it neither rejects nor snapshots. **Needs filing regardless of which way R2 falls.**
 
@@ -1910,6 +1921,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t1270`](todo/t1270.md) **HIGH** — 🆕🐛💥 [HIGH — CRASH ON A VALID, DOCUMENTED PROGRAM: with m.lock() as g: ICEs gg build rc 101 on BOTH backends; found 2026-…
 - [`t1303`](todo/t1303.md) **HIGH** — 🆕🚨 [HIGH — MEMORY UNSAFETY on the REFERENCE lane, in a program with no unsafe, no ownership operator and no FFI. Core #8…
 - [`t1361`](todo/t1361.md) **HIGH** — 🆕🔥 [HIGH (re-graded from CRITICAL 2026-09-05, see addendum) -- AN UNCHECKED MEMBER-ACCESS HOLE ON THE ENTIRE LAZY-ITERAT…
+- [`t1403`](todo/t1403.md) **HIGH** — 🆕🐛 [HIGH — NON-TERMINATION + OOM FROM A gg check-CLEAN PROGRAM, both backends; found 2026-09-05 by the orchestrator whil…
 ### Medium
 
 
