@@ -11,7 +11,7 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ✅ SCOUTED → needs brief. **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| **C2** | ✅ SCOUTED → needs brief. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| **C2** | pass 1 BLOCKED (6) → folded → 🔵 pass 2. **Streak 0/3.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0** | 🆕 **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1. | `t1393`–`t1402` |
 | **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
@@ -770,6 +770,15 @@ views"* — **a size criterion I INVENTED and attributed to §3.5, which says re
 size.** The charter objection also fails: under reject the user hand-writes `d.keys()` first, **the same O(n)
 copy, merely visible**; beating it needs ALGORITHM RESTRUCTURING, and the charter governs **clone placement**.
 
+⇒ ⭐ **R2's PREREQUISITE IS NOW `t1404`, FILED AND SCOPED — AND IT HAD NO OWNER UNTIL NOW.** The durable repro
+`tests/fixtures/known_gaps/sound_for_amp_scalar_elem_writethrough.gg` has existed, `#[ignore]`d and asserting
+the CORRECT answer `11/12/13`, and was **cited from NO `todo/` item**
+(`grep -rln "sound_for_amp_scalar_elem_writethrough" todo/` → empty before the filing).
+⚠ **A PINNED REPRO WITH NO OWNER IS HOW A RATIFIED RULE STAYS UNBUILT** — the same failure mode as the
+2026-07-06 sweep that Track G exists to fix.
+⊕ **`t0045` (C2) closes when the double-free is gone; `t1404` carries the lost-write residual.** Orchestrator
+decision, so the executor is not left to invent it.
+
 ⛔⛔ **CORRECTION 2026-09-05 — I TOLD THE OWNER CONDITION 2 WAS "THE BY-VALUE HALF OF A RULE ALREADY
 HALF-SHIPPED". THAT IS FALSE, AND IT MAKES R2's PREREQUISITE BIGGER THAN I REPRESENTED.**
 
@@ -887,7 +896,7 @@ actually read.
 ⛔ **THE CLONE-BAND ANCHORS WERE RE-SEEDED AT THIS ROUND'S OPEN** (date 2026-09-05, one sha, values
 unchanged — R49 moved the clone meter not at all). `clone_band_anchor_is_reseeded_before_work_resumes` is the
 gate that enforces it; do not let it drift.
-⛔ **FIRST UNISSUED `todo/` ID: `t1404`.** ⊕ `t1383` issued from G's block. ⊕ **BLOCKS: A1 `t1309`–`t1318` · B `t1319`–`t1328` · C `t1329`–`t1338` · D `t1339`–`t1348` · E `t1349`–`t1358` · F2/F3 `t1362`(used)+`t1363`–`t1371` → **F1 owns `t1363`–`t1372`** · A2 `t1373`–`t1382`.** Allocate a private disjoint block per executor (MA-3b).
+⛔ **FIRST UNISSUED `todo/` ID: `t1405`.** ⊕ `t1383` issued from G's block. ⊕ **BLOCKS: A1 `t1309`–`t1318` · B `t1319`–`t1328` · C `t1329`–`t1338` · D `t1339`–`t1348` · E `t1349`–`t1358` · F2/F3 `t1362`(used)+`t1363`–`t1371` → **F1 owns `t1363`–`t1372`** · A2 `t1373`–`t1382`.** Allocate a private disjoint block per executor (MA-3b).
 
 ⚠ **THE ONE THING R49 PAID FOR REPEATEDLY, AND THE ONE THING TO CARRY:** **A SELECTION PRESENTED AS AN
 ENUMERATION.** It fired on a constant censused without the branch that moved it · on figures inherited rather
@@ -1304,6 +1313,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t1383`](todo/t1383.md) **HIGH** — 🆕🐛 [HIGH — SILENT WRONG OUTPUT, BOTH BACKENDS, ORACLE-ADJUDICATED, gg check CLEAN; found 2026-09-05 by the R50 Track G s…
 - [`t1309`](todo/t1309.md) **HIGH** — 🆕🐛 [HIGH — BOTH lanes, leak at scope exit, gg check clean; filed 2026-09-05 by R50 Track A1 as the OTHER HALF of t1077;…
 - [`t1313`](todo/t1313.md) **HIGH** — 🆕🚨 [HIGH — RUST lane, BOTH backends, DOUBLE FREE from SIX LINES using the language's own move operator; gg check clean;…
+- [`t1404`](todo/t1404.md) **HIGH** — 🆕📐 [HIGH — SILENT LOST WRITE FROM A RATIFIED SPELLING, both backends, gg check clean; ⚖ R2's RATIFIED PREREQUISITE (owne…
 ### Medium
 
 - [`t0115`](todo/t0115.md) **MED** — 🆕🐛 [MED — COMMENT MISATTRIBUTION, PRE-EXISTING on both lanes; found 2026-08-19 by the R43 Track G output review, executo…
