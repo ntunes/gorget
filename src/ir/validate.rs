@@ -2580,6 +2580,120 @@ pub fn validate_clone_reasons(module: &Module) -> CloneReasonCensus {
     census
 }
 
+// ── A2: constructions that never became init instructions ────────────
+// WHY THIS EXISTS — a class the consume-site validator is STRUCTURALLY
+// BLIND to, measured, not theorised.
+//
+// `newtype N(T)` construction never became an `Expr::StructLiteral`: the
+// `def.kind == DefKind::Struct` gate in `semantic/rewrite.rs` excluded
+// `DefKind::Newtype`, so it stayed an `Expr::Call` to a synthesized
+// extern fn. Every downstream owner of the construction then had to
+// re-derive it — BOTH backends did so by NAME-MATCHING
+// (`s.name == *name && s.fields.len() == 1`), which is Core #2 /
+// devbook/24 rule 2 sitting directly under a miscompile.
+//
+// And the consume-site validator could not see any of it. Its
+// `Instruction::Call` arm asks `module.fn_param_abis.get(callee)` and
+// answers `None => false, // unknown ABI — skip`, so a construction
+// wearing a Call's clothes is skipped BEFORE any ownership question is
+// asked. Measured at the time: `GG_VALIDATE_CONSUME_SITES` emitted
+// NOTHING for a program that double-freed.
+//
+// THE CLASS, stated so it cannot be spelled around: a `Call` whose
+// callee names a registered aggregate `TypeDef` is a CONSTRUCTION, and a
+// construction must be an init instruction (`StructInit` / `EnumInit` /
+// `TupleInit`) — the only shapes the consume-site validator, the
+// ownership machinery (`move_zero_consumed_args`,
+// `clone_multi_use_resource_args`) and the backends' aggregate paths all
+// agree on. It is checked from TYPED STATE — `TypeRegistry`'s name→def
+// index and `TypeDefKind` — never from a name pattern, a prefix or a
+// suffix. A source-text ratchet on the `rewrite.rs` gate would count
+// COSTUMES; this counts what actually reached the IR.
+//
+// LADDER (Core #6: env-gate → burn down → fatal). Today: REPORT-ONLY
+// under `GG_VALIDATE_CTOR_LOWERING`, and the reason is measured, not
+// cautionary — THE CENSUS IS NOT YET AT ZERO.
+//
+// Measured over `tests/fixtures/*.gg` + `known_gaps/` +
+// `robustness_map/cells/` + `examples/` (2253 files, 2082 modules
+// reporting): EIGHT sites in six files, and every one of them is an
+// inline constructor inside an f-string interpolation — `todo/t0691`,
+// already filed, where `gg check` is clean, C refuses to compile and
+// LLVM prints garbage. The guard rediscovered that class from typed
+// state alone, and found six robustness-map cells nobody had connected
+// to the filing. That family is the whole burn-down set; the item now
+// carries the table and the regenerating command.
+//
+// ⚠ AND `tests/fixtures/*.gg` ALONE IS A SELECTION, NOT A TOTAL
+// ENUMERATION (SIX-Q #3): over that glob the census reports ZERO. All
+// eight sites are in SUBDIRECTORIES. Anyone re-measuring this must walk
+// them, or they report a zero they have not earned.
+//
+// PROMOTION: when `t0691` lands, this becomes debug-default-strict in
+// the shape `GG_VALIDATE_CLONE_REASONS` already uses (strict when the
+// env is unset in a debug build or set to "strict", report on "1",
+// disabled on "off").
+
+/// Per-module census of CALLS THAT SHOULD HAVE BEEN INIT INSTRUCTIONS.
+#[derive(Debug, Clone, Default)]
+pub struct CtorLoweringCensus {
+    /// `(function, block, inst_index, callee, kind)` per offending site.
+    pub sites: Vec<(String, usize, usize, String, &'static str)>,
+    /// Total `Instruction::Call` sites walked — the denominator, so a
+    /// zero in `sites` can be told apart from a walker that never ran
+    /// (Core #13: a zero from an instrument that has never printed a one
+    /// is worthless).
+    pub calls_walked: usize,
+}
+
+/// Walk the module for constructions that never became init instructions.
+///
+/// A site is reported when the callee spelling resolves through the type
+/// registry to an aggregate `TypeDef` (`Struct` or `Enum`). Type ALIASES
+/// are excluded: an alias is not constructible, so a call bearing an
+/// alias name is an ordinary function. Env-gated by the caller
+/// (`GG_VALIDATE_CTOR_LOWERING`).
+///
+/// ⚠ ONE CARVE-OUT, and it is a RATIFIED DESIGN DECISION rather than a
+/// defect spelled around: a TypeDef carrying `metadata.collection_kind`
+/// is a RUNTIME-BACKED collection. `Vector[int](10)` really does
+/// construct through a call (`gorget_array_new`), never through a
+/// compound literal — which is why `semantic/rewrite.rs`'s rewrite pass
+/// early-returns on collection names before it ever reaches the
+/// `DefKind` gate. The carve-out reads `collection_kind`, the typed axis
+/// that exists precisely to replace name-prefix matching; it must never
+/// become a `Vector__` prefix test.
+///
+/// ⚠ NAMED BLIND SPOT: the same carve-out means an ownership defect at a
+/// COLLECTION constructor is invisible to this census. That is not a
+/// widening this predicate can fix — the early-return is keyed on a
+/// hard-coded 14-name list one layer up, filed as `todo/t1377`.
+pub fn validate_ctor_lowering(module: &Module) -> CtorLoweringCensus {
+    let registry = &module.type_registry;
+    let mut census = CtorLoweringCensus::default();
+    for func in &module.functions {
+        for (b, bb) in func.blocks.iter().enumerate() {
+            for (i, inst) in bb.instructions.iter().enumerate() {
+                if let Instruction::Call { func: callee, .. } = inst {
+                    census.calls_walked += 1;
+                    let Some(td) = registry.get_type_def(callee) else { continue };
+                    if td.metadata.collection_kind.is_some() {
+                        continue;
+                    }
+                    let kind = match &td.kind {
+                        crate::ir::types::TypeDefKind::Struct(_) => "Struct",
+                        crate::ir::types::TypeDefKind::Enum(_) => "Enum",
+                        // An alias names no constructible aggregate.
+                        crate::ir::types::TypeDefKind::Alias(_) => continue,
+                    };
+                    census.sites.push((func.name.clone(), b, i, callee.clone(), kind));
+                }
+            }
+        }
+    }
+    census
+}
+
 /// Walker: identifies every consume site and routes through
 /// [`validate_consume`]. The walker is shape-driven on Instruction
 /// variants; ABI-based dispatch reads the typed `module.fn_param_abis`

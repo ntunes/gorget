@@ -2,4 +2,4 @@ newtype UserId(int)
 
 void main():
     UserId id = UserId(42)
-    print("newtype works")
+    print(id.0)

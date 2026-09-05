@@ -1,0 +1,37 @@
+# DURABLE REPRO for `todo/t1373` — `Box[T].get()` through a STRUCT-FIELD
+# receiver is SILENT-WRONG ON THE DEFAULT BACKEND.
+#
+# WRONG TODAY (measured at pristine HEAD and unchanged by R50 Track A2):
+#     C     → prints garbage (a pointer value, e.g. 187651060765344), rc 0
+#     LLVM  → prints 9, rc 0
+# `gg check` is clean, both builds are rc 0, and ASan reports nothing.
+#
+# MECHANISM, read off the emitted C rather than inferred — two call-emit shapes
+# for the same operation, one of them deref-correct:
+#     __v8  = &s.b;                                 /* the FIELD'S ADDRESS   */
+#     __v10 = Box__Box__int64_t__get(__v8);         /* to a BY-VALUE __get   */
+#     __v12 = Box__int64_t__get(*(Box__int64_t*)__v11);   /* sibling derefs  */
+#
+# ⚠ THIS INVERTS A FILED MEASUREMENT, AND THAT IS THE POINT. `todo/t0685`
+# records `Box[int].get()` as green on both backends — TRUE FOR A LOCAL
+# RECEIVER, FALSE FOR A FIELD ONE. The axis `t0685` enumerates is the PAYLOAD
+# TYPE; the axis that actually discriminates is the RECEIVER PLACE. A fixture set
+# sampling only local receivers is an anecdote on the axis that matters
+# (Core #12). Do not merge this into `t0685` or `t0684` — a fix aimed at payload
+# types leaves it alive.
+#
+# ⚠ WHY IT IS FILED HERE RATHER THAN ABSORBED BY R50 TRACK A2: A2 made
+# `newtype NX(Box[int])` reach PARITY WITH THIS STRUCT CONTROL. The newtype and
+# the struct now print the SAME garbage on C and the SAME 9 on LLVM, at every
+# state of A2's patch including pristine HEAD. The control is what proves the
+# residual wrongness is NOT A2's — it is this, one layer down in the C emitter.
+#
+# INTENDED (asserted by the `#[ignore]`d test): `9` on C and on LLVM.
+# Un-ignore when the field-receiver call emit derefs like its sibling.
+struct SB:
+    Box[int] b
+
+void main():
+    Box[int] bb = Box(9)
+    SB s = SB(^bb)
+    print(s.b.get())

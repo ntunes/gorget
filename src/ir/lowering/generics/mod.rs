@@ -2431,7 +2431,7 @@ fn monomorphize_struct(
             })
             .unwrap_or(false);
         if !trait_via_ast {
-            let inner_type = mapper.map_ast_type(&type_args[0].node);
+            let inner_type = mapper.map_ast_type_mut(&type_args[0].node, registry);
             fields.push(StructField {
                 name: "_0".to_string(),
                 type_id: inner_type,

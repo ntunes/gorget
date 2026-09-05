@@ -2566,9 +2566,80 @@ test7 done",
     );
 }
 
+/// ⚠ THIS FIXTURE USED TO ASSERT `"newtype works"` — it CONSTRUCTED a newtype
+/// and never read `.0` back, so it was green on a compiler that stored garbage
+/// in the payload. It was the tree's only newtype fixture that did not read the
+/// payload back, and it stayed green through the entire lifetime of the
+/// `newtype`-construction defect R50 Track A2 closed. Construct AND read.
 #[test]
 fn newtype() {
-    run_gg("newtype.gg", "newtype works");
+    run_gg("newtype.gg", "42");
+}
+
+// ══════════════════════════════════════════════════════════════
+// R50 Track A2 — `newtype` construction lowers to `StructInit`.
+//
+// These four fixtures live in `known_gaps/` but their tests are LIVE, not
+// `#[ignore]`d: a top-level fixture auto-joins the self-host parity corpus, and
+// `todo/t0400` files the matching self-host gap (`INewtype` missing from
+// `lower.gg`'s `resource_types` / `optionlike_resource` fixpoints) as LATENT
+// only because every newtype in-tree wrapped `int`/`float`. A `String` or
+// generic payload at top level would make it non-latent; A2 does not port the
+// self-host lane, so the fixtures stay out of the corpus and the tests stay
+// live. (They are therefore NOT census rows — the census enumerates `#[ignore]`d
+// tests citing `known_gaps/`.)
+//
+// EVERY PARTIAL REVERT REDDENS A NAMED ROW (measured, four compilers built):
+//   revert the `rewrite.rs`/`typecheck.rs` gate → `newtype_string_payload_reads_empty`
+//                                                 (+ the vector and option rows)
+//   revert `register_newtype`                    → `newtype_vector_payload_reads_back`
+//                                                 + `newtype_option_payload_reads_back`
+//   revert `register_collection_alias`           → `sound_amp_box_tuple_field_cc_fail`
+//                                                 + `sound_amp_box_tuple_field_nonprimitive`
+//   revert `register_enum_type`                  → `enum_variant_payload_registered_unit`
+//   revert `monomorphize_struct`                 → NOTHING. Changed for uniformity;
+//     all 12 of its corpus fires are bare trait names the change does not alter,
+//     and 10+ independent repro attempts failed to redden a row. Stated, not argued.
+// ══════════════════════════════════════════════════════════════
+
+/// R50 Track A2 — the headline: a NON-generic `newtype NS(String)` printed
+/// EMPTY on the C backend at pristine HEAD, rc 0, ASan-clean, `gg check` clean.
+/// Silent wrong output on the default backend from plain, book-legal Gorget.
+/// Pins the `StructInit` half ALONE — reverting the registration half leaves
+/// this cell green.
+#[test]
+fn newtype_string_payload_reads_empty() {
+    run_gg("known_gaps/newtype_string_payload_reads_empty.gg", "hello");
+}
+
+/// R50 Track A2 — a `newtype` over a generic payload. Reddens on EITHER half's
+/// revert: registration-only → `gg build` rc 1; StructInit-only → C traps
+/// `index out of bounds`, LLVM rc 134 double free.
+#[test]
+fn newtype_vector_payload_reads_back() {
+    run_gg(
+        "known_gaps/newtype_vector_payload_reads_back.gg",
+        "\
+3
+20",
+    );
+}
+
+/// R50 Track A2 — `Option[int]` payload. With only the registration half this
+/// prints `none` for `Some(5)` on C, rc 0: a loud build failure traded for a
+/// silent wrong answer. The `is Some(x)` read-back is what makes it a pin.
+#[test]
+fn newtype_option_payload_reads_back() {
+    run_gg("known_gaps/newtype_option_payload_reads_back.gg", "5");
+}
+
+/// R50 Track A2 — `register_enum_type`, the third TypeDef-field writer reading
+/// from the non-registering mapper. Also repairs the enum's drop/copy metadata
+/// (`drop: None, copy: Copy` → `drop: Recursive, copy: Move` for a tuple
+/// payload), so the site was leaking, not merely crashing codegen.
+#[test]
+fn enum_variant_payload_registered_unit() {
+    run_gg("known_gaps/enum_variant_payload_registered_unit.gg", "42");
 }
 
 #[test]
@@ -52516,14 +52587,63 @@ fn sound_guard_bare_param_mutate_undefined_symbol() {
 /// a pointer to a `Result`) when the auto-propagate pre-check's `None` case was
 /// inverted. The fail-safe restored the loud failure. Trading a loud build error
 /// for a silent wrong answer is a regression even on a broken shape (Core #8).
+/// ⭐ GRADUATED by R50 Track A2 — `register_collection_alias`'s `Box` branch was
+/// the lossy writer: it cached `Box__…` with `_0: Unit` from the non-registering
+/// mapper, and the faithful field mapper then found it cached. Routing that site
+/// through `map_ast_type_mut` emits the tuple type. Verified in both directions:
+/// rc 1 → rc 0 / `ERR(propagated)` on both backends, and reverting THAT SITE
+/// ALONE brings rc 1 back while every other A2 cell stays green.
+///
+/// ⚠ `todo/t0104` carried a "DO NOT CLOSE via pin 6" reservation naming a
+/// SECOND face that pin 6 still accepted. That face's filed spelling
+/// (`Box[(int, int)]` + `&(*b).1`, a PRIMITIVE tuple field) is GREEN at
+/// pristine HEAD and pinned nothing; the reproducing shape needs a NON-PRIMITIVE
+/// element, and it is now `sound_amp_box_tuple_field_nonprimitive` below. Both
+/// faces graduate, so the reservation is discharged rather than waived.
 #[test]
-#[ignore = "KNOWN GAP: `&(*b).0` (tuple field through a Box deref) passes `gg check` then fails \
-the C build — the mangled tuple type is referenced but never emitted. Pre-existing. Asserts the \
-INTENDED propagation; TODO.md. Un-ignore when the emission lands."]
 fn sound_amp_box_tuple_field_cc_fail() {
     run_gg(
         "known_gaps/sound_amp_box_tuple_field_cc_fail.gg",
         "ERR(propagated)",
+    );
+}
+
+/// ⭐ The SECOND face of the same gap, graduated by R50 Track A2 alongside its
+/// sibling above. No `Result` and no propagation anywhere in the program — the
+/// discriminating axis is a NON-PRIMITIVE element in the tuple, which is why
+/// `todo/t0104`'s filed spelling (a plain `int` field) was green at HEAD and
+/// pinned nothing. Reverting `register_collection_alias` alone brings rc 1 back
+/// on both backends.
+#[test]
+fn sound_amp_box_tuple_field_nonprimitive() {
+    run_gg(
+        "known_gaps/sound_amp_box_tuple_field_nonprimitive.gg",
+        "\
+5
+done",
+    );
+}
+
+/// KNOWN GAP (`todo/t1373`) — `Box[T].get()` through a STRUCT-FIELD receiver is
+/// handed the field's ADDRESS where the by-value `__get` expects the value, so
+/// C prints garbage and LLVM prints `9`. rc 0 both ways, `gg check` clean,
+/// ASan silent.
+///
+/// ⚠ THE RECEIVER PLACE IS THE DISCRIMINATING AXIS, not the payload type —
+/// which INVERTS `todo/t0685`'s measurement that this cell is green on both
+/// backends (true for a LOCAL receiver only).
+///
+/// ⚠ NOT R50 Track A2's, and this fixture is the control that proves it: A2
+/// brought `newtype NX(Box[int])` to PARITY with this struct, and the struct is
+/// identically wrong at pristine HEAD, under each partial revert, and after the
+/// full fix. Un-ignore when the field-receiver call emit derefs like its sibling.
+#[test]
+#[ignore = "KNOWN GAP (t1373): `Box[T].get()` through a struct-field receiver passes the field's \
+ADDRESS to a by-value `__get`; C prints garbage, LLVM prints 9, both rc 0. Asserts the INTENDED 9."]
+fn box_get_through_struct_field_receiver_garbage() {
+    run_gg(
+        "known_gaps/box_get_through_struct_field_receiver_garbage.gg",
+        "9",
     );
 }
 

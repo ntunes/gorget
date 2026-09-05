@@ -4855,7 +4855,7 @@ impl<'a> TypeChecker<'a> {
                 // Resolve struct type
                 if let Some(def_id) = self.resolve_name(name.span.start, &name.node) {
                     let def = self.scopes.get_def(def_id);
-                    if def.kind != DefKind::Struct {
+                    if !matches!(def.kind, DefKind::Struct | DefKind::Newtype) {
                         self.error(
                             SemanticErrorKind::NotAStruct {
                                 name: name.node.clone(),

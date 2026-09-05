@@ -846,7 +846,7 @@ pub fn register_newtype(
         mapper.register_named(name.clone(), placeholder_id);
     }
 
-    let inner_type = mapper.map_ast_type(&nt.inner_type.node);
+    let inner_type = mapper.map_ast_type_mut(&nt.inner_type.node, registry);
     let fields = vec![StructField {
         name: "_0".to_string(),
         type_id: inner_type,
@@ -993,7 +993,7 @@ pub(super) fn register_collection_alias(
     // (`lowering/exprs/type_reg.rs`), pinned by
     // `box_typedef_registration_sites_count` in `tests/lints.rs`.
     if base_name == "Box" {
-        let inner_type = mapper.map_ast_type(&_type_args[0].node);
+        let inner_type = mapper.map_ast_type_mut(&_type_args[0].node, registry);
         let type_def = TypeDef {
             name: mangled_name.to_string(),
             kind: TypeDefKind::Struct(StructDef {
@@ -1209,28 +1209,27 @@ pub fn register_enum_type(
     }
 
     // Map variants
-    let variants: Vec<EnumVariant> = enum_def.variants.iter()
-        .map(|v| {
-            let fields = match &v.node.fields {
-                ast::VariantFields::Unit => vec![],
-                ast::VariantFields::Tuple(types) => {
-                    types.iter().enumerate()
-                        .map(|(i, t)| {
-                            let field_type = mapper.map_ast_type(&t.node);
-                            StructField {
-                                name: format!("_{i}"),
-                                type_id: field_type,
-                            }
-                        })
-                        .collect()
+    let mut variants: Vec<EnumVariant> = Vec::new();
+    for v in &enum_def.variants {
+        let fields = match &v.node.fields {
+            ast::VariantFields::Unit => vec![],
+            ast::VariantFields::Tuple(types) => {
+                let mut fs = Vec::new();
+                for (i, t) in types.iter().enumerate() {
+                    let field_type = mapper.map_ast_type_mut(&t.node, registry);
+                    fs.push(StructField {
+                        name: format!("_{i}"),
+                        type_id: field_type,
+                    });
                 }
-            };
-            EnumVariant {
-                name: v.node.name.node.clone(),
-                fields,
+                fs
             }
-        })
-        .collect();
+        };
+        variants.push(EnumVariant {
+            name: v.node.name.node.clone(),
+            fields,
+        });
+    }
 
     // Tier 1c: compute coherence-at-construction drop metadata.
     let (drop_strategy, copy_semantics) = registry.compute_drop_strategy_for_enum(&variants);

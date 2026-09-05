@@ -1,0 +1,37 @@
+# REGRESSION PIN — `register_enum_type`, the third TypeDef-field writer that
+# read from the NON-registering mapper.
+#
+# WRONG BEFORE THE FIX (measured at pristine HEAD): `gg build` rc 1 on BOTH
+# backends. The variant's tuple field mapped through `mapper.map_ast_type(...)`,
+# which cannot insert into the registry, so a `Callable[int(int)]` payload
+# lowered to `_0: unit` and the emitted code referenced a type that was never
+# registered.
+#
+# ⚠ THE DAMAGE IS NOT ONLY A CODEGEN CRASH. The same site decides the enum's
+# drop and copy metadata: with a tuple payload the enum went
+# `drop: None, copy: Copy` where it must be `drop: Recursive, copy: Move`. That
+# is a LEAK plus wrong copy semantics, computed from a field type the writer had
+# already thrown away.
+#
+# ⚠ DO NOT RESPELL THIS AS `enum E: V(Box[Box[int]])`. That shape's changed
+# TypeDef is attributable to `register_collection_alias` (the Box pre-pass), so
+# it is not a clean pin for THIS site. The `Callable` and tuple shapes reach the
+# variant-field mapper directly: the pre-pass early-returns on empty generic
+# args and only handles `Type::Named`, so `Function` and `Tuple` variant fields
+# slip past it. Verified by reverting `register_enum_type` ALONE: rc 1 returns
+# on both backends while every other cell in the set stays green.
+#
+# Reads the payload back through the variant binding rather than printing
+# "built" — a construction-only assertion cannot see a mis-typed field.
+enum E:
+    V(Callable[int(int)])
+
+int addone(int x): x + 1
+
+void main():
+    E e = E.V(addone)
+    match e:
+        case E.V(f):
+            print(f(41))
+        else:
+            print("no")

@@ -311,7 +311,7 @@ impl ClosureLowering {
         });
 
         // Emit the creation-site StructInit through the SHARED consuming-position
-        // sequence — the same three passes `lower_struct_init` runs for a user
+        // sequence — the same three passes `lower_struct_literal` runs for a user
         // struct literal, in the same order:
         //
         //   1. `ensure_owned_at_boundary`      — materialize borrows (Ptr(T)
@@ -353,7 +353,7 @@ impl ClosureLowering {
             .collect();
         // Pass 1. Skipped for ByMutRef, whose field is a Ptr — cloning it would
         // deep-copy the pointee and store the address of a temporary, exactly
-        // as `lower_struct_init` skips its Ptr-typed fields.
+        // as `lower_struct_literal` skips its Ptr-typed fields.
         //
         // This pass keeps the ENCLOSING `closure_span`. Its own last-use query
         // (`maybe_move_owning_param_ctor_temp`) governs a move out of an owning

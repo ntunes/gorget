@@ -1,0 +1,30 @@
+# REGRESSION PIN — the SECOND FACE of the `&(*b).<n>` tuple-field-through-a-Box
+# gap, and the run-level pin for `register_collection_alias`.
+#
+# WRONG BEFORE THE FIX (measured at pristine HEAD): `gg build` rc 1 on BOTH
+# backends — the mangled tuple type is referenced by the emitted code but never
+# emitted, because the `Box` pre-pass cached `Box__…` with `_0: Unit` from the
+# NON-registering mapper and the faithful mapper then found it cached. Read site
+# faithful, writer one layer up lossy (Core #1).
+#
+# ⚠ THIS SHAPE EXISTS BECAUSE THE ONE FILED AS THE SECOND FACE DID NOT
+# REPRODUCE. The filing spelled it `Box[(int, int)]` + `&(*b).1` — a PRIMITIVE
+# tuple field — and that program is GREEN at pristine HEAD, so it pinned
+# nothing. The discriminating axis is a NON-PRIMITIVE element in the tuple: with
+# a struct in the first slot the mangled tuple type is the one that goes
+# unemitted. No `Result` and no propagation anywhere in this program, which is
+# what separates it from its sibling `sound_amp_box_tuple_field_cc_fail.gg`.
+#
+# Verified by reverting `register_collection_alias` ALONE: rc 1 returns on both
+# backends while every other cell in the set stays green.
+struct P:
+    int x
+
+void take(int &v):
+    print(v)
+    v = v + 1
+
+void main():
+    Box[(P, int)] b = Box((P(5), 7))
+    take(&(*b).0.x)
+    print("done")

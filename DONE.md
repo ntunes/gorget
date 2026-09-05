@@ -1,3 +1,88 @@
+- [2026-09-05] ⚠ **NAMED OMISSIONS FROM R50 TRACK A2, recorded here because a brief dies at round close.**
+  **(1) THE SELF-HOST LANE IS NOT PORTED, DELIBERATELY.** `todo/t0400` files `INewtype` as missing from the
+  self-host's `resource_types` / `optionlike_resource` fixpoints, marked LATENT because *"every newtype
+  in-tree wraps int/float"* — and `newtype NS(String)` makes it NON-LATENT the moment a top-level fixture
+  lands. Measured: **0 of the 11 newtype-declaring files are under `self_host_*`; the SH lane has NEVER been
+  exercised on this axis.** A2's five new fixtures therefore live in `known_gaps/` with LIVE (non-`#[ignore]`d)
+  tests — out of the parity corpus, out of the sweep corpus, and out of the census roster. **The SH port stays
+  `t0400`'s.** **(2) `monomorphize_struct` IS PINNED BY NOTHING** — reverting it alone reddens no row, across
+  10+ independent repro attempts by two agents; all 12 of its corpus fires are bare trait names the change does
+  not alter. It was changed **for uniformity with its three siblings**, and that is stated rather than argued.
+  **(3) `examples/comprehensive.gg` declares a newtype and never constructs it** — 0 fires on both backends. It
+  is the second read-back violator after `tests/fixtures/newtype.gg`; the fixture was fixed, the example was
+  left. **(4) THE `GG_VALIDATE_CTOR_LOWERING` CENSUS IS NOT AT ZERO** — 8 sites in 6 files, all `t0691`, which
+  now carries the table. **(5) FULL C AND LLVM SWEEPS ARE THE PARENT'S** and were not run by the track.
+
+- [2026-09-05] **`t1374` + `t1375` + `t0104` CLOSED — `newtype` CONSTRUCTION NEVER BECAME A `StructInit`, SO
+  BOTH BACKENDS RE-DERIVED IT BY NAME-MATCHING, AND `newtype N(String)` PRINTED EMPTY ON C (R50 Track A2).**
+  ⛔ **THE TRACK'S TITLE WAS WRONG TWICE AND THE HEADLINE IS THE PLAINEST SHAPE THERE IS.** It opened as
+  "nested Box", was rescoped to "any GENERIC payload", and the executor's PRE run confirmed what pass 4 had
+  found: `newtype NS(String)` — no generics anywhere — **prints EMPTY on the C backend, rc 0, ASan-clean,
+  `gg check` clean**, while LLVM prints `hello`. Plain, in-subset, book-legal Gorget, silently wrong on the
+  default backend. Silent-wrong-output outranks ICE and leak.
+  **ROOT CAUSE, ONE LAYER UP FROM WHERE IT WAS FILED.** `semantic/rewrite.rs` turns a constructor `Call` into
+  an `Expr::StructLiteral` behind `def.kind == DefKind::Struct`; a newtype carries `DefKind::Newtype`, fails
+  that gate, and stays a `Call` to a synthesized extern fn. It therefore never reached
+  `move_zero_consumed_args` / `clone_multi_use_resource_args` at all, and **both backends re-derived the
+  construction by NAME-MATCHING** (`s.name == *name && s.fields.len() == 1`, in `is_newtype_ctor` and
+  `newtype_sid`) — **Core #2 / devbook/24 rule 2 sitting directly under a miscompile.** The C arm wrote
+  `._0 = {arg}` with no pointer/value adaptation while the LLVM arm had one, **and that asymmetry IS the
+  measured C/LLVM divergence.** `t1374` (a slot address into a by-value field) and `t1375` (the source temp
+  dropped instead of moved) were **two symptoms of one write site**, filed one layer too low; both were
+  corrected in place mid-gauntlet and both close here.
+  **THE FIX IS THREE EDITS.** The `DefKind` gate in `rewrite.rs`, the matching `NotAStruct` guard in
+  `typecheck.rs`'s `StructLiteral` arm (**they land together or every newtype in the corpus is instantly
+  rejected**), and four TypeDef-field writers moved off the non-registering `mapper.map_ast_type` onto
+  `map_ast_type_mut` — `register_newtype`, `register_collection_alias`'s Box branch, `register_enum_type`,
+  `monomorphize_struct`. The sibling `register_struct` had used the mut form all along, with a comment saying
+  exactly why. ⭐ **The `^arg` `Expr::Move` wrap already in the rewrite is what repairs `t1375`:** `Box[T]` is
+  a single-owner carve-out, so `NX(b)` is correctly rejected, the user writes `NX(^b)`, and the rewrite
+  carries that into the `StructInit` where the move fires.
+  ⛔ **NEITHER HALF IS SHIPPABLE ALONE, MEASURED RATHER THAN ARGUED.** With only the registration half,
+  `newtype NV(Vector[int])` goes from a LOUD BUILD FAILURE to a bounds trap on C and **rc 134 double free on
+  LLVM**, and `NO(Some(5))` builds rc 0 and prints **`none`** — a loud→silent excursion up the ratified
+  severity ladder (Core #8). With only the `StructInit` half, every generic payload still fails to build.
+  **EVERY PARTIAL REVERT REDDENS A NAMED ROW** (five compilers built, one per cell): StructInit half →
+  `newtype_string_payload_reads_empty`; `register_newtype` → the vector + option rows; `register_collection_alias`
+  → **`sound_amp_box_tuple_field_cc_fail`**, which is `t0104`'s own repro and turned out to be this site's
+  run-level pin, not merely a graduation; `register_enum_type` → `enum_variant_payload_registered_unit`;
+  `monomorphize_struct` → nothing (named omission above).
+  ⭐ **`t0104` CLOSES ON BOTH FACES, INCLUDING THE ONE ITS "DO NOT CLOSE" RESERVATION WAS HOLDING OPEN.** That
+  face's filed spelling — `Box[(int, int)]` + `&(*b).1`, a PRIMITIVE tuple field — is **green at pristine
+  HEAD** and pinned nothing; the discriminating axis is a NON-PRIMITIVE element, and `Box[(P, int)]` +
+  `&(*b).0.x` is rc 1 on both backends at PRE and correct at POST. The reservation is **discharged, not
+  waived**, and the reproducing shape ships as `sound_amp_box_tuple_field_nonprimitive`.
+  ⭐ **`register_enum_type` was not merely crashing codegen — it was LEAKING.** With a tuple payload the enum's
+  metadata went `drop: None, copy: Copy` where it must be `drop: Recursive, copy: Move`, computed from a field
+  type the writer had already thrown away.
+  ⭐ **STRUCTURAL GUARD (Core #6): `GG_VALIDATE_CTOR_LOWERING`.** The consume-site validator was
+  **structurally blind** to this whole class — its `Call` arm asks `fn_param_abis.get(callee)` and answers
+  `None => false, // unknown ABI — skip`, so it emitted **nothing for a program that double-freed**. The new
+  census reports every `Instruction::Call` whose callee names a registered aggregate `TypeDef` — a
+  construction that never became an init instruction — **from typed state** (`TypeRegistry` name→def index +
+  `TypeDefKind`), never a name pattern, with one carve-out read off `TypeMetadata::collection_kind` (the axis
+  that exists to replace name-prefix matching) because a runtime-backed collection really does construct
+  through a call. **Verified in both directions:** it prints `not_init=1` naming `NS`/`NV` on the reverted
+  compiler and `not_init=0` on the fixed one, and the carve-out does **not** swallow the class it was written
+  to catch. ⭐⭐ **AND IT INDEPENDENTLY REDISCOVERED `t0691`** — inline struct constructors inside f-strings —
+  **finding six robustness-map cells nobody had connected to that filing.** Report-only, because the census is
+  **not** at zero: those 8 sites are the documented burn-down, and `t0691` now carries the table, the
+  regenerating command and the promotion condition.
+  ⛔ **THE TWO `SlotStore` COERCION ARMS WERE *NOT* DELETED.** An env-gated fire count over 2250 fixtures on
+  both backends measured **0 fires PRE and POST, corpus-wide**, from a harness that reports 5→0 on the sibling
+  arm — so they are pre-existing dead code, not siblings, and a deletion no row reddens is an unguarded
+  behaviour change (Core #12). The proposed widening was retracted at its own scope.
+  ⛔ **`t1373` STAYS OPEN AND NOW HAS ITS DURABLE REPRO** — `Box[T].get()` through a STRUCT-FIELD receiver
+  prints garbage on C and `9` on LLVM. **The struct control is what proves the residual wrongness is not
+  A2's:** a struct with the identical payload and read shape is identically wrong at pristine HEAD, under
+  every partial revert, and after the full fix. **The fix takes newtype to PARITY WITH STRUCT.**
+  ⭐ **`tests/fixtures/newtype.gg` WAS A LIVE VIOLATOR OF THE RULE THIS TRACK ESTABLISHED** — it constructed a
+  newtype and printed `"newtype works"`, never reading `.0` back, so it was green on a compiler that stored
+  garbage, for the entire lifetime of the defect. Now reads the payload. **Filed for follow-up:** `t1376`
+  (one-field newtype accepts any arity — an accept→reject change owing all lanes) and `t1377` (a hard-coded
+  14-name `COLLECTION_TYPES` early-return fires BEFORE the gate, so `newtype Set(String)` is silently never
+  rewritten and its emitted C is already conflating the user type with `GorgetMap` — a case with no subject,
+  which no widening of the gate reaches, and which the new census catches).
 - [2026-09-05] ⚠ **`t0121` CLOSED — AND IT WAS ALREADY FIXED, BY ANOTHER TRACK, WITH THE ROUND-CLOSE CENSUS GATE
   RED IN BETWEEN (found by R50 Track E's gate run; the FIX is R50 Track H's).** `scripts/known_gaps_census.sh
   --check` exits 1 with two ignored tests now PASSING and absent from the passing-allowlist:

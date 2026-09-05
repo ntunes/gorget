@@ -999,7 +999,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
                 // Verify the definition name matches the callee name.
                 // This prevents span collisions from derive-generated code
                 // (which has overlapping spans) from causing false rewrites.
-                if def.kind == DefKind::Struct && def.name == *cname {
+                if matches!(def.kind, DefKind::Struct | DefKind::Newtype) && def.name == *cname {
                     // Extract fields from the Call and build StructLiteral
                     let call = std::mem::replace(&mut expr.node, Expr::NoneLiteral);
                     if let Expr::Call { callee, generic_args, args } = call {

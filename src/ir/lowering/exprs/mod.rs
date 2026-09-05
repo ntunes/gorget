@@ -5388,7 +5388,7 @@ pub(super) fn clone_multi_use_resource_args(
     ast_args: &[Spanned<Expr>],
 ) {
     // Ptr(resource) borrows are handled by the preceding
-    // `ensure_owned_at_boundary` call in `lower_struct_init`. This pass only
+    // `ensure_owned_at_boundary` call in `lower_struct_literal`. This pass only
     // handles the by-value multi-use / field-access / loop-carried / string-view
     // cases that need a clone even though the local isn't in a ref ownership
     // state.

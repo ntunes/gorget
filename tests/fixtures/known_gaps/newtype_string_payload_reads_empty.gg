@@ -1,0 +1,39 @@
+# REGRESSION PIN — `newtype` construction must become a `StructInit`.
+#
+# WRONG BEFORE THE FIX (measured at pristine HEAD, both backends):
+#     C     → prints EMPTY, rc 0        ⛔ SILENT WRONG OUTPUT ON THE DEFAULT BACKEND
+#     LLVM  → prints `hello`, rc 0
+#
+# MECHANISM: `newtype` construction never became an `Expr::StructLiteral` — the
+# `def.kind == DefKind::Struct` gate in `semantic/rewrite.rs` excluded
+# `DefKind::Newtype`, so it stayed an `Expr::Call` to a synthesized extern fn.
+# Both backends then RE-DERIVED the construction by NAME-MATCHING
+# (`s.name == *name && s.fields.len() == 1`) — Core #2 / Layering rule 2 sitting
+# directly under the defect — and the C arm wrote `._0 = {arg}` with no
+# pointer/value adaptation while the LLVM arm had one. That asymmetry IS the
+# C/LLVM divergence above: the emitted C brace-elides a `void*` into a 32-byte
+# `Str`, so `Str.data` takes a stack address and `len` stays 0.
+#
+# ⚠ THE GIR WAS ALREADY CORRECT HERE (`_0: GorgetString`, `drop: Recursive`).
+# This cell is INDEPENDENT of the TypeDef-registration half of the fix: reverting
+# `register_newtype` alone leaves it GREEN. It pins the `StructInit` half and
+# nothing else — that is exactly why it is here.
+#
+# ⚠ NEITHER `gg check`, ASan, NOR `*_comparison` CAN SEE THIS CLASS. Build rc 0,
+# run rc 0, no sanitizer report (the punned `Str.len` lands as 0 and
+# short-circuits every read — a different field order makes the same emit a wild
+# read instead). ONLY A READ-BACK FIXTURE CATCHES IT. Never assert `"built"` in a
+# newtype fixture; construct AND read `.0` back.
+#
+# ⚠ LIVES IN `known_gaps/` DELIBERATELY, with a LIVE (non-ignored) test. A
+# top-level fixture auto-joins the self-host parity corpus, and `todo/t0400`
+# files the matching self-host gap (`INewtype` missing from `lower.gg`'s
+# `resource_types` / `optionlike_resource` fixpoints) as LATENT precisely
+# because every newtype in-tree wrapped `int`/`float`. A `String` payload at top
+# level would make it non-latent the same round.
+newtype NS(String)
+
+void main():
+    String s = "hello"
+    NS a = NS(s)
+    print(a.0)

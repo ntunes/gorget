@@ -2221,6 +2221,34 @@ pub fn lower_module(
     }
 
 
+    // ── A2 structural guard: constructions that never became init
+    // instructions (`GG_VALIDATE_CTOR_LOWERING`).
+    //
+    // Report-only, opt-in, zero cost when unset. See
+    // `ir::validate::validate_ctor_lowering` for the class and for why a
+    // source-text ratchet on the `semantic/rewrite.rs` gate would count
+    // costumes rather than what reached the IR. Core #6's ladder:
+    // env-gate → burn down → fatal; this is rung one, and the census
+    // prints its own denominator so a zero cannot be confused with a
+    // walker that never ran.
+    {
+        let env = std::env::var("GG_VALIDATE_CTOR_LOWERING").ok();
+        if matches!(env.as_deref(), Some(m) if !m.is_empty() && m != "off") {
+            let census = crate::ir::validate::validate_ctor_lowering(&module);
+            let module_name = module.source_filename.as_deref().unwrap_or("<unknown>");
+            eprintln!(
+                "[ctor-lowering] module={} calls_walked={} not_init={}",
+                module_name, census.calls_walked, census.sites.len(),
+            );
+            for (f, b, i, callee, kind) in census.sites.iter().take(40) {
+                eprintln!(
+                    "  NOT-INIT @{} bb{} i{} → {} (TypeDef kind {})",
+                    f, b, i, callee, kind,
+                );
+            }
+        }
+    }
+
     let __pass_t = Instant::now();
     // Propagate directive flags to module
     module.runtime.scheduler_mode = ctx.spawn.scheduler_mode;

@@ -1,0 +1,26 @@
+# REGRESSION PIN — `newtype` over `Option[int]`, the cell that was ACCIDENTALLY
+# GREEN TWICE OVER (Core #12 / SIX-Q #6).
+#
+# WRONG BEFORE THE FIX (measured at pristine HEAD): `gg build` rc 1 on both
+# backends — the payload registered as `_0: Unit`.
+#
+# ⚠ THIS FIXTURE EXISTS IN THIS SHAPE BECAUSE ITS FIRST TWO SPELLINGS DID NOT
+# PIN ANYTHING:
+#   • Asserting `"built"` made it green under the registration-half-only
+#     compiler, which returns `none` for `Some(5)` — a LOUD BUILD FAILURE traded
+#     for a SILENT WRONG ANSWER, and the fixture could not see it.
+#   • `Option[int]` gets no drop glue, so the bad store the emitted C carried
+#     was harmless: the cell was green for a reason unrelated to what it claimed
+#     to test.
+# Reading the payload back through `is Some(x)` is what makes it a pin. Measured
+# with the STRUCTINIT HALF REVERTED: C builds rc 0 and prints `none` for
+# `Some(5)`, deterministically. Do not weaken this assertion.
+newtype NO(Option[int])
+
+void main():
+    Option[int] o = Some(5)
+    NO a = NO(o)
+    if a.0 is Some(x):
+        print(x)
+    else:
+        print("none")

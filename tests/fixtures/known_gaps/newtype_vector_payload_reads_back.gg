@@ -1,0 +1,31 @@
+# REGRESSION PIN — a `newtype` over a GENERIC payload, both halves of the fix.
+#
+# WRONG BEFORE THE FIX (measured at pristine HEAD):
+#     C and LLVM → `gg build` rc 1
+#     LLVM `llc`: "void type only allowed for function results: load void, ptr"
+#     C:          -Wint-conversion, the payload pointer truncated into `_0: Unit`
+#
+# TWO INDEPENDENT DEFECTS, and this cell reddens on EITHER revert:
+#   (1) REGISTRATION — `register_newtype` called the NON-registering
+#       `mapper.map_ast_type(...)` (= `try_map_ast_type(ty).unwrap_or(UNIT_TYPE)`),
+#       so `Vector[int]` was never registered and `_0` lowered to `Unit`. Its
+#       immediate sibling `register_struct` already used `map_ast_type_mut`, with
+#       a comment saying exactly why. Revert it → build rc 1 again.
+#   (2) STRUCTINIT — the construction stayed an `Expr::Call`, so it never reached
+#       `move_zero_consumed_args` and both backends re-derived it by name-match.
+#       Revert it → C traps `index out of bounds` on `a.0[1]`, LLVM rc 134
+#       `double free detected in tcache 2`.
+#
+# ⚠ (2) IS WHY (1) CANNOT SHIP ALONE. With only the registration half, this
+# program goes from a LOUD BUILD FAILURE to a bounds trap on C and a double free
+# on LLVM — up the ratified severity ladder (Core #8). Both halves land together.
+#
+# ⚠ Reads the payload back (`len()` AND an index) rather than printing "built":
+# a construction-only assertion is green on a compiler that stores garbage.
+newtype NV(Vector[int])
+
+void main():
+    Vector[int] v = [10, 20, 30]
+    NV a = NV(v)
+    print(a.0.len())
+    print(a.0[1])
