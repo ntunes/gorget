@@ -10,7 +10,7 @@
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
-| **C1** | ⭐⭐ **SCOUT DELIVERED: THE OWNER WAS RIGHT. C1 IS *HALF* OF ONE FIX — supply `Box[T]`'s missing `clone_fn` and BOTH CELLS WORK UNCHANGED, no spelling change.** Streak 0/3, brief `v2` next. | `t1329`–`t1333` |
+| **C1** | ⭐⭐ **`t0011` + `Box[T]`'s missing `clone_fn` as ONE change. Brief `v2` written, 🔵 pass 1.** Streak 0/3. | `t1329`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ⏸ ruling PAUSED. **v3 pass 1: 5 BLOCKING + 6 errata — the LAYER IS RIGHT and the prototype WORKS, but the SAFETY ARGUMENT IS FALSIFIED.** Streak 0/3, fold → `v4`. ⭐ **It found a CRITICAL: `t1393`.** | `t1394`–`t1402` |
@@ -1628,7 +1628,44 @@ ratified §3.5/D52 answer and Rust gg does not on 237 of them, GATED rather than
 subdirectory premise is FALSE HERE:** the map runs its OWN self-host lane over every cell, per-row and gated
 ⇒ **819/819 WORKS is a STRONGER same-round SH discharge than a top-level fixture would give.**
 
-### ⏸ **RULING PAUSED BY THE OWNER 2026-09-05 — `d[k](v)` IS *NOT* RULED. TREAT v3 AS UNBLOCKED-PENDING.**
+### ✅✅ RULED 2026-09-05 — **`d[k](v)` IS INDEX-THEN-CALL, BY *KIND*, AND SHADOWING IS A HARD ERROR**
+
+> *"I think we should take A — resolve by kind."* … *"Agreed, and shadow-reject as a hard error."*
+
+**THE RULE.** `expr[...](args)` resolves by **what the head NAMES**: a **type** or **generic function** ⇒
+instantiation; a **value** ⇒ **index-then-call**. ⛔ **AND A VALUE THAT SHADOWS A GENERIC TYPE NAME IS A HARD
+ERROR AT THE AMBIGUOUS SITE** — not innermost-wins.
+
+⭐ **WHY THE SHADOW-REJECT, AND WHY IT IS FREE.** Ordinary shadowing changes *which value* you get; here it would
+change **WHICH OPERATOR YOU ARE USING** — a reader could not tell construction from indexing without knowing the
+whole scope, in a language whose pitch is Python-like readability. **Measured cost: ZERO.** No `.gg` file in the
+tree shadows a generic type name with a value (the 35 apparent parameter hits are bare types in function-type
+positions, classified by the type-first syntax rule — **an indication, not a proof; the executor re-measures**).
+⚠ **`Vector[int] Vector = [1,2,3]` checks CLEAN at HEAD**, so this IS a real accept→reject change.
+
+**WHAT THE RULING BUYS AND COSTS — recorded so it is not rediscovered:**
+- ⭐ **0 rewrite fires, 0 behavioural diffs across 4909 files** ⇒ **no existing program changes meaning.**
+- ⭐ **It closes `t1393`** — the silent-accept-then-SIGSEGV cells. **The status quo is the memory-unsafe option.**
+- ⛔ **The grammar becomes RESOLUTION-DEPENDENT.** Already true of the `Call`→`StructLiteral` rewrite in the same
+  pass, so not a new CLASS of cost — but real for tooling and error recovery.
+- ⛔ **The self-host pays a price the alternatives would not:** its **parser** drivers have no `resolve.gg` or
+  `scope.gg`, so a resolution-aware disambiguation **cannot live where the three parser copies are**. Its home is
+  `resolve.gg` (**two** copies).
+- ⛔ **ggdef CANNOT MIRROR IT INTO AGREEMENT** — `elaborate_call` hard-requires a named callee, so a mirror yields
+  an **out-of-subset error, not lane agreement.** ⇒ Core #9's escape clause: **note + FILED SUBSET GAP**, and an
+  explicit statement that **no ggdef conformance fixture can pin the accept.**
+- ⛔ **The newly-accepted program LEAKS 8 B** (pre-existing, shared with the already-accepted literal-index
+  sibling). **Round close sweeps every top-level fixture; price it before landing.**
+- ⛔ **THE RULING OWES A SYNTAX-BUDGET SECTION** per the ledger's own 2026-07-18 directive — full sigil
+  inventory, newcomer cost, collisions. **That document has never been written for `[]`, and its absence is how
+  this survived from February.**
+- ⚠ **The shadow-reject is an accept→reject surface change ⇒ Core #9 binds ALL THREE LANES with a conformance
+  fixture for the FINAL state.**
+⊕ **NOT taken, and recorded so it is not re-proposed:** dropping the 516 explicit-type-arg function sites to
+"simplify". Inference covers the easy ones, but **constrained generics (`hash_of[Hashable T]`) are where explicit
+args earn their keep**, and once the kind rule lands the ambiguity is already gone.
+⛔ **`docs/define-gorget/decisions.md` IS OWNER-EDIT-ONLY — this entry is the authority until the owner records
+it there.**
 
 ⛔⛔ **RETRACTION, QUOTING ITS OWN SCOPE.** I recorded *"RULED — `d[k](v)` MEANS INDEX-THEN-CALL (owner
 2026-09-05)"* in the handover **and in commit `27d769b21`'s subject line**. **The owner then said: *"Wait, let
