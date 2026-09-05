@@ -11,6 +11,7 @@
 | **B** | 🔵 SCOUTING. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C** | 🔵 SCOUTING. **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D** | 🔵 SCOUTING. **`t1225`** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
+| **F** | 🔵 SCOUTING. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
@@ -171,6 +172,49 @@ FIX IT NOW** — the addendum only records what was measured.
   not at lowering (today the ICE comes from the Tier 2a consume-site validator — wrong layer, wrong
   diagnostic). **No design question remains; this is an implementation track.**
 
+### 🚀 TRACK F OPENED 2026-09-05 — `D40`/`D52`, THE OPTIMALITY CAMPAIGN (owner-directed, in parallel with the safety tracks)
+
+**Owner: *"Yes, open D40/D52 as a track now. I also need some help to decide on R1."*** ⇒ **The scout's SECOND
+deliverable IS the R1 material.** ⛔ **THE SCOUT DOES NOT DECIDE R1 — IT MAKES IT DECIDABLE.** R1 gates the
+EXECUTOR, not the scout, so the track runs now and waits on the ruling.
+
+⭐ **THE DESIGN IS ALREADY RATIFIED; WHAT IS MISSING IS THE BUILD.** From `docs/define-gorget/decisions.md`:
+- **`D40`** (RATIFIED 2026-07-21, recorded 2026-08-04) — return-view lazy materialization, **static provenance,
+  NEVER a runtime refcount; materialize-when-unsure, never reject.** ⚠ **"STATUS: RULED, NOT IMPLEMENTED"** —
+  the ledger itself says *"today both compilers materialise at the return boundary
+  (`ensure_owned_at_boundary` → `ReturnFromBorrow`)"*.
+- **`D52`** (RATIFIED 2026-08-30) — CoW **Rule 3 AMENDED**: a bind **materializes unless PROVABLY FREE**;
+  #13 **does** cover binds.
+
+⭐ **SO THE THREE THINGS THE OWNER ASKED TO UNIFY ARE NOT THREE PROBLEMS** — stored borrows, transient views and
+cow-cost are three **POSITIONS** where ONE unbuilt mechanism is absent. That is the prior design scout's point
+about §3.5 restated as a work plan: *"eager vs lazy is not a rival seam; it is the length of the live range."*
+
+**MEASURED AT HEAD (orchestrator) — regenerate, do not inherit:** a getter returning a struct field, called 10×,
+**clones 10× WHETHER OR NOT THE CALLER MUTATES** — no discrimination at all. Returning an **owned local** clones
+**zero**. ⇒ **the move-on-return path is correct; the VIEW-return path is unconditional.**
+```bash
+./target/debug/gg run <getter fixture> --clones=stats 2>&1 | grep clone-stats
+```
+⚠ **THAT IS ONE TYPE AND ONE SHAPE (`Dict` getters).** **Do NOT inherit "1 clone per call" as a general
+figure** — whether it is uniform across `String`/`Vector`/`Set`/nested-struct/enum-payload/`Box` is the scout's
+first deliverable, and treating it as general would be exactly the selection-as-enumeration defect this round
+keeps paying for.
+
+⚖ **R1, SHARPENED — this is what the owner actually has to rule on:** `D40` says *"materialize-when-unsure,
+never reject"*; `D52` says *"unless PROVABLY FREE"*. **Those two phrasings must agree on what "provable" means
+before ANY executor can implement either — that predicate IS the mechanism.** The scout owes the **enumerated
+set of shapes where freedom is decidable and where it is not**, each with the measured cost of being
+conservative there, **and BOTH defensible lines where two exist** — so the ruling is a line drawn through a
+table, not a definition invented in the abstract.
+
+⊕ **`t0952`'s prototype is a DATAPOINT for this track, not its scope** — the `Ref[T]`-writer fix measures
+**zero clones, zero leak** at `/tmp/recover_scout_cow_t0952_prototype.patch`, which is evidence about what the
+mechanism yields once the writer is right.
+⚠ **ACCEPTANCE IS THE OWNER'S THREE WORDS: PERFORMANT · SIMPLE · SAFE.** A model that is safe and fast but
+makes users reason about compiler internals fails *simple* — the objection that killed `Ref[T]`-by-default.
+**And perf NEVER trades against safety.**
+
 ⚖ **TWO OWNER ASKS ARE OPEN. They block the CoW work; they do NOT block the safety tracks — do not stall.**
 - **R1 — cost-axis ratification.** `docs/internals/cow-cost-contract.md` is **LEANING, not ratified**, except
   the owner-chosen knob spelling. It needs a RATIFICATION pass before any executor, not a scout.
@@ -191,7 +235,7 @@ actually read.
 ⛔ **THE CLONE-BAND ANCHORS WERE RE-SEEDED AT THIS ROUND'S OPEN** (date 2026-09-05, one sha, values
 unchanged — R49 moved the clone meter not at all). `clone_band_anchor_is_reseeded_before_work_resumes` is the
 gate that enforces it; do not let it drift.
-⛔ **FIRST UNISSUED `todo/` ID: `t1362`.** Allocate a private disjoint block per executor (MA-3b).
+⛔ **FIRST UNISSUED `todo/` ID: `t1372`.** Allocate a private disjoint block per executor (MA-3b).
 
 ⚠ **THE ONE THING R49 PAID FOR REPEATEDLY, AND THE ONE THING TO CARRY:** **A SELECTION PRESENTED AS AN
 ENUMERATION.** It fired on a constant censused without the branch that moved it · on figures inherited rather
