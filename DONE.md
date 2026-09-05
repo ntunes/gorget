@@ -670,6 +670,12 @@
   DISJOINT PARTITION with zero overlap** — the same structure the pre-launch composition check found, now
   reproduced on the committed set rather than on throwaway cells. The only rows green under every revert are
   the three straight-line twins, which is what a negative control is for.
+  ⚠ **ONE NAMED OMISSION, RECOVERED AT ROUND CLOSE AND FILED AS `todo/t1450`.** The executor brief named it —
+  *"`Select` was NOT RUN; covered STRUCTURALLY (same shared hook), not BEHAVIOURALLY"* — and it reached no
+  durable home, so it would have died with the brief. Regenerate: `grep -ic select
+  spectests/run/cow_scope_carried_sever*.gg` → **0**. It does not weaken *"the fixture set has no hole"*, which
+  is a claim about the 31 rows and their reverts; it marks the one construct where the coverage argument is
+  *"it goes through the same hook"* rather than *"a row goes red"*.
   ⭐ **THE COMPREHENSION CELL EXISTS BECAUSE THE FIRE COUNT WAS ZERO.** The comprehension surface is **5 of the
   8** loop-hook call sites; the 10 existing `cow_comprehension_*` fixtures are a valid no-regression control
   that **exercises the widened filter not at all**. *"Name the omission"* was not an available disposition.
