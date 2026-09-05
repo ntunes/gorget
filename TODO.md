@@ -82,7 +82,44 @@ corrections were to filed TEXT only and are **applied at `36e9f57eb`; ⛔ MERGE 
 predates this branch's `TODO.md` figure-spelling fix. The executor proved it by reverting to the pristine
 parent and getting the identical failure. **It goes green at merge because `TODO.md` comes from THIS side —
 verify that after merging rather than assuming it.**
-### 🎯 R50's HEADLINE IS THE **CRITICAL MEMORY-SAFETY SET** (owner-directed 2026-09-05)
+### 🧭 THE PROJECT PIVOTS — OWNER DIRECTIVE 2026-09-05, verbatim:
+> *"We have been working on making gorget work (safety), now we want to start making it fast and optimal too.
+> Implicit CoW clones as if manually written by an expert engineer is the end goal of gorget."*
+
+⭐ **THAT IS THE END GOAL, not a nice-to-have.** It sharpens the standing charter (*implicit clones must be AS
+GOOD AS the best hand-written; excess is a CHARTER BREACH*) into a **phase**: the safety campaign has been the
+work; **optimality is now the direction of travel.**
+⛔ **THE ORDER IS FIXED BY THE OWNER: finish the safety debt FIRST, then move on the two CoW plans.**
+
+**R50's SCOPE, owner-directed:**
+1. **The CRITICAL memory-safety set** (below).
+2. ⭐ **ALL R49-DEFERRED TRACKS — explicitly including Track S-a2's deferred half, `t1225`.**
+3. **Then** the direction of travel: optimal-implicit-clone via the two plans.
+
+⚠ **MEASURE IT BEFORE YOU PLAN IT — the scope is bigger than one round.** Regenerate:
+`for f in todo/t1*.md; do case "$(grep -m1 '^filed' $f|cut -d'"' -f2)" in 2026-09-0[3-5]) echo $f;; esac; done | wc -l`
+→ **72 open items filed by R49, 26 of them HIGH**, plus the **5 CRITICAL** (a disjoint set — none is R49
+inflow). **A round runs 4-6 tracks.** ⛔ **So R50 CANNOT close all of it, and pretending otherwise is how a
+round ships a scoped-down result while claiming a complete one.** ⭐ **Sequence it: CRITICALs + the 26 R49
+HIGHs first; the LOW/MED hygiene tail is bulk-graduation work (Core #4 favours class-fixes over
+instance-fixes, and much of that tail IS one class).** Report the split to the owner rather than deciding it
+silently.
+
+⭐ **THE TWO PLANS, and what each needs before an executor:**
+- **`docs/internals/cow-transient-view-model.md` — the LEGALITY axis. `RATIFIED-UNBUILT`.** `D41` is ruled
+  (views internal to builtins only, **no user-visible `Ref[T]`**, user methods return owned, closures are the
+  sanctioned mutate-through path); owner ruled **no stored borrows** and shelved `a = &f()`. **Contestable:**
+  user-writable `Ref[T]` returns + view-of-self. **Measurement-gated:** the #13 read-clone elision. **One
+  OPEN:** prove type-driven builtin descent covers every case the current mechanism does.
+- **`docs/internals/cow-cost-contract.md` — the COST axis, `t0538` HIGH.** Knob spelling owner-chosen
+  2026-07-28; **the rest is LEANING, not ratified.** ⛔ **It needs a RATIFICATION pass before an executor,
+  not a scout** — that is an owner-ask class, and the pivot makes it the gating one.
+⊕ **A cleared blocker worth knowing:** `t0544` was RULED 2026-08-30 as **`D52` — *"materializes unless
+provably free"***, which settled that #13 covers binds and **AMENDED CoW Rule 3**.
+⚠ **`t1065` (LOW) first, it is cheap and it misleads:** the legality note's header says `RATIFIED-UNBUILT`
+while **part of it is BUILT at HEAD** — a scout will otherwise re-implement something.
+
+### 🎯 R50's FIRST HALF IS THE **CRITICAL MEMORY-SAFETY SET** (owner-directed 2026-09-05)
 ⛔ **FIVE CRITICAL items are open, EVERY ONE memory-safety, EVERY ONE reachable from SAFE, SPEC-DOCUMENTED
 SYNTAX THAT `gg check` PASSES CLEAN.** This outranks the guard-hygiene cluster R49 produced — that is fill-in
 work, not a headline.
