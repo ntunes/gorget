@@ -30840,8 +30840,10 @@ fn rmap_rows() -> Vec<Vec<String>> {
 /// as `todo/t1360` in a second instrument, and adding 820 rows to an
 /// unreconciled manifest is how a topic quietly measures 640.
 ///
-/// The reverse direction was unguarded too, and was **non-empty already**: 1039
-/// cell files against 1038 rows. The orphan is a legitimate topic-28 helper, so
+/// The reverse direction was unguarded too, and was **non-empty already**: at the
+/// time this landed, 1039 cell files against 1038 rows (regenerate today with
+/// `ls tests/fixtures/robustness_map/cells/*.gg | wc -l` against
+/// `awk -F'\t' 'NR>1' tests/fixtures/robustness_map/MANIFEST.tsv | wc -l`). The orphan is a legitimate topic-28 helper, so
 /// the fix is a DECLARED allowlist rather than a deletion — a helper is a file
 /// the map compiles as part of another cell, never a cell of its own.
 ///

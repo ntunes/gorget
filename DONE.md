@@ -1,3 +1,11 @@
+- [2026-09-05] ⚠ **NAMED OMISSIONS FROM `t1385`'s CLOSURE (R50 Track K), recorded here because a commit
+  body is the least durable place for them.** Three of the track's atoms are pinned by **NOTHING**: the
+  remediation-hint correction, the two doc-prose rewrites, and the four `robustness_map.py` unit-message
+  fixes. Reverting any of them is GREEN under every gate. They are prose and message text, so this is
+  expected rather than a defect — but *"no row pins it"* has to be written down, or the next reader
+  assumes the suite covers it. ⊕ The fourth unpinned state, `{seed reverted AND allowlist reverted}`, is
+  recorded durably in the lint's own doc comment: its pin is CI's `robustness_map.py --lanes all`.
+
 - [2026-09-05] **`t1385` CLOSED — 93 CELL-LANES WERE MEASURED EVERY CI RUN AND SCORED AGAINST NOTHING; THE
   ALLOWLIST THAT HID THEM IS NOW EMPTY, CLOSED AND RATCHETED BOTH WAYS (R50 Track K).** 31 `hof_*` rows
   carried an empty baseline on `selfhost`/`asan`/`ggdef`, so `robustness_map.py`'s `if base:` scoring branch
@@ -40,10 +48,10 @@
   without that skip the assertion is RED ON ARRIVAL on both controls, whose `c` column holds the literal
   `CONTROL`, not a baseline.
   **FOUR RED-DEMOS, EACH ANCHORED BY LINE (Core #13), fire count 1 each:** re-add one seeded name at
-  `lints.rs:30901` → RED at the LEGACY set-equality (not at `ungated` — proving the NEW assert is what
-  catches that revert); add a real cell name at `:30872` → RED at the helpers set-equality in the direction
+  re-add a seeded name at `grep -n 'const LEGACY_UNBASELINED' tests/lints.rs` → RED at the LEGACY set-equality (not at `ungated` — proving the NEW assert is what
+  catches that revert); add a real cell name at `grep -n 'const DECLARED_HELPERS' tests/lints.rs` → RED at the helpers set-equality in the direction
   that did not exist before; write `WORKS` into field 7 of `MANIFEST.tsv:2` → RED at the control assert;
-  drop the `RMAP_COL_C` skip at `:31062` → RED on both controls.
+  drop the `RMAP_COL_C` skip at `grep -n 'col != RMAP_COL_C' tests/lints.rs` → RED on both controls.
   ⛔ **THE FULLY-REVERTED STATE IS PINNED BY NO `cargo test` ROW, AND THAT IS NOW WRITTEN IN THE LINT'S OWN
   DOC COMMENT** rather than in a commit message that outlives nothing. Measured: with the seed reverted AND
   the 31 names re-listed, `cargo test --test lints` is **rc 0, 237 passed**, while
