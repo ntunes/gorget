@@ -55,6 +55,24 @@ namespace is **blind to the two spellings most likely to be shadowed by a callab
 grep -c '\.md$'`). Using 887 implied 29 closures against 12 measured deletions. **Measure the baseline from
 the TREE, never from the previous round's line.**
 
+**BATTERY LEDGER — rc off the BARE command every time:**
+| gate | rc | note |
+|---|---|---|
+| C sweep (run 1) | **101** | 2788 passed · 1 failed · 6070s. ⚠ **its task notification said "exit code 0"** — that was the wrapper's trailing `tail`. |
+| ↳ `self_host_runtime` after fix | **0** | 1376 passing · 0 regressed · 2 passed/0 failed |
+| `self_host_bootstrap_fixed_point` | **ok** | inside the sweep, at the DEFAULT 600s stage timeout — no 1800 needed on a quiet box |
+| LLVM sweep | ⏳ | running (`--release`) |
+| C sweep (run 2) | ⏸ | **OWED** — see below |
+| sanitize · robustness · cargo targets · script gates | ⏸ | after LLVM |
+
+⛔ **THE C SWEEP IS OWED A SECOND RUN AND THIS IS NOT OPTIONAL.** Run 1 ended rc 101; the fix was one
+`.out` expectation file and `self_host_runtime` was re-verified rc 0 in isolation — **but the sweep has never
+been OBSERVED GREEN IN A SINGLE RUN AT THE FINAL TREE.** A per-test re-verify is not a battery. The delta is
+one test-expectation file that cannot influence another test, so the second run is expected green; expected is
+not measured.
+⊕ **The A2-class is DISCHARGED for this round by construction:** the sweep IS the detector for
+stale-snapshot-after-fixture-edit, it ran over all 1376, and it found exactly one. No separate audit needed.
+
 **BATTERY ORDER (C and LLVM never simultaneously — owner):** C sweep → LLVM sweep → `self_host_bootstrap_fixed_point`
 (**mandatory this round**: J changed `src/backend/c/runtime/runtime_array.c`, an `embed_file` input, and L
 changed `self_host_lowerer/lir_codegen.gg`) → `sanitize_sweep.sh` → `robustness_map.py --lanes all` →
