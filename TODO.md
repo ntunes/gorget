@@ -67,9 +67,9 @@ if it is the same one, the track FIXES it (Core #4).
 ⚠ **A stale-instrument trap the scout hit: the cached `/tmp/*_sh_driver` binaries are STALE** — self-host
 source moved after them. **Rebuild the driver before believing any SH result.**
 
-### ⚖ OWNER ASK — THE RATIFIED LEDGER CONTRADICTS ITSELF (Track B scout, verified verbatim by the orchestrator)
+### ✅ THE LEDGER SELF-CONTRADICTION IS FIXED (owner-directed 2026-09-05: *"Fix the ledger according to language-design"*)
 
-⛔ **`docs/define-gorget/decisions.md` IS OWNER-EDIT-ONLY. NO AGENT TOUCHES IT. This is recorded, not acted on.**
+⛔ **`docs/define-gorget/decisions.md` IS OWNER-EDIT-ONLY — this edit was made ON EXPLICIT OWNER INSTRUCTION and is the ONLY reason an agent touched it. The standing rule is unchanged.** The closure-capture entry now carries the §3.5-derived three-way answer, with the superseded 2026-09-04 text retained inline for the record. **`todo/t1067` carried the same false premise in three bullets and has been corrected too.**
 
 `decisions.md:1605` makes **three** claims about a closure capturing a `Callable`/`Box`/`Owned`/`Task`/`Guard`:
 *"clone breaches the carve-out, **move breaches it under D31**, and **reject cannot be spelled until D7's
