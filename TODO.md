@@ -770,6 +770,35 @@ views"* — **a size criterion I INVENTED and attributed to §3.5, which says re
 size.** The charter objection also fails: under reject the user hand-writes `d.keys()` first, **the same O(n)
 copy, merely visible**; beating it needs ALGORITHM RESTRUCTURING, and the charter governs **clone placement**.
 
+⛔⛔ **CORRECTION 2026-09-05 — I TOLD THE OWNER CONDITION 2 WAS "THE BY-VALUE HALF OF A RULE ALREADY
+HALF-SHIPPED". THAT IS FALSE, AND IT MAKES R2's PREREQUISITE BIGGER THAN I REPRESENTED.**
+
+I quoted the pinned fixture's header — *"the resource-element twins of this shape ALREADY write through"* — and
+carried it as framing. **Measured: that "twin" is a FIELD WRITE, a different mechanism.**
+`tests/fixtures/cow_for_amp_resource_elem_writethrough.gg` is `x.v = x.v + 100`. ⇒ **it is not a twin of
+`i = i * 2` at all.**
+
+**Same type, same `&`, same loop — the orchestrator ran this at HEAD:**
+
+| shape | result |
+|---|---|
+| **field write** `x.v = x.v + 100` | **101** ✅ writes through |
+| **whole-binding rebind** `x = Rec("z", 999)` | **1** ⛔ silently discarded |
+
+⇒ ⭐ **THE DISCRIMINATOR IS THE MUTATION *SHAPE*, NOT THE ELEMENT TYPE.** And the reviewer's full axis, measured
+both sides of C2's prototype, shows **ZERO cells of the whole-binding-rebind axis write through — at ANY element
+type, before OR after the fix**: `Vector[int]` `1/2/3` · `Vector[Vector[int]]` `1/3` · struct `aa/bb` ·
+`Vector[String]` rc 134 → `aa/bb` · `Deque[String]` rc 134 → `aa/bb`. **The only cells that write through are
+FIELD writes.**
+
+⇒ ⛔ **R2's CONDITION 2 IS NOT "FINISHING A HALF-SHIPPED RULE" — IT IS A CLASS WITH NO WORKING PRECEDENT
+ANYWHERE IN THE TREE.** The ruling stands; **its prerequisite is larger than I costed it.**
+⛔ **AND C2 DOES NOT DISCHARGE IT — NOT PARTIALLY, NOT AT ALL.** Three binaries as positive controls: the pinned
+fixture asserts `11/12/13`; HEAD gives `1/2/3`; the full prototype gives `1/2/3` — **byte-identical**. It
+**cannot** move: every hunk is String-gated (`borrow_view_fn: Some` at exactly one site, String only; the tag
+write sits inside `is_string_type`; the drop-reg change is a no-op for non-String).
+⊕ **The fixture header owes the same correction.**
+
 **TWO CONDITIONS — ⚖ OWNER RATIFIED THEM VERBATIM: *"I agree with your conditions."*** They are therefore part of the ruling, not advice:
 1. ⛔ **`implicit_clones=warn` SHIPS WITH IT, NOT AFTER.** The rule **UN-REJECTS** — a compile error becomes a
    silent O(n) **inside a loop**, the worst place for an invisible cost. ⭐ **Track F's scout reached the same
