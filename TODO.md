@@ -13,7 +13,7 @@
 | **C1** | ⛔ **v3 pass 1: 4 BLOCKING — *"half"* names THREE changes, and `clone_fn` ALONE re-enters v2's blocked defect through ORDERING.** Fold → `v4`. Streak 0/3. | `t1329`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D0′** | ⚖ **NEW OWNER ASK — the shadow-reject's TRIGGER SITE is unspecified, and the two readings are DIFFERENT SEMANTICS.** v4 pass 1: 5 BLOCKING. Streak 0/3. | `t1394`–`t1402` |
+| **D0′** | ✅✅ **TRIGGER SITE RULED: reading (a) — the shadowing DECLARATION fails.** Fold ruling + 5 blocking → `v5`. Streak 0/3. | `t1394`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | ✅✅ **G** | **INTEGRATED** (9 commits, `2d647456c`). 819 cells + 3 guards + 4 filings. Gates on the merged tree: lib 1187, lints **237**, gen-check, known-gaps census — all green. | `t1384`–`t1392` |
@@ -1367,6 +1367,42 @@ breach stands — the DIAGNOSTIC'S OWN fix-it is broken — but say that.**
 refuses to build at all is **definitionally new**.
 ⭐ **VERIFIED: the killer sentence is LIVE**, the `.clone()` C is **byte-identical (3906 lines each)**, all five
 of my other errata land, and **the four `is_box: true` sites are LINT-PINNED** — a real readiness-row-2 witness.
+
+### ✅✅ RULED 2026-09-05 — **READING (a): THE SHADOWING DECLARATION FAILS.** *"`Vector` is a type, must not be used as identifier."*
+
+⚠ **AND A CLARIFICATION THE OWNER HAD TO PULL OUT OF ME:** `Vector[int] v = [1,2,3]` is **NEVER AFFECTED** — the
+rule asks **only** whether the *variable's NAME* also resolves as a type. `v` resolves as nothing; the
+`Vector[int]` on the left is the **type ANNOTATION**, a type POSITION the rule never inspects. ⛔ **My example
+differed by one token and read as if normal declarations were at risk. Say the rule in terms of the NAME, never
+by showing a declaration.**
+
+### 🔎 ARCHAEOLOGY (owner-requested) — **IT WAS NEVER ALLOWED ON PURPOSE. IT FALLS OUT OF A DESIGN BUILT FOR SOMETHING ELSE.**
+
+⭐⭐ **THE MECHANISM IS TWO DISJOINT NAMESPACES, AND ITS STATED PURPOSE IS UNRELATED TO BUILTINS.**
+`Scope` keeps `types` and `values` as **separate maps** (`grep -n "two disjoint name maps" -A 8
+src/semantic/scope.rs`), *"so that e.g. `Error` can live simultaneously as a user-defined trait AND the
+`Result.Error` variant constructor — the former looked up at type positions, the latter at expression /
+pattern positions."*
+⇒ **a value named `Vector` goes in the VALUE map while the type sits in the TYPE map. THEY NEVER MEET** — no
+duplicate-definition check fires, and **nothing ever had to decide the question.**
+
+⭐ **WHAT THE DESIGN *DID* ANTICIPATE — AND HANDLED CAREFULLY — IS A *TYPE* SHADOWING A BUILTIN TYPE.** Builtins
+register as **dummy-span `Import` placeholders** that *"can be replaced by anything"*, and a user `struct
+Vector` that replaces one gets a **DISTINCT DefId** with `deref_wrapper_kind: None` and
+`has_intrinsic_equality: false` — **explicitly so it cannot inherit builtin behaviour**; the comment names the
+bug that would otherwise follow (*"the garbage-0 miscompile"*). ⇒ **that half is DESIGNED. It simply never
+contemplated a VALUE taking the name, because a value cannot carry those flags and never needed to.**
+
+⭐⭐⭐ **THE DEEPER POINT, AND IT EXPLAINS WHY THIS SURFACES ONLY NOW: TWO DISJOINT NAMESPACES ARE SOUND EXACTLY
+AS LONG AS NO OPERATOR SPANS BOTH. `expr[...]` DOES** — subscript in the value namespace, instantiation in the
+type namespace. **The collision was invisible until `[]` began resolving BY KIND.**
+
+⊕ **AND THE RULING CONTINUES AN EXISTING REPAIR LINE RATHER THAN OPENING ONE.** *Snag #29 follow-up #2
+(2026-05-10)* narrowed a **sibling clause** for exactly this class: a permissive rule let a user definition
+silently replace a same-named import, which *"produced wrong resolution at use sites"*; the fix made **both
+orders error consistently — *"the user must rename one or remove one."*** **Same remedy, one namespace over.**
+⇒ **`struct Vector` shadowing the builtin STAYS LEGAL AND SAFE (designed). `Vector[int] Vector = …` becomes an
+ERROR.**
 
 ### ⚖⚖ OWNER ASK — **WHERE DOES THE SHADOW-REJECT FIRE?** THE TWO READINGS ARE DIFFERENT SEMANTICS
 
