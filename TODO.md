@@ -20,12 +20,50 @@
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED. ⭐ **BOTH GATES NOW CLEAR** — F1r INTEGRATED, and **R1 IS RULED (Line A, signature-only, 'for now')**. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** ⏸ **QUEUED BEHIND THE SAFETY SET** per the owner's fixed order, not blocked. | `t1362`–`t1371` |
 | ✅ **H** | **`t1387`** — the map's KEY has no drop discipline. **EXECUTOR RETURNED 2026-09-05** (`c7cec057b`+`84f0b2b1b`) → 🔵 **output-review**. ⭐ **It found FOUR defects in my brief and filed `t1409`/`t1410`/`t1411`.** | `t1409`–`t1417` |
-| **K** | **`t1385`** — the SEED HALF. ✅ **pass 2 SIGNED OFF the design** → 🔵 **pass 3**. **Streak 1/3.** ⭐ **H + K ARE THE ONLY TWO THINGS BETWEEN HERE AND A GREEN `--lanes all`.** | `t1432`–`t1437` |
+| **K** | **`t1385`** — the SEED HALF. ✅✅ **passes 2 AND 3 SIGNED OFF** → 🔵 **pass 4 (confirming)**. **Streak 2/3.** ⭐ **H + K ARE THE ONLY TWO THINGS BETWEEN HERE AND A GREEN `--lanes all`.** | `t1432`–`t1437` (all free — `t1432` NOT filed) |
 | **J** | **`t1407`** — `Vector.fill`, **TWO defects**. 🔵 **RE-SCOUT (J2) measuring the HYBRID.** **Streak 0/3.** ⛔ **Pass 1 killed `v2b`: its snapshot is the `save/restore` READ-SITE shape, and its `memset` has NO possible RED row.** | `t1421`–`t1427` (`t1420` spent) |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**. 🔵 **SCOUT LAUNCHED 2026-09-05.** ⭐ **K's triage handed it a TOTAL enumeration for free: 21 of 22 sanitizer rows are exactly this frame**, + 13 already-baselined siblings. **93 of 301 allowlist rows carry `closure_env_alloc`; only 17 cite the item.** | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ✅ K's PASS 3 SIGNED OFF — **AND CAUGHT TWO THINGS THAT WOULD HAVE SHIPPED BROKEN, BOTH MINE**
+
+**Streak 2/3.** Nine non-blocking; the design is untouched.
+- ⛔⛔ **MY PRESCRIBED ASSERT WAS RED ON ARRIVAL.** Both CONTROL rows carry **four** empty lane columns, so the
+  naive unbaselined set is **33, not 31**, and the set-equality fails the moment the list is emptied. ⛔ **And
+  the file DOCUMENTS THIS EXACT TRAP 130 LINES ABOVE** — *"written as a by-name allowlist this assertion goes
+  red the moment anyone adds a control … red on arrival, from its own required precondition."* **I prescribed
+  the form and dropped its precondition.** Fix: build the set with the same `CONTROL` predicate the sibling
+  loop already uses, never a name list.
+- ⛔ **MY RETRACTION WAS ONE SENTENCE TOO WIDE — the rule I wrote this round, broken by me twice now.** The
+  retracted block had two clauses; the second is genuinely dead, but the first (*"if the ggdef half is bigger
+  than measured, come back and say so"*) **is still TRUE for K2**. ⇒ **retract clause (ii); clause (i) is
+  TRANSFERRED, not retracted.**
+- ⛔ **MY Core #15a SLIP, ALSO TWICE:** the MA-5 grep I quoted returns **six** paths, not four. **The verdict
+  survives** — the three extras are a different manifest, a `.gitignore` line, and a cell-count counter K does
+  not move (K changes lane COLUMNS, not the cell count) — **but the sentence did not regenerate its own claim.**
+- ⛔ **AND I MIS-ATTRIBUTED THE STALE PROSE.** *"The 31 named exemptions … predate those lanes"* is in the
+  **FUNCTION's rustdoc** — the paragraph a reader hits first — **not** the const's. Following me literally
+  would have fixed the const and left the visible claim standing: **Core #14 rot surviving the round that
+  retired it.**
+- ⭐ **AND MY `DECLARED_HELPERS` SPLIT WAS A Core #4 DODGE.** *"A different list about helpers"* is a
+  **subject-matter** distinction; **disjoint means a different CLASS**, and the class is **Core #6's "a ratchet
+  needs BOTH directions."** Three declared allowlists in ONE function, one ratcheted both ways and two not.
+  ⇒ **folded in, `t1432` NOT filed.** Today a stale helper entry **pre-authorises the next orphan that takes
+  the name** — verbatim the hazard the sibling list's own message describes.
+- ⛔ **A NAMED OMISSION HAD NO DURABLE HOME.** The `{¬seed ∧ ¬delete}` revert is pinned by **no `cargo test`
+  row**, and I told the track to say so *in the commit message* — but `t1385` is `git rm`'d this round, so the
+  omission would die with it. ⇒ **it lands in the rewritten lint doc comment instead.**
+- ⚠ **I NAMED THE RARER LOAD HAZARD.** Seeding at `good` then measuring non-good is a permanent unfoldable
+  REGRESSION — real, but the **LIKELY** artefact is the mirror: **a lane times out, seeds a false non-good, and
+  is later foldable as PROGRESS, so it NEVER REDS ANYTHING.** Both directions now stated.
+- ⭐ **SIX-Q #4, a case with NO SUBJECT: a CONTROL row with a POPULATED lane column.** The runner `continue`s
+  before the lane loop, the controls' own assert checks only the NAME set, and no widening of the exemption
+  rule reaches it. **Vacuous today — but silence is not the disposition.**
+- ⭐ **SIX-Q #6: `hof_dict_filter_untyped`'s own note says `accidentally correct at HEAD for the same Str/int
+  reason`** — and it is **one of the three rows taking a knowingly-false `ggdef=REJECTED`.** **Two soft-false
+  signals on one row; the commit must say the word.**
 
 ### ✅ K's PASS 2 SIGNED OFF — AND PROVED SIX-Q #3 **STRUCTURALLY**, WHERE PASS 1 HAD ONLY MEASURED IT
 
