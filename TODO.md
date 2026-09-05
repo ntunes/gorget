@@ -451,6 +451,38 @@ invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
 
+### ⭐ THREE FOLD RULES LANDED IN `AGENTS.md` — THEY WERE LIVING ONLY IN A HARNESS PROMPT
+
+**`AGENTS.md` says it in its own words: *state every excellence-system rule HERE, never only in one harness's
+private memory.*** These three were earned this round and were living exactly there. **Each SHARPENS AN
+EXISTING RULE IN PLACE — no second dated copy, no sixth readiness row (the FIVE are CAPPED):**
+
+- **Readiness row (4)** now reads *"the GUARD FAILS when the fix is reverted — **and a fixture set is complete
+  only when EVERY PARTIAL REVERT turns a row RED: enumerate the reverts, name the row that pins each**"*.
+  ⇒ **a revert with no pinning row is a HOLE, not a footnote.**
+- **The FOLD paragraph** gains: ⛔ ***a fold may only assert what a command in that same fold REGENERATES*** — a
+  figure quoted from a scout is NOT exempt, and the instrument must be able to SEE the class it is asked about;
+  ⊕ ***a retraction quotes the retracted claim's OWN scope*** — **retract wider and you delete a true claim;
+  retract narrower and the false one still stands.** (Both measured on my own folds this round.)
+- **The `/tmp`-only paragraph** gains: ⚠ ***a NAMED OMISSION is durable content*** — *"not measured"*,
+  *"scoped enumeration"*, *"lane not run"* noted only in a brief **dies WITH the brief at round close**, and
+  *nothing recorded what was never run* **is how a family gets declared closed.**
+
+**Verify:** `sed -n '286p;288p;312p' AGENTS.md`. Size ratchet + heading inventory green (`cargo test --test lints`,
+rc off the bare command); **no new heading**, so `agents_md.heading_count` does not move.
+
+### ⚠ F1r's EXECUTOR PARKED ITSELF ON A WAITER THE HARNESS DOES NOT TRACK
+
+It stopped with *"waiting on the self-host lane… I'll resume when the background waiter fires"* — **but a
+background waiter is not a harness-tracked child, so nothing was ever going to wake it.** ⭐ **Its build IS
+live** (rustc on `src/lib.rs`, pids confirmed in ITS worktree), and **its tree carries substantial uncommitted
+work** ⇒ **DO NOT PRUNE IT.** Resumed by message, told to poll its OWN run in the foreground, to checkpoint
+before anything else, and — ⛔ **because its tree shows `TODO.md` dirty from a snapshot taken at spawn** — **not
+to stage `TODO.md`, which would revert every handover write since.**
+⚠ **THIS IS THE SPAWN-FREEZE HAZARD IN ITS SECOND FORM:** the known one is *a reviewer reports a just-filed item
+as missing*; this one is *an executor silently reverts the session state doc*. **Same cause, and every brief
+already states the base commit — the missing half is telling executors which files are NOT theirs.**
+
 ### ⛔⛔ D0′ IS **REBUILT**, NOT AMENDED — ITS PRESCRIBED FIX REDS A **COMMITTED, WIRED** FIXTURE ON BOTH BACKENDS
 
 ⭐⭐ **THE ROUTE WAS WRONG, AND ONLY A BUILD COULD SHOW IT.** `tests/fixtures/dict_box_callable.gg` — top-level,
