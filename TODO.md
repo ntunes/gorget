@@ -7,8 +7,8 @@
 **ROSTER — five tracks, each with a private disjoint ID BLOCK (MA-3b; a track NEVER picks its own):**
 | track | scope | ids |
 |---|---|---|
-| **A** | **`t1077`** ✅ SCOUTED · pass 1 BLOCKED (4) → folded → 🔵 pass 2. **Streak 0/3.** **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
-| **B** | 🔵 SCOUTING. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
+| **A** | **`t1077`** ✅ SCOUTED · passes 1+2 BLOCKED → 2 folds → 🔵 pass 3. **Streak 0/3.** **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
+| **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C** | 🔵 SCOUTING. **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D** | 🔵 SCOUTING. **`t1225`** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | **F** | 🔵 SCOUTING. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
@@ -66,6 +66,27 @@ undefined typedef · `t1312` `s06` (nested box through a struct FIELD) **only if
 if it is the same one, the track FIXES it (Core #4).
 ⚠ **A stale-instrument trap the scout hit: the cached `/tmp/*_sh_driver` binaries are STALE** — self-host
 source moved after them. **Rebuild the driver before believing any SH result.**
+
+### ⚖ OWNER ASK — THE RATIFIED LEDGER CONTRADICTS ITSELF (Track B scout, verified verbatim by the orchestrator)
+
+⛔ **`docs/define-gorget/decisions.md` IS OWNER-EDIT-ONLY. NO AGENT TOUCHES IT. This is recorded, not acted on.**
+
+`decisions.md:1605` makes **three** claims about a closure capturing a `Callable`/`Box`/`Owned`/`Task`/`Guard`:
+*"clone breaches the carve-out, **move breaches it under D31**, and **reject cannot be spelled until D7's
+capture list exists**."* **Two are measurably false:**
+- **MOVE.** D31 Addendum-2 — the ratified text itself, `sed -n '1516p' docs/define-gorget/decisions.md` —
+  says *"full strict governs CONTRACTUAL consumption only — bare values at non-`!` consuming positions
+  (push/ctor/return/**capture**) still **auto-move-when-dead** per CoW (unobservable optimization, not
+  contract; no sigil marks it)."* The 2026-09-04 capture ruling agrees. **A move creates no second owner, so it
+  cannot breach a SINGLE-OWNER carve-out.**
+- **REJECT.** Capturing `h.f` is **already rejected today** — `error[E_MoveWithoutOperator]: … 'h.f' is a
+  single-owner type` — and the fix-it it recommends **works**: `c6 = c5.clone()` then capture, `c5` still live
+  → rc 0, `41\n41`, both backends, matches ggdef, no UAF.
+
+⇒ **`t1067`'s "all three answers are blocked" premise is FALSE, and D7 gates neither the dead cell nor
+`Callable`'s live cell.** What is left for D7 is **ergonomics, not soundness**. ⚠ **The track does NOT wait on
+this** — the dead cell is unblocked by the ratified text as it stands; only the ledger's own consistency needs
+the owner.
 
 ⛔ **STANDING CONSTRAINT, UNCHANGED: the non-MATCH ceiling and the ggdef floor are at ZERO SLACK.** Any track
 adding a non-MATCH fixture reds immediately. **Own new fixtures must COMPILE + MATCH on self-host the SAME
