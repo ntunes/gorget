@@ -7,7 +7,7 @@
 **ROSTER — five tracks, each with a private disjoint ID BLOCK (MA-3b; a track NEVER picks its own):**
 | track | scope | ids |
 |---|---|---|
-| **A1** | **`t1077` ONLY** — **4 passes; design signed off. 🟢 EXECUTOR LAUNCHED 2026-09-05.** | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
+| ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ✅ SCOUTED → needs brief. **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
@@ -905,8 +905,10 @@ while **part of it is BUILT at HEAD** — a scout will otherwise re-implement so
 ⛔ **FIVE CRITICAL items are open, EVERY ONE memory-safety, EVERY ONE reachable from SAFE, SPEC-DOCUMENTED
 SYNTAX THAT `gg check` PASSES CLEAN.** This outranks the guard-hygiene cluster R49 produced — that is fill-in
 work, not a headline.
-- **`t1077`** — reading through a nested `Box[Box[T]]`: **SIGSEGV on C, SILENT WRONG ANSWER on LLVM**, `gg
-  check` clean, both lanes at HEAD. *(found 2026-09-04 by R49 Track M1 while writing a refusal message)*
+- ✅ ~~**`t1077`** — reading through a nested `Box[Box[T]]`~~ **CLOSED 2026-09-05 by Track A1 (read half).**
+  ⚠ **"READ FIXED, LEAK NOT"** — the leak half is **`t1309`**, mechanism recorded **UNDETERMINED** and blocked
+  on `t0096`. **Do not read this as a clean close of a CRITICAL.** ⊕ The fix also surfaced `t1310` (**CRITICAL**,
+  self-host: the constructor SPELLING changes memory safety), `t1311` and `t1313`.
 - **`t1067`** — a closure that **CAPTURES ANOTHER CLOSURE** reads freed memory: **rc 0 with SILENTLY WRONG
   OUTPUT**, heap-use-after-free under `--sanitize`. *(found by R49 Track L's pass-2 review)*
 - **`t0011`** — `Box[T](struct.field)` takes a **SHALLOW** clone when the field transitively owns `Box`es →
