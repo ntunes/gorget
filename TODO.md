@@ -4,6 +4,25 @@
 ### 🚀 ROUND L (R50) IS OPEN — 2026-09-05. HEADLINE: **THE CRITICAL MEMORY-SAFETY SET + R49's DEFERRED HALVES.**
 **Owner-directed.** Safety debt first; the optimality pivot follows it, not beside it.
 
+### ✅ REVERT-RULE AUDIT — **ALL TEN TRACKS PASS** (audited 2026-09-05, so R51 need not redo it)
+
+*"A fixture set is complete only when EVERY PARTIAL REVERT turns a row RED"* checked against all ten
+integrated tracks. **All ten satisfy it**, two of them in wording a keyword grep cannot see:
+- **A1 (`t1077`)** — 9 fixtures RED-verified vs a pinned pre-fix binary; the 10th is exempt **by construction
+  and says why**: it was ACCIDENTALLY correct pre-fix, so it is pinned must-stay-green (SIX-Q #6, handled).
+- **H (`t1387`)** — per-revert ALLOCATION DELTAS rather than the phrase: pristine 38 B/7 · transfer-wrapper
+  drop alone 28 B/5 · `put_cloned`'s `!__gg_hit` alone 10 B/2 · fixed rc 0.
+⚠ **MY AUDIT INSTRUMENT WAS THE WEAK PART** — it grepped for the PHRASE and reported 0 for both, which is
+Core #13 pointed at myself: a keyword probe cannot see a semantic property. **Read the two before believing a
+future audit that flags them.**
+⭐ **THE ONE FINDING WORTH CARRYING FORWARD, from C2:** its revert lattice is **NON-MONOTONE** — a SUPERSET
+revert restores the pre-fix path and **greens rows its own subset fails**. ⇒ *"revert everything and watch it
+go red"* is **NOT a valid substitute for atom-by-atom**, and a track that only does the coarse revert can
+report full coverage while pinning nothing.
+⊕ **K (`t1385`) is the model for the honest case**: it writes down the states nothing pins — *"reverting any
+of them is GREEN under every gate … but 'no row pins it' has to be written down, or the next reader assumes
+the suite covers it"* — including a fourth unpinned combination.
+
 ### ⚖ THE OWNER-ASK LEDGER FOR R50 — **SIX RAISED, ONE SURVIVES** (audited 2026-09-05)
 
 ⛔ **THE AUDIT'S OWN FINDING FIRST: two of these dissolved in conversation and the withdrawal was recorded
