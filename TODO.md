@@ -47,6 +47,34 @@ claims folded into this handover long ago. **Everything else stayed.**
 `CARGO_TARGET_DIR` for a lint; deleting it forces a full rebuild on every `cargo test --test lints`),
 `execE_01db12fc`, and `rev2_a2e446ab`. **None of them is prunable until its track integrates.**
 
+### ⚠ J's EXECUTOR STOPPED **UNCOMMITTED** MID-BOOTSTRAP — AND ITS REPORT CAUGHT A FALSE FACT ONE STEP FROM THE PERMANENT RECORD
+
+**~20 files of finished work sat in its worktree with the branch still at base.** Resumed via `SendMessage`;
+**the worktree is intact, which is the only reason it was resumable** — this is exactly why a live agent's tree
+is never pruned. **Nothing is integrable until it commits.**
+- ⛔⛔ **IT MEASURED ADDENDUM 5's ERRATUM (a) FALSE, AND I WAS ONE INTEGRATION FROM RECORDING IT PERMANENTLY.**
+  *"The LLVM lane is stdout-only, blind to the leak class"* was **true only of the SCOUT'S AD-HOC HARNESS, which
+  never passed `--sanitize`.** Built as the repo builds it, **LLVM reports the leak identically to C** — the
+  runtime is `cc`-compiled with ASan flags and only generated USER code goes through `llc` uninstrumented, and
+  `gorget_array_fill` is on the **instrumented** side. ⇒ **a false, COVERAGE-UNDERSTATING fact would have gone
+  into `DONE.md` as a named omission.** *(A named omission is durable content — which cuts both ways: a WRONG
+  one is durable too.)*
+- ⛔ **`t1421` IS A DUPLICATE OF `t1083`, AND BOTH STATED MECHANISMS WERE WRONG. THE FILING ERROR IS MINE** — I
+  filed it from the scout's report **without grepping `todo/` for the MECHANISM first**, which is the rule.
+  ⭐ **And the real mechanism is neither item's:** not an unsubstituted type parameter — **a by-VALUE type drop
+  colliding with the by-SLOT element-drop hook** — ⭐ **and `t1083`'s own discriminator (*"must also be
+  trait-equipped"*) is FALSE: `Vector[Box[int]]` emits ZERO vtable references and collides identically.**
+  ⇒ **the scope is EVERY `Vector[Box[T]]`.** Folded and corrected.
+- ⭐ **PLACEMENT RESOLVED BETTER THAN THE BRIEF PLANNED FOR: all 10 fixtures were MEASURED to compile AND MATCH
+  on self-host, so all stay top-level** — no subdirectory cells, **no `OUT` rows, no subset gaps.** ⊕ **And it
+  wired the eight droppable-element cells through `assert_gg_sanitize_clean`, so R3 and R5 are pinned INSIDE
+  `cargo test` rather than only in the 25-minute sweep** — 9 of 9 RED under the over-clone revert **while stdout
+  is byte-identical in all 8 rows.**
+- ✅ **The census gate is RED AT ITS BASE AND NOT ITS DOING** — measured by reverting its own two source files.
+  **Two `t0121` rows. Confirmed independently on my side.**
+- ⚠ **Owed to me at integration:** the handover still references `t1407` and `t1421`, both of which the diff
+  removes. **That block is mine, correctly not touched by the track.**
+
 ### 🟢 A2 LAUNCHED — **AND ITS PASS 4 RAISED THE TRACK'S SEVERITY BY MEASURING WHAT THE TITLE EXCLUDED**
 
 **Four passes, direction confirmed at every one, and pass 4 prototyped the whole design and measured it: every
