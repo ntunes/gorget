@@ -16,7 +16,7 @@
 | **D0′** | ✅ **RULED.** `v4` written — ruling + 5 blocking + 6 errata folded; 🔵 **pass 1 on v4.** Streak 0/3. ⚠ **The SHADOW-REJECT is the bigger, least-tested half.** | `t1394`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| **G** | **`fa4a76d92`** — 5 errata folded; 🔵 **final confirming pass.** ⭐⭐ **Fixing the ENUMERATION AXIS surfaced a HIGH memory-safety bug (`t1388`) and a dead flag in the generator.** | `t1384`–`t1392` |
+| **G** | **`fa4a76d92`** — final pass: **3 BLOCKING + 4 errata, STREAK NOT RESET** (text-only + one fixture). 🟢 executor folding. ⭐ **`t1388`'s SEGV confirmed at the INTEGRATION TIP — and its filed MECHANISM is false.** | `t1384`–`t1392` |
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
@@ -1314,6 +1314,47 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### 🚨 `t1388` IS CONFIRMED AT THE INTEGRATION TIP — AND ITS FILED **MECHANISM IS MEASURABLY FALSE**
+
+⭐ **The SEGV reproduces at `19211162e`** — *ahead* of the commit the item cites — **so it survives everything
+R50 has landed.** `gg check` clean; ASan `SEGV in Shared__int64_t__get`; both backends.
+⭐⭐ **AND A ROW THE ITEM DOES NOT RECORD: bind + `b.get()` ONLY → `rc 0` WITH A GARBAGE VALUE, BOTH BACKENDS.**
+⇒ **a SILENT-WRONG-OUTPUT defect sitting beside the crash — an executor who fixes the SEGV and stops LEAVES IT.**
+
+⛔⛔ **THE FILED MECHANISM IS REFUTED BY THE EMITTED C.** The item says *"duplicates the handle without an incref
+and drop-registers BOTH names, so the first scope-exit drop frees the control block."* **An incref IS emitted,
+and NOTHING has been dropped** (ASan's frame is the FIRST `.get()`; both drops take the correct `&local` form).
+⭐ **THE REAL MECHANISM: `Shared__T__clone` takes the handle BY VALUE while `Shared__T__drop` takes it BY
+ADDRESS — and the bind passes `&slot`.** Since `strong` is field 0, the atomic increment **bumps the POINTER
+VARIABLE ITSELF BY ONE BYTE** (UBSan: misaligned address) and returns `&slot` as `b` ⇒ **`a` reads misaligned →
+SEGV, and `b` is a handle pointing at `a`'s OWN STACK SLOT → garbage.**
+
+⛔⛔⛔ **AND THE CLASS IS ALREADY FIXED TWICE, AT TWO OTHER SITES.** `src/lir/lower/insts.rs` describes the
+identical failure **VERBATIM** — *"Passing the slot address made `Shared__T__clone` incref whatever the SLOT
+ADDRESS pointed at (t0840…)"* — and gates on `is_refcount_clone_type_name`; `methods.rs` does the same for the
+explicit `.clone()` path, **which is exactly why `a.clone()` prints `7 7`.** **The bare bind is the THIRD
+consumer that never consults the predicate** (`grep -c "is_refcount_clone_type" src/ir/lowering/stmts/mod.rs`
+→ **0**). ⇒ ⭐ ***`t1388` is a Core #4 SIBLING-SITE-DRIFT INSTANCE OF `t0840` — and the item cites `t0840`
+NOWHERE.*** Its discrimination *from* `t0108`/`t0620` is **sound and verified**; its **positive family
+attribution** is wrong, and it **points the executor at `drops.rs` where nothing is broken.**
+
+⛔ **AND THE FOLD LANDED IN THE GENERATOR ONLY.** The same commit **edits `todo/t1384.md`** and leaves its bullet
+list carrying the **superseded four-value enumeration the fold existed to retire** — including the `None` row
+asserting *"no subject; widening cannot manufacture one"*, **which is `(Trivial, None)` only and omits the
+`(Resource, None)` the fold measured and left OPEN**, and the `Trivial` row that **omits `(Trivial, Trivial)` —
+the row that turned out to be `t1388`'s SEGV.** ⇒ ⭐⭐ ***`todo/` IS THE DURABLE RECORD; A PYTHON DOCSTRING IS
+NOT*** — and an **OPEN row living only in a docstring is an UNFILED DEFERRAL.** *Fold rule (c)/(d) missed on a
+bullet list the commit was already editing.*
+
+⭐ **VERIFIED AND STRONGER THAN CLAIMED:** the six rows are **TOTAL**, with a witness better than the doc table —
+**`src/ir/validate.rs` is a rustc-EXHAUSTIVE match over the `(CopySemantics, DropStrategy)` PAIR.** The
+generator's dead flag and its fix are **RED-verified in BOTH directions**, with SIX-Q #2 answered. `(Resource,
+None)` OPEN judged **honest**. E5b's figures regenerate exactly and the set-identity claim holds. **And
+item-by-item, NOTHING was lost in the executor's `git checkout --` recovery.**
+⊕ **ERRATUM WORTH KEEPING: `.expect("{CONTROL_SRC} …")` — `Option::expect` takes a PLAIN `&str`, so the braces
+print LITERALLY.** *The message that names the guarded cell now names a Rust identifier instead.*
+⊕ **`todo/t1265` asserts *"`b = a` makes `b` the SAME handle"* — REFUTED by this measurement.** Cross-cite.
 
 ### ⛔⛔ C1 v2 PASS 1 — THE MEASUREMENTS SURVIVE; **THE DESIGN CONCLUSION DOES NOT**
 
