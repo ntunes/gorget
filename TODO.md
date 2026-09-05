@@ -11,11 +11,11 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| **C2** | passes 1–3 BLOCKED → 3 folds → 🔵 pass 4. **Streak 0/3.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| **C2** | passes 1–4 BLOCKED → 4 folds → 🔵 pass 5. **Streak 0/3.** ⭐ **Patch reproduced 5× across 14 cells; no defect found in it.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0** | 🆕 **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1. | `t1393`–`t1402` |
 | **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| **G** | 🔵 brief-review pass 1. **Streak 0/3.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
+| **G** | pass 1 BLOCKED (5) → folded → 🔵 pass 2. **Streak 0/3.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
 | **F1r** | ✅ **REBUILD CONFIRMED BY MEASUREMENT — `t1362` + `t0750` ARE ONE FIX.** 🔵 brief-review pass 1. **Streak 0/3.** | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
@@ -449,6 +449,40 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ⭐⭐ TWO FINDINGS THIS HEARTBEAT THAT OUTLIVE THEIR TRACKS
+
+**1. A BRIEF THAT NAMES ITS OWN OMISSIONS IS NOT ENOUGH, BECAUSE BRIEFS ARE `/tmp`-ONLY AND PRUNED AT ROUND
+CLOSE.** Track G's brief is honest that its SOURCE axis is a **selection** and names four unprobed kinds. Pass 1:
+*"the honesty is sufficient AS REASONING and insufficient AS AN ARTIFACT."* **What survives the round is a
+693-cell topic that LOOKS like a total enumeration — and the next round concludes the family is closed.**
+⛔ ***"That is the 2026-07-06 failure in a new dress: not 'nothing obliged a re-run', but 'NOTHING RECORDED WHAT
+WAS NEVER RUN.'"***
+⇒ ⭐ **RULE: a named omission must land somewhere DURABLE — the generator docstring, the manifest note column, a
+`todo/` item — never only in the brief that named it.** ⚠ **This generalises past Track G: every "named
+omission" this round lives in a `/tmp` brief.**
+
+**2. C2's FIXTURE-SET DEFECT HAS A GENERAL FORM I KEPT MISSING.** Pass 3 found the set greens the view-only
+revert; my D16 **pinned that one instance**; pass 4 found **two more partial reverts still fully green**
+(`lower_for_enumerate` hunks only → all green; both `set_collection_ref` calls → all green, ASan-clean).
+⇒ ⭐ **RULE: a fixture set is complete only when EVERY PARTIAL REVERT of the patch turns at least one row RED.
+ENUMERATE THE REVERTS; do not pin the one you happened to find.** ⊕ **And state, per row, WHICH revert it
+pins** — so the next fold cannot silently drop one.
+⊕ **SIX-Q #2 fired a THIRD time inside my own prescription:** I wired the leak-detecting row through
+`security_safe`, which routes to `ASAN_OPTS_NO_LEAK` (`detect_leaks=0`) — **the row is INERT.** The tree already
+has `security_safe_no_leak`. ⚠ ***"`--sanitize` alone is not the instrument."***
+
+⊕ **AND TWO OF MY OWN DECISIONS CONTRADICTED EACH OTHER ON C2:** `security/` costs **zero inflow BECAUSE the
+parity corpus is non-recursive** — which is **exactly why a `security/` fixture is INVISIBLE to the self-host
+lane**, so my Core #9 "cross-lane pin" could never have pinned anything. **Resolved: one BARE-FORM fixture goes
+TOP LEVEL** (measured MATCH, zero non-MATCH inflow); memory-safety rows and the `&` cell stay in `security/`.
+⛔ **Never a top-level `&`-form fixture — its expected output would ENSHRINE THE LOST WRITE.**
+
+⭐ **C2's Core #8 GATE IS NOW CLEARED BY MEASUREMENT, not by a severity argument:** the `&` lost write is
+**pre-existing and universal** (`Vector[int]` + `for i in &v: i = i + 10` → rc 0, prints `1 2` at HEAD), so the
+fix **moves the String cell OUT of memory-unsafety INTO an already-filed class**; and **String was the LAST
+broken cell of ratified consequence (a)** — nested Vector, struct and dict-value already bare-rebind as
+non-crashing private copies. ⇒ **the fix COMPLETES the ratified rule.**
 
 ### ⚖⚖ OWNER ASK — TRACK C1 MAKES A **WORKING** PROGRAM STOP COMPILING, AND THERE IS NO WAY TO WRITE IT INSTEAD
 
