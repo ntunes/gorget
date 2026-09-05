@@ -130,9 +130,40 @@ work (Core #4 favours the class-fix). **They are not R50's obligation under this
   sanctioned mutate-through path); owner ruled **no stored borrows** and shelved `a = &f()`. **Contestable:**
   user-writable `Ref[T]` returns + view-of-self. **Measurement-gated:** the #13 read-clone elision. **One
   OPEN:** prove type-driven builtin descent covers every case the current mechanism does.
-- **`docs/internals/cow-cost-contract.md` — the COST axis, `t0538` HIGH.** Knob spelling owner-chosen
-  2026-07-28; **the rest is LEANING, not ratified.** ⛔ **It needs a RATIFICATION pass before an executor,
-  not a scout** — that is an owner-ask class, and the pivot makes it the gating one.
+- **`docs/internals/cow-cost-contract.md` — the COST axis, `t0538` HIGH.** `D42` (the `implicit_clones` knob
+  — one name, three scopes, `allow|warn|deny`, explicit `.clone()` exempt) is RULED 2026-07-28. **FIVE things
+  are LEANING and unratified:** the four-layer design (signature summary → arg-side elision →
+  guaranteed-elision set → knob) · #13 merging into the cost axis while transient-views keeps legality ·
+  transitive-guarantee / non-transitive-obligation · error-biased checker vs clone-biased optimizer ·
+  **§3-before-§4 ordering.**
+
+  ⚖⚖ **THE ONE ASK THAT UNBLOCKS THE PIVOT — put to the owner 2026-09-05 with this recommendation:**
+  ⭐ **RATIFY §3-BEFORE-§4, and treat it as the whole point rather than a sequencing detail.** *"As good as
+  meticulously optimized manual cloning"* is only CHECKABLE against a stable model of when a copy is required
+  — which is what an expert hand-writing clones reasons from. **If `deny` means "the optimizer happened to
+  manage it this week", then a compiler improvement cannot be relied on, a regression silently breaks user
+  code, and A CALLEE BODY EDIT CAN FLIP A CALLER'S ANNOTATION** — action-at-a-distance on legality, the exact
+  objection that killed `Ref[T]`-by-default. ⇒ **Specify the elision set as a LANGUAGE GUARANTEE first; the
+  knob asserts against the SPEC, never the implementation. The optimizer may beat the spec; it may never fall
+  below it.** Prior art the note already cites: **C++17 mandatory RVO**, which turned returning big values by
+  value from a gamble into an idiom.
+  ⭐ **THE MECHANISM THAT ACTUALLY REACHES THE GOAL IS LAYER 1, THE SIGNATURE SUMMARY.** An expert knows at a
+  call site whether the callee CONSUMES the argument; without a per-signature ownership summary **every call
+  boundary is a pessimistic clone**, which is exactly where hand-written code beats us today. **Measured
+  evidence in the note: mutual recursion `ping→pong→ping` clones 201 times and warns ZERO times**, because the
+  shipped diagnostic sees only DIRECT self-recursion. A call-graph fixed point sees it; nothing else will.
+  ⭐ **KEEP THE ASYMMETRY: transitive GUARANTEE, non-transitive OBLIGATION.** If I elide, my caller may rely on
+  it; my `deny` does NOT force my callees to be `deny`. **That is what makes it adoptable incrementally rather
+  than viral** — the failure mode of every effect system that demanded the opposite.
+  ⊖ **DELIBERATELY SCOPED OUT so the ask is decidable in one pass:** the **runtime tripwire** (a real
+  complement — it catches unbounded MULTIPLICITY a static check cannot — but separable, and bundling it makes
+  the ask bigger than the decision); **`warn` per-site vs per-function** → take **PER SITE with dedup**, which
+  matches how an expert reasons (a specific copy is wrong, not a function); and **legality's B**
+  (user-writable `Ref[T]` returns + view-of-self) → **keep REJECTED, consistent with `D41`**, because
+  re-opening it re-imports the very action-at-a-distance the cost axis is built to avoid.
+  ⭐ **WHAT IT UNBLOCKS: §1 and §2 are machinery buildable without a ruling; §4 CANNOT EXIST HONESTLY UNTIL §3
+  IS WRITTEN DOWN.** Ratifying the ordering is what turns this from a brainstorm into an executable track —
+  `t0538` becomes scoutable the same day.
 ⊕ **A cleared blocker worth knowing:** `t0544` was RULED 2026-08-30 as **`D52` — *"materializes unless
 provably free"***, which settled that #13 covers binds and **AMENDED CoW Rule 3**.
 ⚠ **`t1065` (LOW) first, it is cheap and it misleads:** the legality note's header says `RATIFIED-UNBUILT`
