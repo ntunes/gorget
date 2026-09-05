@@ -416,7 +416,6 @@ agents_md.size_ceiling.caveat = the headroom is 0 bytes at 3b8a5561 — every R4
 agents_md.size_ceiling.cost_secs = 30
 agents_md.size_ceiling.mirror = tests/lints.rs:AGENTS_MD_SIZE_CEILING
 agents_md.size_ceiling.waiver = tests/lints.rs 1 declared the ratchet's own `49_200 -> 49_400` history line, directly above the constant
-agents_md.size_ceiling.waiver = TODO.md 1 debt the handover's zero-headroom note spells the ceiling instead of citing it; the handover is rewritten every round, so this one WILL rot
 agents_md.size_ceiling.input = none
 
 # ── exact-pin × derived ────────────────────────────────────────────────────
