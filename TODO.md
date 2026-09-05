@@ -17,14 +17,49 @@
 | ✅✅ **G** | **INTEGRATED** (9 commits, `2d647456c`). 819 cells + 3 guards + 4 filings. Gates on the merged tree: lib 1187, lints **237**, gen-check, known-gaps census — all green. | `t1384`–`t1392` |
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED. ⭐ **BOTH GATES NOW CLEAR** — F1r INTEGRATED, and **R1 IS RULED (Line A, signature-only, 'for now')**. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** ⏸ **QUEUED BEHIND THE SAFETY SET** per the owner's fixed order, not blocked. | `t1362`–`t1371` |
-| ✅ **H** | **`t1387`** — the map's KEY has no drop discipline. **EXECUTOR RETURNED 2026-09-05** (`c7cec057b`+`84f0b2b1b`) → 🔵 **output-review**. ⭐ **It found FOUR defects in my brief and filed `t1409`/`t1410`/`t1411`.** | `t1409`–`t1417` |
+| ✅✅ **H** | **`t1387` INTEGRATED** 2026-09-05 (`8573b12ca`+`0c137cbe0`). Output-review SIGNED OFF; 3 errata fixed at `6b4c8a544`. ⭐ **Its executor found FOUR defects in my brief; the review found a fifth in ITS filing.** | `t1409`–`t1417` |
 | **K** | **`t1385`** — the SEED HALF. ✅✅✅ **3/3 SIGNED OFF, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⭐ **H + K ARE THE ONLY TWO THINGS BETWEEN HERE AND A GREEN `--lanes all`.** | `t1433`–`t1437` (`t1432` = K2) |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
+| **L** | **`t1410`** — ⛔ **THE WRAPPING OPERATORS LOWER TO UB ON THE C LANE**, and `lib/std/hash.gg`'s `FxHasher` is `*% 31 +%` at **four** sites ⇒ **every `@derive(Hashable)` executes it.** LLVM is CORRECT, so the lanes differ in **DEFINED-NESS** (Core #8). 🔵 **SCOUT LAUNCHED 2026-09-05** — opened as a TRACK, not deferred. | `t1438`–`t1447` |
 | **J** | **`t1407`** — `Vector.fill`, **TWO defects**. 🔵 **RE-SCOUT (J2) measuring the HYBRID.** **Streak 0/3.** ⛔ **Pass 1 killed `v2b`: its snapshot is the `save/restore` READ-SITE shape, and its `memset` has NO possible RED row.** | `t1421`–`t1427` (`t1420` spent) |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**. 🔵 **SCOUT LAUNCHED 2026-09-05.** ⭐ **K's triage handed it a TOTAL enumeration for free: 21 of 22 sanitizer rows are exactly this frame**, + 13 already-baselined siblings. **93 of 301 allowlist rows carry `closure_env_alloc`; only 17 cite the item.** | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ✅✅ H IS INTEGRATED — **AND ITS OUTPUT-REVIEW FOUND A FIFTH DEFECT, IN THE EXECUTOR'S OWN FILING**
+
+`8573b12ca` + `0c137cbe0`; errata at `6b4c8a544`. `--lib` 1187 and `--test lints` 237 both **rc 0 off the bare
+command at the MERGED tree** — the four leak pins validate against the committed file, not against arithmetic.
+- ⭐⭐ **MY "TWO HALVES" FRAMING WAS UNDER-SPECIFIED — IT IS SIX PARTIAL REVERTS**, three map modes × two
+  wrappers. **A reviewer who checked only the two halves would have concluded the UNORDERED mode was
+  unguarded.** All six enumerated: four red, one (`R2`) is **unreachable dead code** and therefore
+  *unpinnable* — the honest answer, not a coverage hole.
+- ⛔⛔ **THE 12 ALLOWLIST TIGHTENINGS ARE NOT BOOKKEEPING.** `test_hashmap_all str_alloc_copy*2` is the **SOLE
+  guard for the entire unordered mode** — the new fixture pins only the DENSE mode. Reverting either unordered
+  half takes it to `*3` and reds the sweep. **Nothing in the tree said so** ⇒ annotated in the allowlist, or a
+  future round loosens a "noisy" row and silently unpins half the fix.
+- ⛔ **AND THE FIFTH DEFECT IS IN `t1411`'s OWN FILING: "50 gates" is 44.** Its regenerating grep **counted the
+  function's own DEFINITION** — *a regenerator that includes its own subject is not one* (Core #15a) — and it
+  added in `assert_box_deref_asan_clean`, which builds `-fsanitize=address` **only** and so was **never
+  configured to emit a UBSan report at all.** ⊕ **22 of the 44 are live, 22 `#[ignore]`d.**
+- ⛔ **A COMMENT THAT CONTRADICTED THE NUMBER IT EXPLAINS**: *"the eight retired rows take one pair"* — they
+  take **eight**; 8 + 3 = 11 **is** the 498→487 delta.
+- ✅ **Core #8 ADJUDICATED: filing `t1410` was CORRECT, not a dodge** — different file, layer, invariant and fix
+  shape from map-key ownership, and the escape hatch was taken properly (a `known_gaps` repro asserting the
+  **intended** behaviour). ⭐ **The repro is genuinely red, NOT accidentally green** — a naive probe is
+  constant-folded, which the executor caught itself (SIX-Q #6).
+- ⚠ **The review REFUSED to inherit the 25-min sweep number** on a loaded box, and ran a targeted 21-fixture
+  sweep instead. **Saying "I did not run it" is the right answer**; the full sweep is the parent's at round close.
+
+### 🚀 TRACK L OPENED — `t1410`, **A STDLIB-WIDE UB THE ROUND ALMOST CARRIED FORWARD**
+
+The output-review's orchestrator finding: *"per 'SPLIT also when the scope genuinely grows too much — each half
+becomes its own track in the SAME round; a split is division, never deferral', that should be a Track in this
+round."* **Measured before opening: `lib/std/hash.gg`'s `FxHasher` is `state *% 31 +% input` at FOUR sites**
+(`grep -n '31' lib/std/hash.gg`) ⇒ **every `@derive(Hashable)` with a String field runs it.**
+⚠ **`t1411` may be a PREREQUISITE** — if the gate cannot see UBSan, what pins the fix afterwards? The scout owes
+a measured answer.
 
 ### 🟢 K's EXECUTOR IS LAUNCHED — **3/3 — AND PASS 4 CAUGHT A SECOND RED-ON-ARRIVAL ASSERT ONE LEVEL DOWN**
 
