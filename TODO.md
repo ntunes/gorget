@@ -4,11 +4,29 @@
 ### 🚀 ROUND L (R50) IS OPEN — 2026-09-05. HEADLINE: **THE CRITICAL MEMORY-SAFETY SET + R49's DEFERRED HALVES.**
 **Owner-directed.** Safety debt first; the optimality pivot follows it, not beside it.
 
+### ✅ ALL TEN TRACKS INTEGRATED — ROUND-CLOSE BATTERY IN FLIGHT (2026-09-05)
+
+**Integrated:** A1 · C2 · F1r · G · H · K · E · A2 · J · L. **Head at close-start: `ba1ca28b3`.**
+**Convergence (MEASURED, does not gate):** `known_gaps 17→17 · TODO items 870→936 · net +66`
+(regen: `scripts/convergence.sh 17 870 78` — 78 filed, 12 closed).
+⚠ **R49's RECORDED BASELINE DOES NOT REGENERATE — do not inherit it.** `DONE.md` records R49 as
+`todo_items=887`; the tree at `bee51d536` has **870** (`git ls-tree -r --name-only bee51d536 -- todo/ |
+grep -c '\.md$'`). Using 887 implied 29 closures against 12 measured deletions. **Measure the baseline from
+the TREE, never from the previous round's line.**
+
+**BATTERY ORDER (C and LLVM never simultaneously — owner):** C sweep → LLVM sweep → `self_host_bootstrap_fixed_point`
+(**mandatory this round**: J changed `src/backend/c/runtime/runtime_array.c`, an `embed_file` input, and L
+changed `self_host_lowerer/lir_codegen.gg`) → `sanitize_sweep.sh` → `robustness_map.py --lanes all` →
+the cargo targets → the two script gates.
+⛔ **THE TREE IS FROZEN FOR THE DURATION — no `src/`, `lib/`, `compiler/` or driver edits, comments included.**
+That is not caution: J's bootstrap RED this round was a one-word comment edit to a runtime `.c` mid-run,
+and it read as a genuine ratchet breach.
+
 **ROSTER — five tracks, each with a private disjoint ID BLOCK (MA-3b; a track NEVER picks its own):**
 | track | scope | ids |
 |---|---|---|
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
-| **A2** | ⭐ **`newtype N(String)` silently wrong on C at HEAD.** Committed `426f617b5`; output-review **2 BLOCKING, both text+fixture, no re-review owed** → 🔄 **executor resumed for the follow-up.** | `t1378`–`t1382` |
+| ✅✅ **A2** | **`t1374`+`t1375`+`t0104` INTEGRATED** (`4a5c6dad1`+`b9af510fe`). ⭐ **Its executor REFUTED the output-review's BLOCKING 1 with a 4-state × 2-backend table — and I had relayed that claim as a prescription without measuring it.** The reviewer said `n.0.get()` builds on neither backend at either state; measured, it builds rc 0 at POST on both. The real error was a different clause in the same sentence. | `t1378`–`t1382` |
 | **B** | ⚖⚖ **HELD — OWNER ASK (the capture cell). Pass 1: NOT SIGN OFF, 5 BLOCKING.** The brief was STALE BY CONSTRUCTION (my revert landed 3 min after it) and **overrode a ratified `decisions.md` clause with an agent's derivation.** Streak 0/3. Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⛔⛔ **BLOCKED A FOURTH TIME — `R`'s SUBJECT IS A SELECTION ON A THIRD AXIS. RECOMMEND CLOSE FOR R50: `R` NEEDS ITS OWN SCOUT.** Spine survives and measures STRONGER each pass. | `t1332`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
@@ -20,8 +38,8 @@
 | ✅✅ **H** | **`t1387` INTEGRATED** 2026-09-05 (`8573b12ca`+`0c137cbe0`). Output-review SIGNED OFF; 3 errata fixed at `6b4c8a544`. ⭐ **Its executor found FOUR defects in my brief; the review found a fifth in ITS filing.** | `t1409`–`t1417` |
 | ✅✅ **K** | **`t1385` INTEGRATED** 2026-09-05 (`b5c5eaabc`+`1c2513e45`); errata `9d7e9f71b`. Output-review **SIGNED OFF**. ⭐ **93 cell-lanes now gated; both allowlists ratchet BOTH ways.** | `t1434`–`t1437` |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
-| **L** | **`t1410`** — ✅ committed `b64fed58e` → 🔵 **output-review.** ⭐ **It REFUSED a prescribed repro shape it measured green-on-arrival AND ratchet-growing** — and my brief was wrong. | `t1445`–`t1447` |
-| **J** | **`t1407`** — ✅ **bootstrap RESOLVED: stage-2 rc 0.** The red was a **mid-run edit to an `embed_file` input**, not code. → 🔵 **output-review.** | `t1422`–`t1427` |
+| ✅✅ **L** | **`t1410` INTEGRATED** (`640235fc1`). Output-review **SIGNED OFF** after re-running the decisive reverts BY LINE itself. ⭐ **The executor REFUSED a prescribed repro shape it measured green-on-arrival AND ratchet-growing — my brief was wrong and the repo's own durable-repro contract backed the executor.** | `t1445`–`t1447` |
+| ✅✅ **J** | **`t1407` INTEGRATED** (`d61e5af23`+`d26af1d42`, **NOT squashed**). Output-review **SIGNED OFF** and proved the `embed_file` mechanism from source without re-running the bootstrap. ⛔ **The two commits must stay separate: the first says "do NOT integrate this commit", the second retracts it. A squash inherits the false warning and deletes its repeal.** | `t1422`–`t1427` |
 | ✅✅ **E** | **`t0953` INTEGRATED** 2026-09-05 (`ef25a8ab7`-era cherry-picks); output-review **SIGNED OFF** after re-running the matrix by line AND the full 25-min sweep itself (rc 0). Errata `4611ef045`. | `t1352`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
