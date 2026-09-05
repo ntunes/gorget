@@ -30863,55 +30863,68 @@ fn rmap_rows() -> Vec<Vec<String>> {
 /// so it would have been red on arrival, from its own required precondition.
 /// The carve-out therefore keys on the CONTROL marker itself.
 ///
-/// The 31 named exemptions are the real, legacy thing: `hof_*` rows whose
-/// `selfhost` / `asan` / `ggdef` columns predate those lanes existing. They are a
-/// **shrink-only** list — measure one and delete its line; never add to it,
-/// because `--seed-new` is the reviewed way to record a first measurement.
+/// # The 31 `hof_*` exemptions, and why the list is now empty
+///
+/// They were never legacy. All 31 cells were created by ONE commit,
+/// `ef171a34a` — nine days AFTER the lane schema landed and eight after the
+/// corpus was baselined on five lanes. They are inflow that populated two of
+/// five lanes, not rows that predate the lanes, and `LEGACY_UNBASELINED` is a
+/// misnomer the name's history has to carry. All 93 cell-lanes are measured and
+/// seeded now; the list is empty, and a set-equality holds it there in BOTH
+/// directions (Core #6 — a ratchet with one direction greens every step of its
+/// own drift).
+///
+/// ⚠ **THE FULLY-REVERTED STATE IS PINNED BY NO `cargo test` ROW, THIS ONE
+/// INCLUDED.** Revert the seed *and* re-list the 31 names and this test is
+/// GREEN, by construction: the exemption is consulted before the empty-baseline
+/// check, and the set-equality then agrees with the list. What pins that state
+/// is `python3 scripts/robustness_map.py --lanes all`, which returns rc 1 on an
+/// unseeded row and which CI runs (`.github/workflows/ci.yml`). This lint pins
+/// the two HALF-reverts — seed-without-delisting, delisting-without-seed — and
+/// the map runner pins the whole one.
 #[test]
 fn robustness_map_manifest_and_cells_reconcile() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let cells_dir = root.join("tests/fixtures/robustness_map/cells");
 
     /// Files under `cells/` that are deliberately NOT cells: a multi-file
-    /// topic's helper module, compiled as part of another cell. Shrink-only.
+    /// topic's helper module, compiled as part of another cell.
+    ///
+    /// EXACT, not shrink-only. The set-equality below asserts this list IS the
+    /// set of on-disk cell files no MANIFEST row names — so deleting a helper's
+    /// file, or giving it a row, is as red as adding an unlisted orphan. The
+    /// one-directional form let an entry go stale, and a stale entry
+    /// pre-authorises the next orphan that happens to take the name.
     const DECLARED_HELPERS: &[&str] = &["modhelp_shapes"];
 
-    /// Rows whose `selfhost` / `asan` / `ggdef` baselines predate those lanes.
-    /// SHRINK-ONLY: measure the row (`--lanes all --accept --seed-new --topic`)
-    /// and delete its entry. Never grow this list.
-    const LEGACY_UNBASELINED: &[&str] = &[
-        "hof_all_strings_untyped",
-        "hof_any_strings_untyped",
-        "hof_count_strings_untyped",
-        "hof_deque_each_untyped",
-        "hof_deque_map_untyped",
-        "hof_deque_sort_by_key_untyped",
-        "hof_dict_filter_untyped",
-        "hof_dict_fold_key_len",
-        "hof_dict_fold_value_sum",
-        "hof_each_strings_untyped",
-        "hof_each_strings_untyped_import",
-        "hof_filter_strings_untyped",
-        "hof_find_index_bound_untyped",
-        "hof_find_index_discard_untyped",
-        "hof_flat_map_strings_untyped",
-        "hof_fold_len_accumulator",
-        "hof_fold_nonconstant_accumulator",
-        "hof_fold_string_accumulator",
-        "hof_for_each_strings_import",
-        "hof_for_each_strings_import_closure",
-        "hof_for_each_strings_import_typed",
-        "hof_for_each_strings_noimport_namedfn",
-        "hof_for_each_strings_untyped",
-        "hof_hashset_each_untyped",
-        "hof_map_strings_untyped",
-        "hof_option_map_untyped",
-        "hof_reduce_strings_untyped",
-        "hof_set_fold_len_accumulator",
-        "hof_sort_by_strings_untyped",
-        "hof_sort_by_structs_untyped",
-        "hof_sorted_by_strings_untyped",
-    ];
+    /// Rows carrying an EMPTY baseline on a lane the map measures.
+    ///
+    /// **EMPTY, AND CLOSED.** Under the set-equality below, adding a name here
+    /// is no longer a quiet exemption — it is a POSITIVE CLAIM that the row
+    /// really does have an empty lane column, i.e. a deliberate, reviewed
+    /// re-authorisation of the debt. Deleting a name while its row is still
+    /// unbaselined is equally red.
+    ///
+    /// To retire a row rather than list it, seed it — but NOT with the
+    /// five-lane form this comment used to prescribe, which REFUSES on exactly
+    /// the rows the list names. `--seed-new`'s `first_seen` branch requires
+    /// EVERY value-lane column to be empty; on a partially-baselined row (`c`
+    /// and `llvm` already written) the seeding run's own discovery scores as a
+    /// NEW DIVERGENCE and the write is refused wholesale. State the
+    /// PRECONDITION, not a lane count:
+    ///
+    /// * every value-lane column empty — `--lanes all --accept --seed-new
+    ///   --topic "<topic>"` is correct, and is what a brand-new topic uses;
+    /// * any value lane already baselined — use
+    ///   `--lanes selfhost,asan,ggdef --accept --seed-new --topic "<topic>"`.
+    ///
+    /// The three-lane form works because it names ONE value lane, so `diverges`
+    /// (`len(set(keys)) > 1`) is unsatisfiable and no new divergence can refuse
+    /// the write. That also means it never stamps `COL_DIVERGE`, which is safe
+    /// only while every divergence among the seeded rows is visible at BUCKET
+    /// level; a WRONG-vs-WRONG-with-a-different-value row passes through it
+    /// unrecorded (`todo/t1386`).
+    const LEGACY_UNBASELINED: &[&str] = &[];
 
     let rows = rmap_rows();
     // FIRE COUNT. A vacuous walk over an unreadable manifest would pass every
@@ -30968,19 +30981,34 @@ fn robustness_map_manifest_and_cells_reconcile() {
          diagnostic anywhere. Restore the .gg or delete the row."
     );
 
-    // --- direction 2: a cell file no row names ----------------------------
-    let orphans: Vec<&str> = on_disk
+    // --- direction 2: a cell file no row names -- BOTH WAYS ---------------
+    // SET-EQUALITY, not `orphans.is_empty()`. The one-directional form asserted
+    // only that no UNDECLARED orphan exists; nothing asserted a DECLARED helper
+    // is still an unnamed file, so a stale entry could sit here forever and
+    // pre-authorise the next orphan that happened to take the name -- verbatim
+    // the hazard `LEGACY_UNBASELINED`'s own message describes, in the list
+    // beside it. A ratchet needs both directions (Core #6), and the class here
+    // is the RATCHET, not the subject matter, so both declared lists in this
+    // test get the same treatment. This also subsumes the by-name liveness loop
+    // that used to close this function.
+    let orphan_candidates: std::collections::BTreeSet<&str> = on_disk
         .iter()
         .map(String::as_str)
-        .filter(|c| !seen.contains(*c) && !DECLARED_HELPERS.contains(c))
+        .filter(|c| !seen.contains(*c))
         .collect();
-    assert!(
-        orphans.is_empty(),
-        "cells/ holds .gg files that no MANIFEST row names: {orphans:?}.\n\
-         An unlisted cell is never built, never run and never scored — it looks \
-         like coverage and is none. Add a row for it, or (if it is a helper \
-         module compiled as part of another cell) add it to DECLARED_HELPERS \
-         with a reason."
+    let declared_helpers: std::collections::BTreeSet<&str> =
+        DECLARED_HELPERS.iter().copied().collect();
+    assert_eq!(
+        orphan_candidates, declared_helpers,
+        "cells/ and DECLARED_HELPERS disagree about which .gg files no MANIFEST \
+         row names.\n\
+         EXTRA ON THE LEFT = an unlisted cell. It is never built, never run and \
+         never scored — it looks like coverage and is none. Add a MANIFEST row \
+         for it, or (if it is a helper module compiled as part of another cell) \
+         add it to DECLARED_HELPERS with a reason.\n\
+         EXTRA ON THE RIGHT = a declared helper that is no longer an unnamed \
+         file: it was deleted, or a MANIFEST row now names it. Delete the entry \
+         — a stale exemption pre-authorises the next orphan that takes the name."
     );
 
     // --- the empty-baseline half ------------------------------------------
@@ -31037,15 +31065,102 @@ fn robustness_map_manifest_and_cells_reconcile() {
          Removing one makes that gate unfalsifiable and needs the same \
          justification as deleting any positive control."
     );
+
+    // AND THE CARVE-OUT'S OWN RATIONALE, GUARDED. The rustdoc above states that
+    // a CONTROL row's "lane columns are empty FOREVER, by construction" — an
+    // invariant-claiming comment with nothing enforcing it (Core #14). The
+    // runner really does `continue` before the lane loop, so robustness_map.py
+    // can never write one; a populated column therefore means a hand edit, and
+    // the `continue` below would hide it. That is a case with NO SUBJECT in
+    // either declared-list rule: `DECLARED_CONTROLS` checks only the NAME set,
+    // and no widening of `LEGACY_UNBASELINED`'s rule reaches a CONTROL row.
+    //
+    // ⚠ `RMAP_LANE_COLS` includes `(2, "c")` and `RMAP_COL_C == 2`. A CONTROL
+    // row's `c` column holds the literal "CONTROL", not the empty string —
+    // there it is the MARKER, not a baseline. Skipping it is load-bearing:
+    // without the skip this assertion is red on arrival, on both control rows.
+    let control_populated: Vec<String> = rows
+        .iter()
+        .filter(|r| r[RMAP_COL_C] == "CONTROL")
+        .flat_map(|r| {
+            RMAP_LANE_COLS
+                .iter()
+                .filter(|(col, _)| *col != RMAP_COL_C && !r[*col].is_empty())
+                .map(move |(_, lane)| format!("{} [{}]", r[RMAP_COL_CELL], lane))
+        })
+        .collect();
+    assert!(
+        control_populated.is_empty(),
+        "CONTROL row(s) carry a populated lane baseline: {control_populated:?}.\n\
+         The runner inverts a CONTROL's verdict and `continue`s BEFORE the lane \
+         loop, so it can never write one — and the empty-baseline assertion \
+         below exempts CONTROL rows wholesale, so a hand-written baseline there \
+         is both unreachable by the runner and unchecked by the gate. Clear the \
+         column, or (if the runner now measures controls) update this lint and \
+         the carve-out below together."
+    );
+
     assert!(
         ungated.is_empty(),
         "{} cell-lane(s) are measured every run but have an EMPTY baseline, so \
          `robustness_map.py`'s `if base:` scoring branch never runs for them — \
          a WRONG -> CRASH there is invisible to the gate:\n  {}\n\
-         Seed them in ONE five-lane run:\n    \
-         python3 scripts/robustness_map.py --lanes all --accept --seed-new --topic \"<topic>\"",
+         Seed them with --seed-new, scoped by --topic. WHICH LANE SET DEPENDS \
+         ON A PRECONDITION, NOT ON A COUNT — the five-lane form REFUSES the \
+         write on a partially-baselined row, because `first_seen` requires \
+         EVERY value lane to be empty and the seeding run's own discovery then \
+         scores as a NEW DIVERGENCE:\n    \
+         every value lane empty (a brand-new topic):\n      \
+         python3 scripts/robustness_map.py --lanes all --accept --seed-new --topic \"<topic>\"\n    \
+         any value lane already baselined:\n      \
+         python3 scripts/robustness_map.py --lanes selfhost,asan,ggdef --accept --seed-new --topic \"<topic>\"\n\
+         The three-lane form works because it names ONE value lane, so \
+         `diverges` is unsatisfiable — which also means it never stamps \
+         COL_DIVERGE, safe only while every divergence among the seeded rows is \
+         visible at BUCKET level (todo/t1386).",
         ungated.len(),
         ungated.join("\n  ")
+    );
+
+    // AND THE OTHER DIRECTION, WHICH THE `continue` ABOVE STRUCTURALLY CANNOT
+    // SEE. `ungated` skips a listed row BEFORE it looks at any lane column, so
+    // {the row gets seeded, the entry stays} is GREEN there — nothing catches a
+    // stale exemption, and the list documents itself as shrink-only with
+    // nothing enforcing the shrink. Prose with an assert around it. This is the
+    // assert (Core #6: a ratchet needs both directions).
+    //
+    // ⚠ ORDERED AFTER `ungated`, AND BOTH STAY. They fire on overlapping
+    // states, but `ungated`'s message carries the remediation command while
+    // this one carries a set diff, and the granularities differ: `ungated` is
+    // per cell-LANE, this is per ROW.
+    //
+    // ⚠ THE CONTROL CARVE-OUT IS THE SAME PREDICATE, NOT A NAME LIST. Both
+    // CONTROL rows have four empty lane columns, so a right-hand side built
+    // without this filter is 33 where the list is 31 — red on arrival, from its
+    // own required precondition. That is the trap the rustdoc above documents
+    // for the by-name form, one level down.
+    let listed: std::collections::BTreeSet<&str> =
+        LEGACY_UNBASELINED.iter().copied().collect();
+    let unbaselined_rows: std::collections::BTreeSet<&str> = rows
+        .iter()
+        .filter(|r| r[RMAP_COL_C] != "CONTROL")
+        .filter(|r| RMAP_LANE_COLS.iter().any(|(col, _)| r[*col].is_empty()))
+        .map(|r| r[RMAP_COL_CELL].as_str())
+        .collect();
+    assert_eq!(
+        listed, unbaselined_rows,
+        "LEGACY_UNBASELINED is not the set of non-CONTROL rows carrying an \
+         empty lane baseline.\n\
+         EXTRA ON THE LEFT = a STALE exemption: the row is baselined now (or is \
+         no longer a MANIFEST row at all), so delete its entry. A stale entry \
+         widens the carve-out for the next cell that takes the name, and the \
+         `continue` in the loop above cannot see it.\n\
+         EXTRA ON THE RIGHT is unreachable in practice — an unlisted, \
+         unbaselined, non-CONTROL row trips `ungated` first, and its message is \
+         the one you want.\n\
+         The list is EMPTY and CLOSED. Adding a name is a POSITIVE CLAIM that \
+         the row has an empty lane column: a deliberate re-authorisation of the \
+         debt, not a quiet exemption."
     );
 
     // THE TOPIC-30 CONTROL'S LOAD-BEARING INVARIANT, WHICH NOTHING ELSE
@@ -31113,24 +31228,12 @@ fn robustness_map_manifest_and_cells_reconcile() {
         );
     }
 
-    // A shrink-only list that never shrinks is prose. Assert every named
-    // exemption is still a real row, so a retired cell cannot leave a dead
-    // entry behind that quietly widens the carve-out for a future namesake.
-    for name in LEGACY_UNBASELINED {
-        assert!(
-            seen.contains(name),
-            "LEGACY_UNBASELINED names {name:?}, which is no longer a MANIFEST \
-             row. Delete the entry — a stale exemption pre-authorises the next \
-             cell that happens to take the name."
-        );
-    }
-    for name in DECLARED_HELPERS {
-        assert!(
-            on_disk.contains(*name),
-            "DECLARED_HELPERS names {name:?}, which is no longer a file under \
-             robustness_map/cells. Delete the entry."
-        );
-    }
+    // (The by-name liveness loop that used to close this test is gone: both
+    // halves are subsumed. A LEGACY_UNBASELINED name that is no longer a row
+    // cannot appear in `unbaselined_rows`, and a DECLARED_HELPERS name that is
+    // no longer an unnamed file cannot appear in `orphan_candidates` — each is
+    // a set-equality failure now, in the direction the loop used to check AND
+    // in the direction it did not.)
 }
 
 /// **The map's drift ratchet reached stage 3 on exactly one topic, and the

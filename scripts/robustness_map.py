@@ -910,12 +910,18 @@ def main():
         else:
             (MAP / "MANIFEST.tsv").write_text(
                 header + "\n" + "\n".join("\t".join(r) for r in rows) + "\n")
-            recorded = (f", {len(drifts)} DRIFT rows recorded"
+            # UNIT: CELL-LANES, NOT ROWS. `progress`, `drifts` and `seeded`
+            # all append inside `for lane in lanes:`, so a three-lane run over
+            # 21 rows seeds 63 of these. Every one of these four messages used
+            # to say "rows", and the slip propagated into a filed item as
+            # "63 rows SEEDED". (`new_div` really is per row; `regressions`
+            # and `fatal_drifts` carry no unit word.)
+            recorded = (f", {len(drifts)} DRIFT cell-lanes recorded"
                         if args.accept_drift else
-                        f" ({len(drifts)} DRIFT rows LEFT ALONE — "
+                        f" ({len(drifts)} DRIFT cell-lanes LEFT ALONE — "
                         f"pass --accept-drift after triage)" if drifts else "")
-            seedmsg = f", {len(seeded)} rows SEEDED" if seeded else ""
-            print(f"\nbaseline updated ({len(progress)} progress rows folded"
+            seedmsg = f", {len(seeded)} cell-lanes SEEDED" if seeded else ""
+            print(f"\nbaseline updated ({len(progress)} progress cell-lanes folded"
                   f"{seedmsg}{recorded}) - review this diff")
 
     if regressions or new_div or (fatal_drifts and not args.accept_drift):

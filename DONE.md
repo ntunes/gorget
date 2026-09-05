@@ -1,3 +1,66 @@
+- [2026-09-05] **`t1385` CLOSED — 93 CELL-LANES WERE MEASURED EVERY CI RUN AND SCORED AGAINST NOTHING; THE
+  ALLOWLIST THAT HID THEM IS NOW EMPTY, CLOSED AND RATCHETED BOTH WAYS (R50 Track K).** 31 `hof_*` rows
+  carried an empty baseline on `selfhost`/`asan`/`ggdef`, so `robustness_map.py`'s `if base:` scoring branch
+  never ran for them — a `WRONG → CRASH` there was not a regression, not a drift, not anything. They also
+  **red the five-lane CI step**: all 11 whole-corpus NEW DIVERGENCES were inside this set.
+  **THE ROWS WERE NEVER LEGACY.** All 31 cells were created by ONE commit, `ef171a34a` — nine days AFTER the
+  lane schema and eight after the five-lane baselining. Inflow that populated two of five lanes, not debt
+  that predates them; `LEGACY_UNBASELINED` was a misnomer, and the item's own `mechanism` field said the
+  opposite until it was corrected.
+  ⛔ **AND THE GUARD PRESCRIBED A REMEDIATION THAT REFUSES ON THE EXACT ROWS IT NAMES.** `--lanes all
+  --accept --seed-new` needs `first_seen`, which requires EVERY value lane empty; with `c`/`llvm` populated
+  the seeding run's own discovery scores as a NEW DIVERGENCE and the write is refused wholesale. Both hint
+  sites now state the **PRECONDITION, not a lane count**, and point at `--lanes selfhost,asan,ggdef` for a
+  partially-baselined row — with N5's caveat that the three-lane form never stamps `COL_DIVERGE`, safe only
+  while every divergence among the seeded rows is bucket-visible (`t1386`).
+  **SEEDED, REVIEWED, 93/93.** Four `--topic`-scoped three-lane runs (07/10/11/13 → 15/3/63/12 cell-lanes),
+  each folding **ZERO** foreign rows; the changed-row set diffs IDENTICAL to the independently derived 31.
+  Buckets: asan 22 SANITIZE-FAIL · 6 BUILD-FAIL · 2 WORKS · 1 REJECTED; selfhost 22 WORKS · 8 BUILD-FAIL ·
+  1 WRONG; ggdef 27 NO-VERDICT · 3 REJECTED · 1 WORKS. **No TIMEOUT and no UNKNOWN anywhere** — the load
+  artefact the confirmation runs exist to catch did not occur.
+  **A NON-GOOD BASELINE MAKES A KNOWN DEFECT GATED INSTEAD OF INVISIBLE**, and the hand-derived `expected`
+  column was untouched. 21 of the 22 `SANITIZE-FAIL` are `t0953`'s `8 byte(s) leaked in 1 allocation(s)`
+  from `__gorget_closure_env_alloc`; the 22nd, `hof_fold_string_accumulator`, is `t1428` — re-measured here
+  at **13 bytes in 3 allocations**, the closure-env leak PLUS a second unbounded one through
+  `gorget_str_cat`. `hof_option_map_untyped` seeds `selfhost=WRONG` against `c`/`llvm` `WORKS` — a silent
+  miscompile, `t1429`. And **three rows seed `c=BUILD-FAIL llvm=BUILD-FAIL selfhost=WORKS`**
+  (`hof_for_each_strings_{import_closure,noimport_namedfn,untyped}`): the reference lagging the self-host,
+  `t0987`'s class and a succession-plan data point.
+  **THE RATCHET, BOTH DIRECTIONS (Core #6).** `LEGACY_UNBASELINED` survives as an EMPTY slice under a
+  set-equality — CONTROL-scoped **by predicate**, never by name, because both control rows have four empty
+  lane columns and a naive right-hand side is 33 where the list is 31, red on arrival from its own required
+  precondition. `DECLARED_HELPERS` got the same treatment (`orphan_candidates == helpers_set`), which
+  subsumes the old orphans assert AND the by-name liveness loop that used to close the test; the loop is
+  deleted, both halves. The one-directional form was the real defect: `{seed lands, entry stays}` was GREEN,
+  because `ungated` `continue`s on a listed name BEFORE it looks at any lane column.
+  ⭐ **AND A CASE WITH NO SUBJECT, NOW GUARDED (SIX-Q #4):** a CONTROL row with a POPULATED lane column was
+  reachable by no rule — the runner `continue`s before the lane loop, `DECLARED_CONTROLS` checks only the
+  NAME set, and no widening of `LEGACY_UNBASELINED` reaches it. The rustdoc asserted "empty FOREVER, by
+  construction" with nothing enforcing it (Core #14). It is asserted now, skipping `RMAP_COL_C` — measured:
+  without that skip the assertion is RED ON ARRIVAL on both controls, whose `c` column holds the literal
+  `CONTROL`, not a baseline.
+  **FOUR RED-DEMOS, EACH ANCHORED BY LINE (Core #13), fire count 1 each:** re-add one seeded name at
+  `lints.rs:30901` → RED at the LEGACY set-equality (not at `ungated` — proving the NEW assert is what
+  catches that revert); add a real cell name at `:30872` → RED at the helpers set-equality in the direction
+  that did not exist before; write `WORKS` into field 7 of `MANIFEST.tsv:2` → RED at the control assert;
+  drop the `RMAP_COL_C` skip at `:31062` → RED on both controls.
+  ⛔ **THE FULLY-REVERTED STATE IS PINNED BY NO `cargo test` ROW, AND THAT IS NOW WRITTEN IN THE LINT'S OWN
+  DOC COMMENT** rather than in a commit message that outlives nothing. Measured: with the seed reverted AND
+  the 31 names re-listed, `cargo test --test lints` is **rc 0, 237 passed**, while
+  `robustness_map.py --lanes all --topic "11 closures"` is **rc 1, 6 NEW DIVERGENCES**. CI runs the latter.
+  ⊕ **Four sibling unit slips fixed as a class (Core #4):** `progress`, `drifts` (×2) and `seeded` all
+  `.append()` inside `for lane in lanes:`, and all four summary lines called them "rows". They are
+  CELL-LANES; the slip had already propagated into the record as "63 rows SEEDED" for 21 rows × 3 lanes.
+  ⚠ **DISCLOSED, NOT FOLDED:** topic 13 reports one intra-quadrant DRIFT (`sort_by_key_length [asan]
+  BUILD-FAIL → SANITIZE-FAIL`), report-only and owned by `t0993`. **THREE ROWS TAKE A KNOWINGLY-FALSE
+  `ggdef=REJECTED`** (`hof_dict_filter_untyped`, `hof_filter_strings_untyped`, `hof_map_strings_untyped`):
+  ggdef's fourth exit-1 channel is a codeless `IllFormed`, which `run_ggdef` defaults to `REJECTED
+  (uncoded)` — a claim ggdef never made. That label already sits on 40 baselined rows, so seeding 3 more
+  joins an existing class rather than creating one, while withholding the seed would keep 93 cell-lanes
+  ungated and CI red. **`t1432` owns the fix and opens with an owner ask.** ⚠ And on
+  `hof_dict_filter_untyped` a reader meets **two** soft-false signals at once: its own note already reads
+  *"CONTROL: accidentally correct at HEAD for the same Str/int reason"*.
+  Gates: `--test lints` rc 0 · `--lib` rc 0 · four `--lanes all --topic` confirmations **all rc 0**.
 - [2026-09-05] **`t1387` CLOSED — `gorget_map_put`'s KEY HAD NO DROP DISCIPLINE (R50 Track H).**
   ⛔ **THE FILED MECHANISM WAS WRONG, AND IT POINTED READERS AT THE WRONG LAYER.** `t1387` said the leak was
   *"a clone at a `for ch in s:` LOOP HEAD never registered for drop"* and warned *"DO NOT fix it by making
