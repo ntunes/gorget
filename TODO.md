@@ -487,6 +487,39 @@ double-free, which is fixed in `7785c1221` and **not yet on this branch**. ⚠ *
 lost write), it does not VANISH.** ⇒ **correct it AT integration, or a true statement is deleted early** — the
 retraction rule, one heartbeat old, applied prospectively for once.
 
+### ✅ RULED — **D27's `^` MIGRATION EXTENDS EVERYWHERE** (owner 2026-09-05)
+
+> *"D27's ^ migration extends everywhere. That is the new move operator that will eventually free the
+> `!` operator."*
+
+⛔ **SUPERSEDES the 2026-08-06 scoping** (`src`/`tests`/`lib`/`spec` only). **`docs/`, `README.md`, `spectests/`
+are now IN SCOPE.** ⭐ **The END STATE is the point: `^` IS the move operator and prefix-`!` is to be FREED** —
+so this is a prerequisite for retiring the old spelling from the grammar, not a cosmetic pass.
+
+⛔⛔ **`!` DOES NOT DISAPPEAR, AND A BLIND SED BREAKS THE LANGUAGE.** D26 ratified **suffix-`!` as the FALLIBLE
+marker** — `+! -! *! /! %!`, `<<! >>!`, `**!`, `f()!` (`grep -n "FALLIBLE OPERATORS ADOPTED"
+docs/define-gorget/decisions.md`). ⇒ **POSITION-SENSITIVE: the NAME-SLOT prefix `!` becomes `^`; the SUFFIX `!`
+STAYS.**
+
+⚠ **NOTHING FLAGS THE OLD SPELLING TODAY** — the parser accepts both
+(`grep -rn "Token::Bang) || self.check(&Token::Caret)" src/parser/` → 3 sites), so a `!`-move compiles clean and
+**the tree cannot drift toward `^` on its own.**
+
+⚠⚠ **MY FIRST MEASUREMENT WAS UNUSABLE AND I SAY SO RATHER THAN QUOTE IT.** A regex cannot separate a call-site
+move `f(!x)` from a negation `if (!ok)` — **the instrument could not SEE the class** (Core #13). The one
+unambiguous position is the declaration `Type !name` (negation never follows a type name):
+**236 decl-position `!`-moves across 158 `.gg` files, against 49 already on `^`** — regenerate:
+`grep -rhoE '[A-Za-z_][A-Za-z0-9_\]\[]* +![a-z_][a-z0-9_]* *[,)]' --include='*.gg' . | wc -l`.
+⛔ **THAT IS A LOWER BOUND AND THE ITEM SAYS SO.**
+
+⇒ **FILED AS `todo/t1405`** (MED, campaign): **instrument that counts by PARSE POSITION → migrate → ratchet
+(Core #6, both directions) → only THEN reject prefix-`!`**, which is an accept→reject surface change ⇒ **Core #9
+binds all three lanes.** ⊕ **`gg fmt` is an UNCONFIRMED lever** — `grep -rn 'Bang\|Caret' src/formatter/`
+returns nothing.
+
+⚠ **THE LEDGER STILL CARRIES THE OLD SCOPE. `docs/define-gorget/decisions.md` IS OWNER-EDIT-ONLY — I have not
+touched it, and the ruling above is the authority until the owner records it.**
+
 ### ⛔⛔ C2's DOC FIX REPRODUCED ITS OWN ROOT CAUSE **TWICE** — A SELECTION, AND A SELF-CONTRADICTION
 
 ⭐⭐ **THE LESSON OF THE ROUND, IN ONE SENTENCE: THE FIX FOR A SELECTION WAS ITSELF SCOPED, AND SO WAS A
@@ -3074,6 +3107,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t1127`](todo/t1127.md) **MED** — 🆕🐛 [MED — @derive(Equatable) ON A GENERIC STRUCT DOES NOT REQUIRE ITS PARAMETER TO BE Equatable, so Pair[NonEquatable] =…
 - [`t1265`](todo/t1265.md) **MED** — 🆕⚖ [MED — AN UNRULED CELL THE RATIFIED TEXT CLAIMS NOT TO HAVE: == on the D53 single-owner HANDLE family (Shared / Weak…
 - [`t1068`](todo/t1068.md) **MED** — 🆕⛔ [OVER-REJECTION — a correct program is refused, and the refusal's stated premise is false; found R49 Track L while wi…
+- [`t1405`](todo/t1405.md) **MED** — 🆕📐 [MED — CAMPAIGN, owner-ratified 2026-09-05: D27's ^ MIGRATION EXTENDS EVERYWHERE, superseding the earlier src/tests/l…
 ### Low
 
 - [`t0452`](todo/t0452.md) **LOW** — 🆕 [LOW — diagnostic ergonomics follow-up from Round XXIX Track A close 2026-08-03] E_NotIndexable message text should na…
