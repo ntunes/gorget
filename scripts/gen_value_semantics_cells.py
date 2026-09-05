@@ -30,10 +30,21 @@ from the language design then fixes the output completely.
 container, not a copy of it -- and that is why it appears on both sides of the
 rule.
 
-Grounding: `docs/language-design.md` section 3.5 (copy-on-write value semantics)
-and ratified decision `D52` obligation (ii) in
-`docs/define-gorget/decisions.md`, which describes THIS family and says of a
-defect in it, verbatim, "a bug there is a UAF, not a wrong answer".
+Grounding, and it is not an analogy -- the design document's own worked example
+IS one of these cells. `docs/language-design.md` 3.5, "The Borrow Rule -- one
+rule, with a lazy escape", says of `String s = v.get(0).unwrap()` followed by a
+mutation of `v`: *"the mutation is a visible statement, so the compiler inserts
+a guarded copy and the program is accepted"*. That is the `getvia` source with
+its mutation at the `straight` site, and the guarded copy is precisely why `s`
+must still read its pre-mutation value. 3.4 carries the same rule for the
+bare-identifier assignments (`local`, `alias2`).
+
+The severity comes from ratified decision `D52` obligation (ii)
+(`docs/define-gorget/decisions.md`, ratified 2026-08-30), which describes THIS
+family and says of a defect in it, verbatim: *"a bug there is a UAF, not a wrong
+answer"*. Today the class yields wrong values; under the ratified direction the
+same class yields use-after-free, which is why the `asan` lane is baselined here
+even though it reports nothing today.
 
 WHAT MAKES THE RULE APPLY UNIFORMLY ACROSS THE SITE AXIS: every site executes
 its mutation EXACTLY ONCE -- `while __w < 1`, `for __i in 0..1`, `loop:` + an
