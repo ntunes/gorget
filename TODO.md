@@ -96,14 +96,33 @@ work; **optimality is now the direction of travel.**
 2. ⭐ **ALL R49-DEFERRED TRACKS — explicitly including Track S-a2's deferred half, `t1225`.**
 3. **Then** the direction of travel: optimal-implicit-clone via the two plans.
 
-⚠ **MEASURE IT BEFORE YOU PLAN IT — the scope is bigger than one round.** Regenerate:
-`for f in todo/t1*.md; do case "$(grep -m1 '^filed' $f|cut -d'"' -f2)" in 2026-09-0[3-5]) echo $f;; esac; done | wc -l`
-→ **72 open items filed by R49, 26 of them HIGH**, plus the **5 CRITICAL** (a disjoint set — none is R49
-inflow). **A round runs 4-6 tracks.** ⛔ **So R50 CANNOT close all of it, and pretending otherwise is how a
-round ships a scoped-down result while claiming a complete one.** ⭐ **Sequence it: CRITICALs + the 26 R49
-HIGHs first; the LOW/MED hygiene tail is bulk-graduation work (Core #4 favours class-fixes over
-instance-fixes, and much of that tail IS one class).** Report the split to the owner rather than deciding it
-silently.
+⛔ **"ALL R49-DEFERRED" MEANS **HALF-IMPLEMENTED WORK WHOSE SECOND HALF WAS DEFERRED** — owner-corrected
+2026-09-05. It does NOT mean R49's 72 open filings.** An earlier draft of this block read it that way and the
+owner corrected it: *"I did not mean fix all the opened items. But close or complete half-implemented stuff
+from R49 that saw their second half deferred."*
+
+⭐⭐ **AND R49's OWN NEW GUARD MADE THAT SET MACHINE-ENUMERABLE — this is the payoff nobody planned.** Track
+INT-B's `# RETIRES:` requirement means **every temporary admission in the tree now DECLARES what would retire
+it**, so the deferred-work census is a grep:
+```
+grep -oE '^# RETIRES: .*' tests/sanitize/LEAK_ALLOWLIST.txt | sort -u     # each line = a deferred fix
+grep -c '^# ⚖ ADMITTED (' tests/sanitize/LEAK_ALLOWLIST.txt              # how many admissions ride on them
+```
+**Every id on those lines is a half whose other half is deferred, by the tree's own declaration.**
+
+**THE R50 "CLOSE THE DEFERRED HALVES" SET, measured — roughly SEVENTEEN, not seventy-two:**
+- ⭐ **`t1225` — Track S-a2's deferred half, NAMED BY THE OWNER.** HIGH, memory-unsafe from ordinary safe
+  syntax, `gg check` rc 0 AND `gg build` rc 0.
+- **`t1118`** (HIGH) · **`t1216`** (MED) · **`t1066`** (MED) — items whose own text says a half was deferred.
+- **`t1295`** (MED) — the retirement guard's **ADVISORY half shipped, FATAL half deferred.**
+- **`t1210`** (HIGH) — R49-filed and already carrying an admission that retires on it.
+- ⚖ **`t0953`** — **TWO of the owner's R49 admissions retire on it**, and a third new-inflow fixture would be
+  a THIRD owner ask. **The highest-leverage single fix in the set.**
+- **The rest of the retire census** — `t0609(2)`, `t0616`, `t0790`, `t0873(b)`, `t0948`, `t0949`, `t0951`,
+  `t0952`, `t0971`, `t0972`. ⚠ **These predate R49**, so they are the SUPERSET, not the owner's R49 scope —
+  but each is a live admission and the grep above is the honest census. **Ask before widening to them.**
+⊕ **The other ~55 R49 filings are ordinary inflow, NOT deferred halves** — LOW/MED hygiene, bulk-graduation
+work (Core #4 favours the class-fix). **They are not R50's obligation under this directive.**
 
 ⭐ **THE TWO PLANS, and what each needs before an executor:**
 - **`docs/internals/cow-transient-view-model.md` — the LEGALITY axis. `RATIFIED-UNBUILT`.** `D41` is ruled
