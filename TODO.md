@@ -62,6 +62,11 @@ grep -c '^# ⚖ ADMITTED (' tests/sanitize/LEAK_ALLOWLIST.txt              # how
 - **The rest of the retire census** — `t0609(2)`, `t0616`, `t0790`, `t0873(b)`, `t0948`, `t0949`, `t0951`,
   `t0952`, `t0971`, `t0972`. ⚠ **These predate R49**, so they are the SUPERSET, not the owner's R49 scope —
   but each is a live admission and the grep above is the honest census. **Ask before widening to them.**
+⊕ **OWNER-DIRECTED INTO R50 (2026-09-05): `t1308`** — `scripts/todo_index.py --write` handles pointer ADD and
+DELETE but **not MOVE**, so a re-graded item's pointer strands in its old region and `--check` reports a state
+`--write` cannot repair. ⚠ **R50 re-grades the CRITICAL and deferred sets, so this stops being rare** — which
+is why it is scoped here rather than left filed. ⊕ It strands on an `areas` change too, not just `priority`.
+
 ⊕ **The other ~55 R49 filings are ordinary inflow, NOT deferred halves** — LOW/MED hygiene, bulk-graduation
 work (Core #4 favours the class-fix). **They are not R50's obligation under this directive.**
 
@@ -1624,6 +1629,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0965`](todo/t0965.md) **LOW** — 🆕 [LOW — ADOPTION GAP, not a defect; identified 2026-09-03 by R48 Track T-a2 while closing its
 - [`t1301`](todo/t1301.md) **LOW** — 🆕🛡 [LOW — A GUARD NARROWER THAN THE CLASS IT NAMES; found 2026-09-04 by R49 Track S-a2's fixup pass, which narrowed the…
 - [`t1296`](todo/t1296.md) **LOW** — 🆕🐛 [LOW — a CLASS KEY that stopped discriminating, latent rather than live; found 2026-09-04 by R49's sanitize re-seed]…
+- [`t1308`](todo/t1308.md) **LOW** — 🆕🧹 [LOW — A GENERATOR THAT CANNOT REACH ONE OF ITS OWN ERROR STATES; found 2026-09-05 by the orchestrator re-grading t13…
 ## Concurrency
 
 ### High
