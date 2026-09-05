@@ -15,7 +15,7 @@
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0** | 🔵 SCOUTING. **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1 (owner-named). | `t1393`–`t1402` |
 | **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| **G** | pass 1 BLOCKED (5) → folded → 🔵 pass 2. **Streak 0/3.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
+| **G** | passes 1+2 BLOCKED → 2 folds → 🔵 pass 3. **Streak 0/3.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
 | **F1r** | ✅ **REBUILD CONFIRMED BY MEASUREMENT — `t1362` + `t0750` ARE ONE FIX.** 🔵 brief-review pass 1. **Streak 0/3.** | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
@@ -449,6 +449,49 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ⛔⛔ TRACK G's LANDING PROCEDURE WAS UNEXECUTABLE — ~210 CELLS WOULD HAVE SHIPPED **UNGATED**
+
+**Two of my own directives were in direct conflict and I did not notice:** the body says *"baseline at the
+MEASURED bucket"*; my D2 says *"the generator owns `topic`/`cell`/`expected`/`note` ONLY"*. **Composed, nothing
+can seed a non-good baseline.**
+
+**Verified in source:** `--accept` writes a lane column **only when `bucket == good`**, and `--accept-drift`
+needs `drifted`, **which is set inside `if base:`** ⇒ **an EMPTY baseline can NEVER receive a non-good bucket.**
+Pass 2 proved it with a probe row: after `--accept --accept-drift` the column is **still empty.**
+
+⛔ **CONSEQUENCE: the ~210 `WRONG` cells sit at `base == ""` FOREVER, so the regression branch NEVER RUNS on
+them — `WRONG → CRASH` is INVISIBLE.** ⭐ **That is precisely the transition `D52` predicts** (*"a bug there is
+a UAF, not a wrong answer"*) ⇒ **the track's own central argument for the ASan lane was neutralised by the
+seeding hole. SIX-Q #2: the guard could not catch its own class on 30% of its corpus.**
+⊕ **And `--accept` is ALL-OR-NOTHING:** any self-host disagreement reds the map and **refuses to write a single
+row** — and **`t0750` records the self-host is CORRECT on this family while C/LLVM are wrong**, so that is the
+**EXPECTED** outcome on ~210 cells, not a tail risk.
+⭐ **DECIDED — THE CLASS FIX, NOT THE WORKAROUND:** extend the accept branch so an empty baseline **records its
+measured bucket** (one condition; the file already carries the *"a ratchet needs both directions"* reasoning),
+seed all five lanes + `divergence` in the same commit, and have precondition 1 assert **no row is measured on a
+lane where its baseline is empty.**
+
+⛔ **AND MY D1 MITIGATION DOES NOT EXIST.** `--topic` is **INCLUSION-ONLY** (`startswith`) — there is no way to
+exclude one. **And the five-lane step is ALSO PER-PR** (same `test` job; the workflow triggers on `push` **and**
+`pull_request`) ⇒ **the map runs TWICE per PR and BOTH steps grow ~67%.**
+⭐ **DECIDED — ACCEPT THE COST AND WRITE IT INTO THE ROUND ENTRY.** Excluding the topic from CI **defeats the
+argument that justified the design**: a topic CI does not run is a script nobody runs — **2026-07-06 again.**
+
+⛔ **AND MY D5 DISCLOSURE WAS ITSELF A SELECTION — SIX-Q #3 APPLIED TO THE DISCLOSURE.** The generator always
+mutates the **SOURCE** and reads the **VIEW**; the mirror — **mutate the VIEW, read the SOURCE** — is
+**UNPROBED for 7 of 9 sources**, and `t0750` names **both directions as one defect**. ⭐ **The proof was in my
+own errata: `misc_vector_alias_copy.gg` is the MIRROR shape, not the duplicate I called it.** ⇒ **DIRECTION is
+a FOURTH AXIS with no witness, no coverage and no name.**
+⊕ **And one of my two "durable homes" does not exist** — `MANIFEST.tsv` is a flat TSV; a `#` header row would
+be silently dropped and **break precondition 1's set-equality.** ⇒ **the homes are the GENERATOR DOCSTRING, the
+per-row `note` COLUMN, and a `todo/` ITEM.**
+⭐ **STRENGTHENER TAKEN, better than all three: PUT THE SCOPE LIMIT IN THE TOPIC STRING** — it is column 1 of
+every row and prints on every report line.
+
+⊕ **E5 WAS ITSELF A WRONG-INSTRUMENT READING, INSIDE THE ADDENDUM THAT EXISTED TO CORRECT ONE:** *"90 of 99
+fail to build; 9 build"* read `c_verdict`, not build status. **All 99 fail to build on both value lanes**; the
+"9" are labelled ggdef-abstain because that branch is tested **before** the build status.
 
 ### ⭐⭐ TWO FINDINGS THIS HEARTBEAT THAT OUTLIVE THEIR TRACKS
 
