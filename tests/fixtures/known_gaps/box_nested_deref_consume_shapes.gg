@@ -1,0 +1,72 @@
+# `todo/t1077` REGRESSION CELL — the CONSUME-SHAPE row, eight shapes in one
+# program so a PARTIAL regression trips it rather than a total one.
+#
+#   PRE-fix, C:    build rc 0, run rc 139 (SIGSEGV on the first read)
+#   PRE-fix, LLVM: build rc 0, run rc 139 (SIGSEGV on the first read)
+#
+# The shapes, in source order — each is a separate cell of `consume shape`
+# at a fixed payload (`int`) and storage class:
+#
+#   1. plain local read                        `(*(*a))`
+#   2. `Box.new` constructor spelling          `Box.new(Box.new(20))`
+#   3. call-ARGUMENT position                  `bump((*(*c)))`
+#   4. `&`-PARAMETER                           `read_through_ref(&d)`
+#   5. RETURNED from a function                `return (*(*w))`
+#   6. DEPTH 3                                 `(*(*(*e)))`
+#   7. WRITE-THROUGH then read back            `*(*f) = 60`
+#   8. `Option[Box[Box[int]]]` payload, read through a pattern extract
+#
+# ⛔ THE `^`-PARAMETER CELL IS DELIBERATELY ABSENT AND IS NOT THIS CLASS.
+# `int take(Box[int] ^b): return 1` — no nesting, no deref, no `.clone()`,
+# primitive payload — is rc 134 `free(): invalid pointer` on the PRISTINE
+# compiler and stays rc 134 after this fix. That is a pre-existing double-free
+# in the move-parameter path, wider than the filed `todo/t0010` (whose repro
+# needs `(*b).clone()` on an owned-and-dead `Box[Leaf]`), and it is filed
+# separately as `todo/t1313`. Writing it here would pin a defect this fix does
+# not touch.
+#
+# ⊕ The BARE-parameter cell is absent for the opposite reason: it is a NO-OP,
+# green before and after, and it is pinned on its own in
+# `box_nested_deref_bare_param_noop.gg` as a must-stay-green guard.
+#
+# EXPECTED OUTPUT: 10, 20, 31, 40, 41, 50, 60, 70 — one per line
+# EXPECTED EXIT: 0 on BOTH backends.
+#
+# ⛔ `known_gaps/` with a LIVE test: self-host cannot compile nested `Box`
+# (`todo/t1311`) AND this leaks at scope exit (`todo/t1309`).
+
+int bump(int n):
+    return n + 1
+
+int read_through_ref(Box[Box[int]] &w):
+    return (*(*w))
+
+int make_and_return():
+    Box[Box[int]] w = Box[Box[int]](Box[int](41))
+    return (*(*w))
+
+void main():
+    Box[Box[int]] a = Box[Box[int]](Box[int](10))
+    print((*(*a)))
+
+    Box[Box[int]] b = Box.new(Box.new(20))
+    print((*(*b)))
+
+    Box[Box[int]] c = Box[Box[int]](Box[int](30))
+    print(bump((*(*c))))
+
+    Box[Box[int]] d = Box[Box[int]](Box[int](40))
+    print(read_through_ref(&d))
+
+    print(make_and_return())
+
+    Box[Box[Box[int]]] e = Box[Box[Box[int]]](Box[Box[int]](Box[int](50)))
+    print((*(*(*e))))
+
+    Box[Box[int]] f = Box[Box[int]](Box[int](0))
+    *(*f) = 60
+    print((*(*f)))
+
+    Option[Box[Box[int]]] g = Some(Box[Box[int]](Box[int](70)))
+    if g is Some(inner):
+        print((*(*inner)))

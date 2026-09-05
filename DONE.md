@@ -1,3 +1,41 @@
+- [2026-09-05] **`t1077` CLOSED — READ FIXED, LEAK NOT (R50 Track A1).** Nested `Box[Box[T]]` read one deref
+  too many. **ONE LINE** in the value `Expr::Deref` arm (`src/ir/lowering/exprs/mod.rs`): it discriminated a
+  `Box[T]` PARAMETER (internally `*Box__T`, two peels) from a plain LOCAL (one peel) by testing the RESULT of
+  the first peel, `is_box(deref_type)`, instead of the SOURCE representation. When `T` is itself a `Box` the
+  result IS a box, so a local took the parameter branch. **The typed fact it needed — `ptr_to_box` — was
+  computed three lines below and used only to gate the deep-clone branch** (Core #1, verbatim: the read side
+  compensating for a fact the writer already had). The two conditions differ in EXACTLY ONE cell.
+  **⛔ THE ITEM'S FILED SEVERITY UNDERSTATED THE CLASS, AND SO WOULD "SIGSEGV ON C, WRONG ANSWER ON LLVM".**
+  The discriminator is `payload type × consume shape × STORAGE CLASS`, three axes, and it produces FOUR
+  distinct faces on BOTH lanes: rc 139 · **silent-wrong output** (a struct FIELD read prints `0`; a `.rodata`
+  `String` prints an EMPTY line on C and a raw pointer on LLVM — and silent-wrong OUTRANKS the SIGSEGV the
+  item was named for) · a **consume-site ICE rc 101** (`AssignIntoOwnedSlot`, resource-carrying enum and
+  `.rodata` String, both lanes identically) · and a **LINK break** (`undefined reference to 'int64_t__len'` /
+  `llc: '%v32' … expected 'i64'`). Same payload, different consume shape → different face: the struct cell is
+  silent-wrong read as a FIELD and rc 139 read WHOLE.
+  **Shipped:** 9 fixtures in `known_gaps/` with LIVE tests, every one RED-verified on both lanes against the
+  pinned pre-fix binary; the tenth cell — a BARE `Box[Box[T]]` parameter — is a NO-OP that was ACCIDENTALLY
+  correct pre-fix and is pinned as must-stay-green, exempt by construction. Un-ignored
+  `box_nested_double_deref_reads_garbage`. Two guards: a Core #6 ratchet on the arm's `unwrap_or(I64_TYPE)`
+  lossy default (**9 firing fixtures with the gate reverted by line → 0 at HEAD**, an OBSERVER, not an ICE —
+  an unconditional assert there was proposed twice in review and rejected twice as a release-crash risk on an
+  unmeasured path) and a **site-count ratchet over the 11 deref-peel sites** with a disposition per row.
+  ⛔ **NOT an equivalence lint: the sites do NOT agree** — the value arm peels one OR two, the rest peel once —
+  and a lint pinning agreement would have been GREEN on the compiler that shipped this bug.
+  **⛔ THE LEAK HALF IS NOT CLOSED.** The fix trades corruption for a PRE-EXISTING leak — ASan `SEGV` in
+  `strnlen` → **73 bytes in 2 allocations**, byte-identical to a construction-only control in both compiler
+  states, so no new leak — but corruption-to-leak is up the ladder, not reference-grade. Filed as **`t1309`**,
+  blocked on `t0096`, which had asked for exactly this filing on 2026-07-24 and never got it. The plausible
+  mechanism (the fix's `deref_type` change re-gating the deep-clone path) was MEASURED AND REJECTED four ways
+  and the item records the mechanism as UNDETERMINED rather than guessing.
+  **Also filed, each regenerated this session, not inherited:** **`t1310`** 🚨 CRITICAL — on the SELF-HOST lane
+  the `Box` CONSTRUCTOR SPELLING changes memory safety (`Box[String](mk(a,b))` rc 134 double-free,
+  `Box.new(mk(a,b))` rc 0, byte-identical otherwise, Rust gg correct on both; the control ships with a LIVE
+  test because a discriminator that is a spelling needs both spellings in the tree) · **`t1311`** the
+  self-host's `Box__` name-strip family (**17 sites across 4 files**) laundered through a *total* `"__gg_" +
+  suffix` fallback into an undefined typedef — Core #2 in the elegance showcase, and the correctness half of
+  what `t0219`/`t0488` file as form debt · **`t1313`** a `Box[T]` at a `^` parameter double-frees in SIX lines
+  with no nesting, no deref and no clone, wider than `t0010` whose discriminator cannot apply.
 - [2026-09-05] **ROUND XLIX (R49) CLOSED — SEVEN TRACKS, TWO INTEGRATION TRACKS, AND A ROUND THAT LEARNED TO ENUMERATE.**
   **Landed:** T1 (self-host ambient `Callable` return outranks body inference; 7 RED-verified pins) · L
   (closure-capture ownership) · N2 (Vector-HOF result element drop + sizing) · S-a2 (single-owner sub-place

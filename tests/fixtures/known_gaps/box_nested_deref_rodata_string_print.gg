@@ -1,0 +1,27 @@
+# `todo/t1077` REGRESSION CELL — payload: `String`, storage class: `.rodata`
+# LITERAL, consume shape: PRINT-DIRECT.
+#
+# ⭐ THE STORAGE CLASS OF A `String` PAYLOAD IS ITS OWN AXIS, and this cell is
+# the WORST one in the whole class. `t1077` was filed on a HEAP-FORCED string
+# (`box_nested_double_deref_reads_garbage.gg`, `mk(a, b)` so the value cannot
+# be an immortal `.rodata` view), where C SIGSEGVs — loud. Write the obvious
+# literal version instead and C exits 0 having printed NOTHING:
+#
+#   PRE-fix, C:    build rc 0, run rc 0, prints an EMPTY line   ← SILENT WRONG
+#   PRE-fix, LLVM: build rc 0, run rc 0, prints `187651001414384`
+#                  (a raw pointer as an integer)                ← SILENT WRONG
+#
+# Both lanes exit 0. No crash-watching gate can see this cell, which is exactly
+# why `t1077`'s severity text had to be corrected: the class contains a
+# silent-wrong face on BOTH backends, and silent-wrong-output outranks the
+# SIGSEGV the item was named for.
+#
+# EXPECTED OUTPUT: hi
+# EXPECTED EXIT: 0 on BOTH backends.
+#
+# ⛔ `known_gaps/` with a LIVE test: self-host cannot compile nested `Box`
+# (`todo/t1311`) AND this leaks at scope exit (`todo/t1309`).
+
+void main():
+    Box[Box[String]] w = Box.new(Box.new("hi"))
+    print((*(*w)))

@@ -1,0 +1,28 @@
+# `todo/t1077` REGRESSION CELL — payload: `String`, storage class: `.rodata`
+# LITERAL, consume shape: WHOLE-VALUE ASSIGN into a `String` local.
+#
+# The third face of one payload at one storage class. Print it directly and
+# both lanes are silently wrong (`box_nested_deref_rodata_string_print.gg`);
+# assign it to a local and the COMPILER panics instead:
+#
+#   PRE-fix, BOTH lanes: build rc 101
+#     Tier 2a consume-site violation: 1 violation(s) ...
+#     fn @main bb0 i10 — AssignIntoOwnedSlot(dst: GorgetString) — untracked
+#     source consumed (ownership not decided)
+#
+# ⚠ BOTH LANES, IDENTICALLY — the panic is at GIR level, before either backend
+# runs, so there is no lane asymmetry in this cell. That is one more piece of
+# evidence for the single-root-cause claim: every face in this class comes from
+# the same wrong GIR, and the lanes differ only in what they do downstream of
+# it.
+#
+# EXPECTED OUTPUT: hi
+# EXPECTED EXIT: 0 on BOTH backends.
+#
+# ⛔ `known_gaps/` with a LIVE test: self-host cannot compile nested `Box`
+# (`todo/t1311`) AND this leaks at scope exit (`todo/t1309`).
+
+void main():
+    Box[Box[String]] w = Box.new(Box.new("hi"))
+    String s = (*(*w))
+    print(s)

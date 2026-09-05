@@ -1,0 +1,46 @@
+# KNOWN GAP `todo/t1311` — SELF-HOST LANE. Any NESTED `Box` emits C that
+# references a typedef nothing defines, so `cc` rejects the self-host's own
+# output.
+#
+#   emit rc 0, then cc rc 1:
+#     error: unknown type name '__gg_Box__GorgetString';
+#            did you mean 'Box__Box__GorgetString'?
+#
+# ⭐ MECHANISM — AND IT IS CORE #2 / LAYERING RULE 2 IN THE ELEGANCE SHOWCASE.
+# The self-host `EDeref` value arm resolves a box's pointee by STRIPPING THE
+# LITERAL `"Box__"` PREFIX off the mangled type name
+# (`grep -n 'String d_inner_name = dsrc_tname.slice(5' tests/fixtures/self_host_lowerer/lower_expr.gg`).
+# For `Box__Box__int64_t` that yields `Box__int64_t` — itself a mangled Box
+# name, not a runtime type — which then misses the runtime type map and falls
+# through to the `"__gg_" + suffix` fallback
+# (`grep -n 'return "__gg_" + suffix' tests/fixtures/self_host_lowerer/lir_codegen.gg`),
+# producing `__gg_Box__GorgetString`. The emitted line is
+# `static inline void* __gorget_box_alloc_Box__GorgetString(__gg_Box__GorgetString val)`.
+#
+# ⛔ IT IS A FAMILY, NOT A SITE — 17 name-strip sites across 4 files.
+# Regenerate:
+#   grep -rc 'slice(5' tests/fixtures/self_host_lowerer/*.gg | grep -v ':0'
+#   → lir_lower.gg 10 · lower_expr.gg 3 · lir_codegen.gg 2 · lower_types.gg 2
+# Deciding MEANING by matching a name is exactly what the layering rules
+# forbid, and the self-host is supposed to read like the user manual.
+#
+# ⊕ THE IRONY WORTH KEEPING: `todo/t1078` praises the `"__gg_" + suffix`
+# fallback as TOTAL — and total is precisely the problem. It has an answer for
+# every name, including names that are not runtime types, so a wrong name
+# produced upstream is laundered into a plausible-looking C identifier instead
+# of failing. Totality without a domain check is not robustness.
+#
+# ⚠ THIS IS WHAT KEEPS `todo/t1077`'s regression fixtures in `known_gaps/`.
+# The Rust lane is fixed and correct; a top-level fixture would be auto-scanned
+# into `runtime_parity_corpus`, which the self-host cannot compile at all
+# against a non-MATCH ceiling with zero slack.
+#
+# EXPECTED OUTPUT: aaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbb
+# EXPECTED EXIT: 0 on the SELF-HOST lane (Rust gg already gives this).
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Box[Box[String]] w = Box[Box[String]](Box[String](mk("aaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbb")))
+    print((*(*w)))

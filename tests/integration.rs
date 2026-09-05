@@ -65720,27 +65720,432 @@ fn box_carveout_struct_init_requires_operator() {
     );
 }
 
-/// `todo/t1077` — reading through a nested `Box[Box[T]]` is broken on both
-/// lanes, and the two lanes are broken DIFFERENTLY: C SIGSEGVs (rc 139), LLVM
-/// exits 0 and prints a raw pointer as an integer. The LLVM face is the worse
-/// one — a wrong value no crash-watching gate can see.
+// ─────────────────────────────────────────────────────────────────────────
+// `todo/t1077` — NESTED `Box[Box[T]]` READ ONE DEREF TOO MANY.
+//
+// The value `Expr::Deref` arm in `src/ir/lowering/exprs/mod.rs` serves two
+// source shapes: a `Box[T]` PARAMETER (internally `*Box__T`, needing TWO
+// peels) and a plain `Box[T]` LOCAL (needing one). It discriminated them by
+// testing the RESULT of the first peel — `is_box(deref_type)` — instead of the
+// SOURCE representation. When `T` is itself a `Box`, the result IS a box, so a
+// local took the parameter branch and peeled twice. The typed fact it needed,
+// `ptr_to_box`, was computed three lines below and used only to gate the
+// deep-clone branch (Core #1: the read side compensating for a fact the writer
+// had in hand). The fix gates the second peel on `ptr_to_box`. The two
+// conditions differ in EXACTLY ONE cell — `Box__T` where T is a box.
+//
+// ⚠ THE SWEEP IS NOT EVIDENCE ABOUT THIS FIX. The change is a no-op on every
+// program in the corpus that is not a nested `Box`, and
+// `grep -rln 'Box\[Box\[' tests/fixtures/*.gg` returns NOTHING — there was no
+// nested-Box program in the top-level corpus at all. The fixtures below are
+// the ENTIRE guard, which is why they are wide.
+//
+// ⛔ ALL OF THEM LIVE IN `known_gaps/` WITH LIVE TESTS, FOR **TWO** REASONS,
+// and closing only the first is NOT licence to graduate them:
+//   1. the self-host cannot compile ANY nested `Box` (`todo/t1311`,
+//      `unknown type name '__gg_Box__GorgetString'`), and a top-level fixture
+//      is auto-scanned into `runtime_parity_corpus` whose non-MATCH ceiling
+//      has zero slack;
+//   2. they LEAK at scope exit (`todo/t1309`, blocked on `todo/t0096`), and
+//      top level is also the ASan corpus, whose allowlist is shrink-only.
+// `known_gaps/` is `OUT` of both (`tests/sanitize/CORPUS_MANIFEST.txt`), and
+// `scripts/known_gaps_census.sh` scans only `#[ignore]`d tests, so a LIVE test
+// here moves no ceiling. Precedent: `box_ctor_field_source_owning_string`.
+//
+// ⛔ THE FIX IS READ-SIDE ONLY. `t1077`'s read defect is closed; the nested
+// box still leaks at scope exit and that half is OPEN as `todo/t1309`.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// `todo/t1077`'s ORIGINAL repro, graduated from `#[ignore]` to a LIVE
+/// assertion. Payload `String`, HEAP-FORCED (`mk(a, b)`, so the value cannot
+/// be an immortal `.rodata` view), read print-direct.
 ///
-/// CONSTRUCTION is fine: drop the `print` and the identical program builds,
-/// runs and exits 0, with a correctly-named `Box__Box__GorgetString` typedef
-/// and drop chain in the emitted C. The SECOND deref is the axis.
+/// PRE-fix: C build rc 0 / run **rc 139**; LLVM build rc 0 / run rc 0 printing
+/// a raw pointer as an integer. POST-fix: rc 0 and the correct string on both.
+/// Verified in both directions against binary hashes, three times
+/// independently before this landed.
 ///
-/// ⭐ This is also why the `Box` mint's pointer refusal names no remedy: it
-/// originally suggested `^source`, and `^` at both the parameter and the
-/// constructor is rc 139 before AND after that fix — because of this.
+/// CONSTRUCTION was always fine: drop the `print` and the identical program
+/// builds, runs and exits 0, with a correctly-named `Box__Box__GorgetString`
+/// typedef and drop chain in the emitted C. The SECOND deref was the axis.
 #[test]
-#[ignore = "KNOWN GAP (todo/t1077): `(*(*w))` on a `Box[Box[String]]` SEGVs on \
-the C lane (rc 139) and prints a raw pointer as an integer on the LLVM lane \
-(rc 0). Construction is fine; the second deref is the axis. Fixture: \
-tests/fixtures/known_gaps/box_nested_double_deref_reads_garbage.gg."]
 fn box_nested_double_deref_reads_garbage() {
     run_gg(
         "known_gaps/box_nested_double_deref_reads_garbage.gg",
         "aaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbb",
+    );
+}
+
+/// `todo/t1077` — payload RESOURCE-CARRYING ENUM, whole-value assign.
+/// PRE-fix **both lanes**: build **rc 101**, `Tier 2a consume-site violation
+/// … AssignIntoOwnedSlot(dst: Tag) — untracked source consumed`. An ICE, not a
+/// crash and not a wrong value — a third face the filed item did not contain.
+///
+/// ⚠ The enum must CARRY A RESOURCE: a fieldless `enum E: A / B` builds and
+/// SIGSEGVs instead, so a fixture named "enum payload" built on one would miss
+/// this cell (Core #12 — the NAME is a claim about SCOPE).
+#[test]
+fn box_nested_deref_enum_payload() {
+    run_gg("known_gaps/box_nested_deref_enum_payload.gg", "alphabeta");
+}
+
+/// `todo/t1077` — payload `Vector[int]`, method-receiver consume shape.
+/// PRE-fix **both lanes**: a BUILD failure, and the only link-level face in
+/// the class — C `undefined reference to 'int64_t__len'`, LLVM
+/// `'%v32' defined with type 'ptr' but expected 'i64'`.
+///
+/// ⛔ Vector as the PAYLOAD, never as the container: `Vector[Box[Box[int]]]`
+/// and `Dict[String, Box[Box[int]]]` are `redefinition of 'Box__R__drop'`
+/// compile breaks BOTH before and after this fix — `todo/t0096`, a different
+/// defect. They are omitted cells with a reason, not missed ones.
+#[test]
+fn box_nested_deref_vector_payload() {
+    run_gg("known_gaps/box_nested_deref_vector_payload.gg", "3");
+}
+
+/// `todo/t1077` — payload USER STRUCT, FIELD read. PRE-fix **both lanes**:
+/// build rc 0, run rc 0, prints `0` — SILENT WRONG OUTPUT.
+///
+/// ⭐ Its sibling `box_nested_deref_struct_whole_value_read` is the SAME
+/// payload with a different consume shape and SIGSEGVs instead. That pair is
+/// the evidence that the discriminator is `payload × consume shape × storage
+/// class`, not payload alone — a fixture set varying only the payload would
+/// have shown one face and called the axis covered.
+#[test]
+fn box_nested_deref_struct_field_read() {
+    run_gg("known_gaps/box_nested_deref_struct_field_read.gg", "7\n9");
+}
+
+/// `todo/t1077` — payload USER STRUCT, WHOLE-VALUE read into a local.
+/// PRE-fix **both lanes**: build rc 0, run **rc 139**. Same payload as
+/// `box_nested_deref_struct_field_read`, different face.
+#[test]
+fn box_nested_deref_struct_whole_value_read() {
+    run_gg("known_gaps/box_nested_deref_struct_whole_value_read.gg", "7 9");
+}
+
+/// `todo/t1077` — payload `String` at `.rodata` STORAGE CLASS, print-direct.
+/// **THE WORST CELL IN THE CLASS**, and the item was filed without it.
+///
+/// PRE-fix: C build rc 0, run **rc 0, printing an EMPTY line**; LLVM build
+/// rc 0, run rc 0, printing a raw pointer as an integer. BOTH lanes exit 0, so
+/// no crash-watching gate can see it, and silent-wrong-output outranks the
+/// SIGSEGV `t1077` was named for on the severity ladder.
+///
+/// The storage class is its own axis: `t1077`'s own repro heap-forces the
+/// string and gets the loud face. Write the obvious literal instead and you
+/// land here.
+#[test]
+fn box_nested_deref_rodata_string_print() {
+    run_gg("known_gaps/box_nested_deref_rodata_string_print.gg", "hi");
+}
+
+/// `todo/t1077` — payload `String` at `.rodata` storage class, whole-value
+/// assign. PRE-fix **both lanes**: build **rc 101**, `Tier 2a consume-site
+/// violation … AssignIntoOwnedSlot(dst: GorgetString)`.
+///
+/// ⚠ BOTH lanes, identically — the panic is at GIR level, before either
+/// backend runs. The ICE face is not enum-specific and not lane-specific,
+/// which is more evidence for the single-root-cause claim: every face in this
+/// class comes from the same wrong GIR.
+#[test]
+fn box_nested_deref_rodata_string_assign() {
+    run_gg("known_gaps/box_nested_deref_rodata_string_assign.gg", "hi");
+}
+
+/// `todo/t1077` — the CONSUME-SHAPE row: eight shapes in one program (plain
+/// read · `Box.new` spelling · call-argument · `&`-parameter · returned ·
+/// depth 3 · write-through · `Option[Box[Box[T]]]` payload), so a PARTIAL
+/// regression trips it rather than a total one. PRE-fix **both lanes**:
+/// build rc 0, run **rc 139**.
+///
+/// ⛔ THE `^`-PARAMETER CELL IS DELIBERATELY ABSENT. `int take(Box[int] ^b)` —
+/// no nesting, no deref, no `.clone()`, primitive payload — is rc 134
+/// `free(): invalid pointer` on the PRISTINE compiler and stays rc 134 after
+/// this fix. Pre-existing, wider than the filed `todo/t0010`, and filed on its
+/// own as `todo/t1313`. Including it would pin a defect this fix cannot move.
+#[test]
+fn box_nested_deref_consume_shapes() {
+    run_gg(
+        "known_gaps/box_nested_deref_consume_shapes.gg",
+        "10\n20\n31\n40\n41\n50\n60\n70",
+    );
+}
+
+/// `todo/t1077` — the PRIMITIVE-PAYLOAD and DEPTH rows: `int` / `float` /
+/// `bool` at depth 2, and `int` at DEPTH 4. PRE-fix **both lanes**: build
+/// rc 0, run **rc 139** on all of them.
+///
+/// ⚠ Written out rather than sampled on purpose. All four behave identically,
+/// so one cell "covers" them by argument — but this tree has already been
+/// burned on exactly this axis (`todo/t1197`: `Box[float32]` reads `0.000000`
+/// because the allocator's NAME and BODY disagree about element width, which
+/// no `int` cell could show). `float32` itself is the named omission: it is
+/// red independently of this fix.
+#[test]
+fn box_nested_deref_primitive_payloads_and_depth() {
+    run_gg(
+        "known_gaps/box_nested_deref_primitive_payloads_and_depth.gg",
+        "42\n2.500000\ntrue\n99",
+    );
+}
+
+/// `todo/t1077`'s NO-OP CELL — a BARE `Box[Box[T]]` parameter, GREEN BEFORE
+/// AND AFTER. ⛔ EXEMPT FROM THE CORE #12 RED-VERIFY, deliberately, and it is
+/// the one fixture in this family that must NOT be red on the pre-fix
+/// compiler.
+///
+/// A `Box[T]` parameter is internally `*Box__T`, so the pre-fix gate
+/// `is_box(deref_type)` (the RESULT of the first peel) happened to agree with
+/// the correct gate `ptr_to_box` (the SOURCE) for exactly this shape. Two
+/// peels are genuinely needed here and both gates ask for two — the pre-fix
+/// compiler was ACCIDENTALLY correct (six-questions #6).
+///
+/// ⚠ IT IS A TRAP FOR THE NEXT RE-MEASUREMENT: revert the fix, run this one
+/// fixture, see green, and conclude the revert did not take. Independently
+/// confirmed here — with the gate reverted by line, this is the ONLY nested-Box
+/// fixture that stays clean while the other nine fire.
+///
+/// ⭐ Its real job is the other side of the boundary. The fix NARROWS the
+/// second peel from `is_box(deref_type)` to `ptr_to_box`; this pins the cell
+/// where the second peel must still HAPPEN. Without it, "narrow the gate" and
+/// "delete the gate" look identical to the suite.
+#[test]
+fn box_nested_deref_bare_param_noop() {
+    run_gg("known_gaps/box_nested_deref_bare_param_noop.gg", "42\nhi!");
+}
+
+/// KNOWN GAP (`todo/t1309`) — the OTHER HALF of `todo/t1077`, and the reason
+/// that item closed as **"read fixed, leak not"** rather than cleanly.
+///
+/// A nested `Box[Box[R]]` LEAKS its inner box at scope exit. `t1077` fixed the
+/// READ; the drop chain still never reaches the inner box, and the fix neither
+/// caused nor cured that.
+///
+/// ⚠ CONSTRUCTION ONLY — the box is built and never read — so this repro
+/// cannot be confused with `t1077`'s. The payload is HEAP-FORCED (`mk(a, b)`
+/// on two long halves): a `.rodata` literal is an immortal view, leaks
+/// nothing, and would make this fixture green on arrival.
+///
+/// MEASURED 2026-09-05, `gg build --sanitize`, 2 reps, both compiler states:
+/// **73 bytes in 2 allocations, identical before and after the `t1077` fix**
+/// (32 direct + 41 indirect). The READ program goes ASan `SEGV` in `strnlen`
+/// → the SAME 73 bytes / 2 allocations, so the fix trades corruption for a
+/// pre-existing leak and introduces no new one — up the severity ladder, but
+/// not reference-grade, and `t1309` says so.
+///
+/// Blocked on `todo/t0096`: routing the outer box's drop through the inner
+/// `Box__R__drop` wrapper is the natural fix and trips that redefinition.
+/// ⭐ `t0096`'s own text asked for this filing ("file that separately, do not
+/// lump") on 2026-07-24 and nobody made it until now.
+#[test]
+#[ignore = "KNOWN GAP (todo/t1309): a nested `Box[Box[R]]` leaks its inner box \
+at scope exit — 73 bytes in 2 allocations under `gg build --sanitize`, \
+identical before and after the todo/t1077 read fix. Blocked on todo/t0096 \
+(`Box__R__drop` redefinition). Asserts the INTENDED leak-clean run. Fixture: \
+tests/fixtures/known_gaps/box_nested_construction_only_leak.gg."]
+fn box_nested_construction_only_leak() {
+    assert_gg_sanitize_clean("known_gaps/box_nested_construction_only_leak", "built");
+}
+
+/// KNOWN GAP (`todo/t1313`), RUST lane — a `Box[T]` passed to a `^` (move)
+/// PARAMETER double-frees. Six lines, primitive payload, no nesting, no
+/// deref, no `.clone()`.
+///
+/// C: build rc 0, run **rc 134** `free(): invalid pointer`.
+/// LLVM: build rc 0, run **rc 134** `double free or corruption (out)`.
+///
+/// ⚠ WIDER THAN THE FILED `todo/t0010`, which is why it is its own item: that
+/// item's repro needs `(*b).clone()` on an owned-and-dead `Box[Leaf]`, and the
+/// discriminator it names — move-eligibility of the Box AT THE CLONE — cannot
+/// apply here, because there is no clone.
+///
+/// ⚠ MEASURED IDENTICAL on both sides of the `todo/t1077` fix (rc 134 before,
+/// rc 134 after, both backends), so it is a pre-existing sibling and not
+/// inflow from it. It is also why `t1077`'s fixture set carries no
+/// `^`-parameter cell.
+#[test]
+#[ignore = "KNOWN GAP (todo/t1313): `int take(Box[int] ^b)` double-frees — \
+rc 134 `free(): invalid pointer` on C, `double free or corruption (out)` on \
+LLVM — with no nesting, no deref and no clone, so it is wider than \
+todo/t0010. Asserts the INTENDED 1. Fixture: \
+tests/fixtures/known_gaps/rust_box_move_param_double_free.gg."]
+fn rust_box_move_param_double_free() {
+    run_gg("known_gaps/rust_box_move_param_double_free.gg", "1");
+}
+
+/// KNOWN GAP (`todo/t1310`), SELF-HOST lane — 🚨 **the constructor SPELLING
+/// changes memory safety.**
+///
+/// `Box[String](mk(a, b))` and `Box.new(mk(a, b))` are byte-identical programs
+/// but for the spelling. Measured 2026-09-05 against a freshly built self-host
+/// lowerer driver: the first is emit rc 0 / cc rc 0 / run **rc 134**
+/// `free(): double free detected in tcache 2`; the second is rc 0 and correct.
+/// **Rust gg is correct on BOTH**, so this is not "the reference lags the
+/// self-host" — the self-host is simply wrong.
+///
+/// SINGLE LEVEL, not nesting: unrelated to `todo/t1077` and `todo/t1311`.
+/// The `Box.new` control is pinned LIVE as
+/// `sh_box_ctor_spelling_new_ok_self_host` — if that one ever goes red too,
+/// the discriminator has moved and this item describes something else.
+#[test]
+#[ignore = "KNOWN GAP (todo/t1310): on the SELF-HOST lane \
+`Box[String](mk(a,b))` runs rc 134 `free(): double free detected in tcache 2` \
+while the byte-identical `Box.new(mk(a,b))` runs rc 0 — the constructor \
+SPELLING changes memory safety. Rust gg is correct on both. Asserts the \
+INTENDED output. Fixture: \
+tests/fixtures/known_gaps/sh_box_ctor_spelling_double_free.gg."]
+#[serial(self_host_lowerer_driver)]
+fn sh_box_ctor_spelling_double_free() {
+    sh_known_gap_expect(
+        "known_gaps/sh_box_ctor_spelling_double_free.gg",
+        "sh_box_ctor_spelling_df",
+        "xxxxxxxxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyyyy",
+    );
+}
+
+/// LIVE control for `todo/t1310` — the `Box.new` spelling, which the self-host
+/// gets RIGHT (emit rc 0, cc rc 0, run rc 0, correct output, measured
+/// 2026-09-05).
+///
+/// ⭐ It is LIVE on purpose. `t1310`'s discriminator is a SPELLING, and a
+/// discriminator with only one side in the tree is a sentence rather than a
+/// pin: if this test ever fails, the two spellings no longer differ and
+/// `t1310` needs rewriting, not re-running.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_box_ctor_spelling_new_ok_self_host() {
+    sh_lane_expect(
+        "known_gaps/sh_box_ctor_spelling_new_ok.gg",
+        "sh_box_ctor_spelling_new",
+        "xxxxxxxxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyyyy",
+    );
+}
+
+/// KNOWN GAP (`todo/t1311`), SELF-HOST lane — any NESTED `Box` emits C that
+/// references a typedef nothing defines, so `cc` rejects the self-host's own
+/// output: `unknown type name '__gg_Box__GorgetString'` (measured 2026-09-05,
+/// emit rc 0 then cc rc 1, freshly built driver).
+///
+/// ⭐ MECHANISM, AND IT IS CORE #2 IN THE ELEGANCE SHOWCASE. The self-host
+/// `EDeref` arm resolves a box's pointee by stripping the literal `"Box__"`
+/// prefix off the mangled name — regenerate with
+/// `grep -n 'String d_inner_name = dsrc_tname.slice(5' tests/fixtures/self_host_lowerer/lower_expr.gg`.
+/// `Box__Box__int64_t` becomes `Box__int64_t`, itself a mangled Box name and
+/// not a runtime type, which misses the type map and falls through to the
+/// `"__gg_" + suffix` fallback in `lir_codegen.gg`.
+///
+/// ⛔ A FAMILY, NOT A SITE — 17 name-strip sites across 4 files. Regenerate:
+/// `grep -rc 'slice(5' tests/fixtures/self_host_lowerer/*.gg | grep -v ':0'`
+/// → `lir_lower.gg` 10 · `lower_expr.gg` 3 · `lir_codegen.gg` 2 ·
+/// `lower_types.gg` 2.
+///
+/// ⚠ THIS IS WHAT KEEPS `todo/t1077`'s fixtures in `known_gaps/`: a top-level
+/// fixture is auto-scanned into `runtime_parity_corpus`, and this lane cannot
+/// compile the shape at all against a non-MATCH ceiling with zero slack.
+#[test]
+#[ignore = "KNOWN GAP (todo/t1311): the self-host emits `unknown type name \
+'__gg_Box__GorgetString'` for any nested `Box` — its EDeref arm resolves a \
+box's pointee by stripping the literal `Box__` prefix off the mangled name \
+(17 such sites across 4 self_host_lowerer files), and the `__gg_` fallback \
+launders the wrong name into a C identifier. Asserts the INTENDED output. \
+Fixture: tests/fixtures/known_gaps/sh_nested_box_undefined_typedef.gg."]
+#[serial(self_host_lowerer_driver)]
+fn sh_nested_box_undefined_typedef() {
+    sh_known_gap_expect(
+        "known_gaps/sh_nested_box_undefined_typedef.gg",
+        "sh_nested_box_typedef",
+        "aaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbb",
+    );
+}
+
+/// Core #6 ratchet for the ONE lossy default in the value `Expr::Deref` arm —
+/// `ctx.deref_inner_type(ptr_type).unwrap_or(I64_TYPE)`
+/// (`src/ir/lowering/exprs/mod.rs`). When the pointee of a deref target cannot
+/// be resolved, that default MANUFACTURES `i64` rather than failing, and the
+/// manufactured type is what picks the print format: an unresolvable pointee
+/// becomes `%lld`, so the value is printed as a raw pointer instead of being
+/// diagnosed. **The ceiling is ZERO and this asserts it.**
+///
+/// ⚠ THE `unwrap_or` IS DELIBERATELY LEFT IN PLACE. `DerefLossyDefaultGuard`
+/// OBSERVES it under an env var and is OFF by default. An unconditional
+/// `debug_assert!`/ICE there was proposed twice during review and rejected
+/// twice: the default's reachability had never been measured, and an
+/// unconditional ICE on an unmeasured path is a release-crash risk. This is
+/// the `env-gate → burn down → fatal` runway (the `GG_STAGING_MOVE_GUARD`
+/// precedent) entered with the corpus already at zero.
+///
+/// ## BOTH DIRECTIONS, MEASURED (2026-09-05, `todo/t1077`)
+///
+/// The `t1077` fix is what burned this down, and the two states are:
+///
+/// | gate at `src/ir/lowering/exprs/mod.rs` | firing fixtures of the 10 below |
+/// |---|---|
+/// | `if ptr_to_box {` (HEAD) | **0** |
+/// | `if ctx.type_registry.is_box(deref_type) {` (reverted) | **9** |
+///
+/// The RED direction was produced by reverting that ONE LINE BY LINE INDEX,
+/// never by substring (Core #13 — `is_box(` has identically-spelled siblings
+/// three lines away that would have absorbed the edit), rebuilding, and
+/// re-running this same set; binary hashes confirmed each rebuild.
+///
+/// The tenth fixture, `box_nested_deref_bare_param_noop.gg`, is clean in BOTH
+/// states — it is the no-op cell, and its staying clean while the other nine
+/// flip is the cleanest available proof that the revert took.
+///
+/// **If this fails**: something now reaches a deref whose pointee type cannot
+/// be resolved, and it is silently compiling as `i64`. Find it with
+/// `GG_DEREF_LOSSY_DEFAULT_GUARD=count`; do NOT widen this test's fixture list
+/// to route around it.
+#[test]
+fn deref_pointee_lossy_default_never_fires() {
+    const FIXTURES: &[&str] = &[
+        "known_gaps/box_nested_double_deref_reads_garbage.gg",
+        "known_gaps/box_nested_deref_enum_payload.gg",
+        "known_gaps/box_nested_deref_vector_payload.gg",
+        "known_gaps/box_nested_deref_struct_field_read.gg",
+        "known_gaps/box_nested_deref_struct_whole_value_read.gg",
+        "known_gaps/box_nested_deref_rodata_string_print.gg",
+        "known_gaps/box_nested_deref_rodata_string_assign.gg",
+        "known_gaps/box_nested_deref_consume_shapes.gg",
+        "known_gaps/box_nested_deref_primitive_payloads_and_depth.gg",
+        "known_gaps/box_nested_deref_bare_param_noop.gg",
+    ];
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut firing: Vec<String> = Vec::new();
+
+    for fixture in FIXTURES {
+        let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+        assert!(
+            fixture_path.exists(),
+            "Fixture not found: {}",
+            fixture_path.display()
+        );
+        let mut cmd = gg_command("build");
+        cmd.arg(&fixture_path);
+        cmd.env("GG_DEREF_LOSSY_DEFAULT_GUARD", "fatal");
+        let out = build_with_timeout(&mut cmd, fixture);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stderr.contains("deref-pointee lossy default fired") {
+            firing.push((*fixture).to_string());
+        }
+    }
+
+    assert!(
+        firing.is_empty(),
+        "\nderef-pointee lossy default (`unwrap_or(I64_TYPE)` in the value \
+         `Expr::Deref` arm of src/ir/lowering/exprs/mod.rs) fired for {} of {} \
+         nested-`Box` fixtures. The ceiling is ZERO.\n\nFired for:\n  {}\n\n\
+         Reproduce with:\n  \
+         GG_DEREF_LOSSY_DEFAULT_GUARD=count cargo run -- build \
+         tests/fixtures/<fixture>\n\n\
+         An unresolvable deref pointee is compiled as `i64`, which picks \
+         `%lld` and prints the value as a raw pointer. See `todo/t1077` and \
+         `DerefLossyDefaultGuard` in src/ir/lowering/exprs/mod.rs.",
+        firing.len(),
+        FIXTURES.len(),
+        firing.join("\n  "),
     );
 }
 
