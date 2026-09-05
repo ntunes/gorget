@@ -11,7 +11,7 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| ✅ **C2** | **`t0045`** — **OUTPUT-REVIEW: SIGN OFF on code + fixtures + guard + lanes; ONE BLOCKING DOC claim. 🟢 EXECUTOR RESUMED to close it.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| ✅ **C2** | **`t0045`** — code SIGNED OFF; doc blocker closed by **`a1e57be97`** (docs-only). 🔵 **fresh CONFIRMING pass on the delta, then integrate the 2-commit stack.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ⛔⛔ **REBUILT TWICE. Streak 0/3, 🔵 SCOUT on `v3`.** Read-site route dead (5 corrupting cells); **write-site route ALSO dead** (1 corrupting cell; its "zero corruption" table was the **no-op column** — byte-identical C to HEAD on all 11 cells). ⭐ **v3 = PARSER FIRST:** make `d[k](v)` parse ⇒ the 8 `httpserver` BINDS migrate to the ratified **callee borrow** ⇒ the bind reject gains a recourse ⇒ `elem_drop` is safe on every provenance. **No owner ruling needed — `t1225`'s directive is honoured, not overridden.** | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
@@ -486,6 +486,28 @@ path does not exist.** Filed from the spare block.
 double-free, which is fixed in `7785c1221` and **not yet on this branch**. ⚠ **The blocker CHANGES (to `t1404`'s
 lost write), it does not VANISH.** ⇒ **correct it AT integration, or a true statement is deleted early** — the
 retraction rule, one heartbeat old, applied prospectively for once.
+
+### ⭐ C2's DOC FOLD FOUND A SITE **NOBODY HAD NAMED** — WHICH IS THE POINT OF ASKING FOR A SET
+
+**`a1e57be97`, docs-only, on top of `7785c1221`. 5 sites FIXED, and the 5th was found BY THE GREP, not by the
+checklist:** a `devbook/11` per-loop-kind table row that described only the zero-copy view and not the
+drop-safe one. ⇒ ⭐ **"present the SET with a disposition per row" is not bookkeeping — it is the only thing
+that finds the row no enumerator thought of.**
+
+⭐⭐ **AND THE EXECUTOR APPLIED THE NEW FOLD RULE TO A CLAIM IT WAS ASKED TO CARRY.** The same §9.1 note also
+says a `String` element loses a mutation-through (`e.push('!')`). **Rather than propagate it, it MEASURED:
+`aa` at BOTH the pre-fix and post-fix compiler** ⇒ unchanged by this fix ⇒ **the claim STAYS.** ⚠ ***That is
+the retraction rule working in the other direction: I only ever caught myself retracting too WIDE — this is
+the discipline that stops a fold deleting a TRUE neighbour of a false claim.***
+
+⊕ **The `E5` sentence now records WHY there is no fixture instead of promising one:** a realloc-forcing shape
+lands in the still-open `sound_excl_forbody_amp_writer` gap, so it would **pin THAT gap, not this tag.**
+⛔ **No fixture invented** — which is the correct outcome of *"do not promise a fixture you do not name"*.
+
+⊕ **`t1335` filed with the DISCRIMINATOR stated, not just the symptom:** unlike the rest of the
+*"guard cannot see its own class"* family, **this guard's SUBJECT is present and correct — it loses the
+producer because the producer STOPPED BEING NAMEABLE** ⇒ **widening either sibling does not reach it.**
+(That is SIX-Q #4 used as a filing tool: *a case with no subject at all, which no widening fixes.*)
 
 ### ⛔⛔⛔ D0′ REBUILD #1 IS ALSO DEAD — THE WRITE SITE DOUBLE-FREES, AND ITS "ZERO CORRUPTION" WAS THE **NO-OP COLUMN**
 
