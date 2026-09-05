@@ -20,6 +20,17 @@
 # deleted does not remove a row, it FLIPS one CLONED → RAW — which is how this
 # census catches the class it was written for rather than green-lighting it.
 #
+# ⚠ WHAT SET EQUALITY CANNOT SEE, STATED SO IT IS NOT REDISCOVERED: the key
+# DEDUPLICATES (`key_set` in scripts/runtime_duplication_census.py is a set
+# comprehension over (fn, prim, cat)). So a SECOND raw duplicating store added
+# inside a function that ALREADY has a RAW row for the same primitive collapses
+# into that row and is INVISIBLE here. The flip direction — a clone deleted,
+# CLONED → RAW — is what this census exists to catch and is unaffected; the
+# blind spot is purely ADDITIVE, a new defect hiding behind an existing
+# correct-by-declaration row. A reviewer adding a duplicating store to a
+# function already listed below must read the row's REASON, because the gate
+# will not ask.
+#
 # ⚠ LINE NUMBERS ARE NOT IN THE KEY, DELIBERATELY. They rot on every edit above
 # them, and a baseline that must be re-blessed for unrelated changes gets
 # re-blessed unread.

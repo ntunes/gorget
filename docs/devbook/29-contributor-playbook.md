@@ -899,6 +899,31 @@ shared. If they shared a harness the shipping tests do not use, you have measure
 harness. The finding is not wrong yet — but it is unverified, and the cheapest way to
 verify it is to make the failure appear somewhere the project already trusts.
 
+### The sibling case — an instrument that discards the very output you are comparing
+
+The same trap has a second shape, and it is quieter because the harness is one the project
+*does* trust. A round wanted to know whether a partial revert changed a fixture's stdout, and
+measured it under the sanitizer — the natural choice, since the same run was already being
+used to detect the leak. Every row read back empty, and empty compares equal to empty, so the
+conclusion was "stdout unchanged" for rows whose stdout had in fact changed.
+
+The cause is that ASan's `exitcode=` path aborts the process without flushing buffered stdout.
+The instrument that answers *"does it leak?"* is structurally unable to answer *"what did it
+print?"* — the leak check destroys the print. Two questions, one run, and only one of them
+was actually measured.
+
+**The fixed procedure.** When a claim pairs a memory finding with a stdout finding, run the
+program **twice**: once under the sanitizer for the leak, once with leak detection off
+(`detect_leaks=0`) for the bytes. Never read both off the same invocation. And when a
+comparison returns "identical" for *every* row, treat unanimity as a symptom before treating
+it as a result — a instrument returning a constant is indistinguishable from a world in which
+nothing changed, and the constant is the more common explanation.
+
+**The general rule this belongs to** is Core #13: *pick an instrument that can SEE the failure
+class.* Both shapes are the same mistake — a control that cannot vary with the thing it is
+controlling for. The harness-sharing shape hides a bug that is not there; this one hides a
+difference that is.
+
 ## A class statement reached by resemblance is the defect that survives four reviews
 
 One R47 track produced four consecutive blocking findings, one per review pass, and every one was the

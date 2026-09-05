@@ -2,10 +2,17 @@
   at round close and *"nothing recorded what was never run"* is how a family gets declared closed.
   **(1) THE SELF-HOST PORT'S ONLY INSTRUMENT IS A SOURCE-TEXT RATCHET.** `self_host_lowerer` is an `OUT` row
   in `tests/sanitize/CORPUS_MANIFEST.txt`, so no UBSan gate walks it, and the parity corpus pins VALUES —
-  which a defined-ness fix leaves byte-identical by construction. **Reverting the port turns no behavioural
+  which a defined-ness fix leaves byte-identical by construction. **Reverting THE PORT turns no behavioural
   row red anywhere in the battery.** `self_host_wrap_arith_uses_wrapping_compute_c` (`tests/lints.rs`) was
   landed rather than recording a bare omission, and it IS RED-verified — but it reads source text, so it
   cannot see a semantic regression, only a textual one. Carried into `todo/t1442`.
+  ⛔ **CORRECTED 2026-09-05 at integration, quoted at the claim's own scope.** The sentence about the
+  RATCHET stands — it does read text. The sentence about the BATTERY was stated too widely: it holds for
+  the **port revert** (value-identical by construction, which is the cell the ratchet uniquely covers)
+  and is **FALSE for a NARROWING**. The output-review narrowed the SH helper to `uint32_t` — a semantic
+  regression — and `sh_wrapping_ops_defined` goes **RED** on it
+  (`left: "i64_add=0\ni64_sub=4294967295\ni64_mul=0"`). ⇒ **name which revert each instrument pins**
+  instead of crediting one instrument with the whole surface.
   **(2) THE PERF IDENTITY DOES NOT COVER `-O3`.** At `-O2` — the only level `gg` emits (`grep -n '"-O2"\|"-O3"\|user_opt' src/main.rs`)
   — the widened form is instruction-identical to the same-width one except that `Shl` widens to 64-bit
   register ops at equal instruction count (10 v 10), values unaffected. **At `-O3` the 8-bit dependent chain
@@ -116,7 +123,7 @@
   `known_gaps` repro **GRADUATED** (moved out, un-ignored, upgraded to the sanitizer assertion).
   **NINE PARTIAL REVERTS, EIGHT PINNED, EACH ANCHORED BY LINE** — the over-clone revert has an
   identically-spelled sibling nine lines down in the same function, the Core #13 trap, live. R2 clone-loop
-  → 8 DOUBLE_FREE · R3 over-clone → 7 rows LEAK with stdout unchanged in **all 8** · R4 inherited slot →
+  → 8 DOUBLE_FREE · R3 over-clone → **9 of 9 rows LEAK, stdout byte-identical in 9 of 9** (this entry first said 7 of 8; the DENOMINATOR regenerates to 9 via `git show d61e5af23 -- tests/integration.rs | grep '^+' | grep -c "assert_gg_sanitize_clean("`, and the NUMERATOR is the OUTPUT-REVIEW's measurement, recorded as theirs and not re-run at integration) · R4 inherited slot →
   8 rows, uninitialised-poison read · R5 `n==0` arm → **uniquely** `fill_count_boundaries`, LSan-only ·
   R6 POD branch → `fill_element_types` on **stdout** (a sanitizer-only harness is blind to it) · R7
   lowering arm → 7 rows incl. the UAF · R8 `CkVector` → all 7 Vector rows on the SH lane, Deque rows
