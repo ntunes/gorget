@@ -11,7 +11,7 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| ✅ **C2** | **`t0045`** — **7 passes, executor RETURNED `7785c1221` (30 files, +836/−99), 🔵 OUTPUT-REVIEW RUNNING.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| ✅ **C2** | **`t0045`** — **OUTPUT-REVIEW: SIGN OFF on code + fixtures + guard + lanes; ONE BLOCKING DOC claim. 🟢 EXECUTOR RESUMED to close it.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ⛔⛔ **REBUILT TWICE. Streak 0/3, 🔵 SCOUT on `v3`.** Read-site route dead (5 corrupting cells); **write-site route ALSO dead** (1 corrupting cell; its "zero corruption" table was the **no-op column** — byte-identical C to HEAD on all 11 cells). ⭐ **v3 = PARSER FIRST:** make `d[k](v)` parse ⇒ the 8 `httpserver` BINDS migrate to the ratified **callee borrow** ⇒ the bind reject gains a recourse ⇒ `elem_drop` is safe on every provenance. **No owner ruling needed — `t1225`'s directive is honoured, not overridden.** | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
@@ -450,6 +450,42 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ✅ C2's OUTPUT-REVIEW: THE PATCH SURVIVED EVERYTHING — AND THE ONE BLOCKER IS A **DOC CLAIM THE FIX MADE FALSE**
+
+⭐ **All three integration gates PASS, and gate 2 was RED-VERIFIED BY THE REVIEWER, not accepted on report:** it
+built the pre-fix compiler at `7785c1221^` and ran all 11 new fixtures — **8 `security/` rows + the `spectests/`
+seed RED** (`attempting double-free` / `heap-use-after-free`), green under the fix. ⊕ **The two green-at-HEAD
+rows are not green-on-arrival coverage** — their own headers say their instrument is a **compile-time refusal,
+not a crash**, and the reviewer confirmed it fires. ⊕ **Gate 3 is the strong form of Core #8:** ggdef MATCHes the
+bare cell ⇒ **this is the REFERENCE being brought into line with the DEFINITION**, not two backends agreeing.
+⊕ **Three revert atoms independently RED-verified with LINE-anchored breaks** — and Core #13 paid off twice:
+`for_loops.gg` has **three identically-spelled** `set_collection_ref` lines and **two** identical
+`register_local` lines; a substring break hits the wrong one. ⊕ **`Dp` fires ONLY under `detect_leaks=1`** ⇒
+**the `security_safe_no_leak` wiring is LOAD-BEARING; under `security_safe` that row would be inert.**
+
+⛔ **THE BLOCKER: `docs/language-reference.md:2554` still says the construct *"double-frees at runtime"*.**
+Regenerate: `grep -n "double-frees at runtime" docs/language-reference.md`. The reviewer ran that exact program
+under the fix: **rc 0, prints `x`, ASan- and LSan-clean.** ⇒ **the tree CONTRADICTS ITSELF in the user-facing
+reference**, because the same commit rewrites two `#[ignore]` reasons to say *"it no longer double-frees"*.
+⊕ **And the element-type list is now a stale SELECTION — `String` belongs IN the "rebinding is silently lost"
+set**, which is exactly `t1404`'s residual.
+⭐ **ROOT CAUSE, AND IT IS MINE: my doc-rot row was a SELECTION (SIX-Q #3).** It enumerated six citation SITES
+and **never grepped for behaviour CLAIMS about the construct.** ⇒ the executor is told to **run that grep across
+`docs/` and present the SET with a disposition per row** — two members are already known (`:2921` understates
+now that `String` is affected; `docs/book/11-ownership.md:511,517` still teaches the retired *"borrows each
+element read-only"* label).
+
+⊕ **A GUARD GAP THE FIX ITSELF CREATES, measured:** `no_growth_in_lir_view_callee_rewrites` is **41 at parent,
+41 at the fix, BUDGET 41** — no slack, nothing to lower. **But the new emit reaches `gorget_string_borrow_view`
+through typed metadata and never SPELLS it in `src/lir/`**, so a future `borrow_view_fn: Some(..)` row mints a
+new LIR view producer with **ZERO ratchet movement.** ⇒ **the devbook row was added by hand; the GUARD for that
+path does not exist.** Filed from the spare block.
+
+⛔ **`todo/t0041.md:11`'s blocker line goes STALE AT INTEGRATION, NOT NOW** — it cites the `for x in &coll`
+double-free, which is fixed in `7785c1221` and **not yet on this branch**. ⚠ **The blocker CHANGES (to `t1404`'s
+lost write), it does not VANISH.** ⇒ **correct it AT integration, or a true statement is deleted early** — the
+retraction rule, one heartbeat old, applied prospectively for once.
 
 ### ⛔⛔⛔ D0′ REBUILD #1 IS ALSO DEAD — THE WRITE SITE DOUBLE-FREES, AND ITS "ZERO CORRUPTION" WAS THE **NO-OP COLUMN**
 
