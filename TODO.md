@@ -4,6 +4,28 @@
 ### 🚀 ROUND L (R50) IS OPEN — 2026-09-05. HEADLINE: **THE CRITICAL MEMORY-SAFETY SET + R49's DEFERRED HALVES.**
 **Owner-directed.** Safety debt first; the optimality pivot follows it, not beside it.
 
+### ⚖ THE OWNER-ASK LEDGER FOR R50 — **SIX RAISED, ONE SURVIVES** (audited 2026-09-05)
+
+⛔ **THE AUDIT'S OWN FINDING FIRST: two of these dissolved in conversation and the withdrawal was recorded
+NOWHERE DURABLE.** The roster said `HELD — OWNER ASK` for both while the answer was already settled. **A
+resolution that lives only in a transcript is exactly as ephemeral as a brief** — same failure as F1r's lost
+omission, one heartbeat apart.
+
+| ask | verdict | what settled it |
+|---|---|---|
+| **`t1443`** neg overflow | ✅ **WITHDRAWN**, committed `da541d17a` | Rust gg contradicts ITSELF (`0 - m` traps, `-m` wraps); wrap already spellable as `0 -% m`; D30 lists defined-wrap among REJECTED alternatives. ggdef corroborates, it does not decide. |
+| **B** the capture cell | ✅ **WITHDRAWN — record it** | **`D7` (ratified, unimplemented) IS the reference-grade answer.** Recourse exists TODAY and is measured: `Callable c2 = c.clone()` then capture `c2`. `^c` at a capture is unspellable (`(^c)(): …` is a parse error), so there is no accept→reject cliff. |
+| **K2** ggdef VERDICT taxonomy | ✅ **WITHDRAWN — record it** | ⭐ **THE REPO ALREADY ANSWERED IT.** `todo/t0338.md:11`, filed by R43 in August: *"the gap is that the shapes are OUT OF SUBSET — NOT that the tool fails quietly; ggdef's rejection is loud and correct (`EXIT_ILLFORMED = 1`)"*, and it prescribes the subset-expansion queue. `EXIT_ILLFORMED` was **deliberately collapsed 102→1** — the distinction K2 wanted to ADD once existed and was REMOVED. |
+| **D1** `t1225` | 🔄 **NOT AN ASK — a sequencing dependency** | The named ruling is **absent from the ledger AND never was there**: `git log -S'callee-borrow' -- docs/define-gorget/decisions.md` is EMPTY, so there is no removal to find. The blocking work is filed: **`t1349`** (ctors store a BORROWED `Callable` into a returned field) + **`t1350`** (write site: `needs_explicit_move`'s `Generic` arm misses a type param bound to a single-owner type). Owner input is not what unblocks it. |
+| **D0′** Ruling 3 | 🔄 **OWNER-FACING REPORT, not a question** | Ruling 3 is not implementable as written — all 16 builtin generics are `DefKind::Import`/`Span::dummy()`, identical to user imports; both branches are wrong and every discriminator is the forbidden name list in disguise (Core #2). **The prerequisite is FILED as `t1408`** — *"is this name a TYPE?" has TWO independent answers*, a `BUILTIN_GENERIC_TYPES` string list AND a separate `matches!` on literals. The owner's only real choice is *wait for `t1408`* vs *narrow Ruling 3*. |
+| **C1** shadow-reject | ⚖⚖ **GENUINE — IT SURVIVES THE PROBE** | The ruling says *"at the ambiguous site"* but offers `Vector[int] Vector = [1,2,3]` as proof of an accept→reject change, **and that program has no `x[…](…)` site.** Measured at HEAD: the shadowing declaration checks **rc 0**, and `Vector.len()` on it checks **rc 0**. ⇒ reading (a) IS accept→reject; reading (b) leaves the example accepted and costs 0. **Two different semantics, and the ruling's text and its own example pick different ones.** |
+
+⇒ ⭐ **BRING THE OWNER EXACTLY ONE QUESTION: C1.** D0′ rides along as a report, not a question.
+⚠ **AND THE HAZARD C1's INSTRUMENT SURFACED, which any fix must survive:** `Callable` and `Owned` are **NOT in
+the ScopeTable's type namespace** (`Option`/`Result`/`Set`/`Box` all are) — so a shadow-check built on that
+namespace is **blind to the two spellings most likely to be shadowed by a callable-valued local.** Same root as
+`t1408`.
+
 ### ✅ ALL TEN TRACKS INTEGRATED — ROUND-CLOSE BATTERY IN FLIGHT (2026-09-05)
 
 **Integrated:** A1 · C2 · F1r · G · H · K · E · A2 · J · L. **Head at close-start: `ba1ca28b3`.**
@@ -27,17 +49,17 @@ and it read as a genuine ratchet breach.
 |---|---|---|
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | ✅✅ **A2** | **`t1374`+`t1375`+`t0104` INTEGRATED** (`4a5c6dad1`+`b9af510fe`). ⭐ **Its executor REFUTED the output-review's BLOCKING 1 with a 4-state × 2-backend table — and I had relayed that claim as a prescription without measuring it.** The reviewer said `n.0.get()` builds on neither backend at either state; measured, it builds rc 0 at POST on both. The real error was a different clause in the same sentence. | `t1378`–`t1382` |
-| **B** | ⚖⚖ **HELD — OWNER ASK (the capture cell). Pass 1: NOT SIGN OFF, 5 BLOCKING.** The brief was STALE BY CONSTRUCTION (my revert landed 3 min after it) and **overrode a ratified `decisions.md` clause with an agent's derivation.** Streak 0/3. Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
+| **B** | ✅ **ASK WITHDRAWN 2026-09-05 — `D7` is the reference-grade answer and recourse exists today (see the ask ledger above). Track still HELD on its own design.** Pass 1: NOT SIGN OFF, 5 BLOCKING.** The brief was STALE BY CONSTRUCTION (my revert landed 3 min after it) and **overrode a ratified `decisions.md` clause with an agent's derivation.** Streak 0/3. Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⛔⛔ **BLOCKED A FOURTH TIME — `R`'s SUBJECT IS A SELECTION ON A THIRD AXIS. RECOMMEND CLOSE FOR R50: `R` NEEDS ITS OWN SCOUT.** Spine survives and measures STRONGER each pass. | `t1332`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
-| **D0′** | ⚖⚖ **OWNER ASK — RULING 3 IS NOT IMPLEMENTABLE AS WRITTEN; `t1408` MUST LAND FIRST.** ⛔ And as designed the track would ship an **accept→MEMORY-UNSAFETY** change. Streak 0/3. | `t1394`–`t1402` |
-| **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
+| **D0′** | 🔄 **OWNER-FACING REPORT, not a question — Ruling 3 is not implementable as written; the prerequisite is FILED as `t1408`.** ⛔ And as designed the track would ship an **accept→MEMORY-UNSAFETY** change. Streak 0/3. | `t1394`–`t1402` |
+| **D1** | 🔄 **NOT AN OWNER ASK — a sequencing dependency on `t1349`+`t1350`; the named ruling never existed in the ledger (`git log -S` empty).** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ✅✅ **G** | **INTEGRATED** (9 commits, `2d647456c`). 819 cells + 3 guards + 4 filings. Gates on the merged tree: lib 1187, lints **237**, gen-check, known-gaps census — all green. | `t1384`–`t1392` |
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED. ⭐ **BOTH GATES NOW CLEAR** — F1r INTEGRATED, and **R1 IS RULED (Line A, signature-only, 'for now')**. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** ⏸ **QUEUED BEHIND THE SAFETY SET** per the owner's fixed order, not blocked. | `t1362`–`t1371` |
 | ✅✅ **H** | **`t1387` INTEGRATED** 2026-09-05 (`8573b12ca`+`0c137cbe0`). Output-review SIGNED OFF; 3 errata fixed at `6b4c8a544`. ⭐ **Its executor found FOUR defects in my brief; the review found a fifth in ITS filing.** | `t1409`–`t1417` |
 | ✅✅ **K** | **`t1385` INTEGRATED** 2026-09-05 (`b5c5eaabc`+`1c2513e45`); errata `9d7e9f71b`. Output-review **SIGNED OFF**. ⭐ **93 cell-lanes now gated; both allowlists ratchet BOTH ways.** | `t1434`–`t1437` |
-| **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
+| **K2** | **`t1432`** — the ggdef VERDICT taxonomy. ✅ **ASK WITHDRAWN 2026-09-05 — `todo/t0338.md:11` already recorded the ratified pattern, and `EXIT_ILLFORMED` 102→1 shows the distinction was deliberately REMOVED.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
 | ✅✅ **L** | **`t1410` INTEGRATED** (`640235fc1`). Output-review **SIGNED OFF** after re-running the decisive reverts BY LINE itself. ⭐ **The executor REFUSED a prescribed repro shape it measured green-on-arrival AND ratchet-growing — my brief was wrong and the repo's own durable-repro contract backed the executor.** | `t1445`–`t1447` |
 | ✅✅ **J** | **`t1407` INTEGRATED** (`d61e5af23`+`d26af1d42`, **NOT squashed**). Output-review **SIGNED OFF** and proved the `embed_file` mechanism from source without re-running the bootstrap. ⛔ **The two commits must stay separate: the first says "do NOT integrate this commit", the second retracts it. A squash inherits the false warning and deletes its repeal.** | `t1422`–`t1427` |
 | ✅✅ **E** | **`t0953` INTEGRATED** 2026-09-05 (`ef25a8ab7`-era cherry-picks); output-review **SIGNED OFF** after re-running the matrix by line AND the full 25-min sweep itself (rc 0). Errata `4611ef045`. | `t1352`–`t1358` |
