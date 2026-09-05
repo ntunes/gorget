@@ -507,14 +507,14 @@ always a mistake (you meant to change the caller), the compiler warns:
 unchanged; did you mean `&self`?"*. The fix is usually a one-character edit:
 `self` → `&self`.
 
-The same split shows up in `for` loops. `for x in coll` borrows each
-element read-only, so mutating `x` copies-on-write and the collection is
-left intact; `for x in &coll` asks for write access, so the mutation
-lands back in the collection (see the
+The same split shows up in `for` loops. `for x in coll` binds each
+element as a mutable private copy, so writing to `x` is allowed and
+copies-on-write, leaving the collection intact; `for x in &coll` asks for
+write access, so the mutation lands back in the collection (see the
 [language reference](../language-reference.md), §6.11):
 
 ```gorget
-for p in points:        # read-only — mutating p copies, points unchanged
+for p in points:        # private copy — mutating p is fine, points unchanged
     p.label = "x"
 
 for p in &points:       # write-through — points IS modified

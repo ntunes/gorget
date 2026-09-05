@@ -788,7 +788,7 @@ unwrapped (guarded by `test_option_resource_field`). The discriminator is `place
 
 | Loop kind | Element handling | Status |
 |-----------|------------------|--------|
-| `for x in array` — string element | `index_load_borrow` zero-copy `cap==0` view | borrow |
+| `for x in array` (and `.enumerate()`) — string element | `index_load_borrow` mints the DROP-SAFE `cap==0` view (`borrow_view_fn`); slot IS drop-registered and tagged `Borrowed{CollectionElement}` | borrow |
 | `for x in array` — recursive struct element | `Ptr(elem)` alias, no clone, no drop reg | borrow |
 | `for x in array` — enum element (Option/Result/user) | `Ptr(elem)` alias + `build_enum_recv_ptr` | borrow |
 | `for (i, x) in array.enumerate()` — recursive struct/enum element | `Ptr(elem)` alias, same gate as the plain array loop | borrow |
@@ -1440,15 +1440,19 @@ dispatch, the index/slice place-arm in `lower_index_access`, and the
 form — the **`String` element bind in `lower_for_array_with` and
 `lower_for_enumerate`**, whose read mints `gorget_string_borrow_view`.
 
-**Both axes are exercised for that last producer, and by different
-fixtures — the coverage is not one argument used twice.** The
-*ownership-boundary* axis is pinned by the escape shapes
+**The two axes are covered differently, and deliberately so.** The
+*ownership-boundary* axis is pinned by FIXTURES — the escape shapes
 (`tests/fixtures/security/sound_for_string_elem_push_escape_plain.gg` and its
 `.enumerate()` sibling): the element comes to rest in a slot that must own,
 and dropping the tag makes the consume-site validator refuse the program
-outright rather than silently aliasing. The *sever-on-realloc* axis is Case 3
-itself — an element read whose collection is grown behind a call boundary
-during the loop.
+outright rather than silently aliasing. The *sever-on-realloc* axis is covered
+STRUCTURALLY, by which walker the tag selects — `collection_ref_source` into
+Case 3 — and not by a fixture of its own: an element read whose collection is
+grown behind a call boundary mid-loop is a still-open exclusivity gap
+(`sound_excl_forbody_amp_writer.gg`, `#[ignore]`d), so a fixture there would
+pin that gap rather than this tag. The tags are not interchangeable on that
+axis regardless: `RuntimeView` would name a collection local where the walker
+expects a string local.
 
 *Third-hand "the boundary clones own it" is not a covering argument, and
 saying so in a comment is how the gap survives.* The consuming positions

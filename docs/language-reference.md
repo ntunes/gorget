@@ -2546,13 +2546,14 @@ A move capture is never inferred; it is requested with `^`.
 >
 > Element write-through through a **comprehension** iterable is lost for every
 > element type. Through a
-> **for-loop** iterable the outcome depends on TWO axes — the element type and
-> the form of the write. A mutation **through** the element (`e.field = …`,
+> **for-loop** iterable the outcome depends on the form of the write far more
+> than on the element type. A mutation **through** the element (`e.field = …`,
 > `e.push(…)`) writes through correctly for a struct or `Vector` element;
-> **rebinding** the element (`e = …`) is silently lost for every element type
-> measured (`int`, plain struct, `Vector`); a `String` element loses even a
-> mutation-through (`e.push('!')`), and ⚠ **double-frees at runtime** when
-> rebound (`e = e + "!"`). Continuing the divergences: `&` through a
+> **rebinding** the element (`e = …`) is silently lost at **every** element type
+> measured — `int`, plain struct, `Vector` and `String` alike — so it is the
+> whole-binding rebind, not the element type, that names the class. A `String`
+> element additionally loses a mutation-through (`e.push('!')`).
+> Continuing the divergences: `&` through a
 > `Callable`-typed **value** — a local, or a parameter whose type declares the
 > sigil (`Callable[void(int &)] cb`) — segfaults on both backends when called,
 > and a `&`-declared `Callable` parameter (`Callable[…] &cb`) ICEs the compiler
@@ -2918,7 +2919,7 @@ a closed inventory.
 
 **`.clone()` works on all types.** Explicit `.clone()` calls route to the correct clone function: collections use `gorget_array_clone`/`gorget_map_clone`/etc., user structs use generated `{Name}__clone`, copy types return the value unchanged.
 
-**Collection `.get()` returns a read-only borrow.** Both `auto` and typed bindings produce borrows — there is no implicit clone on read. Mutating the bound value materializes a private copy (the collection is untouched); to change the element in the collection, use a mutable borrow (`&`, `for x in &coll`) or a direct place mutation (`v[i] = x`, `v[i].m()`) — ⚠ the `&` forms are the specification, but the compiler currently drops the write for a by-value element type (see §9.1's status note), so a program relying on them there is silently wrong today:
+**Collection `.get()` returns a read-only borrow.** Both `auto` and typed bindings produce borrows — there is no implicit clone on read. Mutating the bound value materializes a private copy (the collection is untouched); to change the element in the collection, use a mutable borrow (`&`, `for x in &coll`) or a direct place mutation (`v[i] = x`, `v[i].m()`) — ⚠ the `&` forms are the specification, but the compiler currently drops a **whole-binding rebind** of a loop element (`for x in &coll: x = …`) at every element type — `int`, plain struct, `Vector` and `String` alike; only a mutation *through* the element (`x.field = …`) lands (see §9.1's status note) — so a program relying on that spelling is silently wrong today:
 
 ```gorget
 auto entry = v.get(i).unwrap()    # read-only borrow into v's storage
