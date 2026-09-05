@@ -1402,6 +1402,48 @@ refuses to build at all is **definitionally new**.
 ⭐ **VERIFIED: the killer sentence is LIVE**, the `.clone()` C is **byte-identical (3906 lines each)**, all five
 of my other errata land, and **the four `is_box: true` sites are LINT-PINNED** — a real readiness-row-2 witness.
 
+### ⭐⭐⭐ THE REFERENCE-GRADE END STATE FOR D0′ **AND** `t1408` (owner-asked 2026-09-05) — **`Import` IS A FIELD, NOT A KIND**
+
+⛔ **ROOT CAUSE, AND EVERY FRAMING SO FAR — MINE INCLUDED — WAS AT THE WRONG LAYER.** `DefKind` has 12 variants:
+`Function`, `Struct`, `Enum`, `Variable`, … **and `Import`.** ⭐ **But `Function` says what a name IS; `Import`
+says how the name GOT HERE. THOSE ARE TWO AXES COLLAPSED INTO ONE ENUM** — and a name can be both.
+
+⛔⛔ **THE RESOLVER RESOLVES AN IMPORT AND THEN DISCARDS WHAT IT RESOLVED TO.** Seven sites write
+`DefKind::Import` (`grep -n 'DefKind::Import' src/semantic/resolve.rs`) — builtins with `Span::dummy()`, and
+every user form (`import std.io`, `from X import y`, `as`-aliases, globs). **The TARGET's kind is never written
+through.** ⇒ ***LAYERING RULE 4 VERBATIM: "resolve once, write through — downstream doesn't redo the work and
+doesn't get to disagree."*** **Today downstream redoes it TWICE** (the hardcoded `BUILTIN_GENERIC_TYPES` list;
+the `Callable` `matches!`) **and DISAGREES WITH ITSELF about `Owned`.** ⊕ **And the one existing consumer
+APPROXIMATES the question it cannot ask:** `def.kind != DefKind::Import || def.span == Span::dummy()` is
+*"is this an unresolved user import?"* **reconstructed from a placeholder kind plus a synthetic-span
+heuristic** — the read-site reconstruction Layering rule 4 exists to forbid.
+
+⭐⭐ **THE END STATE: `Import` STOPS BEING A `DefKind` AND BECOMES A PROVENANCE *FIELD* ON `DefInfo`; THE `kind`
+OF AN IMPORTED NAME IS THE TARGET'S KIND.** Everything falls out:
+- `def_namespace(kind)` answers *"is this a type?"* **TOTALLY** — no list, no span heuristic, no `matches!`.
+- ⭐ **`t1408` EVAPORATES.** One registration path because there is ONE QUESTION; the `matches!` retires and
+  `Owned` stops being special **because nothing is special.**
+- ⭐ **D0′'s shadow-reject becomes THREE LINES AND CANNOT BE INCOMPLETE** — which is exactly what Ruling 3 asked
+  for and what the current tree cannot deliver.
+- `resolve.rs`'s consumer asks its REAL question (`provenance == Import && !synthetic`) instead of
+  approximating it.
+
+⭐⭐⭐ **THE STRONGEST SIGN IT IS THE RIGHT LAYER: THE FIX HAS THE SAME SHAPE AS MACHINERY ALREADY IN THAT
+FILE.** `deref_wrapper_kind` and `has_intrinsic_equality` are **seeded-once TYPED FIELDS on `DefInfo`**, added
+precisely so downstream reads a flag instead of re-deriving from a name (`grep -n "deref_wrapper_kind" -B 8
+src/semantic/scope.rs`). ***Provenance is the third field of that family. It was always a field pretending to be
+a kind.***
+
+⇒ ⛔ **SEQUENCING CONSEQUENCE, AND IT REFRAMES BOTH ITEMS: `t1408` AS FILED IS THE READ-SITE FIX — it makes the
+LIST complete without making the LIST UNNECESSARY. The write-through is the WRITE-SITE fix (Core #1).** ⇒ the
+long-term answer is **NOT** *"`t1408`, then D0′"* — it is ***"do the write-through, and `t1408` stops existing
+while D0′ becomes trivial."***
+
+⚠ **THE HONEST COUNTER-ARGUMENT, TO BE PRICED BY A SCOUT, NOT WAVED THROUGH:** imports carry **visibility,
+module provenance, `as`-aliasing and re-export** — things a target kind does not. **If `Import` stops being a
+kind, that information needs a home.** ⭐ **But that IS the point: it should have had one anyway. Two axes in one
+enum is Layering rule 3, and the collapse is precisely why *"is this a type"* has THREE answers today.**
+
 ### ⚖⚖⚖ OWNER ASK — **RULING 3 CANNOT BE IMPLEMENTED AS WRITTEN, AND THE REASON IS ITS OWN WORKED EXAMPLE**
 
 ⛔⛔ **THE `DefKind` IS AVAILABLE. THE TYPE-KIND SET IS NOT WELL-DEFINED, AND NO PARTITION OF IT WORKS.**
@@ -4159,6 +4201,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t1361`](todo/t1361.md) **HIGH** — 🆕🔥 [HIGH (re-graded from CRITICAL 2026-09-05, see addendum) -- AN UNCHECKED MEMBER-ACCESS HOLE ON THE ENTIRE LAZY-ITERAT…
 - [`t1403`](todo/t1403.md) **HIGH** — 🆕🐛 [HIGH — NON-TERMINATION + OOM FROM A gg check-CLEAN PROGRAM, both backends; found 2026-09-05 by the orchestrator whil…
 - [`t1393`](todo/t1393.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — MEMORY-UNSAFE FROM ORDINARY SAFE SYNTAX; gg check CLEAN, gg build rc 0, then SIGSEGV on BOTH backends; f…
+- [`t1329`](todo/t1329.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — MEMORY-UNSAFE FROM ORDINARY SAFE SYNTAX; gg check rc 0, then heap-use-after-free; found 2026-09-05 by R5…
 ### Medium
 
 
@@ -4323,6 +4366,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t1083`](todo/t1083.md) **HIGH** — 🆕🐛 [HIGH — a program the compiler ACCEPTS emits C that a C compiler REFUSES: error: redefinition of 'Box__Robot__drop'.…
 - [`t1359`](todo/t1359.md) **CRITICAL** — 🆕🔥 [CRITICAL -- DOUBLE-FREE REACHABLE FROM ORDINARY SAFE SYNTAX, gg check clean; found 2026-09-05 by the R50 CoW design…
 - [`t1407`](todo/t1407.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — MEMORY-UNSAFE FROM ORDINARY SAFE SYNTAX, both backends, gg check clean; found 2026-09-05 by R50 Track H'…
+- [`t1330`](todo/t1330.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — MEMORY-UNSAFE AT PRISTINE HEAD; found 2026-09-05 by R50 Track C1's brief-review pass 1, which BUILT the…
 ### Medium
 - [`t0474`](todo/t0474.md) **MED** — 🆕🔧 [MED — prerequisite for retiring the last indirect-call shape heuristic; filed 2026-08-19 by R43 Track C] Tag LARGE n…
 - [`t0475`](todo/t0475.md) **LOW** — 🧹 [LOW — Layering rule 3, one source of truth per axis; found 2026-08-19 by R43 Track C] src/backend/c_lir/helpers.rs ca…
