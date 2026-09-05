@@ -672,6 +672,48 @@ Lines A/B/C, an 8.9× figure, a `peek`/`advance` measurement and an F1/F2/F3 spl
 and the orchestrator worktree are both clean. ⇒ **MA-1 applies to NESTED spawns and a scout will forget it;
 say so in every scout brief.**
 
+### ✅ R1 IS RULED — **LINE A** (owner 2026-09-05)
+
+**Owner, verbatim: *"For R1 let's go with line A for now. We may revisit in the future to optimize even
+more."*** ⇒ **signature-only freedom: accepts decision-table rows 1–3 and 5–9, clones at rows 10 and 12.**
+⭐ **Line A needs ZERO NEW MACHINERY** — liveness, `fn_param_ownerships` and the mutation scan all exist. It is
+**Rust's architecture minus the rejection**, and the standard one: Swift tried inferring the convention and
+**gave up in writing** (hence SE-0377).
+⛔ **"For now" is an explicit door left open — do NOT record Line A as closing Lines B/C.** Line B buys back
+row 10 only, needs a call graph that does not exist, and its measured upside is **14 params across the whole
+self-host closure — a bound on PLACES, not on clone VOLUME**, so one hot-path param could still dominate.
+⚠ **F3 is unblocked; F2 remains gated on F1**, and ⛔ **row 4 of the decision table IS `t1362` — unsound at
+HEAD.** The ruling sits on top of a mechanism that is currently broken.
+
+### ⚖ R2 — STILL OPEN, AND BOTH OF MY EARLIER ARGUMENTS FOR IT WERE WRONG
+
+⛔ **I told the owner `t1361` and R2 were structurally identical. THEY ARE NOT, and the owner caught it.**
+`t1361` is a **missing TYPE CHECK** — `p` is an `int`, `int` has no fields, `p.bogus_field` is ill-typed;
+nothing to do with aliasing or liveness. **R2 is a WELL-TYPED program** where every access is type-correct and
+the question is what mutation *during iteration* means. They share only the surface observation *"builtin
+rejects, `.iter()` does not"*, and **the reasons are unrelated — so the `t1361` ruling does NOT transfer.**
+
+⛔ **AND MY §3.5 ARGUMENT POINTED THE WRONG WAY.** §3.5 rejects a conflict ***unless the conflicting path is a
+READER and the clone can be placed lazily at a VISIBLE mutation point***. The iterator **is** a reader,
+`d.put()` **is** visible, and §3.5's closing line reserves rejection for copies that would be **SPECULATIVE** —
+*"paid unconditionally … to guard against a mutation the compiler cannot see."* **By its own criterion this
+should be ACCEPTED with a materialize.**
+
+⭐ **THE ARGUMENT THAT ACTUALLY SURVIVES IS A COST ARGUMENT, NOT A LEGALITY ONE.** §3.5's escape clones **the
+VIEW**, and in its own worked example the view is **ONE ELEMENT** (`String s = v.get(0).unwrap()`). **For an
+iterator the "view" is the WHOLE COLLECTION** ⇒ materialize-to-snapshot is an **implicit O(n) copy the user
+never wrote**, which breaches the charter *"implicit clones as good as the best hand-written"*. ⇒ **§3.5's
+escape is CALIBRATED FOR ELEMENT-SIZED VIEWS, and an iterator is not one.** **That is the cost axis
+constraining the legality axis** — the unification the CoW scout described, doing real work.
+⊕ **Counter-argument, recorded so it is not lost:** Swift and C# snapshot; value semantics arguably imply
+snapshot; and rejecting makes users hand-write `d.keys()` first — **the same O(n) copy, merely visible.**
+
+⛔ **MEASURED AT HEAD, AND IT IS A DEFECT UNDER *EITHER* RULING:** `for k, v in d.iter(): d.put(...)` does NOT
+produce a "silent live view" — **it HANGS and is OOM-KILLED (rc 137)**, because the iterator observes the
+entries it is adding. `gg check` accepts it. The builtin rejects the identical program with
+`error[E_MutationWhileBorrowed]`. ⇒ **`.iter()` is wrong in the worst available way — it neither rejects nor
+snapshots — so this needs filing regardless of which way R2 falls.**
+
 ⚖ **R1, SHARPENED — this is what the owner actually has to rule on:** `D40` says *"materialize-when-unsure,
 never reject"*; `D52` says *"unless PROVABLY FREE"*. **Those two phrasings must agree on what "provable" means
 before ANY executor can implement either — that predicate IS the mechanism.** The scout owes the **enumerated
