@@ -12,8 +12,8 @@
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C** | 🔵 SCOUTING. **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** **`t1225`** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| **G** | 🆕 **THE STANDING VIEW-INVALIDATION MATRIX — owner-directed 2026-09-05.** 🔵 SCOUTING. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
-| **F1** | 🆕 **`t1362` CRITICAL — ggdef adjudicates against BOTH backends. 🔵 brief-review pass 1. Streak 0/3.** | `t1363`–`t1372` |
+| **G** | 🆕 **THE STANDING VIEW-INVALIDATION MATRIX — ⚖ OWNER-RATIFIED 2026-09-05: *"exactly, so let's fix it the right way."*** 🔵 SCOUTING. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
+| **F1** | **`t1362` CRITICAL** — pass 1 BLOCKED (3) → folded → 🔵 pass 2. **Streak 0/3.** | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
@@ -378,6 +378,42 @@ FIX IT NOW** — the addendum only records what was measured.
   ratified semantics, and the builtin's behaviour is the correct one.** The rejection belongs at **`gg check`**,
   not at lowering (today the ICE comes from the Tier 2a consume-site validator — wrong layer, wrong
   diagnostic). **No design question remains; this is an implementation track.**
+
+### ⚠ F1's PASS 1 BLOCKED ON THREE COUNTS — AND ONE OF THEM IS AN UNVERIFIED CLAIM I FILED
+
+- ⛔ **THE ARM DISCRIMINATOR WAS FACTUALLY WRONG.** The brief said the trivial-getter arm is *"the only sibling
+  arm with no `is_source_mut_unsafe_at` guard"*. **Measured: 3 of 3 `Local` sites are UNGUARDED; 6 of 6
+  `FieldPath` sites are guarded — and TWO of the three unguarded arms are MEASURABLY CORRECT.** An executor
+  following it finds three arms and either stalls or regresses correct behaviour. ⛔ **Guard presence is a RED
+  HERRING: adding the guard fixes nothing**, because the predicate walks **strict prefixes** and the marker is
+  a **descendant**. ⭐ **Real discriminator: the only site where the returned view aliases a DESCENDANT of the
+  receiver while provenance names the RECEIVER.** Independent witness: `CollectionId` has **exactly two
+  variants** (rustc-exhaustive).
+- ⛔ **"TWO INDEPENDENT GATES" IS FALSE FOR THIS REPRO — gate 2 is LATENT BEHIND GATE 1** (gate 1 blocks the
+  provenance match, so the rebind never happens and there is nothing for `restore_locals` to discard).
+  **SIX-QUESTIONS #6: the repro is ACCIDENTALLY INSENSITIVE to gate 2 and cannot be its instrument.** Gate 2 is
+  real but needs a **different program** (probe G: C `2 2` · ggdef `1 2` · SH `1 2`). ⇒ an executor fixes gate
+  1, sees green, ships, **and probe G stays wrong.**
+- ⛔ **THE DOUBLE-FREE I FILED AS THE CRITICAL JUSTIFICATION IS UNREPRODUCED.** ASan positive-controlled first,
+  then four shapes: **no finding on either backend.** ⛔ **I pruned the originating scout's worktree before this
+  surfaced, so the claim CANNOT BE RE-ASKED and has no recoverable evidence.** ⭐ **CRITICAL stands without
+  it** — the oracle adjudicating against **both** backends (Core #8) plus silent wrong output. ⚠ **And the
+  per-cell instrument was wrong in the same direction: all three enum shapes are wrong-VALUE, visible to a
+  PLAIN RUN** — an executor reaching for ASan there finds nothing and calls the cell clean.
+
+⭐ **UPGRADE: the self-host lane is MEASURED, not source-read** — SH prints `10` and `1 2`, **genuinely ahead of
+Rust gg on both shapes.** A *"reference lags the self-host"* finding: fix the Rust side as oracle hygiene.
+
+⛔ **D13 SHARPENED AGAIN — FIFTH GENERATION, AND THE CAUSE IS NOW PRECISE.** The brief carried three
+irreconcilable cell counts (*"21 of 30"* vs 8 constructs vs *"12 × 7"* = 84) **while itself ordering "state NO
+total"**. **The cause: I QUOTED a scout's numbers instead of REGENERATING them.** ⇒ **A NUMBER QUOTED FROM A
+SCOUT IS NOT EXEMPT FROM D13. Regenerate it or drop it.**
+
+⚠ **OPS, MEASURED THE HARD WAY: PRUNING A COMPLETED AGENT'S WORKTREE MAKES IT UNRESUMABLE.** `SendMessage`
+returns *"cannot be resumed: its worktree no longer exists"*. ⇒ **DO NOT PRUNE A SCOUT'S TREE WHILE ANY OF ITS
+CLAIMS IS STILL UNVERIFIED BY A FRESH PASS** — the disk is worth less than the ability to ask.
+⊕ **And the lock-reason pid is the HARNESS (pid 60), identical across all agent worktrees**, so the recorded
+check *"`ps -p <pid>` before overriding"* is **INERT** — it can never distinguish a stale lock from a live one.
 
 ### 🚀 TRACK G OPENED 2026-09-05 — WHY `t1362` ELUDED US, AND THE INSTRUMENT THAT WOULD HAVE CAUGHT IT
 
