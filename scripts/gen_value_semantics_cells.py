@@ -115,39 +115,65 @@ degenerates into a straight-line mutation after the handler and so is not a
 nested-block cell at all; `Snapshot`, `AssertReturn`, the six `Meta*` variants
 and `Item` are compile-time or item-level and take no runtime mutation.
 
-PAYLOAD is a SELECTION on the drop-strategy axis. The TYPE axis is infinite; the
-DROP STRATEGY axis is closed (`DropStrategy` = None | Trivial | Recursive |
-Custom, `src/ir/types.rs`), and the four values are NOT equally reachable by a
-cell of this shape. Value by value:
+PAYLOAD IS A SELECTION, AND THE AXIS IT IS A SELECTION ON IS THE PAIR
+`(CopySemantics, DropStrategy)` -- NOT `DropStrategy` ALONE. The type axis is
+infinite; the ownership axis is closed, and its independent witness is the
+"Valid combinations" table in `src/ir/types.rs` (`awk '/# Valid combinations/,
+/Suspicious/' src/ir/types.rs`), which enumerates SIX legal pairs. Enumerating
+over `DropStrategy`'s four values instead hides two of them, because `None` and
+`Trivial` each span both copy semantics and the halves get OPPOSITE dispositions.
 
-  * `Trivial` (one free call, `gorget_string_free` / `gorget_array_free`) is what
-    all seven payloads are. This is the covered value.
+All seven payloads are ONE cell of that six: `(Resource, Trivial)`.
 
-  * `Recursive` (compiler-generated field-by-field glue, assigned to structs
-    holding droppable fields) appears in this corpus only on the SOURCE side --
-    the `Store` / `Inner` / `Outer` wrappers -- and NEVER as the aliased payload.
-    A struct-valued payload is a REAL WIDENING TARGET, not a no-subject cell:
-    measured, `Store t = s` for `struct Store: Vector[int] f` checks clean.
+  1. `(Trivial, None)` -- primitives, plain value structs.
+     NO SUBJECT. A Copy bind DUPLICATES the storage rather than sharing it, so
+     the two places never overlap and the rule has nothing to say about them
+     (`docs/language-design.md` 3.5, "overlap is about storage, not spelling").
+     Widening cannot manufacture a subject here.
 
-  * `None` is primitives and Copy structs. A Copy bind DUPLICATES the storage
-    instead of sharing it, so the two places do not overlap and the rule has
-    nothing to say about them -- 3.5's "overlap is about storage, not spelling".
-    No subject, and widening cannot manufacture one.
+  2. `(Trivial, Trivial(fn))` -- the refcount handles, `Shared` / `Weak` /
+     `Channel`. NOT COVERED, and the rule is deliberately INVERTED for them: a
+     handle bind shares the referent BY DESIGN, so "every other place reads the
+     value it had before" is the wrong expectation rather than an unmeasured one.
+     !! And it is worse than uncovered at HEAD: `Shared[int] b = a` -- a bare
+     bind, no call -- SEGVs on BOTH backends (`todo/t1388`, found while writing
+     this row). A cell here would be measuring a crash, not value semantics.
 
-  * `Custom` IS A CELL WITH NO SUBJECT, and this one NO WIDENING REACHES. Both
-    lines that assign it are gated on a `Drop` impl and set `CopySemantics::
-    Resource` on the same line (`grep -rn "DropStrategy::Custom"
-    src/ir/lowering/mod.rs`), and a resource is single-owner, so the bare view
-    bind every one of these 820 cells is built on is REJECTED:
-        error[E_MoveWithoutOperator]: cannot copy `v`: `v` is a resource
-        (a type with a custom `Drop` is single-owner)
-    There is no second live place, so "every other place reads the value it had
-    before" has no other place to speak about.
-    !! MEASURED, NOT DEDUCED. The obvious inference -- that the upgrade scan
-    setting `Resource` alongside `Recursive` rejects those binds too -- is FALSE;
-    `Store t = s` is accepted. The rejection is specific to a CUSTOM `Drop`, not
-    to `CopySemantics::Resource` in general. A reader who reasons it out instead
-    of running it gets the `Recursive` row wrong.
+  3. `(Resource, None)` -- the ownership-tracked handles, `Thread` / `Process`.
+     NOT COVERED, and this row is genuinely OPEN rather than dispositioned.
+     Unlike row 1 a bind does NOT duplicate storage (measured by review:
+     `Process c = proc` checks clean, rc 0), so a second live place demonstrably
+     exists -- but the value is a handle with no observable payload for the rule
+     to read. Whether that makes it a no-subject cell or an uncovered one is
+     NOT settled here, and saying so is the point: it is a THIRD disposition,
+     and an enumeration with only "covered" and "no subject" could not express it.
+
+  4. `(Resource, Trivial(fn))` -- `String`, `Vector`, `Dict`, `Set`, `Guard`.
+     COVERED. This is the entire payload axis of this corpus.
+
+  5. `(Resource, Recursive)` -- structs holding droppable fields. Present here
+     only on the SOURCE side (`Store` / `Inner` / `Outer`), never as the aliased
+     payload. A REAL WIDENING TARGET, not a no-subject cell: measured,
+     `Store t = s` for `struct Store: Vector[int] f` checks clean.
+
+  6. `(Resource, Custom(fn))` -- a user `Drop` impl.
+     A CELL WITH NO SUBJECT, and this one NO WIDENING REACHES. Both assignment
+     sites (`grep -n "DropStrategy::Custom(format!" src/ir/lowering/mod.rs` ->
+     exactly 2) are gated on a `Drop` impl, and the line ABOVE each sets
+     `CopySemantics::Resource`. A resource is single-owner, so the bare view bind
+     all 820 of these cells are built on is REJECTED:
+         error[E_MoveWithoutOperator]: cannot copy `v`: `v` is a resource
+         (a type with a custom `Drop` is single-owner)
+     With no second live place, "every other place reads the value it had
+     before" has no other place to speak about. That is a boundary of the RULE,
+     not a hole in the corpus.
+
+!! ROWS 5 AND 6 ARE MEASURED, NOT DEDUCED, AND THE DEDUCTION IS WRONG. The
+obvious inference -- that the scan setting `Resource` alongside `Recursive`
+rejects those binds too -- is FALSE: `Store t = s` is accepted. The reject reads
+a `Drop`-taint flag, not `CopySemantics`. A reader who reasons this out from the
+source instead of running it gets row 5 backwards, turning a reachable widening
+target into an imaginary no-subject cell.
 
 An eighth payload, `Vector[Option[String]]`, was dropped for an unrelated
 reason: all 99 of its cells fail to BUILD on both value lanes today
@@ -505,7 +531,7 @@ def main():
     header, rows = read_manifest()
     by_cell = {r[COL_CELL]: r for r in rows}
 
-    problems, written, removed = [], [], []
+    problems, written, removed, forced = [], [], [], []
 
     # --- 1. the .gg files -------------------------------------------------
     for name, (text, _, _, _) in sorted(cells.items()):
@@ -557,6 +583,7 @@ def main():
                      COL_NOTE: "note"}[col]
             if args.force_expectation_change and not args.check:
                 existing[col] = value
+                forced.append(f"{name}: {label}")
             else:
                 problems.append(
                     f"{name}: committed {label} {existing[col]!r} != generated "
@@ -581,12 +608,37 @@ def main():
               f"{'Re-run without --check to fix what is fixable.' if args.check else ''}")
         return 1
 
-    if new_rows and not args.check:
+    # `forced` matters here, not just `new_rows`: under
+    # --force-expectation-change on a topic that is ALREADY fully landed
+    # there are no new rows, and gating the write on `new_rows` alone left
+    # the forced values mutated IN MEMORY and never written -- the flag
+    # silently did nothing while exiting 0. Found by RED-verifying the
+    # control-coupling guard, which is exactly what a red-verification is
+    # for: the deliberate break did not take, and the guard looked green.
+    if (new_rows or forced) and not args.check:
         # REGENERATION NORMALIZES THE WHOLE FILE to (topic, cell) order, and
-        # that DOES move rows this generator does not own -- 489 legacy rows
-        # shifted on the first run, measured. Say so plainly: an earlier draft of
-        # this comment claimed the opposite while the very next line sorted
-        # everything, which is a comment falsified by its own code (Core #14).
+        # that DOES move rows this generator does not own. Say so plainly: an
+        # earlier draft of this comment claimed the opposite while the very next
+        # line sorted everything, which is a comment falsified by its own code
+        # (Core #14).
+        #
+        # Regenerate the reordering from the two committed revisions rather than
+        # trusting a figure here (Core #15a). `224da7ae7` is the last revision
+        # before topic 30; `82bbdf12f` is the one that landed it:
+        #   git show 224da7ae7:tests/fixtures/robustness_map/MANIFEST.tsv \
+        #     | tail -n +2 | cut -f2 > /tmp/before
+        #   git show 82bbdf12f:tests/fixtures/robustness_map/MANIFEST.tsv \
+        #     | tail -n +2 | cut -f2 | grep -v '^vsm_' > /tmp/after
+        #   diff /tmp/before /tmp/after | grep -c '^<'
+        #
+        # !! AND STATE WHICH MEASURE, because the two obvious ones disagree by
+        # 50%: that command counts rows in the MINIMAL EDIT SCRIPT (317), while
+        # counting positions where the two sequences differ index-by-index gives
+        # 489. Neither is wrong; "N rows moved" without the definition is not a
+        # regenerable claim. The load-bearing fact is not the count at all -- it
+        # is that the SET is identical and only the ORDER changed, which the same
+        # two files show:
+        #   diff <(sort /tmp/before) <(sort /tmp/after)   # empty
         #
         # It is safe, and the distinction is ORDER versus CONTENT. Only `new_rows`
         # is constructed here; an existing row is the parsed list itself and is
@@ -610,7 +662,10 @@ def main():
     else:
         print(f"{fwd} forward + {mir} mirror + 1 control = {len(cells)} cells; "
               f"{len(written)} written, {len(removed)} removed, "
-              f"{len(new_rows)} MANIFEST rows added.")
+              f"{len(new_rows)} MANIFEST rows added, "
+              f"{len(forced)} owned column(s) FORCED.")
+        for what in forced:
+            print(f"  FORCED {what}")
         if new_rows:
             print("\nSEED THE BASELINE IN ONE FIVE-LANE RUN:\n"
                   f'    python3 scripts/robustness_map.py --lanes all --accept '

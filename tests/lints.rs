@@ -30779,6 +30779,7 @@ fn cow_scope_boundary_hook_pairing_count() {
 const RMAP_COL_TOPIC: usize = 0;
 const RMAP_COL_CELL: usize = 1;
 const RMAP_COL_C: usize = 2;
+const RMAP_COL_NOTE: usize = 5;
 /// The five lane-baseline columns: `c`, `llvm`, `selfhost`, `asan`, `ggdef`.
 const RMAP_LANE_COLS: &[(usize, &str)] = &[
     (2, "c"),
@@ -30962,13 +30963,11 @@ fn robustness_map_manifest_and_cells_reconcile() {
 
     // --- the empty-baseline half ------------------------------------------
     let mut ungated: Vec<String> = Vec::new();
-    let mut control_rows = 0usize;
     for row in &rows {
         // PREDICATE, not a name: the runner inverts a CONTROL row's verdict and
         // `continue`s before the lane loop, so its lane columns are empty by
         // construction and forever.
         if row[RMAP_COL_C] == "CONTROL" {
-            control_rows += 1;
             continue;
         }
         if LEGACY_UNBASELINED.contains(&row[RMAP_COL_CELL].as_str()) {
@@ -31016,7 +31015,6 @@ fn robustness_map_manifest_and_cells_reconcile() {
          Removing one makes that gate unfalsifiable and needs the same \
          justification as deleting any positive control."
     );
-    assert_eq!(control_rows, DECLARED_CONTROLS.len());
     assert!(
         ungated.is_empty(),
         "{} cell-lane(s) are measured every run but have an EMPTY baseline, so \
@@ -31038,11 +31036,37 @@ fn robustness_map_manifest_and_cells_reconcile() {
     // comment says "re-point it if that row ever stops being green"; a comment
     // asking to be re-checked with nothing checking it is Core #14 rot, so this
     // is the guard that makes it binding.
+    // !! THE NAME BELOW IS A HAND-COPIED LITERAL, AND THE GENERATOR DERIVES ITS
+    // OWN FROM `CONTROL_SOURCE`/`CONTROL_SITE`/`CONTROL_PAYLOAD`. Nothing ties
+    // the two together, so re-pointing those three and regenerating leaves
+    // `--check` green, `DECLARED_CONTROLS` green, and THIS ASSERTION STILL
+    // GUARDING THE OLD ROW -- guarding nothing, silently. That is the same
+    // "can this guard catch its own class" question the guard below exists to
+    // answer, one level up.
+    //
+    // The generator already publishes the true source: `NOTE_CTL` interpolates
+    // those three constants into the control row's `note` column. So cross-check
+    // against that rather than against a second copy of the literal.
+    const CONTROL_SRC: &str = "vsm_field__straight__vec_int";
+    let control_row = rows
+        .iter()
+        .find(|r| r[RMAP_COL_CELL] == "vsm_POSITIVE_CONTROL_view_reads_pre_mutation")
+        .expect("topic 30's control row is missing from MANIFEST.tsv");
+    assert!(
+        control_row[RMAP_COL_NOTE].contains(CONTROL_SRC),
+        "topic 30's control is drawn from a DIFFERENT row than this lint guards.\n\
+         The control row's note says {:?}, which does not mention {CONTROL_SRC:?}.\n\
+         `CONTROL_SOURCE`/`CONTROL_SITE`/`CONTROL_PAYLOAD` in \
+         scripts/gen_value_semantics_cells.py were re-pointed without updating \
+         CONTROL_SRC here, so the green-on-every-lane assertion below is guarding \
+         a row the control no longer uses.",
+        control_row[RMAP_COL_NOTE]
+    );
     let control_src = rows
         .iter()
-        .find(|r| r[RMAP_COL_CELL] == "vsm_field__straight__vec_int")
+        .find(|r| r[RMAP_COL_CELL] == CONTROL_SRC)
         .expect(
-            "vsm_field__straight__vec_int is gone: topic 30's positive control is \
+            "{CONTROL_SRC} is gone: topic 30's positive control is \
              drawn from it. Re-point CONTROL_SOURCE/SITE/PAYLOAD in \
              scripts/gen_value_semantics_cells.py at another row that is green on \
              every lane, and update this guard in the same commit.",
@@ -31050,7 +31074,7 @@ fn robustness_map_manifest_and_cells_reconcile() {
     for (col, lane) in RMAP_LANE_COLS {
         assert_eq!(
             control_src[*col], "WORKS",
-            "vsm_field__straight__vec_int is {} on the {lane} lane, but topic 30's \
+            "{CONTROL_SRC} is {} on the {lane} lane, but topic 30's \
              positive control is drawn from it and needs it GREEN ON EVERY LANE.\n\
              While it is broken the compiler already prints the mutated value, so \
              the control MATCHES its deliberately-wrong expectation, scores WORKS, \
