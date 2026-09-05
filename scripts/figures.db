@@ -714,7 +714,7 @@ done_md.round_close.roundish_headlines.note = when this moves and anchor_age_mat
 # anchored one returns 237. Anchor on the lane banner AND on `total=…`, never on
 # a bare `MATCH=`.
 row = parity.spec_conformance.c.match_floor
-parity.spec_conformance.c.match_floor.value = 244
+parity.spec_conformance.c.match_floor.value = 245
 parity.spec_conformance.c.match_floor.unit = spectests/run seeds whose C-backend run matches the committed expect:
 parity.spec_conformance.c.match_floor.polarity = grow-only
 parity.spec_conformance.c.match_floor.provenance = measured
@@ -733,7 +733,7 @@ parity.spec_conformance.c.match_floor.mirror = tests/spec_conformance.rs:C_MATCH
 parity.spec_conformance.c.match_floor.input = none
 
 row = parity.spec_conformance.llvm.match_floor
-parity.spec_conformance.llvm.match_floor.value = 244
+parity.spec_conformance.llvm.match_floor.value = 245
 parity.spec_conformance.llvm.match_floor.unit = spectests/run seeds whose LLVM-backend run matches the committed expect:
 parity.spec_conformance.llvm.match_floor.polarity = grow-only
 parity.spec_conformance.llvm.match_floor.provenance = measured
@@ -752,7 +752,7 @@ parity.spec_conformance.llvm.match_floor.mirror = tests/spec_conformance.rs:LLVM
 parity.spec_conformance.llvm.match_floor.input = none
 
 row = parity.spec_conformance.selfhost.match_floor
-parity.spec_conformance.selfhost.match_floor.value = 243
+parity.spec_conformance.selfhost.match_floor.value = 244
 parity.spec_conformance.selfhost.match_floor.unit = spectests/run seeds whose self-host emit+cc+run matches the committed expect:
 parity.spec_conformance.selfhost.match_floor.polarity = grow-only
 parity.spec_conformance.selfhost.match_floor.provenance = measured
@@ -780,7 +780,7 @@ parity.spec_conformance.selfhost.match_floor.input = none
 # the registry. NO BAND: corpus size is a file count, deterministic, so there is
 # no jitter for a band to absorb.
 row = spec_conformance.corpus.fixtures
-spec_conformance.corpus.fixtures.value = 244
+spec_conformance.corpus.fixtures.value = 245
 spec_conformance.corpus.fixtures.unit = .gg seeds in spectests/run
 spec_conformance.corpus.fixtures.polarity = exact-pin
 spec_conformance.corpus.fixtures.provenance = measured

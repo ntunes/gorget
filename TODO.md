@@ -11,13 +11,13 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⛔ **THE OWNER REJECTED ALL THREE OF MY OPTIONS 2026-09-05 — THE ASK IS WITHDRAWN, THE TRACK IS RE-AIMED AT *MAKE IT WORK*.** 🔵 reference-grade SCOUT running. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| ✅ **C2** | **`t0045`** — **`635d98496`: the executor replaced the phrase-grep with a CONSTRUCT-SCOPED instrument and found 2 MORE sites than I reported.** Ready to integrate. | `t1334`–`t1338` |
+| ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ⭐ **SCOUT DELIVERED — HYPOTHESIS HALF RIGHT; the fix is REAL but it is NOT a parser fix and the ORDER REVERSES.** Streak 0/3, brief `v3` next. ⚖ one PRECISE ratification question. | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | ✅ **G** | **6 passes, DESIGN SIGNED OFF, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⚖ owner-ratified. **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
-| ✅ **F1r** | **`t1362`+`t0750`** — **`504bf5ad5` OUTPUT-REVIEW: SIGN OFF, integrate.** 2 errata to fold. ⭐ It delivered the PER-FIXTURE/PER-ROUND split and a `figures.db` mirror map the parent needs. | `t1363`–`t1372` |
+| ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
@@ -1274,6 +1274,46 @@ TOP LEVEL** (measured MATCH, zero non-MATCH inflow); memory-safety rows and the 
 fix **moves the String cell OUT of memory-unsafety INTO an already-filed class**; and **String was the LAST
 broken cell of ratified consequence (a)** — nested Vector, struct and dict-value already bare-rebind as
 non-crashing private copies. ⇒ **the fix COMPLETES the ratified rule.**
+
+### ✅✅ C2 AND F1r ARE INTEGRATED — AND THE FORECAST COLLISION FIRED EXACTLY AS PREDICTED
+
+**6 commits on the integration branch.** Three conflicts, **all three in RATIONALE COMMENTS, none in a value** —
+`DONE.md`, `tests/spec_conformance.rs`, `spec/ggdef/tests/spec_conformance_ggdef.rs`. ⭐ **Both narratives were
+TRUE, so both were KEPT** — each documents a different seed, and deleting either would have left the surviving
+comment describing a corpus that no longer exists.
+
+⭐⭐ **THE COLLISION FIRED, MEASURED NOT PREDICTED:** after both stacks landed,
+`ls spectests/run/*.gg | wc -l` → **245** against a `MIN_FIXTURES` of **244**, which is an **EXACT PIN**.
+⇒ **`spec_conformance` would have RED on ARITHMETIC**, and a parent who had not forecast it would have read a
+green patch as a regression. ⛔ **Neither track could have seen it: each measured base + its own fixture.**
+
+**The parent's constant pass — all PER-FIXTURE, so each moved TWICE:** `MIN_FIXTURES` · `C_MATCH_FLOOR` ·
+`LLVM_MATCH_FLOOR` 243→**245**; `SELFHOST_MATCH_FLOOR` 242→**244**; `GGDEF_MATCH_FLOOR` 225→**227**;
+`GGDEF_SKIP_CEILING` **UNMOVED** (both seeds carry `adjudicator: ggdef` and both measured SKIP=18).
+⊕ **Plus the four `figures.db` mirrors** — `parity.spec_conformance.{c,llvm,selfhost}.match_floor` and
+`spec_conformance.corpus.fixtures` — which `figures_db_mirrors_agree` enforces.
+⛔ **THESE ARE THE ARITHMETIC EXPECTATION AND THEY ARE BEING RE-MEASURED, NOT TRUSTED (Core #5). The gate's
+printed counts win over my addition.**
+
+### ⛔ F1r's EXECUTOR CAUGHT **MY** MIRROR MAP SHORT BY FOUR — AND THE MISS HAD A SHARPER CAVEAT THAN THE HIT
+
+I handed it seven constant↔mirror pairs. `grep -n "\.home = " scripts/figures.db` also returns the
+**`clone.stage1.*` QUARTET** — `STAGE1_{ARRAY,STRING}_CLONE_{PIN,ROUND_OPEN}`. ⇒ **they belong in the same
+deferral**, and they carry a caveat the stage-0 pair does not:
+⭐⭐ ***THE TRACK'S CLONE EVIDENCE IS STAGE-0 ONLY. Stage 1 pushes a much larger program through the changed
+lowering, so a stage-0 result is NO EVIDENCE AT ALL about stage 1.*** ⛔ **I must not move a stage-1 pin on
+stage-0 evidence at round close.** `t1365` now says so.
+⊕ **And the shape recurses:** I told the track *"the landing boundary of a constant is not the constant"*; the
+executor answered that **the DEFERRAL RECORD has the same landing boundary as the constant** — the same failure,
+one level up, found in my own correction.
+
+⭐ **A THIRD-ORDER FINDING WORTH KEEPING:** the executor reports **erratum 1 is the THIRD mechanism-claim on this
+track that survived review by being PLAUSIBLE rather than MEASURED** (the other two: `t1362`'s original filed
+double-free, and the *"gate 2 is not a root cause"* correction). ⭐ **All three were STRUCTURAL claims about
+WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the predicate's docstring now
+**distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
+*"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
+**not** cover it. **No mechanism invented.**
 
 ### ✅ RULED — **`d[k](v)` MEANS INDEX-THEN-CALL** (owner 2026-09-05), AND THE COMPETING READING IS REAL
 
