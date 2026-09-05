@@ -20,6 +20,7 @@
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | ✅ **H** | **`t1387`** — the map's KEY has no drop discipline. **SIGNED OFF 3/3, 🟢 EXECUTOR LAUNCHED 2026-09-05.** | `t1409`–`t1417` |
+| **K** | **`t1385`** — the bucket triage. **THE LAST BLOCKER TO A GREEN `--lanes all`.** 🔵 scout. Streak 0/3. | `t1428`–`t1437` |
 | **J** | **`t1407`** — `Vector.fill` DOUBLE-FREES at pristine HEAD (CRITICAL, owner-approved 2026-09-05). 🔵 scout. Streak 0/3. | `t1418`–`t1427` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
@@ -1316,6 +1317,35 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### 🚀 TRACK K OPENED — `t1385`, THE LAST BLOCKER TO A GREEN ROUND-CLOSE BATTERY
+
+⛔ **`--lanes all` is RED on exactly two causes: `t1387` (H's executor is fixing it now) and `t1385`.** **A red
+battery is NEVER waivable** ⇒ **R50 cannot close until both are discharged.**
+
+⛔ **AND THE ITEM'S OWN SCOPE FIGURE IS WRONG BY TWO.** Regenerated
+(`awk -F'\t' 'NR>1 && ($8=="" || $10=="" || $11=="")' tests/fixtures/robustness_map/MANIFEST.tsv | wc -l`) →
+**33, not 31**: `00 harness controls` 1 · `07` 5 · `10` 1 · **`11` 21** · `13` 4 · `30` 1.
+⇒ **the scout establishes whether the topic-00 and topic-30 rows are DELIBERATE CONTROLS or two more
+unbaselined rows, and corrects the item either way.**
+
+⭐⭐ **THE QUESTION THAT COULD CHANGE THE WHOLE TRIAGE, HANDED TO THE SCOUT FIRST — AND IT COMES FROM TRACK H:**
+pass 3 measured that **topic 30's `asan` column is a BYTE-FOR-BYTE COPY of its C-lane column** (819/820 rows
+identical) ⇒ **those baselines were NEVER MEASURED ON THAT LANE.** ⛔ **If the same holds for the legacy rows,
+then *"seeding a measured verdict"* and *"seeding a COPIED one"* are different acts and the triage changes
+shape.** *A `WORKS` row whose column was copied from another lane is SIX-Q #6 in its purest form.*
+
+⚠ **AND THE 13 IS A LOWER BOUND:** G's executor censused **topic 11 only** (21 rows: 13 `SANITIZE-FAIL` ·
+6 `BUILD-FAIL` · 1 `REJECTED` · 1 `WORKS`); **topics 07/10/13 were never censused.**
+⚠ **COLLISION WARNING BRIEFED: H is editing the map runtime and will retire 8 leak-allowlist rows this round.**
+**If K also moves allowlist rows or manifest columns it must say so** — *this round has already been bitten by
+two tracks colliding on shared counters.*
+⊕ **The scout is told that if a full triage cannot land this round, it must SAY SO and propose the smallest
+honest alternative (the sanctioned `LEGACY_UNBASELINED` mechanism — DECLARED, not hidden), and that editing an
+expectation to match what the compiler prints is forbidden by the map's own header.**
+
+⊕ **DISK: 22G → 5.1G.** All completed agent worktrees pruned; only the two live agents remain. ⊕ **The two
+shared-`pgrep` watchdogs pass 3 flagged are GONE — they died with their agents.**
 
 ### ✅✅✅ H IS SIGNED OFF 3/3 — EXECUTOR LAUNCHED. **AND PASS 3 FOUND THE THIRD SELECTION.**
 
