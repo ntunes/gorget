@@ -13,7 +13,7 @@
 | **C1** | ⛔ **THE OWNER REJECTED ALL THREE OF MY OPTIONS 2026-09-05 — THE ASK IS WITHDRAWN, THE TRACK IS RE-AIMED AT *MAKE IT WORK*.** 🔵 reference-grade SCOUT running. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
 | **C2** | **`t0045`** — code SIGNED OFF. ⛔⛔ **DOC ROT IS ON ITS THIRD GENERATION — a phrase-scoped "zero hits repo-wide" that the ORCHESTRATOR falsified with one grep. NOT INTEGRATED.** 🟢 executor resumed. ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D0′** | ⛔⛔ **REBUILT TWICE. Streak 0/3, 🔵 SCOUT on `v3`.** Read-site route dead (5 corrupting cells); **write-site route ALSO dead** (1 corrupting cell; its "zero corruption" table was the **no-op column** — byte-identical C to HEAD on all 11 cells). ⭐ **v3 = PARSER FIRST:** make `d[k](v)` parse ⇒ the 8 `httpserver` BINDS migrate to the ratified **callee borrow** ⇒ the bind reject gains a recourse ⇒ `elem_drop` is safe on every provenance. **No owner ruling needed — `t1225`'s directive is honoured, not overridden.** | `t1393`–`t1402` |
+| **D0′** | ⭐ **SCOUT DELIVERED — HYPOTHESIS HALF RIGHT; the fix is REAL but it is NOT a parser fix and the ORDER REVERSES.** Streak 0/3, brief `v3` next. ⚖ one PRECISE ratification question. | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | ✅ **G** | **6 passes, DESIGN SIGNED OFF, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⚖ owner-ratified. **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
@@ -1274,6 +1274,63 @@ TOP LEVEL** (measured MATCH, zero non-MATCH inflow); memory-safety rows and the 
 fix **moves the String cell OUT of memory-unsafety INTO an already-filed class**; and **String was the LAST
 broken cell of ratified consequence (a)** — nested Vector, struct and dict-value already bare-rebind as
 non-crashing private copies. ⇒ **the fix COMPLETES the ratified rule.**
+
+### ⭐⭐ D0′ v3 SCOUT — THE HYPOTHESIS IS **HALF RIGHT, AND THE WRONG HALF REVERSES THE ORDER**
+
+**RIGHT:** `d[k](v)` is fixable and **the zero-clone claim is TRUE — MEASURED, not asserted.** `callee_var`
+goes EMIT_FAIL → emits C **byte-identical to the already-working `callee_lit`** but for two filename strings;
+`deep_clone=0 closure_free=0 shallow_memcpy=0`. **The bind spelling costs an extra closure slot + memcpy +
+free.** Unchanged cells: **0 diff lines vs HEAD.**
+⚠⚠ **AND THE INSTRUMENT WARNING IS THE ROUND'S THEME AGAIN:** `grep -c gorget_closure_clone_to_owned` over the
+whole file is **CONSTANT AT 3 FOR EVERY CELL** — it counts runtime boilerplate and **would have reported the fix
+as doing nothing.** It must be sliced to the function body. *(Core #13: the instrument must SEE the class.)*
+
+**WRONG — AND I NAMED THE LAYER WRONG:** ⛔ **IT IS NOT A PARSER FIX AND CANNOT BE.** The parser genuinely
+cannot decide whether `k` is a value or a type. **But `Type::Named{name, generic_args:[]}` LOSSLESSLY ENCODES
+`Expr::Identifier`, so the AST is NOT lossy** — disambiguating downstream is **Layering rule 4 (resolve once,
+write through), not a read-site patch.** ⭐ **And the precedent already exists:** `src/semantic/rewrite.rs` is a
+post-resolution pass that ALREADY converts `Expr::Call`→`Expr::StructLiteral` on exactly this class of parse
+ambiguity. **The fix goes there: 91 lines, parser untouched.**
+Proto: `/tmp/scoutD0v3_a4799cbf/ckpt3_final_proto.patch`.
+
+⛔⛔ **TWO FINDINGS THAT BREAK MY PROPOSED ORDER OUTRIGHT:**
+1. **THERE IS A SECOND AMBIGUITY SITE I MISSED.** `expr.field[...](` is a **different parser branch**
+   (`src/parser/expr.rs:1057-1071`) producing a `MethodCall` and failing **`E_NoMethodFound`**, not
+   `E_NotAFunction`. ⇒ **ALL 8 httpserver sites are `self.X[k]`/`sub.X[k]`, so ALL 8 need THAT site** — which
+   needs the receiver's TYPE, so `rewrite.rs` cannot reach it. **The prototype does not fix them.**
+2. ⛔ **THE MIGRATION WOULD MAKE `httpserver` WORSE.** At HEAD the **bind** spelling is CLEAN and the **callee**
+   spelling **LEAKS 16 B**. ⇒ ***migrating converts clean sites into leaking ones*** unless `elem_drop` lands the
+   same round. **My "parser first → migrate → reject" order is dead as stated.**
+
+⛔⛔⛔ **AND THE SAME CERTIFICATION MISTAKE, A THIRD TIME — THIS TIME IN MY OWN BRIEF.** I called `gg_full`
+*"the one measured configuration that is both leak-free and memory-safe."* **Run as a genuine product
+(18 cells × 4 oracles, container × read-shape × PROVENANCE), `gg_full` STILL LEAKS 16 B in 4 cells on the
+STRUCT-FIELD provenance** — the provenance the certifying matrix omitted. ***A claim certified on a matrix that
+omits the axis where it fails.***
+
+🚨 **A THIRD, INDEPENDENT DEFECT, AND IT SITS ON THE `httpserver` PATH:** a container reached **through a struct
+field** clones the closure env and **never registers the clone for drop** (`deep_clone=1, closure_free=0`).
+**Present identically at PURE HEAD** ⇒ caused by no prototype, and **neither read-site nor write-site
+`elem_drop` touches it.**
+
+⭐ **THE ENUMERATION HAS A REAL INDEPENDENT WITNESS — THE PARSER ITSELF.** Instrumented the branch and swept
+**4894 `.gg` files**: **4762 sites, 1167 with all-bare-name type args** (the ambiguous shape). **Every head is a
+type constructor or a generic free function — NO head is a value**, which is why the fix fires only on the
+current error path. ⊕ **10 sites have a non-Identifier head** (`None[String](...)` in the self-host parsers)
+⇒ **a "non-Identifier ⇒ index" rule would BREAK them.** Blast radius: **1187/1187 unit, 1723 fixtures, 0
+failures.**
+
+⊕ **TWO PRE-EXISTING DEFECTS FOUND IN PASSING — and the second is deliciously self-defeating:**
+`rewrite_expr` **never walks f-string interpolations** (`Expr::StringLiteral` sits in its LEAF list,
+`src/semantic/rewrite.rs:930`) ⇒ at pure HEAD `print(getx(P(7)))` prints 7 while **`print(f"{getx(P(7))}")`
+fails with a RAW C ERROR**. ⇒ ⛔ **`t0957`'s OWN COMMITTED REPRO is written in the one position where the
+rewrite layer is BLIND** (`f"{fs[n](21)}"`), so it still fails under the prototype while the plain form prints
+42. **A repro that cannot pass the fix it was filed for.**
+
+⭐ **SHIPPABLE ALONE, AND IT SHOULD SHIP ALONE — WITHOUT the migration.** It only turns ERRORS into
+ACCEPTANCES; no accepted program changes. ⚠ **But it IS a semantic change (Core #9): ggdef reuses the root
+parser but NOT `src/semantic/rewrite.rs`, so it needs a ggdef mirror in `elaborate/`; self-host has 3 parser
+copies.**
 
 ### ⛔⛔⛔ C2's DOC ROT, GENERATION **THREE** — AND I CAUGHT IT BY NOT TRUSTING A TOTAL CLAIM
 
