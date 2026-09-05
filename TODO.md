@@ -16,7 +16,7 @@
 | **D0** | 🆕 **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1. | `t1393`–`t1402` |
 | **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | **G** | ✅ **SCOUTED — VERDICT: NO NEW INSTRUMENT. A ~693-CELL TOPIC IN `robustness_map`.** ⚖ OWNER-RATIFIED. Needs brief. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
-| **F1** | **`t1362` CRITICAL** — pass 1 BLOCKED (3) → folded → 🔵 pass 2. **Streak 0/3.** | `t1363`–`t1372` |
+| **F1** | ⛔ **REBUILT 2026-09-05 — `t1362` + `t0750` AS ONE FIX AT THE SHARED CONSUMER.** Passes 1–3 all blocked; **pass 3 found the root cause INVERTED by my own folds.** Needs a FRESH SCOUT. **Streak 0/3.** | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
@@ -449,6 +449,65 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ⛔⛔ F1 IS REBUILT — PASS 3 FOUND MY TWO FOLDS HAD INVERTED THE ROOT CAUSE
+
+⛔ **I RULED GATE 2 OUT (D9). GATE 2 *IS* THE REPRO.** With it out of scope **the track could not have fixed the
+bug it was written for.** The chain: pass 1's **D2** claimed *"gate 1 stops any provenance match, so
+`cow_materialize_alias` never runs, so there is no rebind for `restore_locals` to discard"*; pass 2 re-confirmed
+it; I built **D9** on it. **Every clause of D2 is measurably false.**
+
+**Instrumented, then reverted:** the provenance match **SUCCEEDS**, Case 3 **FIRES**,
+`cow_materialize_collection_ref` **IS called** — `matched=true`, `CASE3 ref#13 … is_ref_local=true`.
+**The controlled pair, ONE EDIT APART:**
+
+| | severance decision | emitted C | run |
+|---|---|---|---|
+| straight-line | `matched=true`, Case 3 fires | read is `&__s17` — **the clone** | **`10`** ✅ |
+| nested in `if` | **IDENTICAL** | read is `gorget_array_safe_get(__v18,…)` — **the ORIGINAL**, then `gorget_array_free(&__s20)` | **`777`** ✗ |
+
+⇒ **the severance decision is the same in both; the only difference is the enclosing block. That is
+`restore_locals` — gate 2 — and it is the SOLE mechanism.**
+⭐⭐ **AND THE BODY ALREADY SAID SO:** *"pays for a clone AND returns the wrong answer — clones into a
+block-local temp, mutates the original, frees the clone unread."* **That sentence is direct evidence the
+materialize fired. D2 contradicted the brief's own measurement, and I folded it anyway.**
+
+⛔ **THE ENUMERATION AXIS WAS WRONG TOO — AND SO WAS THE STORE.** I enumerated **13 `set_cow_borrow_source`
+sites**. That writes the `func_state.cow_borrow_sources` **sidecar, which the severance path NEVER READS**:
+`cow_collection_refs_for_id` matches on **`l.ownership`**, written by **`set_collection_ref` — 5 sites**
+(`grep -rn "set_collection_ref(" src/ | grep -v "fn set_collection_ref" | wc -l` → 5). ⇒ ⛔ **TWO PARALLEL
+STORES FOR ONE AXIS — Layering rule 3 violated IN THE SOURCE**, and three of my decisions rested on the store
+the reader ignores.
+⊕ **`p6` is NOT a sixth closure at a new write site** — it has the **same nested/straight signature**, i.e. the
+**same consumer defect reached by a different producer.**
+
+⭐⭐ **`t0750` ALREADY NAMES THE SHARED CONSUMER IN ITS OWN `mechanism` FIELD:** *"does not survive the enclosing
+loop's `save_locals`/`restore_locals` boundary."* ⇒ **GATE 2 IS NOT SEPARABLE — IT IS THE SHARED ROOT. Fix the
+consumer and BOTH go green; fix one producer's spelling and NEITHER does.** ⇒ **`t1362` + `t0750` are plausibly
+ONE fix, and the round gets a CLOSURE instead of a fifth narrow patch.**
+
+⛔ **NEITHER OF D8's TWO OPTIONS FIXES THE REPRO — both measured non-fixes.** (a) write-site: recording
+`FieldPath(s.f)` only changes *which scan* finds the ref; `cow_before_field_mutation` calls the **identical**
+`cow_materialize_collection_ref` ⇒ same rebind, same discard, **still `777`**. (b) unify on `loop_set_mutates`:
+that predicate is `starts_with("@mut:{name}.")` over **name strings** ⇒ **name-matching to decide meaning,
+Core #2 — a REGRESSION.** ⭐ **The real fix is neither: MAKE THE REBIND SURVIVE THE SCOPE BOUNDARY.**
+
+⚠ **THE DISCRIMINATING AXIS WAS NEVER NAMED AS AN AXIS: ENCLOSING-CONSTRUCT vs STRAIGHT-LINE.** The
+"view-producing shape" column I added **does not discriminate** — all three values behave identically.
+⛔ **EVERY CELL NEEDS ITS STRAIGHT-LINE TWIN**, or a "fix" that simply disables bind-freedom goes green —
+against the measured negative that disabling it costs **8.93×** site hits.
+
+⊕ **WHAT SURVIVES the rebuild:** the defect · the CRITICAL grade · the Core #8 framing · the three-lane
+disagreement (independently reproduced a third time) · **the self-host-is-ahead finding** · both measured
+negatives (do NOT disable the arm; `FieldPath`-only gating fixes neither repro) · the ID block · the `t0750`
+scope correction. ⊕ **`bdef3d375`'s subject CORROBORATES the inversion** — *"materialize FIELD-PATH projected
+mutation"* — it fixed the field-path **producer**, which is exactly why the straight-line half works and the
+nested half does not.
+⊕ **Floors named for whenever a conformance fixture lands:** `C_MATCH_FLOOR` 243 · `LLVM_MATCH_FLOOR` 243 ·
+`SELFHOST_MATCH_FLOOR` 242 · `MIN_FIXTURES` 243 (`grep -n "const .*FLOOR\|const MIN_FIXTURES" tests/spec_conformance.rs`).
+⚠ **A site-count lint COUNTS; it does not FAIL ON REVERT.** Readiness row (4) needs a **behavioural** fixture;
+the count lint separately satisfies Core #4. **Name both.** And post-rebuild the thing to count is the
+**`restore_locals` / materialize-rebind pairing**, not write sites.
 
 ### ⚠ F1's PASS 1 BLOCKED ON THREE COUNTS — AND ONE OF THEM IS AN UNVERIFIED CLAIM I FILED
 
