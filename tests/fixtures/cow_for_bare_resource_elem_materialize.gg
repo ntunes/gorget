@@ -2,8 +2,9 @@
 #
 # Pins gap A2: a bare-for over a RESOURCE struct element wrongly WROTE THROUGH on
 # Rust gg (`x.field = v` reached the collection → `101`). §3.1 makes the bare
-# element immutable, so the write must land in a private materialized copy and
-# the collection stays `1`. The self-host was already correct here; 1A brings
+# element a MUTABLE PRIVATE COPY — the write is ACCEPTED, and it must land in
+# that private materialized copy rather than the collection, which stays `1`.
+# The self-host was already correct here; 1A brings
 # Rust gg into line. A read-only scan of the same element pays no clone (the
 # CollectionElement borrow only materializes on the write).
 # Output must be correct on BOTH backends.

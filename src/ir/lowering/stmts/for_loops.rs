@@ -783,8 +783,9 @@ fn lower_for_string_with(
 ///    collection's buffer. Taken for ANY struct/enum element (value OR resource).
 ///  - bare (`for x in coll`) over a RESOURCE struct/enum: `CollectionElement` —
 ///    `cow_before_mutation` Case 1b clones the element into a private owned copy
-///    on the first `x.f = v`, so the write does NOT reach the collection (§3.1
-///    immutable for-element). A read-only scan never triggers the clone. Value
+///    on the first `x.f = v`, so the write does NOT reach the collection (§3.1:
+///    the bare for-element is a MUTABLE PRIVATE COPY — the write is accepted,
+///    it just lands in the copy). A read-only scan never triggers the clone. Value
 ///    structs are NOT taken here — they keep the eager value-copy path, which
 ///    already realizes correct materialize semantics.
 fn bind_for_vector_element(

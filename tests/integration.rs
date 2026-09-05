@@ -50910,16 +50910,18 @@ fn cow_for_amp_vector_alias_root() {
     );
 }
 
-/// CoW Track 1A — bare `for c in a` element is immutable (materialize control).
-/// `c.field = v` lands in a private copy; the value-struct collection stays `1`.
+/// CoW Track 1A — the bare `for c in a` element is a MUTABLE PRIVATE COPY
+/// (materialize control). `c.field = v` is ACCEPTED and lands in that private
+/// copy; the value-struct collection stays `1`.
 #[test]
 fn cow_for_bare_vector_control() {
     run_gg("cow_for_bare_vector_control.gg", "1");
 }
 
 /// CoW Track 1A — bare `for x in a` over a RESOURCE element materializes (gap A2).
-/// Rust gg wrongly wrote through (`101`); §3.1 makes the bare element immutable,
-/// so the write lands in a private copy and the collection stays `1`.
+/// Rust gg wrongly wrote through (`101`); §3.1 makes the bare element a MUTABLE
+/// PRIVATE COPY — the write is accepted and lands there, not in the collection,
+/// which stays `1`.
 #[test]
 fn cow_for_bare_resource_elem_materialize() {
     run_gg("cow_for_bare_resource_elem_materialize.gg", "1");
