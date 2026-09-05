@@ -20,12 +20,48 @@
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | ✅ **H** | **`t1387`** — the map's KEY has no drop discipline. **SIGNED OFF 3/3, 🟢 EXECUTOR LAUNCHED 2026-09-05.** | `t1409`–`t1417` |
-| **K** | **`t1385`** — the bucket triage. **THE LAST BLOCKER TO A GREEN `--lanes all`.** 🔵 scout. Streak 0/3. | `t1428`–`t1437` |
+| **K** | **`t1385`** — the bucket triage. ✅ SCOUTED → 🔵 **brief-review pass 1**, brief `/tmp/brief_K_v1.md`. **Streak 0/3.** ⭐ **H + K ARE THE ONLY TWO THINGS BETWEEN HERE AND A GREEN `--lanes all`** — measured whole-corpus. Scope GREW to the ggdef classifier fix (Core #8). | `t1432`–`t1437` (`t1428`–`t1431` spent) |
 | **J** | **`t1407`** — `Vector.fill` DOUBLE-FREES at pristine HEAD (CRITICAL, owner-approved 2026-09-05). ✅ SCOUTED → 🔵 **brief-review pass 1**, brief `/tmp/brief_J_v1.md`. **Streak 0/3.** ⭐ **TWO defects, not one**; scout FALSIFIED 3 of my claims and filed `t1418`+`t1419`. | `t1420`–`t1427` (`t1418`/`t1419` spent) |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ✅✅ TRACK K SCOUTED — **A GREEN `--lanes all` IS TWO THINGS AWAY, AND THE GUARD'S OWN INSTRUCTIONS DON'T WORK**
+
+Brief `/tmp/brief_K_v1.md`; full triage `/tmp/scoutK_t1385_scout/CHECKPOINT.md` + `seed.patch` + 7 scripts.
+- ⭐⭐ **THE HEADLINE.** Whole-corpus `python3 scripts/robustness_map.py --lanes all --detail --jobs 6` (26m01s,
+  rc 1) = **1 REGRESSION + 11 NEW DIVERGENCE + 0 FATAL DRIFT.** The regression is **`t1387` = Track H**; **all
+  11 divergences are inside K's 31-row set.** ⇒ **H + K green the five-lane CI step. Nothing else is in the way.**
+- ⛔⛔ **THE LINT TELLS YOU TO RUN A COMMAND THAT REFUSES ON THE EXACT ROWS IT NAMES.** `tests/lints.rs`
+  prescribes `--lanes all --accept --seed-new --topic "<topic>"`; measured, it **refuses the write wholesale**
+  (`first_seen` needs *no* value lane populated, and `c`/`llvm` are). That is what an earlier revision of
+  `t1385` hit when it recorded *"`--seed-new` does not help"*. **SIX-Q #2 — a guard that cannot be discharged
+  by its own instructions.** The three-lane form works because the divergence set becomes a singleton.
+- ⛔ **ggdef's SCORER STATES A CLAIM ggdef NEVER MADE.** `Outcome::IllFormed` with no reject code prints a bare
+  `error:` and falls into the scorer's **`REJECTED` default** — the script's own docstring calls this *"the worst
+  available outcome."* **3 of the 31 seeds land there; a census of all 72 baselined `REJECTED` rows found 40
+  more.** ⇒ **K's scope GREW to fix it at ggdef** (an out-of-subset marker), **not** by adding a fourth stderr
+  substring to the script — that would be **Core #2 name-matching to decide meaning.**
+- ⛔ **`t1385`'s `mechanism` FIELD WAS FALSE AND I CORRECTED IT IN PLACE.** The 31 rows do **not** predate the
+  lanes: all were created by **one commit `ef171a34a` (R49 Track F, 2026-09-04)**, nine days after the lane
+  schema and eight after five-lane baselining. **This is LAST ROUND'S INFLOW, not legacy debt**, and
+  `LEGACY_UNBASELINED` is a misnomer.
+- ✅ **THE COLUMN-COPYING SUSPICION IS ANSWERED: NO.** One writer per lane column, five distinct runners; 0
+  FATAL DRIFT over 819×5 means every recorded bucket reproduced today. ⭐ **And the counter-example is inside
+  the seed set — 22 rows measure `asan=SANITIZE-FAIL` while `c` is `WORKS`; a copy cannot produce that.**
+- ⛔ **`--topic` IS MANDATORY**: the four scoped runs fold **0** foreign rows; a bare `--lanes all --accept`
+  folds **689** (real uncollected progress, not this track's to collect).
+- ⭐ **THREE UNFILED DEFECTS, NOW FILED**: **`t1428`** (HIGH — `fold`'s accumulator leaks every intermediate,
+  **unbounded**, both backends; isolated from `t0953` by a **named-callee negative control**), **`t1429`** (HIGH
+  — self-host `Option[String].map` prints `0` vs `5`, **silent wrong output** from an incompatible fn-ptr call:
+  the **PARAMETER** half of `t0877`, whose return half is a loud BUILD-FAIL), **`t1430`** (MED — one cell burns
+  **~15 of the 26 minutes** on four lanes, and `HANG_CENSUS` is **C-lane only**, a selection).
+- ⭐⭐ **3 OF THE 11 DIVERGENCES ARE THE SELF-HOST BEING RIGHT AND RUST gg WRONG** (`hof_for_each_strings_*`,
+  `t0987`'s class) — **a succession-plan data point: fix the Rust side as oracle hygiene.**
+- ⚠ **MA-9's shared-predicate deadlock fired a THIRD time** — two watchdogs spinning on `pgrep -f` patterns
+  that matched **each other's own command lines**, alive 4h21m. **Filed `t1431` with a lint ratchet design**;
+  prose alone has now failed three times in one round (Core #6).
 
 ### ✅ TRACK J SCOUTED — **TWO DEFECTS IN ONE RUNTIME FUNCTION**, AND THE `memset` IS A GUARD-BLINDING FIX
 
@@ -3713,6 +3749,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t1364`](todo/t1364.md) **HIGH** — 🆕🚨 [HIGH — A RUN THAT NEVER ERRORS TRAPS T_UnwrapNone. Both Rust backends; the SELF-HOST LANE IS CORRECT, so the oracle…
 - [`t1388`](todo/t1388.md) **HIGH** — 🆕🚨 [HIGH — A BARE LOCAL BIND OF A REFCOUNT HANDLE CORRUPTS THE SOURCE AND FABRICATES THE DESTINATION. No call, no contai…
 - [`t1331`](todo/t1331.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT FROM ORDINARY SAFE SYNTAX; gg check rc 0, build rc 0, run rc 0, ASan CLEAN; found 2026-09…
+- [`t1428`](todo/t1428.md) **HIGH** — 🆕🚨 [HIGH — AN UNBOUNDED LEAK IN fold's ACCUMULATOR SLOT, ON BOTH BACKENDS. Found by R50 Track K's scout while triaging t…
 ### Medium
 
 - [`t0115`](todo/t0115.md) **MED** — 🆕🐛 [MED — COMMENT MISATTRIBUTION, PRE-EXISTING on both lanes; found 2026-08-19 by the R43 Track G output review, executo…
@@ -3849,6 +3886,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t1084`](todo/t1084.md) **HIGH** — 🆕🚨 [HIGH — SELF-HOST LANE DEBT, Core #9: R49 Track M2 landed a semantic change on the Rust C and LLVM lanes and the self…
 - [`t1310`](todo/t1310.md) **CRITICAL** — 🆕🚨 [CRITICAL — SELF-HOST lane, DOUBLE FREE, gg check clean; found 2026-09-05 by R50 Track A1 while measuring the t1077 l…
 - [`t1311`](todo/t1311.md) **HIGH** — 🆕🐛 [HIGH — SELF-HOST lane, the self-host emits C that cc rejects; filed 2026-09-05 by R50 Track A1; BLOCKS graduating t1…
+- [`t1429`](todo/t1429.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT ON THE SELF-HOST LANE, rc 0 AND gg check CLEAN. Found by R50 Track K's scout.] Option[Str…
 ### Medium
 
 - [`t0171`](todo/t0171.md) **MED** — 🆕 [MED — self-host lane gap, Core #9; R40 Track B] The 3 driver-embedded lexer copies lack the \xHH arm + unknown-escape…
@@ -4932,6 +4970,8 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t1335`](todo/t1335.md) **MED** — 🆕🧹 [MEDIUM — GUARD COVERAGE HOLE, no live defect; found 2026-09-05 by the R50 Track C2 output-review] The LIR view-calle…
 - [`t1384`](todo/t1384.md) **MED** — 🆕🔬 [MED — WHAT TOPIC 30 DOES NOT COVER, WRITTEN DOWN SO THE FAMILY IS NOT DECLARED CLOSED. Filed BY the track that built…
 - [`t1386`](todo/t1386.md) **MED** — 🆕🔬 [MED — A WRONG CELL THAT STARTS PRINTING A *DIFFERENT* WRONG VALUE IS INVISIBLE TO THE MAP, and topic 30 is 237 cells…
+- [`t1430`](todo/t1430.md) **MED** — 🆕 [MED — ONE CELL IS 58% OF THE FIVE-LANE WALL CLOCK, AND THE CENSUS THAT EXISTS TO CATCH HANGS CANNOT SEE IT. Found by…
+- [`t1431`](todo/t1431.md) **MED** — 🆕 [MED — A DEADLOCK CLASS THAT HAS NOW FIRED THREE TIMES IN ONE ROUND AND IS POLICED BY PROSE ONLY. Core #6: prose rots,…
 ### Low
 
 - [`t0606`](todo/t0606.md) — 🧹 (G1 follow-up) lint-file-scope: widen g1_projected_materialize_sites_untrack files[] IF a projected-materialize cow_be…
