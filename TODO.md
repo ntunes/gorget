@@ -27,6 +27,26 @@
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
 
+### ⚠⚠ MY OWN `/tmp` PRUNE AUDIT WAS WRONG IN THE DANGEROUS DIRECTION — **THE CITATION SURFACE IS THE PROMPT, NOT JUST THE BRIEF**
+
+**Measured this heartbeat: ~40 GB of agent scratch live** (`/tmp` 25 GB + 14.4 GB of worktrees), on a box that
+has already crashed once on disk exhaustion — **three executors and one reviewer concurrent, the round's
+heaviest load.**
+⛔⛔ **I built the prune list by grepping the four BRIEF FILES for each directory's basename. That marked
+`rev2_a2e446ab` (814 MB) as FREE — and it is A2's pass-2 artifact set, cited by the LIVE pass-4 PROMPT I wrote
+myself minutes earlier** (four partial-revert compilers + 14 probes). **Deleting it would have destroyed a
+running reviewer's evidence base mid-pass.**
+⇒ ⭐ **THE RULE: A `/tmp` DIRECTORY IS LIVE IF IT IS CITED BY A BRIEF *OR BY ANY IN-FLIGHT AGENT'S PROMPT*.**
+The prompt is the larger surface — a brief is written once, but every launch adds citations that exist **only**
+in the spawn message. ⊕ **A basename grep over briefs is exactly the "instrument that cannot SEE the class"
+shape (Core #13), applied to my own housekeeping.**
+⇒ **PRUNED ONLY THE PROVABLY-DEAD SET: the three D0′ directories (~1.9 GB)** — no live agent, track not active,
+claims folded into this handover long ago. **Everything else stayed.**
+⚠ **The four biggest survivors are all live-cited:** `scoutE_01db12fc` (8.3 GB — it holds the `target_pre` and
+`target_v3` compilers E's executor is RED-verifying against), `gg_fuzz_lint_target` (5.3 GB — a live
+`CARGO_TARGET_DIR` for a lint; deleting it forces a full rebuild on every `cargo test --test lints`),
+`execE_01db12fc`, and `rev2_a2e446ab`. **None of them is prunable until its track integrates.**
+
 ### 🟢 L LAUNCHED (5 PASSES) — AND A2's PASS 3 INVERTED MY OWN "SCOPE HAS GROWN" PREMISE
 
 **L — design signed at every one of five passes, shape never changed.** Pass 5's closing findings:
