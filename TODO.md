@@ -20,12 +20,42 @@
 | ✅✅ **H** | **`t1387` INTEGRATED** 2026-09-05 (`8573b12ca`+`0c137cbe0`). Output-review SIGNED OFF; 3 errata fixed at `6b4c8a544`. ⭐ **Its executor found FOUR defects in my brief; the review found a fifth in ITS filing.** | `t1409`–`t1417` |
 | ✅✅ **K** | **`t1385` INTEGRATED** 2026-09-05 (`b5c5eaabc`+`1c2513e45`); errata `9d7e9f71b`. Output-review **SIGNED OFF**. ⭐ **93 cell-lanes now gated; both allowlists ratchet BOTH ways.** | `t1434`–`t1437` |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
-| **L** | **`t1410`** — wrapping ops lower to UB on C; LLVM correct ⇒ lanes differ in **DEFINED-NESS**. 🔵 **pass 2 after a BLOCKING fold. Streak 0/3.** ⛔ **Same-width unsigned PROMOTES BACK TO SIGNED `int`** — the fix's own justification was false below `int` width, and the fixture was blind to it. | `t1442`–`t1447` |
+| **L** | **`t1410`** — wrapping ops lower to UB on C. 🔵 **pass 3. Streak 0/3.** ⛔ **My prescribed RED-verification is IMPOSSIBLE — both instruments are blind.** ⛔ **The SELF-HOST has the identical defect** (filed `t1442`; its `IShl` is **worse** than Rust's). Scope narrowed to **2 cells.** | `t1443`–`t1447` |
 | **J** | **`t1407`** — `Vector.fill`. ✅✅ **passes 1 AND 2 SIGNED OFF** (*"I could not break it at the boundary it turns on"*) → 🔵 **pass 3. Streak 2/3.** ⛔ **Rows 3/4/5 still gate the launch.** | `t1422`–`t1427` |
-| **E** | **`t0953`** — ✅✅ **passes 1 AND 2 both signed the DESIGN** → 🔵 **pass 3. Streak 0/3** (blockers were on the RECORD, not the design). ⭐ **Census REDONE: total over all 5383 fixtures, site-attributed.** Write site filed `t1350`. | `t1351`–`t1358` |
+| **E** | **`t0953`** — ✅✅✅ **DESIGN SIGNED THREE TIMES** → 🔵 **pass 4 confirming.** ⛔ **Rows 3/4 still fail: a cited pin is `#[ignore]`d, and the changed set covers 3 of 28 `HofOp` variants.** | `t1351`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ⛔⛔ E AND L — **TWO PINS THAT PIN NOTHING, AND A RED-VERIFICATION THAT CANNOT HAPPEN**
+
+**E's pass 3 (design signed a THIRD time) and L's pass 2 (blocked) landed together. Both found the same shape of
+defect in my briefs: a guard cited as evidence that cannot fire.**
+- ⛔⛔ **E: THE REVERT TABLE'S FIRST ROW PINS NOTHING — `hof_call_env_leak_unbounded` IS `#[ignore]`d.** An
+  ignored test never runs. ⭐ **SIX-Q #6's sharpest instance of the round: a green-because-nobody-runs-it row,
+  cited as an existing pin.** ⊕ **And variant C makes it CLEAN while it is absent from `PASSING_ALLOWLIST.txt`
+  ⇒ `known_gaps_census.sh --check` EXITS 1. The fix REDS a round-close gate and the brief never mentioned it.**
+- ⛔ **E: `|changed| = 3` WAS A *SITE* COUNT PRESENTED AS A *CELL* COUNT.** The `HofOp` enum is **28 variants**
+  (a rustc-exhaustive witness the brief lacked); the proposed pins cover **3**. ⊕ **Two more changed cells the
+  site framing hid: a DEQUE receiver** (name-stripped into the vector expander, so **one drained site serves TWO
+  receiver families and only one is pinned**) **and `sort_by`.**
+- ⛔ **E: THE ARM-COUNT LINT IS GREEN ON ARRIVAL AND CANNOT SEE ITS CLASS** — an arm minting via a helper leaves
+  the count unchanged. ⭐ **The fix is a CHOKEPOINT: collapse the three mint sites into one that mints AND
+  registers from a typed argument every arm must supply** (Core #4). **That also makes the `debug_assert!`
+  deletable rather than documentable — it is DEAD BY CONSTRUCTION today.**
+- ⛔⛔ **L: I ORDERED A RED-VERIFICATION THAT CANNOT HAPPEN. BOTH INSTRUMENTS ARE BLIND.** Stdout is
+  value-identical across 26×26 operand pairs × 8 types × 3 ops at `-O0` and `-O2`; and UBSan, run on **the
+  scout's own emitted C** in the pre-widening shape, produces **zero diagnostics** — GCC narrows the truncated
+  multiply. ⇒ **the widening revert can red NO row, and gate 4 needs an EMITTED-SHAPE guard.**
+- ⛔⛔ **L: THE SELF-HOST LANE HAS THE IDENTICAL DEFECT AND MY BRIEF WAS SILENT** — same three-arm shape, plain
+  signed C on the fall-through; **`INeg` UB at `INT64_MIN`; `IShl` with NEITHER a count trap NOR an unsigned
+  companion — strictly WORSE than the Rust lane** — **and `self_host_lowerer` is an `OUT` row, so nothing
+  watches it.** **Filed `t1442`.** *(The succession plan makes that the lane meant to become the reference.)*
+- ⛔ **L: MY RETRACTION WAS TOO WIDE AGAIN, AND THE TRUE SCOPE IS TWO CELLS.** *"False for MULTIPLY"* is **true
+  for 8-bit multiply**; after the companion cast only **W=16** overflows `int`, and W≥32 does not promote ⇒
+  **exactly `{I16,U16} × Mul`.** ⊕ **`Neg` and `Shl` are already safe at every width.**
+- ⛔ **L: MY ID BLOCK COLLIDED ON ITS FIRST ID (MA-3b)** — `t1441` was already the orphan-reaper flake, **which
+  the same brief tells reviewers to read.** Reissued `t1443`–`t1447`.
 
 ### ✅ J's PASS 2 SIGNED OFF — **AND CAUGHT ME FIXING A ROTTED LINE NUMBER WITH ANOTHER ROTTED LINE NUMBER**
 
@@ -4315,6 +4345,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t1310`](todo/t1310.md) **CRITICAL** — 🆕🚨 [CRITICAL — SELF-HOST lane, DOUBLE FREE, gg check clean; found 2026-09-05 by R50 Track A1 while measuring the t1077 l…
 - [`t1311`](todo/t1311.md) **HIGH** — 🆕🐛 [HIGH — SELF-HOST lane, the self-host emits C that cc rejects; filed 2026-09-05 by R50 Track A1; BLOCKS graduating t1…
 - [`t1429`](todo/t1429.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT ON THE SELF-HOST LANE, rc 0 AND gg check CLEAN. Found by R50 Track K's scout.] Option[Str…
+- [`t1442`](todo/t1442.md) **HIGH** — 🆕🚨 [HIGH — THE SAME UNDEFINED BEHAVIOUR, IN THE LANE THAT IS MEANT TO BECOME THE PRIMARY REFERENCE. Found 2026-09-05 by…
 ### Medium
 
 - [`t0171`](todo/t0171.md) **MED** — 🆕 [MED — self-host lane gap, Core #9; R40 Track B] The 3 driver-embedded lexer copies lack the \xHH arm + unknown-escape…
