@@ -1315,7 +1315,41 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
 
-### ✅ RULED — **`d[k](v)` MEANS INDEX-THEN-CALL** (owner 2026-09-05), AND THE COMPETING READING IS REAL
+### ⏸ **RULING PAUSED BY THE OWNER 2026-09-05 — `d[k](v)` IS *NOT* RULED. TREAT v3 AS UNBLOCKED-PENDING.**
+
+⛔⛔ **RETRACTION, QUOTING ITS OWN SCOPE.** I recorded *"RULED — `d[k](v)` MEANS INDEX-THEN-CALL (owner
+2026-09-05)"* in the handover **and in commit `27d769b21`'s subject line**. **The owner then said: *"Wait, let
+me understand the generic instantiation before ruling."*** ⇒ **the heading was PREMATURE: the owner's *"I
+believe yes"* was a POSITION, and I promoted it to a RULING.** ⚠ ***What I retract is the RULED status ONLY —
+every MEASUREMENT under it stands*** (the 4762-site census, no-head-is-a-value, the 10 non-Identifier heads,
+the layer being `rewrite.rs`). **The track's brief v3 is written and under review; it must NOT land until the
+owner rules.**
+
+### ⭐ THE SWIFT ANSWER — AND IT REFRAMES THE QUESTION ENTIRELY
+
+**Swift has NO SUCH AMBIGUITY, because Swift NEVER OVERLOADED `[]`.** Verified against the Swift book's
+grammar: **`generic-argument-clause → < generic-argument-list >`** — Swift generics are **ANGLE brackets**;
+`[]` in expression position is **exclusively SUBSCRIPTING** (`[T]`/`[K:V]` are type-position sugar only).
+⇒ **in Swift, `d[k](v)` is UNAMBIGUOUSLY subscript-then-call. There is no competing reading to weigh.**
+⊕ **And Swift has historically REFUSED explicit specialization at a call site altogether** — `f<Int>(x)` was
+invalid; **SE-0460 "Explicit Specialization"** was under review in early 2025 to add it, still with `<>`.
+
+⛔⛔ **SO "WE FOLLOW SWIFT THERE" DOES NOT HOLD FOR THIS CONSTRUCT, AND THAT IS THE FINDING.** Gorget spells
+generics with **SQUARE** brackets (`docs/language-reference.md`: *"generic arguments in square brackets"*,
+`grep -n 'square brackets' docs/language-reference.md`) — that is **PYTHON's** convention (`List[int]`), not
+Swift's. **The repo's documented Swift debts are elsewhere**: CoW (as an explicit CONTRAST — Swift refcounts,
+Gorget does not), dot-shorthand enum inference, uncatchable faults, `String` unification, assert-rewriting
+(`grep -rn 'Swift' docs/language-design.md`).
+
+⇒ ⭐⭐ **THE AMBIGUITY IS SELF-INFLICTED AND BOTH REFERENCE LANGUAGES AVOIDED IT DELIBERATELY.** Swift kept
+`<>` and `[]` disjoint. **Rust made its turbofish `::<>` DELIBERATELY UGLY for exactly this reason** — to keep
+`<` unambiguous at a call site. **Gorget took Python's `[]` for generics while also using `[]` for
+subscripting, and inherited the collision neither reference has.**
+⚠ **This does NOT decide the ruling** — it says the owner cannot import Swift's answer, because Swift never
+faced the question. **The escape remains the MEASURED one: no head ever resolves to a value, so RESOLUTION
+disambiguates.**
+
+
 
 ⭐ **THE OTHER INTERPRETATION IS GENERIC INSTANTIATION** — `d[k](v)` = call `d` with TYPE ARG `k` (Rust's
 `d::<k>(v)`) — **and it is the one the parser picks today, for a good reason: it is the DOMINANT construct.**
