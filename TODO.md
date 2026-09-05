@@ -19,7 +19,7 @@
 | ✅✅ **G** | **INTEGRATED** (9 commits, `2d647456c`). 819 cells + 3 guards + 4 filings. Gates on the merged tree: lib 1187, lints **237**, gen-check, known-gaps census — all green. | `t1384`–`t1392` |
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
-| **H** | **`t1387`** — the map's KEY has no drop discipline. ✅✅ **DESIGN SIGNED OFF BY TWO PASSES, streak 2/3, 🔵 pass 3.** 5 record-level blockers folded. | `t1409`–`t1417` |
+| ✅ **H** | **`t1387`** — the map's KEY has no drop discipline. **SIGNED OFF 3/3, 🟢 EXECUTOR LAUNCHED 2026-09-05.** | `t1409`–`t1417` |
 | **J** | **`t1407`** — `Vector.fill` DOUBLE-FREES at pristine HEAD (CRITICAL, owner-approved 2026-09-05). 🔵 scout. Streak 0/3. | `t1418`–`t1427` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
@@ -1316,6 +1316,44 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ✅✅✅ H IS SIGNED OFF 3/3 — EXECUTOR LAUNCHED. **AND PASS 3 FOUND THE THIRD SELECTION.**
+
+⭐ **THE SET-DIFF IS FIVE, SETTLED BY A THIRD MEASUREMENT** — and this time with the decisive control: **the 227
+`vsm_*` rows and the 5 DRIFT rows are BYTE-IDENTICAL across the pristine and fixed runs.** *Provably not the
+fix's.* **Manifest `|changed|` = 6; TOTAL `|changed|` = 26 across two instruments.**
+⚠ **And the instrument's own limit, stated: `--lanes asan` is the right PRIMARY lane but NOT TOTAL — 133 of
+1856 cells (7.2%) never reach a run verdict** (REJECTED 100 · BUILD-FAIL 28 · ICE 3 · TIMEOUT 1 · UNKNOWN 1).
+
+⭐⭐⭐ **E-f — THE THIRD SELECTION, AND IT IS THE ONE THAT MATTERED: THE ENTIRE EVIDENCE BASE WAS
+STRING-KEYED.** `key_drop` is **not** only `NULL | gorget_string_free` — a generated **`<T>__drop`** is stored
+for any **non-str-keyed** Dict/HashMap/Set/HashSet with a droppable key. **The 5 cells, the 15 A/B programs and
+`dict_update` are ALL String-keyed** — *one value of a typed axis (Core #12).*
+⭐ **PASS 3 BUILT THE MISSING CELL RATHER THAN FILING THE GAP:** `Dict[Named,int]` and `Set[Named]` →
+**pristine LEAK 33 B / 35 B, fixed rc 0 clean, caller's local INTACT.**
+⇒ ⭐⭐ ***THAT IS THE ONE WAY THIS COULD HAVE BEEN A MEMORY-UNSAFETY CHANGE — an arbitrary generated drop on the
+incoming key — AND IT IS MEASURED SAFE. It is why pass 3 SIGNS OFF rather than blocks.*** ⊕ **And no committed
+fixture pins that half: the executor ships one this round.**
+⚠ **A measured executor constraint that would have looked like a defect: `@derive(Hashable)` emits `h * 31` on
+`int64` and trips UBSan SIGNED OVERFLOW on long keys** ⇒ a long-key cell would be SANITIZE-FAIL **for an
+unrelated reason.** ⊕ **That overflow is UNFILED — the executor files it.**
+
+⛔ **THE FOLD REMEDY WAS NOT EXECUTABLE AS I WROTE IT.** *"Fold only the named cells"* — **there is no per-cell
+flag.** And **no single `--topic` folds exactly the five; they span two.** ⇒ **two scoped runs, and the second
+also folds `pair_upper_d_map_named`, which is NOT the fix's — DISCLOSE IT.**
+⭐⭐ **AND B2 IS STRONGER THAN STATED: topic 30's `asan` column is a BYTE-FOR-BYTE COPY OF THE C-LANE COLUMN**
+(819/820 identical) ⇒ **those baselines were NEVER MEASURED ON THE ASan LANE**, and a bare `--accept` would
+write **227 unadjudicated verdicts into a column populated by copying a different lane.** *Pass 3 declined to
+invent a mechanism for why they read WORKS. Correct.*
+
+⛔ **THE COST: PASS 2 UNDERSTATED IT AND MY CITATION WAS THE WRONG LANE.** Noise floor at `-O0` is
+**stdev/median 10.5% (hit) and 15.9% (miss)**, min→max **47%/65%** ⇒ ***the ±1–2% "regressions" are AN ORDER OF
+MAGNITUDE INSIDE NOISE.*** ⊕ **`let user_opt = if release` is inside the LLVM `llc` pipeline — THE DEFAULT C
+BUILD PASSES NO `-O` FLAG AT ALL.** Conclusion unaffected; the command was wrong.
+⊕ **`dict_update` is NOT a map cell** — it is an allowlist row + a fixture, **and because the row is UNCITED its
+retirement is ADVISORY (rc 0)**; it becomes a RED-going pin **only after the row is DELETED.** ⊕ **The
+figures-db value prohibition binds ONE of the four constants, not all four** (only `uncited_class_pairs` has
+`scan = standard`). ⊕ **Retirement is FATAL only for CITED rows — 15 of 301.**
 
 ### ⛔⛔⛔ C1 IS BLOCKED A **FOURTH** TIME — AND THE SPINE SURVIVES EVERY TIME. **`R` NEEDS ITS OWN SCOUT.**
 
