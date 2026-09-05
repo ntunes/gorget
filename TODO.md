@@ -13,7 +13,7 @@
 | **C1** | ⭐⭐ **SCOUT DELIVERED: THE OWNER WAS RIGHT. C1 IS *HALF* OF ONE FIX — supply `Box[T]`'s missing `clone_fn` and BOTH CELLS WORK UNCHANGED, no spelling change.** Streak 0/3, brief `v2` next. | `t1329`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D0′** | ⭐ **SCOUT DELIVERED — HYPOTHESIS HALF RIGHT; the fix is REAL but it is NOT a parser fix and the ORDER REVERSES.** Streak 0/3, brief `v3` next. ⚖ one PRECISE ratification question. | `t1393`–`t1402` |
+| **D0′** | ⏸ ruling PAUSED. **v3 pass 1: 5 BLOCKING + 6 errata — the LAYER IS RIGHT and the prototype WORKS, but the SAFETY ARGUMENT IS FALSIFIED.** Streak 0/3, fold → `v4`. ⭐ **It found a CRITICAL: `t1393`.** | `t1394`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | **G** | **`7f68508b0`** — blocking + 4 errata folded; 🔵 **CONFIRMING PASS on the delta.** ⭐⭐ **The executor CORRECTED MY PRESCRIPTION — I had the `Recursive` disposition BACKWARDS.** | `t1384`–`t1392` |
@@ -1314,6 +1314,71 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ⛔⛔⛔ D0′ v3 PASS 1 — **THE FACT I GAVE THE OWNER TO JUSTIFY THE RULING IS FALSE AS STATED**
+
+⭐⭐⭐ **I TOLD THE OWNER: *"across all 4762 ambiguous sites, NO HEAD IS EVER A VALUE"* — AND OFFERED IT AS THE
+MEASUREMENT THAT MAKES THE RULING SAFE. IT IS LITERALLY FALSE:**
+`grep -P '\thead=Ident\(fs\)\t' <census>` → `tests/fixtures/known_gaps/indexed_callee_variable_index.gg`,
+**where `fs` is a `Vector`.** ⛔ **AND THE INSTRUMENT COULD NEVER HAVE ESTABLISHED IT: the census is a
+PARSE-TIME eprintln recording the head's SPELLING — structurally incapable of seeing what a head RESOLVES TO.**
+The classification of the other 230 head names into *"type or generic fn"* was done **by eyeballing**.
+⇒ **readiness row 2's "independent witness" does not cover the claim it was offered for.**
+⭐ **THE REAL SAFETY EVIDENCE IS A DIFFERENT MEASUREMENT, AND THE REVIEWER HAD TO BUILD IT:** a fire counter at
+the rewrite ⇒ **0 fires and 0 behavioural diffs across 4909 files.** **That is still good evidence — but it is
+NOT the sentence I gave the owner, and `|changed cells|` in the corpus is therefore 0.**
+⊕ Figures drifted too: **4894→4909 files, 4762→4776 sites** (1167 regenerates exactly).
+
+🚨 **AND IT FOUND A CRITICAL — FILED AS `t1393`.** `vv[0][n](7)` and `(r.routes)[k](5)`: **`gg check` OK,
+`gg build` rc 0, then SIGSEGV on BOTH backends.** ⇒ **MEMORY-UNSAFE FROM ORDINARY SAFE SYNTAX**, ranking above
+every leak in this family. ⊕ **A third face fails even later:** a struct-field dict with a variable key checks
+**`OK`** — with a tell-tale `warning: unused variable 'k'`, *the key eaten as a TYPE* — then fails at **LINK**
+time with `undefined reference`. ⚠ **The brief said that site fails `E_NoMethodFound`; measured, it SILENTLY
+ACCEPTS. My filing instruction was less severe than the truth.**
+
+⛔ **BLOCKING 2 — THE PROTOTYPE EMBEDS THE EXACT SHORTCUT THE RULING SECTION FORBIDS, AND IT IS REACHABLE.**
+`Expr::FieldAccess { .. } | Expr::Index { .. } => true` **consults no resolution at all**; its licence is a
+COMMENT arguing from corpus absence. **Both arms FIRE** (fire counter, two spans). ⇒ **it is the SOURCE of the
+two SIGSEGV cells being fixed** — so the fix currently **trades a crash for a shape heuristic**, under a brief
+whose own ruling says *"the discriminator is what the head RESOLVES to, never how it is SPELLED."*
+
+⛔ **BLOCKING 3 — MY ggdef INSTRUCTION CANNOT ACHIEVE WHAT IT CLAIMS, AND I ASSERTED IT AFTER TELLING THE
+EXECUTOR NOT TO.** I wrote *"ggdef DOES NOT ABSTAIN AND MUST BE MIRRORED"* — **the reviewer RAN it**:
+`elaborate_call` hard-requires an `Identifier` callee, so **a mirrored rewrite produces an `Expr::Index` callee
+that ggdef rejects as OUT-OF-SUBSET.** ⇒ ***the mirror converts a wrong answer into an out-of-subset error; it
+CANNOT produce lane agreement.*** Correct disposition is Core #9's own escape clause — **note + a FILED SUBSET
+GAP**, plus an explicit statement that **no ggdef conformance fixture can pin the accept.** ⚠ **I wrote *"DO NOT
+ASSERT ggdef's BEHAVIOUR — RUN IT"* in the same brief and then asserted it two lines later.**
+
+⛔ **BLOCKING 4 — I PRESENTED THE LEAK AS THE WIN.** The headline yield `deep_clone=0 **closure_free=0**
+shallow_memcpy=0` — ⛔ **`closure_free=0` IS THE LEAK.** Measured: the newly-accepted program leaks **8 B** under
+ASan; the **bind** control is **CLEAN**; the already-accepted literal-index sibling **also leaks**. So the leak
+is pre-existing and the fix **extends the accept set INTO it** — defensible as parity, **but round close runs
+`sanitize_sweep.sh` over EVERY top-level `*.gg`, `sanitize_allowlists_shrink_only` is `==`, and its own header
+says genuinely NEW inflow REMAINS AN OWNER ASK — while the brief forbids touching `elem_drop`, the fix.**
+**The brief mentions the sanitizer ZERO times.** ⇒ **decide before launch, not at round close.**
+
+⭐ **E2 — AND THE REVIEWER DISAGREED WITH ME ON MEASUREMENT, CORRECTLY.** I told the executor to fix `t0957`'s
+repro and file the f-string blindness separately. **The fix is ONE LINE in the function the track is already
+editing** — its sibling walker `rename_expr` **already recurses into interpolations** (textbook Core #4 sibling
+drift) — and the blast radius is measured: **exactly ONE row changes across 4909 files, the track's own repro
+going GREEN AS WRITTEN.** ⇒ ***"rewriting the repro to dodge a defect you could close in the same function, in
+the same round, reads as REDESIGN AROUND A COMPILER GAP."*** **Folding it in.**
+
+⊕ **E1 — *"91 lines, parser untouched"* is FALSE:** 24 of the 91 are an **env-gated debug instrument in
+`src/parser/expr.rs`** that must be stripped, and the brief says to apply the patch verbatim. ⊕ **`ckpt2` and
+`ckpt3` are BYTE-IDENTICAL — the "final" checkpoint changed nothing.**
+⊕ **E4 — self-host: right count, WRONG PLACE.** Three `parser.gg` copies ✅ — **but the design is NOT a parser
+fix, and the parser driver has no `resolve.gg`/`scope.gg` at all**, so a resolution-aware disambiguation cannot
+live there. **The real home is `resolve.gg`, which has TWO copies.** *"Fix primitives in ALL parser copies" was
+unactionable as written.*
+⊕ **E5 — filing #4 has no discriminator** (overlaps `t0949`/`t0948`, and `t0948`'s measured figure is the same
+16 B I quoted). ⊕ **E6 — filing #5 and the ID block check out.**
+
+⭐ **WHAT PASS 1 CONFIRMED:** the prototype applies clean, `--lib` 1187/0, both cells work, **the
+whole-file-grep instrument warning is TRUE and matters** (constant at 3 across all three cells; body-sliced, the
+fixed cell is **byte-identical to the already-working literal-index cell**), the 10 non-`Identifier` heads are
+real and **double-protected**, and an adversarial generic-call fixture shows **0 diff lines** HEAD vs prototype.
 
 ### ⭐⭐⭐ C1 RESOLVED — *"IT SHOULD WORK"* WAS RIGHT, AND HEAD WAS ONE `return` FROM CORRUPTION
 
@@ -3487,6 +3552,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t1303`](todo/t1303.md) **HIGH** — 🆕🚨 [HIGH — MEMORY UNSAFETY on the REFERENCE lane, in a program with no unsafe, no ownership operator and no FFI. Core #8…
 - [`t1361`](todo/t1361.md) **HIGH** — 🆕🔥 [HIGH (re-graded from CRITICAL 2026-09-05, see addendum) -- AN UNCHECKED MEMBER-ACCESS HOLE ON THE ENTIRE LAZY-ITERAT…
 - [`t1403`](todo/t1403.md) **HIGH** — 🆕🐛 [HIGH — NON-TERMINATION + OOM FROM A gg check-CLEAN PROGRAM, both backends; found 2026-09-05 by the orchestrator whil…
+- [`t1393`](todo/t1393.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — MEMORY-UNSAFE FROM ORDINARY SAFE SYNTAX; gg check CLEAN, gg build rc 0, then SIGSEGV on BOTH backends; f…
 ### Medium
 
 
