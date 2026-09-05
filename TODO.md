@@ -481,7 +481,16 @@ before anything else, and — ⛔ **because its tree shows `TODO.md` dirty from 
 to stage `TODO.md`, which would revert every handover write since.**
 ⚠ **THIS IS THE SPAWN-FREEZE HAZARD IN ITS SECOND FORM:** the known one is *a reviewer reports a just-filed item
 as missing*; this one is *an executor silently reverts the session state doc*. **Same cause, and every brief
-already states the base commit — the missing half is telling executors which files are NOT theirs.**
+already states the base commit — the missing half is telling executors which files are NOT theirs.** ⇒ landed as
+`AGENTS.md` Multi-agent rule 3 (`grep -n "HANDOVER BLOCK IS NEVER" AGENTS.md`): *naming the base commit tells an
+agent what it HAS, not what it may TOUCH.*
+
+⛔ **AND MY FIRST SPELLING OF THAT RULE WAS TOO WIDE — I RETRACTED IT WITHIN THE HOUR, WHICH IS THE NEW
+RETRACTION RULE EATING ITS OWN AUTHOR.** I told F1r *"do NOT stage or commit `TODO.md`"*. ⭐ **Measured against
+C2's actual commit, the ONLY thing it wrote to that file was the GENERATED INDEX** — correct, required, and red
+without it (`todo_index_is_current`). ⇒ **the carve-out is real and both halves must be stated: the INDEX is the
+track's; the HANDOVER BLOCK is not.** ⚠ ***A ban wider than the hazard is not the safe direction — it would have
+turned a green track red.***
 
 ### ⛔⛔ D0′ IS **REBUILT**, NOT AMENDED — ITS PRESCRIBED FIX REDS A **COMMITTED, WIRED** FIXTURE ON BOTH BACKENDS
 
