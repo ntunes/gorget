@@ -87,9 +87,17 @@ rows clean), adjudicated all four witnesses the item names — **two of them REC
 target reaches"*. **H's output-review re-ran an extensive `cargo` gate set — and `cargo` cannot reach this one.**
 I integrated H, ran `--lib` and `--test lints` at the merged tree, and **never ran the script gates**, so the
 branch has been red for six integrations without a single red signal.
-⇒ ⭐ **RULE, EFFECTIVE NOW: THE TWO SCRIPT GATES RUN AT EVERY INTEGRATION, NOT ONLY AT ROUND CLOSE** —
-`known_gaps_census.sh --check` and `GG_STAGING_MOVE_GUARD=fatal staging_move_burndown.sh --check`. **A gate no
-`cargo` target reaches is a gate nothing schedules; "the suite is green" is not evidence about it.**
+⇒ ⭐ **RULE, EFFECTIVE NOW: THE TWO *CHEAP* SCRIPT GATES RUN AT EVERY INTEGRATION, NOT ONLY AT ROUND CLOSE** —
+`known_gaps_census.sh --check` (~2 min) and `GG_STAGING_MOVE_GUARD=fatal staging_move_burndown.sh --check`
+(~1 min). **A gate no `cargo` target reaches is a gate nothing schedules; "the suite is green" is not
+evidence about it.**
+⊕ ⚠ **AND "THE TWO SCRIPT GATES" IS THE WRONG COUNT — CI RUNS FOUR.** Regenerate:
+`grep -oE 'scripts/[a-z_]+\.(sh|py)' .github/workflows/ci.yml | sort -u` → **`known_gaps_census.sh` ·
+`robustness_map.py` · `sanitize_sweep.sh` · `staging_move_burndown.sh`.** The battery in `AGENTS.md` lists
+all four (the other two under their own ⊕ bullets), so **the battery is complete and its reconciliation lint
+passes — `round_close_battery_covers_ci_steps` rc 0, measured.** What was incomplete was **my summary of
+it.** ⛔ **The other two are unreachable by `cargo` AND expensive (~25 min each), so they stay round-close
+— which is exactly why they are the MOST likely to have gone stale, the same way the census did.**
 ⊕ **It goes green again when E integrates** — but that is luck, not process: **it was H's fix that silently
 graduated two rows, and H's own review had no instrument that could see it.**
 
