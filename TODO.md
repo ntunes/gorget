@@ -91,7 +91,10 @@ the TREE, never from the previous round's line.**
 | `self_host_bootstrap_fixed_point` | **ok** | inside the sweep, at the DEFAULT 600s stage timeout — no 1800 needed on a quiet box |
 | LLVM sweep | ⏳ | running (`--release`) |
 | C sweep (run 2) | ⏸ | **OWED** — see below |
-| sanitize · robustness · cargo targets · script gates | ⏸ | after LLVM |
+| LLVM sweep | **0** | 2789 passed · 0 failed · 5020s · clean single run |
+| 8 fast gates | **0** | lib · lints · c_runtime · spec_conformance · security · ggdef · census · staging |
+| **`GG_BACKEND=llvm cargo test --test security --release`** | ⏸ | 🚨 **NEVER RUN — see `t1452`; the lint EXEMPTS it on a false premise** |
+| `sanitize_sweep.sh` · `robustness_map.py --lanes all` + `--lanes c,llvm` | ⏸ | after C run 2 |
 
 ⛔ **THE C SWEEP IS OWED A SECOND RUN AND THIS IS NOT OPTIONAL.** Run 1 ended rc 101; the fix was one
 `.out` expectation file and `self_host_runtime` was re-verified rc 0 in isolation — **but the sweep has never
@@ -5912,6 +5915,7 @@ when it passes cleanly (per Task Continuity).
 - [`t1419`](todo/t1419.md) **HIGH** — 🆕🚨 [HIGH — A GUARD-BLINDING HAZARD IN THE RUNTIME: a static scratch buffer SILENTLY SUPPRESSES LEAK REPORTS; found 2026-…
 - [`t1409`](todo/t1409.md) **MED** — 🆕 [MED — A GUARD THAT RECORDS A LIVE BUG AS EXPECTED. Found by R50 Track H while landing t1387's fix; the pinning pre-da…
 - [`t1378`](todo/t1378.md) **HIGH** — 🆕🚨 [HIGH — A TIER-2A GUARD CLASS THAT HAS NEVER FIRED AND CANNOT FIRE, AND IT IS THE ROOT OF THE "STRUCTURALLY BLIND VAL…
+- [`t1452`](todo/t1452.md) **HIGH** — 🆕🚨 [HIGH — A RECONCILIATION LINT WHOSE EXEMPTION REINTRODUCES THE HOLE IT EXISTS TO CLOSE. Found 2026-09-05 by the R50 o…
 ### Medium
 - [`t0590`](todo/t0590.md) **LOW** — 🆕🧹 [LOW — lint ergonomics; flagged by the R42 Track-B executor 2026-08-15 (bit three times in one track), filed by the o…
 
