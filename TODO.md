@@ -15,7 +15,7 @@
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0** | 🆕 **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1. | `t1393`–`t1402` |
 | **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| **G** | 🆕 **THE STANDING VIEW-INVALIDATION MATRIX — ⚖ OWNER-RATIFIED 2026-09-05: *"exactly, so let's fix it the right way."*** 🔵 SCOUTING. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
+| **G** | ✅ **SCOUTED — VERDICT: NO NEW INSTRUMENT. A ~693-CELL TOPIC IN `robustness_map`.** ⚖ OWNER-RATIFIED. Needs brief. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
 | **F1** | **`t1362` CRITICAL** — pass 1 BLOCKED (3) → folded → 🔵 pass 2. **Streak 0/3.** | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
@@ -486,6 +486,73 @@ CLAIMS IS STILL UNVERIFIED BY A FRESH PASS** — the disk is worth less than the
 ⊕ **And the lock-reason pid is the HARNESS (pid 60), identical across all agent worktrees**, so the recorded
 check *"`ps -p <pid>` before overriding"* is **INERT** — it can never distinguish a stale lock from a live one.
 
+### ✅ TRACK G SCOUTED — MY FRAMING WAS HALF WRONG, IN THE IMPORTANT HALF
+
+⛔ **A ggdef-ADJUDICATED matrix CANNOT SEE 23% OF THIS FAMILY'S LIVE DEFECTS.** Of 792 generated cells,
+**162 are ggdef-MISMATCH — and 48 MORE are provably wrong that ggdef CANNOT ADJUDICATE AT ALL**
+(`named_scope` outside its statement subset; `Dict` outside its expression subset). **A ggdef-only matrix
+reports those 48 as GREEN.** ⚠ **The scout reproduced the hazard inside its own prototype in the first hour** —
+its summary printed `named_scope 0/8`, reading exactly like *"named scope is fine"*, while the C lane printed
+`777`.
+
+⛔ **AND NO NEW INSTRUMENT IS NEEDED — `scripts/robustness_map.py` ALREADY IS ONE.** Five lanes
+(c · llvm · selfhost · asan · ggdef), hand-derived expectations never captured from the compiler,
+`NO-VERDICT` as a first-class bucket *"emphatically not 'ggdef agrees'"*, a permanent
+`_POSITIVE_CONTROL_broken` cell. **It grades 492 rows ggdef declines, and 13 of those are graded WRONG on
+C** — exactly the capability the proposed matrix lacked.
+⇒ ⭐⭐ **WHAT IS MISSING IS A CORPUS, NOT AN INSTRUMENT.** The map's 30 topics come from beginner tutorials in
+other languages; **not one is about aliasing or value semantics under mutation.**
+
+⭐⭐ **AND THIS ANSWERS THE OWNER'S REAL QUESTION — why 2026-07-06 died and what stops a repeat.** That sweep
+was *"a shell invocation someone ran once"*; nothing obliged anyone to re-run it. The map has three properties
+it lacked, **verified at HEAD**: **4 references in `.github/workflows/ci.yml` · a round-close battery row in
+`AGENTS.md` · `round_close_battery_covers_ci_steps` reconciling the two.** ⇒ **A GENERATED TOPIC IN AN EXISTING
+GATED HARNESS IS THE ONLY SHAPE OF THIS DELIVERABLE THAT CANNOT BE FORGOTTEN.** A new script would need a CI
+step, a battery row, and trust in the lint — **three chances to repeat 2026-07-06.**
+
+**MEASURED, BOTH DIRECTIONS.** Deliberate break **anchored BY LINE** after `context.rs:1540`:
+**GREEN→RED 45 · RED→GREEN 0 · unchanged 747**; row-invariance wrong cells 210 → 270. Gate direction: a mutated
+expectation gives `1 REGRESSION(S)`, **bare rc=1**. **Cost: ≈ +24 s on the CI C-lane, ≈ +4.5 min on the
+five-lane round-close, 330 KB of source.**
+⭐ **CORPUS INFLOW IS ZERO BY CONSTRUCTION** — the parity corpus auto-scans **top-level `tests/fixtures/*.gg`
+only**, so a subdirectory is out; the ASan corpus carries an explicit `OUT` row for `robustness_map`; the ggdef
+floor derives from the same top-level set. ⊕ **And the self-host obligation is met HONESTLY rather than dodged:
+the map HAS a `selfhost` lane, so a lagging cell is baselined as `BUILD-FAIL` in that column — declared,
+visible, gated against regression — instead of pushing a ceiling.**
+
+⛔ **PRECONDITION THE EXECUTOR OWES FIRST — `t1360`'s CLASS IN A SECOND INSTRUMENT.**
+`scripts/robustness_map.py:548` **silently DROPS a MANIFEST row whose cell file is missing** — not measured,
+not reported, not counted. The reverse is unguarded too, and is **non-empty today: 1039 cells vs 1038 manifest
+rows** (verified). ⇒ **Close the reconciliation BOTH WAYS with a declared-helper allowlist BEFORE adding ~693
+rows**, or the topic quietly measures 640.
+⊕ Also owed: **baseline the `selfhost` column honestly** (the scout did NOT build the driver and refuses to
+carry `t1362`'s SH claim), and **add the topic's own positive control**.
+⊕ **BASELINE AT THE MEASURED BUCKET, NOT AT `WORKS`** — ~210 cells land as `WRONG`. **Say so loudly in the
+round entry**; a later `WRONG→WORKS` flip is PROGRESS needing a reviewed `--accept`.
+
+⭐ **THE DISCOVERY IS MUCH BIGGER THAN `t1362` — 4 of 9 SOURCE shapes are broken:**
+- **`&`-param bind loses value semantics in ANY nested block — UNFILED, now `t1383`** (6 of 8 payloads).
+- **`String c = v.get(0).unwrap()` — the §3.5 DOCUMENTED EXAMPLE — breaks in any nested block** (C `abZ` vs
+  ggdef `ab`). **`String` payload ONLY (1 of 8), so any payload-sampled fixture set misses it.**
+- **`t0750` is FAR wider than its title** — not *"inside a `while` loop"*: **all 10 non-straight sites, 7 of 8
+  payloads.**
+- ⚠ **SIX-QUESTIONS #6 LIVE: the two-hop alias `b = v; c = b` is CLEAN while the one-hop `c = v` is BROKEN.**
+  A hand-picked fixture using the two-hop spelling would have concluded aliasing works.
+⊕ **`getter_deep` being clean is the sharpest mechanistic confirmation of `t1362`'s root cause available:** a
+2-level getter is **not recognised as trivial**, so it is not clone-elided, so it is **correct**.
+⊕ **Existing coverage of the broken class is ZERO, not one** — the single candidate is a *root-reassign*
+program, the shape `t1362`'s controlled pair says WORKS.
+⊕ **All 99 BUILD-FAILs attribute to ONE filed item (`t0002(i)`)** — a clean attribution, not noise.
+
+⚠ **THE AXIS THE SCOUT COULD NOT CLOSE, AND IT IS THE ONE THAT MATTERS:** **SOURCE is a selection.**
+`BorrowOrigin` bounds *what the compiler records*, not *what a user can write*. **Closure captures,
+trait-default receivers, comprehension binds and generic-equip receivers are UNPROBED** — and **no widening of
+SITE or PAYLOAD reaches them.** SITE and PAYLOAD are closed with rustc-exhaustive witnesses (`Stmt` 28 variants;
+`DropStrategy` 4 values).
+⊕ **ASan found ZERO — and must be in the instrument anyway.** `D52` says of this family's obligation (ii),
+verbatim: *"a bug there is a **UAF, not a wrong answer**."* **Every wrong cell violates (ii).** Today the class
+yields wrong values; **under the ratified D52 direction the same class yields use-after-free.**
+
 ### 🚀 TRACK G OPENED 2026-09-05 — WHY `t1362` ELUDED US, AND THE INSTRUMENT THAT WOULD HAVE CAUGHT IT
 
 **Owner: *"How has it eluded us so long? We need a fixture or something to test it extensively, this is a
@@ -639,7 +706,7 @@ actually read.
 ⛔ **THE CLONE-BAND ANCHORS WERE RE-SEEDED AT THIS ROUND'S OPEN** (date 2026-09-05, one sha, values
 unchanged — R49 moved the clone meter not at all). `clone_band_anchor_is_reseeded_before_work_resumes` is the
 gate that enforces it; do not let it drift.
-⛔ **FIRST UNISSUED `todo/` ID: `t1403`.** ⊕ **BLOCKS: A1 `t1309`–`t1318` · B `t1319`–`t1328` · C `t1329`–`t1338` · D `t1339`–`t1348` · E `t1349`–`t1358` · F2/F3 `t1362`(used)+`t1363`–`t1371` → **F1 owns `t1363`–`t1372`** · A2 `t1373`–`t1382`.** Allocate a private disjoint block per executor (MA-3b).
+⛔ **FIRST UNISSUED `todo/` ID: `t1403`.** ⊕ `t1383` issued from G's block. ⊕ **BLOCKS: A1 `t1309`–`t1318` · B `t1319`–`t1328` · C `t1329`–`t1338` · D `t1339`–`t1348` · E `t1349`–`t1358` · F2/F3 `t1362`(used)+`t1363`–`t1371` → **F1 owns `t1363`–`t1372`** · A2 `t1373`–`t1382`.** Allocate a private disjoint block per executor (MA-3b).
 
 ⚠ **THE ONE THING R49 PAID FOR REPEATEDLY, AND THE ONE THING TO CARRY:** **A SELECTION PRESENTED AS AN
 ENUMERATION.** It fired on a constant censused without the branch that moved it · on figures inherited rather
@@ -1051,6 +1118,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t1225`](todo/t1225.md) **HIGH** — 🆕🚨 [HIGH — MEMORY-UNSAFE FROM ORDINARY SAFE SYNTAX, both backends, gg check rc 0 AND gg build rc 0; the DEFERRED half of…
 - [`t0952`](todo/t0952.md) **HIGH** — 🆕🐛 [HIGH (re-graded from MED 2026-09-05) — a LEAK *and* an O(n) deep copy per iteration step, from ordinary safe syntax,…
 - [`t1362`](todo/t1362.md) **CRITICAL** — 🆕🔥 [CRITICAL -- SILENT WRONG OUTPUT AND A DOUBLE FREE, BOTH BACKENDS, ggdef-ADJUDICATED AGAINST BOTH, LIVE AND UNFILED S…
+- [`t1383`](todo/t1383.md) **HIGH** — 🆕🐛 [HIGH — SILENT WRONG OUTPUT, BOTH BACKENDS, ORACLE-ADJUDICATED, gg check CLEAN; found 2026-09-05 by the R50 Track G s…
 ### Medium
 
 - [`t0115`](todo/t0115.md) **MED** — 🆕🐛 [MED — COMMENT MISATTRIBUTION, PRE-EXISTING on both lanes; found 2026-08-19 by the R43 Track G output review, executo…
