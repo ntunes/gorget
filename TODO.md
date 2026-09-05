@@ -27,6 +27,22 @@
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
 
+### ⚠ INTEGRATION HAZARD RECORDED — **K's BRANCH PREDATES H's DELETION OF `t1387`**
+
+Measured, not anticipated: `git ls-tree --name-only worktree-agent-a413b5cda3b617268 todo/t1387.md` **still
+returns the file.** K was cut before H integrated, so K's regenerated `TODO.md` index contains a `t1387`
+pointer to an item that no longer exists on the integration branch.
+⇒ **`TODO.md` WILL CONFLICT on K's cherry-pick, exactly as it did on H's.** ⭐ **THE RESOLUTION IS FIXED AND
+MECHANICAL: keep the integration branch's `TODO.md` (`git checkout HEAD -- TODO.md`), then REGENERATE the index
+(`python3 scripts/todo_index.py --write`) — never merge the index text.** The regenerator drops the stale
+pointer on its first pass and *then* reports it, so a second run is what confirms green.
+⛔ **DO NOT hand-delete the pointer line by number** — a line-number edit against the regenerator's output
+asserted the wrong line once already today, and the assert is what caught it.
+
+⊕ **ID AUDIT, run this heartbeat: 13 issued blocks, ZERO duplicate ids, ZERO cross-block collisions**, 96 ids
+free inside issued blocks. `t1387` and `t1433` show only on K's un-integrated branch — **the watermark must be
+read across BRANCHES, not just the integration tree**, or the next block reuses a live id (MA-3b).
+
 ### ⛔⛔⛔ TRACK E's SCOUT BUILT THE FILED FIX AND MEASURED IT MAKING THINGS **WORSE**
 
 **The most valuable scout result of the round.** Brief `/tmp/brief_E_v1.md`; recommendation
