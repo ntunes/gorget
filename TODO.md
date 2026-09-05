@@ -21,11 +21,44 @@
 | ✅✅ **K** | **`t1385` INTEGRATED** 2026-09-05 (`b5c5eaabc`+`1c2513e45`); errata `9d7e9f71b`. Output-review **SIGNED OFF**. ⭐ **93 cell-lanes now gated; both allowlists ratchet BOTH ways.** | `t1434`–`t1437` |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
 | **L** | **`t1410`** — wrapping ops lower to UB on C; LLVM correct ⇒ lanes differ in **DEFINED-NESS**. 🔵 **pass 2 after a BLOCKING fold. Streak 0/3.** ⛔ **Same-width unsigned PROMOTES BACK TO SIGNED `int`** — the fix's own justification was false below `int` width, and the fixture was blind to it. | `t1442`–`t1447` |
-| **J** | **`t1407`** — `Vector.fill`. ✅ **pass 1 SIGNED OFF the rebuilt design** (every figure re-derived, not inherited) → 🔵 **pass 2. Streak 1/3.** ⭐ **ggdef's `repeat_n` IS the hybrid byte-for-byte.** | `t1422`–`t1427` |
+| **J** | **`t1407`** — `Vector.fill`. ✅✅ **passes 1 AND 2 SIGNED OFF** (*"I could not break it at the boundary it turns on"*) → 🔵 **pass 3. Streak 2/3.** ⛔ **Rows 3/4/5 still gate the launch.** | `t1422`–`t1427` |
 | **E** | **`t0953`** — ✅✅ **passes 1 AND 2 both signed the DESIGN** → 🔵 **pass 3. Streak 0/3** (blockers were on the RECORD, not the design). ⭐ **Census REDONE: total over all 5383 fixtures, site-attributed.** Write site filed `t1350`. | `t1351`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ✅ J's PASS 2 SIGNED OFF — **AND CAUGHT ME FIXING A ROTTED LINE NUMBER WITH ANOTHER ROTTED LINE NUMBER**
+
+**Streak 2/3.** The design survived the boundary it turns on; every finding is a correction or a scope-add.
+- ⛔⛔ **"LLVM: IDENTICAL TO C, 23/23" IS FALSE — IT IS 19**, and the five missing cells are **exactly the
+  heap-view class** (`c13`, `c14`, `c15` + two literal cells) — **the class ADDENDUM 2 had just WIDENED `t1407`
+  for**, and `c14` **double-frees at HEAD**. ⇒ **the LLVM lane has ZERO measurement of that class**, and a
+  Core #9 lane claim was pinned by a promise for 5 of 24 cells.
+- ⛔ **I CORRECTED A ROTTED `DONE.md` LINE CITE *TO ANOTHER ROTTED LINE CITE*** — the number I wrote is a
+  **blank line** — **inside the item whose own §5 says *"cite the grep, not the line"*. Fifth rotted cite of the
+  round.** ⊕ "10 DOUBLE_FREE" is **9**, over 19 of 24 cells.
+- ⛔ **THE ROT IS SIX SITES, NOT FOUR** — `schema.gg`'s per-`(kind, method)` owning enumeration omits `fill` **in
+  the schema that DEFINES the column**, and `lower.gg`'s by-pointer list omits a call the lowerer **already had
+  at HEAD**. ⚠ **AND ONE OF MY PRESCRIBED EDITS WOULD DELETE A TRUE CLAUSE** — the sentence covers
+  `fill`/`get_or_put` **jointly**, and `get_or_put` genuinely still carries `[]`. **Narrow, do not delete.**
+- ⛔ **NB-14 NAMES THE WRONG CLAUSE, AND THE RIGHT ONE IS *VIOLATED BY THE FIX*** — `devbook/11`'s *"a writer
+  that duplicates a source must clone per slot"* is exactly what the hybrid does not do (n−1 clones, one slot
+  inherits). ⊕ **NB-13 IS STALE: the "second clause" ALREADY EXISTS AT HEAD; only the GUARD is outstanding.**
+- ⭐ **`n=2` IS NOT NEEDED, MEASURED** — the patch partitions `n` into {0}, {1}, {≥2}, so n=2 and n=3 are
+  structurally identical and give the same verdict with **no new information**. **One sentence recording that
+  {0,1,3,4096} is the TOTAL partition** saves the next reviewer re-deriving it.
+- ⛔⛔ **THE BIGGEST LAUNCH RISK IS PLACEMENT, NOT THE FIX: committing ~28 cells top-level AUTO-ENROLS every one
+  in the self-host parity corpus**, booking **own inflow** against a ceiling **the owner forbids raising for
+  your own inflow.** Existing fixtures sit in `known_gaps/` **for placement reasons precisely to dodge this.**
+- ⛔ **NB-12's REVERT LIST WAS STALE — WRITTEN AGAINST THE DEAD CANDIDATE** (its `memset` revert no longer
+  exists). Replaced with **nine** revertible pieces; **R1 is unpinnable by construction, R3 unpinned, R9
+  half-pinned.**
+- ⭐ **KEEP THE RUNTIME ABORT.** A check-time rejection would be an **unpinnable accept→reject** — the
+  configuration is unreachable, so **no fixture can turn RED** and Core #12 is unsatisfiable. **Core #10 does
+  not bind: it forbids a SILENT discard, and this is a loud abort asserting a COMPILER invariant.**
+- ⛔ **NB-4's SUPPORTING FACT WAS FALSE** — `gorget_shared_array_set` is a **real C function**, not
+  string-emitted. **The conclusion survives and it STRENGTHENS the guard** (its root does see `t1418`'s
+  function) — but an executor told otherwise scopes the root wrong.
 
 ### ⭐⭐ A2's SCOUT — **THE TRACK'S OWN TITLE WAS WRONG, AND THE FIX MAKES ONE SHAPE WORSE**
 
