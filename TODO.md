@@ -7,7 +7,7 @@
 **ROSTER — five tracks, each with a private disjoint ID BLOCK (MA-3b; a track NEVER picks its own):**
 | track | scope | ids |
 |---|---|---|
-| **A** | **`t1077`** — nested `Box[Box[T]]` read: **SIGSEGV on C, SILENT WRONG ANSWER on LLVM**, `gg check` clean. R49-found. | `t1309`–`t1318` |
+| **A** | **`t1077`** ✅ SCOUTED → brief-review pass 1. **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C** | **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D** | **`t1225`** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
@@ -15,6 +15,38 @@
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+⭐ **TRACK A's SCOUT LANDED — brief at `/tmp/brief_A_v1.md`, measured prototype at
+`/tmp/scout_a_protoA.patch` (USE IT, do not retype).** Findings that outlive the track:
+- **ONE LINE.** The `Expr::Deref` value-lowering arm discriminates a `Box[T]` PARAMETER (needs two peels)
+  from a plain local (needs one) **by testing the RESULT of the first peel instead of the SOURCE
+  representation** — so when `T` is itself a box, it peels twice. ⭐ **The correct discriminator
+  (`ptr_to_box`) was ALREADY COMPUTED THREE LINES ABOVE and used only for drop-registration.** Core #1
+  verbatim. Blast radius: **1 divergence in 2594 programs.**
+- ⭐⭐ **ONE DEFECT, TWO FACES — AND THE SECOND FACE IS A READ-SIDE COMPENSATION.** Both lanes get the SAME
+  wrong GIR. The C emitter rewrites `%lld → %.*s` for `Str` args, which repairs the **TYPE** but keeps the
+  extra **DEREF**, casting `char*` to `Str*` → SIGSEGV; LLVM prints the `i64` faithfully. **Fixing the writer
+  closes both. There is no second write site.**
+- ⚠ **`t1077` UNDER-SCOPES ITSELF:** "SIGSEGV on C / silent-wrong on LLVM" is **true only for `String`** —
+  `int`/`float`/`bool` SIGSEGV on **BOTH**, a user struct is silent-wrong `0` on **BOTH**. The two-faces
+  property is an artifact of the **payload type**, not the axis.
+- ⛔ **FIXTURE PLACEMENT IS FORCED TO `known_gaps/` WITH LIVE TESTS.** A top-level fixture would enter the
+  parity corpus (**the self-host cannot compile the shape at all**) AND the ASan corpus (leak vs a
+  shrink-only allowlist). `known_gaps/` is `OUT` of both, the census scans only `#[ignore]`d tests, and the
+  in-tree precedent exists. **No ceiling moves.**
+- ⚠ **THE FIX TRADES CORRUPTION FOR A PRE-EXISTING LEAK** (`ASAN_SEGV` → `LEAK`), introduces no new leak, and
+  the leak is **blocked on `t0096`** by the source's own comment. **Up the severity ladder, NOT
+  reference-grade — the round says so rather than claiming a clean close.**
+- 🚨 **A NEW CRITICAL-CLASS SELF-HOST FINDING: THE CONSTRUCTOR SPELLING CHANGES MEMORY SAFETY.**
+  `Box[String](mk(a,b))` → **rc 134 double free** on the self-host; `Box.new(mk(a,b))` → rc 0 correct;
+  **Rust gg correct on both.** Byte-identical but for the spelling, single level, not nesting. Filed as
+  `t1310` by the track.
+⊕ **IDS ISSUED FROM A's BLOCK:** `t1309` nested-box scope-exit LEAK (**`t0096` asked for this filing and
+nobody made it**) · `t1310` the SH constructor-spelling double free · `t1311` the SH `__gg_Box__<inner>`
+undefined typedef · `t1312` `s06` (nested box through a struct FIELD) **only if it is a different producer**;
+if it is the same one, the track FIXES it (Core #4).
+⚠ **A stale-instrument trap the scout hit: the cached `/tmp/*_sh_driver` binaries are STALE** — self-host
+source moved after them. **Rebuild the driver before believing any SH result.**
 
 ⛔ **STANDING CONSTRAINT, UNCHANGED: the non-MATCH ceiling and the ggdef floor are at ZERO SLACK.** Any track
 adding a non-MATCH fixture reds immediately. **Own new fixtures must COMPILE + MATCH on self-host the SAME
