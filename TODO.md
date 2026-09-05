@@ -13,7 +13,7 @@
 | **C1** | ⭐⭐ **`t0011` + `Box[T]`'s missing `clone_fn` as ONE change. Brief `v2` written, 🔵 pass 1.** Streak 0/3. | `t1329`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D0′** | ⏸ ruling PAUSED. **v3 pass 1: 5 BLOCKING + 6 errata — the LAYER IS RIGHT and the prototype WORKS, but the SAFETY ARGUMENT IS FALSIFIED.** Streak 0/3, fold → `v4`. ⭐ **It found a CRITICAL: `t1393`.** | `t1394`–`t1402` |
+| **D0′** | ✅ **RULED.** `v4` written — ruling + 5 blocking + 6 errata folded; 🔵 **pass 1 on v4.** Streak 0/3. ⚠ **The SHADOW-REJECT is the bigger, least-tested half.** | `t1394`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | ✅ **G** | **`7f68508b0` SIGNED OFF (0 blocking, 5 errata).** 🟢 executor folding errata, then integrate. ⭐ **My `Recursive` correction verified by MECHANISM, not just measurement.** | `t1384`–`t1392` |
