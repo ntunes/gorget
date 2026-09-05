@@ -1,0 +1,27 @@
+# `todo/t1077` REGRESSION CELL — payload: USER STRUCT,
+# consume shape: WHOLE-VALUE READ into a local.
+#
+# The sibling of `box_nested_deref_struct_field_read.gg`: SAME payload type,
+# SAME nesting, different consume shape — and a different failure face.
+#
+#   PRE-fix, C:    build rc 0, run rc 139 (SIGSEGV)
+#   PRE-fix, LLVM: build rc 0, run rc 139 (SIGSEGV)
+#
+# The extra deref sized the destination slot for the payload while the source
+# still held the inner box's heap pointer, so the copy read `sizeof(P)` bytes
+# from an address that is not a `P`.
+#
+# EXPECTED OUTPUT: 7 9
+# EXPECTED EXIT: 0 on BOTH backends.
+#
+# ⛔ `known_gaps/` with a LIVE test: self-host cannot compile nested `Box`
+# (`todo/t1311`) AND this leaks at scope exit (`todo/t1309`).
+
+struct P:
+    int x
+    int y
+
+void main():
+    Box[Box[P]] w = Box[Box[P]](Box[P](P(7, 9)))
+    P q = (*(*w))
+    print(f"{q.x} {q.y}")

@@ -1,0 +1,44 @@
+# `todo/t1077` NO-OP CELL — a BARE `Box[Box[T]]` PARAMETER. This one is GREEN
+# BEFORE THE FIX AND GREEN AFTER, and it is here to STAY green.
+#
+# ⛔ DO NOT RED-VERIFY THIS FIXTURE, AND DO NOT "FIX" IT. It is the one cell in
+# the class that the pre-fix compiler got RIGHT, and it got it right BY
+# ACCIDENT (six-questions #6): a `Box[T]` parameter is represented internally
+# as `*Box__T`, so the pre-fix gate `is_box(deref_type)` — which tests the
+# RESULT of the first peel — happened to agree with the correct gate
+# `ptr_to_box` — which tests the SOURCE — for exactly this shape. Two peels are
+# genuinely needed here, and two peels are what both gates ask for.
+#
+#   PRE-fix,  C and LLVM: build rc 0, run rc 0, prints `42` / `hi!`
+#   POST-fix, C and LLVM: build rc 0, run rc 0, prints `42` / `hi!`
+#
+# ⚠ IT IS ALSO A TRAP FOR THE NEXT PERSON WHO REVERTS THE FIX TO RE-MEASURE.
+# Revert the gate, run THIS fixture, see green, and you will conclude the
+# revert did not take. It did — you picked the one cell that cannot show it.
+# The cells that CAN are every other `box_nested_deref_*.gg` in this directory.
+#
+# ⭐ Its real job: the fix narrows the second peel from `is_box(deref_type)` to
+# `ptr_to_box`, and the two conditions differ in EXACTLY ONE cell (`Box__T`
+# where T is itself a box). This fixture pins the OTHER side of that boundary —
+# the cell where the second peel must still happen. Without it, "narrow the
+# gate" and "delete the gate" look the same to the test suite.
+#
+# EXPECTED OUTPUT: 42 then hi!
+# EXPECTED EXIT: 0 on BOTH backends.
+#
+# ⛔ `known_gaps/` with a LIVE test: the self-host cannot compile nested `Box`
+# at all (`todo/t1311`), and top level is auto-scanned into
+# `runtime_parity_corpus`. Unlike its siblings this cell is a no-op rather than
+# a fix, but it shares their placement for the same self-host reason.
+
+void show_int(Box[Box[int]] w):
+    print((*(*w)))
+
+void show_str(Box[Box[String]] w):
+    print((*(*w)))
+
+void main():
+    Box[Box[int]] a = Box[Box[int]](Box[int](42))
+    show_int(a)
+    Box[Box[String]] b = Box[Box[String]](Box[String]("hi" + "!"))
+    show_str(b)

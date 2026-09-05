@@ -1,0 +1,32 @@
+# KNOWN GAP `todo/t1310` — SELF-HOST LANE. 🚨 THE CONSTRUCTOR SPELLING CHANGES
+# MEMORY SAFETY.
+#
+# This program and `sh_box_ctor_spelling_new_ok.gg` are BYTE-IDENTICAL except
+# for how the `Box` is spelled — `Box[String](...)` here, `Box.new(...)` there.
+# Measured against a FRESHLY BUILT self-host lowerer driver:
+#
+#   this file (`Box[String](mk(a, b))`)  emit rc 0, cc rc 0, run **rc 134**
+#                                        `free(): double free detected in tcache 2`
+#   the sibling (`Box.new(mk(a, b))`)    emit rc 0, cc rc 0, run rc 0, correct
+#
+# Rust gg is CORRECT ON BOTH SPELLINGS, so this is not "the reference lags the
+# self-host" — the self-host is simply wrong, and wrong in a way that no
+# surface-level reading of the program could predict. Two spellings of one
+# constructor must not differ in memory safety.
+#
+# ⚠ SINGLE LEVEL, NOT NESTING. This has nothing to do with `todo/t1077` or
+# `todo/t1311`: one `Box`, one payload, no `*`.
+#
+# ⚠ REBUILD THE SH DRIVER BEFORE BELIEVING ANY RESULT HERE. Cached
+# `/tmp/*_sh_driver` binaries go stale as the self-host source moves, and a
+# stale driver will happily report the opposite.
+#
+# EXPECTED OUTPUT: xxxxxxxxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyyyy
+# EXPECTED EXIT: 0 on the SELF-HOST lane (Rust gg already gives this).
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Box[String] b = Box[String](mk("xxxxxxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyyyyyy"))
+    print((*b))

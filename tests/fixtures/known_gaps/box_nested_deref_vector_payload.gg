@@ -1,0 +1,29 @@
+# `todo/t1077` REGRESSION CELL — payload: `Vector[int]`,
+# consume shape: METHOD RECEIVER.
+#
+# The fourth distinct failure face, and the only one that is a LINK error: the
+# extra deref left the receiver typed as its own element type, so lowering
+# emitted a call to a method on `int64_t` that no one defines.
+#
+#   PRE-fix, C:    build rc 1
+#                  undefined reference to `int64_t__len'
+#                  (and `expected 'int64_t' but argument is of type 'void *'`)
+#   PRE-fix, LLVM: build rc 1
+#                  llc: '%v32' defined with type 'ptr' but expected 'i64'
+#                  in `call void @int64_t__len(i64 %v32)`
+#
+# ⛔ THE VECTOR MUST BE THE PAYLOAD, NOT THE CONTAINER. `Vector[Box[Box[int]]]`
+# and `Dict[String, Box[Box[int]]]` are `redefinition of 'Box__R__drop'`
+# compile breaks BOTH BEFORE AND AFTER this fix — that is `todo/t0096`, a
+# different defect — so they are named-omitted cells here, not missed ones.
+#
+# EXPECTED OUTPUT: 3
+# EXPECTED EXIT: 0 on BOTH backends.
+#
+# ⛔ `known_gaps/` with a LIVE test: self-host cannot compile nested `Box`
+# (`todo/t1311`) AND this leaks at scope exit (`todo/t1309`).
+
+void main():
+    Vector[int] v = [3, 5, 7]
+    Box[Box[Vector[int]]] w = Box[Box[Vector[int]]](Box[Vector[int]](v))
+    print((*(*w)).len())

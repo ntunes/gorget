@@ -1,0 +1,16 @@
+# CONTROL for `todo/t1310` — the `Box.new(...)` spelling of
+# `sh_box_ctor_spelling_double_free.gg`, which is CORRECT on the self-host lane
+# (emit rc 0, cc rc 0, run rc 0, correct output).
+#
+# It is committed because a defect whose discriminator is a SPELLING needs both
+# spellings in the tree: without this file, `t1310`'s claim is a sentence, and
+# the next reader has to reconstruct the control before they can believe it.
+# Its test is LIVE — if this one ever starts failing too, the discriminator has
+# moved and `t1310` is describing something else.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Box[String] b = Box.new(mk("xxxxxxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyyyyyy"))
+    print((*b))

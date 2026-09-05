@@ -1,0 +1,34 @@
+# KNOWN GAP `todo/t1313` — RUST LANE. A `Box[T]` passed to a `^` (move)
+# PARAMETER double-frees. Six lines, a primitive payload, no nesting, no
+# deref, no `.clone()`.
+#
+#   C:    build rc 0, run rc 134, `free(): invalid pointer`
+#   LLVM: build rc 0, run rc 134, `double free or corruption (out)`
+#
+# ⚠ THIS IS WIDER THAN THE FILED `todo/t0010`, WHICH IS WHY IT IS ITS OWN
+# ITEM RATHER THAN A SECOND CELL ON THAT ONE. `t0010`'s repro needs
+# `(*b).clone()` on an owned-and-dead `Box[Leaf]` — a deref, a clone and a
+# struct payload. Strip all three and the double free is still there. The
+# discriminator `t0010` names (move-eligibility of the Box AT THE CLONE) cannot
+# be the discriminator here, because there is no clone.
+#
+# ⭐ WHY IT MATTERS BEYOND ITS SIZE: a `Box` exists precisely to make
+# double-free impossible by construction — single owner, no implicit-copy path,
+# `^` or `.clone()` required at every consuming position. This is that
+# guarantee failing in the lowering of the very operator that enforces it, on
+# the most ordinary possible shape.
+#
+# ⚠ MEASURED ON BOTH SIDES OF `todo/t1077`'s fix and IDENTICAL (rc 134 before,
+# rc 134 after, both backends), so it is a pre-existing sibling and not inflow
+# from that change. It is also why `t1077`'s fixture set has no `^`-parameter
+# cell: writing one would pin a defect that fix cannot move.
+#
+# EXPECTED OUTPUT: 1
+# EXPECTED EXIT: 0 on BOTH backends.
+
+int take(Box[int] ^b):
+    return 1
+
+void main():
+    Box[int] b = Box[int](7)
+    print(take(^b))

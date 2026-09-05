@@ -23,6 +23,74 @@ use crate::span::Spanned;
 
 use super::context::LoweringContext;
 
+/// Core #6 ratchet for the ONE lossy default in the value `Expr::Deref` arm:
+/// `ctx.deref_inner_type(ptr_type).unwrap_or(I64_TYPE)`. When the pointee of a
+/// deref target cannot be resolved, that default MANUFACTURES `i64` instead of
+/// failing, and the manufactured type is what picks the print format — an
+/// unresolvable pointee becomes `%lld` and the value is printed as a raw
+/// pointer rather than diagnosed.
+///
+/// ⚠ THIS IS AN OBSERVER, NOT A REPLACEMENT. The `unwrap_or` stays exactly as
+/// it is and the guard is OFF unless the env var is set, deliberately: the
+/// default's reachability was never measured before, and an unconditional ICE
+/// on an unmeasured path is a release-crash risk. This is the `env-gate → burn
+/// down → fatal` runway (the `GG_STAGING_MOVE_GUARD` precedent), entered at the
+/// env-gate stage with the corpus already burned down to zero.
+///
+/// MEASURED BOTH DIRECTIONS (regenerate with
+/// `cargo test --test integration deref_pointee_lossy_default_never_fires`,
+/// and the RED direction by reverting the `if ptr_to_box {` gate BY LINE to
+/// `if ctx.type_registry.is_box(deref_type) {`):
+///   * with the `t1077` gate REVERTED — 9 of the 10 nested-`Box` fixtures
+///     FIRE it (all but the bare-param no-op cell);
+///   * at HEAD — ZERO fires across that same set.
+///
+/// `GG_DEREF_LOSSY_DEFAULT_GUARD=count` reports each fire on stderr;
+/// `=fatal` makes a fire a hard compile error so a ratchet test can assert the
+/// ceiling. Anything else (including unset) is OFF and costs one `OnceLock`
+/// read per deref lowering.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::ir::lowering) enum DerefLossyDefaultGuard {
+    Off,
+    Count,
+    Fatal,
+}
+
+static DEREF_LOSSY_DEFAULT_GUARD: std::sync::OnceLock<DerefLossyDefaultGuard> =
+    std::sync::OnceLock::new();
+
+fn deref_lossy_default_guard() -> DerefLossyDefaultGuard {
+    *DEREF_LOSSY_DEFAULT_GUARD.get_or_init(|| {
+        match std::env::var("GG_DEREF_LOSSY_DEFAULT_GUARD").as_deref() {
+            Ok("fatal") => DerefLossyDefaultGuard::Fatal,
+            Ok("count") => DerefLossyDefaultGuard::Count,
+            _ => DerefLossyDefaultGuard::Off,
+        }
+    })
+}
+
+/// Report one fire of the lossy `unwrap_or(I64_TYPE)` deref-pointee default.
+fn report_deref_lossy_default(
+    ctx: &LoweringContext,
+    ptr_type: TypeId,
+    span: crate::span::Span,
+) {
+    let name = ctx
+        .type_name_for_id(ptr_type)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("{ptr_type:?}"));
+    let msg = format!(
+        "deref-pointee lossy default fired: `deref_inner_type` could not resolve \
+         the pointee of `{name}` at {span:?}, so the value `Expr::Deref` arm \
+         manufactured `i64`. See `DerefLossyDefaultGuard` in \
+         src/ir/lowering/exprs/mod.rs and todo/t1077."
+    );
+    match deref_lossy_default_guard() {
+        DerefLossyDefaultGuard::Fatal => panic!("{msg}"),
+        _ => eprintln!("[deref-lossy-default] {msg}"),
+    }
+}
+
 /// Known blocking function names that should trigger `with shared_var:` auto-refresh.
 /// These are yield points where another task could modify a shared variable.
 const BLOCKING_CALL_NAMES: &[&str] = &[
@@ -736,38 +804,71 @@ fn lower_expr_inner(
                 } else {
                     I64_TYPE
                 };
+                // Core #6 ratchet, default OFF — see `DerefLossyDefaultGuard`.
+                // Observes the `unwrap_or(I64_TYPE)` above WITHOUT changing it.
+                if deref_lossy_default_guard() != DerefLossyDefaultGuard::Off
+                    && local_idx < builder.locals.len()
+                {
+                    let ptr_type = builder.locals[local_idx].type_id;
+                    if ctx.deref_inner_type(ptr_type).is_none() {
+                        report_deref_lossy_default(ctx, ptr_type, inner.span);
+                    }
+                }
                 // Bare-param wrapping: a `Box[T]` param is represented internally
                 // as `*Box__T`. The user-level `*box` is a single source-level
                 // deref, but at GIR level we need TWO peels — first the implicit
-                // Ptr from the param wrapping, then the Box itself. After the
-                // first peel above, if the result is still a `Box__T`, peel again
-                // so the dst local matches the boxed value's type. Without this
-                // the dst slot is sized for `Box__T` (8 bytes, the heap pointer)
-                // and a downstream assign-into-T-typed-local would memcpy
-                // sizeof(T) > 8 bytes, reading past the slot.
-                // Detect whether we are deref'ing through a Box wrapper.
-                // Two shapes reach here:
+                // Ptr from the param wrapping, then the Box itself. Without the
+                // second peel the dst slot is sized for `Box__T` (8 bytes, the
+                // heap pointer) and a downstream assign-into-T-typed-local would
+                // memcpy sizeof(T) > 8 bytes, reading past the slot.
+                //
+                // Two shapes reach here, and the discriminator is the SOURCE
+                // representation, never the RESULT of the first peel:
                 //   (a) local_type = `*Box__T` (bare-param wrapping) — first
                 //       peel gives `Box__T`, then we add a second Deref to
                 //       peel the Box so dst is sized for T.
                 //   (b) local_type = `Box__T` (pattern extract, local var) —
                 //       first peel already gives T (via the Box name-based
                 //       fallback in `deref_inner_type`); dst is sized for T.
-                // In BOTH cases the resulting value is a shallow memcpy of
+                //
+                // ⛔ `is_box(deref_type)` — testing what the FIRST PEEL PRODUCED
+                // — is NOT that discriminator, and gating the second peel on it
+                // was `todo/t1077`: for a nested `Box[Box[T]]` the result of one
+                // peel IS a box, so shape (b) took the shape-(a) branch and read
+                // one deref too many. The two conditions differ in exactly one
+                // cell — `Box__T` where T is itself a box — and that cell was
+                // memory corruption on both backends (SIGSEGV, silent-wrong
+                // values, a consume-site ICE and an `int64_t__len` link break,
+                // depending on payload type × consume shape × storage class).
+                // `ptr_to_box` — computed three lines below and, before the fix,
+                // used only to gate the deep-clone branch — IS the shape-(a)
+                // discriminator, and it was already in hand. Core #1: the typed
+                // fact the read side needed had been computed and thrown away.
+                //
+                // ⭐ WHY `ptr_to_box` AND NOT `Local::slot_kind` (`SlotKind::
+                // BorrowedPtr`): `slot_kind` answers "does this slot hold a
+                // non-owning pointer", which is a LAYOUT fact and says nothing
+                // about the POINTEE being a Box — you would still have to ask
+                // `is_box(pointee_type(src))` afterwards. `ptr_to_box` is built
+                // from two typed accessors (`pointee_type` + `is_box`, the
+                // latter reading `metadata.is_box` set at every Box-TypeDef
+                // registration site), so it is the MINIMAL typed discriminator
+                // here, not a structural probe standing in for missing metadata.
+                // `SlotKind` is orthogonal, not a better source.
+                //
+                // In BOTH shapes the resulting value is a shallow memcpy of
                 // the boxed data and its heap buffers are shared with the
                 // box's own drop chain — double-free if we drop-register dst.
                 // Read the typed `metadata.is_box` flag at every Box TypeDef
                 // registration site rather than probing by name prefix.
-                let source_is_box = {
-                    let src_ty = if local_idx < builder.locals.len() {
-                        builder.locals[local_idx].type_id
-                    } else { I64_TYPE };
-                    let direct_box = ctx.type_registry.is_box(src_ty);
-                    let ptr_to_box = ctx.pointee_type(src_ty)
-                        .map_or(false, |inner| ctx.type_registry.is_box(inner));
-                    direct_box || ptr_to_box
-                };
-                if ctx.type_registry.is_box(deref_type) {
+                let src_ty = if local_idx < builder.locals.len() {
+                    builder.locals[local_idx].type_id
+                } else { I64_TYPE };
+                let direct_box = ctx.type_registry.is_box(src_ty);
+                let ptr_to_box = ctx.pointee_type(src_ty)
+                    .map_or(false, |inner| ctx.type_registry.is_box(inner));
+                let source_is_box = direct_box || ptr_to_box;
+                if ptr_to_box {
                     if let Some(inner_ty) = ctx.deref_inner_type(deref_type) {
                         deref_place.projections.push(Projection::Deref);
                         deref_type = inner_ty;
@@ -3286,13 +3387,23 @@ pub(in crate::ir::lowering) fn try_resolve_place(
         // `Expr::MutableBorrow` `&*b` block) into this shared producer, so `&*b`
         // and `&b.fd` take ONE path instead of two.
         //
-        // ⚠ A THIRD copy remains open-coded in `lower_assign`'s `Expr::Deref` arm
-        // (`stmts/assigns.rs`), deliberately. Absorbing it is NOT a move: that
-        // copy walks the inner place's projections to compute the pointee type
-        // (peeling `Field` through struct definitions as well as `Deref`), where
-        // this arm reads the local's type directly. They agree on every measured
-        // shape, but reconciling them changes emission for multi-projection deref
-        // targets, so it owes its own fixtures and lane census. Filed, not fixed.
+        // ⚠ FURTHER COPIES remain open-coded in `stmts/assigns.rs`, deliberately.
+        // Absorbing them is NOT a move: they walk the inner place's projections
+        // to compute the pointee type (peeling `Field` through struct definitions
+        // as well as `Deref`), where this arm reads the local's type directly.
+        // Reconciling them changes emission for multi-projection deref targets,
+        // so it owes its own fixtures and lane census. Filed, not fixed.
+        //
+        // ⛔ AN EARLIER REVISION OF THIS COMMENT CLAIMED THEY "AGREE ON EVERY
+        // MEASURED SHAPE". THEY DO NOT, AND A LINT PINNING THAT EQUIVALENCE
+        // WOULD GREEN-LIGHT ITS OWN CLASS. The value `Expr::Deref` arm in
+        // `lower_expr_inner` peels ONE **or TWO** times — a `Box[T]` parameter is
+        // internally `*Box__T` and needs both peels — while this arm and both
+        // `assigns.rs` copies peel once at the end. `todo/t1077` was that second
+        // peel firing on the wrong shape. What IS pinned is the site COUNT, not
+        // an equivalence: `tests/lints.rs::deref_pointee_peel_sites_count`, whose
+        // roster carries a disposition per site (regenerate the anchor with
+        // `grep -rn 'ctx\.deref_inner_type(' src/`).
         Expr::Deref { expr: inner } => {
             let inner_op = lower_expr(ctx, builder, inner);
             let inner_place = match &inner_op {

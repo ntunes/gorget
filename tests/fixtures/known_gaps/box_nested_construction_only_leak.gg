@@ -1,0 +1,41 @@
+# KNOWN GAP `todo/t1309` — a nested `Box[Box[R]]` LEAKS ITS INNER BOX AT SCOPE
+# EXIT. Blocked on `todo/t0096`.
+#
+# ⚠ CONSTRUCTION ONLY, DELIBERATELY: the box is built and NEVER READ. That is
+# what makes this a repro for the LEAK rather than for `todo/t1077`'s read
+# defect — `t1077` is fixed and every nested-`Box` READ is correct now, but the
+# drop chain still never reaches the inner box.
+#
+# ⚠ THE PAYLOAD IS HEAP-FORCED (`mk(a, b)`, and the halves are long enough to
+# defeat any small-buffer optimization). A `.rodata` literal payload is an
+# immortal view and leaks nothing, so a fixture written with `"hi"` would be
+# ASan-clean and pin NOTHING.
+#
+# ⛔ MECHANISM: UNDETERMINED. The obvious candidate was measured and REJECTED —
+# `todo/t1077`'s fix changes `deref_type` from `T` to `Box__T`, and
+# `deref_type` gates the deep-clone branch, so a plausible story was that it
+# now selects a clone that leaks. It does not:
+#   * `--clones=sites`: 1 implicit clone (`String`, CoW materialization) before
+#     the fix and the identical 1 after — same count, same type;
+#   * emitted C: no `Box__GorgetString__clone` in either state; both carry one
+#     `gorget_string_clone_to_owned` and the two construction `box_alloc`s;
+#   * ASan: this construction-only program reports the SAME records and the
+#     SAME byte count before and after the fix;
+#   * and structurally it cannot fire — `is_resource_type` matches
+#     `GirType::Named(name)` with `is_resource_name(name)`, which does not
+#     admit `Box__GorgetString`
+#     (`grep -n 'pub fn is_resource_type' -A 4 src/ir/types.rs`).
+# The leak is PRE-EXISTING and independent of the read fix. What IS known is
+# where the drop is declined: `grep -n 'DS::Trivial(_) => None' src/lir/lower/drops.rs`
+# — routing the outer box's drop through the inner `Box__R__drop` wrapper is
+# the natural fix and trips `todo/t0096`'s `Box__R__drop` redefinition.
+#
+# EXPECTED: prints `built`, exits 0, AND IS LEAK-CLEAN under
+# `gg build --sanitize`. It is the last clause that fails today.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Box[Box[String]] w = Box[Box[String]](Box[String](mk("aaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbb")))
+    print("built")

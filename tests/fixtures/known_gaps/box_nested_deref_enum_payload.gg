@@ -1,0 +1,38 @@
+# `todo/t1077` REGRESSION CELL — payload: RESOURCE-CARRYING ENUM,
+# consume shape: WHOLE-VALUE ASSIGN.
+#
+# This cell's failure face is neither of the two `t1077` was filed on. Reading
+# a nested `Box[Box[E]]` into an `E` local did not crash and did not print a
+# wrong value — it made the COMPILER panic, before any code was emitted:
+#
+#   PRE-fix, BOTH lanes: build rc 101
+#     Tier 2a consume-site violation: 1 violation(s) ...
+#     fn @main bb0 i13 — AssignIntoOwnedSlot(dst: Tag) — untracked source
+#     consumed (ownership not decided)
+#
+# ⚠ THE ENUM MUST CARRY A RESOURCE. A fieldless `enum E: A / B` builds and
+# SIGSEGVs at run time instead, which is the ordinary face — so a fixture named
+# "enum payload" built on a fieldless enum MISSES this cell entirely (Core #12:
+# the NAME is a claim about SCOPE).
+#
+# EXPECTED OUTPUT: alphabeta
+# EXPECTED EXIT: 0 on BOTH backends.
+#
+# ⛔ Lives in `known_gaps/` with a LIVE test for TWO reasons, and closing only
+# the first is not licence to graduate it: (1) the self-host cannot compile any
+# nested `Box` at all (`todo/t1311`), and top level is auto-scanned into
+# `runtime_parity_corpus`; (2) it LEAKS at scope exit (`todo/t1309`, blocked on
+# `todo/t0096`), and top level is also the ASan corpus.
+
+enum Tag:
+    Named(String)
+    Numbered(int)
+
+void main():
+    Box[Box[Tag]] w = Box[Box[Tag]](Box[Tag](Tag.Named("alpha" + "beta")))
+    Tag t = (*(*w))
+    match t:
+        case Named(s):
+            print(s)
+        case Numbered(n):
+            print(n)

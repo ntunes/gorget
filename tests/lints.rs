@@ -29661,6 +29661,129 @@ fn box_typedef_registration_sites_count() {
     );
 }
 
+/// The deref-pointee PEEL SITES — every place in lowering that answers "what
+/// type is behind this `Projection::Deref`" by calling `deref_inner_type`.
+///
+/// ## Why a COUNT and explicitly NOT an equivalence
+///
+/// `todo/t1077` was one of these sites peeling TWICE where it should have
+/// peeled once: the value `Expr::Deref` arm gated its second peel on
+/// `is_box(deref_type)` — the RESULT of the first peel — instead of on the
+/// SOURCE representation, so a nested `Box[Box[T]]` read one deref too many.
+/// Both backends miscompiled it, in four different ways depending on payload
+/// type × consume shape × storage class (SIGSEGV, silent-wrong values, a
+/// consume-site ICE, an `int64_t__len` link break).
+///
+/// The obvious follow-up guard — pin that the sites AGREE — is exactly the
+/// guard that would green-light its own class, so it is deliberately not
+/// written here. **They do not agree, and they are not supposed to.** The
+/// value arm peels ONE **or TWO** times (a `Box[T]` parameter is internally
+/// `*Box__T` and needs both), `try_resolve_place` peels once from the root
+/// local type ignoring projections, and both `assigns.rs` copies WALK the
+/// projections first. Any lint asserting equivalence would have been green on
+/// the pre-`t1077` compiler.
+///
+/// What is pinnable is the SIZE of the class: a fifth independent copy of the
+/// peel is how the next `t1077` gets in, and this ratchet forces it through
+/// review.
+///
+/// ## The roster, with a disposition per site (Core #15b)
+///
+/// Regenerate the anchor with `grep -rn 'ctx\.deref_inner_type(' src/`.
+///
+/// `src/ir/lowering/exprs/mod.rs`
+///   1. value `Expr::Deref` arm, FIRST peel — reads the ROOT local type and
+///      IGNORES `place.projections`. Carries the one lossy default in the set,
+///      `unwrap_or(I64_TYPE)`, which manufactures `i64` for an unresolvable
+///      pointee.
+///   2. **NOT A PEEL** — the Core #6 OBSERVER of site 1's default
+///      (`DerefLossyDefaultGuard`), which re-asks the same question to find out
+///      whether the default fired. It is inside an `if guard != Off` so it is
+///      not evaluated at all in a normal build. It counts here because the
+///      anchor is textual and hiding it would be exactly the "respelled outside
+///      its pattern" evasion this test warns about. Its ceiling is asserted by
+///      `deref_pointee_lossy_default_never_fires` (integration).
+///   3. value `Expr::Deref` arm, SECOND peel — the `t1077` site. Gated on
+///      `ptr_to_box`, i.e. on the SOURCE being `*Box__T`. Fires for a `Box[T]`
+///      parameter and for nothing else.
+///   4. `place_expr_type_only` — a type-ONLY classification probe with no place
+///      to build; returns `Option` and has no default. Not a place peel.
+///   5. `try_resolve_place`'s `Expr::Deref` arm — ONE peel from the root local
+///      type, ignoring projections. Its `unwrap_or(t)` is IDENTITY-on-failure,
+///      not a manufactured type.
+///   6. + 7. two projection-WALK loops inside `try_resolve_place`'s field-place
+///      resolution. Both `if let Some(..)` — they leave the type unchanged on
+///      failure rather than defaulting.
+///
+/// `src/ir/lowering/stmts/assigns.rs`
+///   8. + 9. `lower_assign`'s `Expr::Deref` arm: a projection-walk step and the
+///      final peel.
+///   10. + 11. the compound-assign read-modify-write path: **byte-identical to
+///      8+9 modulo indentation** — two copies of one algorithm, not two
+///      algorithms. That duplication is a real Core #4 smell and is recorded
+///      here rather than silently tolerated; unifying it changes emission for
+///      multi-projection deref targets and owes its own fixtures and lane
+///      census, so it is filed, not fixed.
+///
+/// **If this fails and the count GREW**: a new peel site landed. Add it to the
+/// roster above WITH its disposition — does it default, and to what? — and
+/// raise `EXPECTED` in the same commit. A site that defaults to a manufactured
+/// type (rather than to identity, or to `None`) owes a fire-count first.
+///
+/// **If it SHRANK**: copies were unified. Delete the retired rows and lower
+/// `EXPECTED` in the same commit.
+///
+/// ## What this does NOT check (Core #12: name the omitted cells)
+///
+/// It counts the literal `ctx.deref_inner_type(` spelling on a non-comment
+/// line. A peel reached through a differently-named local (`self.`, a rebound
+/// `let cx = ctx`) or through a wrapper helper is invisible to it, and equality
+/// is evaded by a compensating pair. Bookkeeping, not a class-retiring guard —
+/// see [`assert_exact_ratchet`].
+#[test]
+fn deref_pointee_peel_sites_count() {
+    /// Baseline 2026-09-05 (`todo/t1077`): 11 — seven in
+    /// `ir/lowering/exprs/mod.rs` (one of which is the Core #6 observer, not a
+    /// peel) and four in `ir/lowering/stmts/assigns.rs`, the last two of those
+    /// byte-duplicates of the first two. The roster with a disposition per site
+    /// is on this test.
+    const EXPECTED: usize = 11;
+
+    let mut sites: Vec<String> = Vec::new();
+    let mut files = walkdir_rs("src");
+    files.sort();
+    for f in &files {
+        let Ok(content) = fs::read_to_string(f) else { continue };
+        for (i, line) in content.lines().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with("//") {
+                continue;
+            }
+            if t.contains("ctx.deref_inner_type(") {
+                sites.push(format!("{}:{}", f.display(), i + 1));
+            }
+        }
+    }
+
+    assert_exact_ratchet(
+        "deref-pointee peel sites in src/",
+        sites.len(),
+        EXPECTED,
+        &format!(
+            "The roster these must match — WITH a disposition per site — lives \
+             on this test's doc comment. Sites found:\n  {}\n\n\
+             Regenerate with:\n  \
+             grep -rn 'ctx\\.deref_inner_type(' src/\n\n\
+             ⛔ DO NOT replace this with a lint asserting the sites AGREE. They \
+             do not: the value `Expr::Deref` arm peels ONE or TWO times (a \
+             `Box[T]` param is internally `*Box__T`), the others peel once. An \
+             equivalence lint would have been GREEN on the compiler that \
+             shipped `todo/t1077`.",
+            sites.join("\n  "),
+        ),
+    );
+}
+
 /// The `Box(value)` constructor is minted in ONE place —
 /// `src/ir/lowering/exprs/calls.rs`. A second, unreachable copy of that mint
 /// sat in `lower_struct_literal` (`src/ir/lowering/exprs/mod.rs`) for a long

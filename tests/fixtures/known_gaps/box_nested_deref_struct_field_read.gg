@@ -1,0 +1,32 @@
+# `todo/t1077` REGRESSION CELL — payload: USER STRUCT,
+# consume shape: FIELD READ through the nested box.
+#
+# ⭐ THE SAME PAYLOAD HAS TWO DIFFERENT FACES DEPENDING ON THE CONSUME SHAPE,
+# which is why the discriminator is `payload type × consume shape × storage
+# class` and not payload type alone. Read a FIELD and it is silent-wrong; read
+# the WHOLE VALUE (`box_nested_deref_struct_whole_value_read.gg`) and the same
+# program SIGSEGVs. A fixture set varying only the payload would have shown one
+# of the two and called the axis covered.
+#
+#   PRE-fix, C:    build rc 0, run rc 0, prints `0` / `0`  ← SILENT WRONG
+#   PRE-fix, LLVM: build rc 0, run rc 0, prints `0` / `0`  ← SILENT WRONG
+#
+# Silent-wrong-output outranks ICE on the severity ladder, and this cell plus
+# `box_nested_deref_rodata_string_print.gg` are why `t1077`'s filed severity
+# text ("SIGSEGV on C, silent wrong answer on LLVM") understated the class:
+# here BOTH lanes are silently wrong.
+#
+# EXPECTED OUTPUT: 7 then 9
+# EXPECTED EXIT: 0 on BOTH backends.
+#
+# ⛔ `known_gaps/` with a LIVE test: self-host cannot compile nested `Box`
+# (`todo/t1311`) AND this leaks at scope exit (`todo/t1309`).
+
+struct P:
+    int x
+    int y
+
+void main():
+    Box[Box[P]] w = Box[Box[P]](Box[P](P(7, 9)))
+    print((*(*w)).x)
+    print((*(*w)).y)

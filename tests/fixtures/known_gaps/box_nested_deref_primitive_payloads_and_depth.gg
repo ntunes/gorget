@@ -1,0 +1,38 @@
+# `todo/t1077` REGRESSION CELL — the PRIMITIVE-PAYLOAD row and the DEPTH row.
+#
+#   PRE-fix, C:    build rc 0, run rc 139 (SIGSEGV)
+#   PRE-fix, LLVM: build rc 0, run rc 139 (SIGSEGV)
+#
+# Cells: `int`, `float` and `bool` payloads at depth 2, plus `int` at DEPTH 4.
+#
+# ⚠ THE PRIMITIVE AXIS IS WRITTEN OUT RATHER THAN SAMPLED, DELIBERATELY. Every
+# one of these behaves identically (139 before, correct after, both backends),
+# so one cell would "cover" them by argument — but this tree has already been
+# burned on exactly this axis: `todo/t1197` is `Box[float32]` reading
+# `0.000000` because the allocator's NAME and its BODY disagree about element
+# width, which no `int` cell could ever have shown. A one-value-per-axis
+# fixture set is an anecdote (Core #12).
+#
+# ⛔ `float32` SPECIFICALLY IS OMITTED AND NAMED: it is broken independently of
+# this fix (`todo/t1197`, `#[ignore]`d as `box_float32_element_reads_zero`), so
+# a `Box[Box[float32]]` cell here would be red for a reason that has nothing to
+# do with `t1077`. `float` (f64) is the shippable neighbour.
+#
+# EXPECTED OUTPUT: 42, 2.500000, true, 99 — one per line
+# EXPECTED EXIT: 0 on BOTH backends.
+#
+# ⛔ `known_gaps/` with a LIVE test: self-host cannot compile nested `Box`
+# (`todo/t1311`) AND this leaks at scope exit (`todo/t1309`).
+
+void main():
+    Box[Box[int]] i = Box[Box[int]](Box[int](42))
+    print((*(*i)))
+
+    Box[Box[float]] f = Box[Box[float]](Box[float](2.5))
+    print((*(*f)))
+
+    Box[Box[bool]] b = Box[Box[bool]](Box[bool](true))
+    print((*(*b)))
+
+    Box[Box[Box[Box[int]]]] d4 = Box[Box[Box[Box[int]]]](Box[Box[Box[int]]](Box[Box[int]](Box[int](99))))
+    print((*(*(*(*d4)))))
