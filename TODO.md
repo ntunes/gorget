@@ -10,8 +10,11 @@
 | **A1** | **`t1077` ONLY** — **4 passes; design signed off. 🟢 EXECUTOR LAUNCHED 2026-09-05.** | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
-| **C** | 🔵 SCOUTING. **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** **`t1225`** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
+| **C1** | ✅ SCOUTED → needs brief. **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
+| **C2** | ✅ SCOUTED → needs brief. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
+| **D0** | 🆕 **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1. | `t1393`–`t1402` |
+| **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | **G** | 🆕 **THE STANDING VIEW-INVALIDATION MATRIX — ⚖ OWNER-RATIFIED 2026-09-05: *"exactly, so let's fix it the right way."*** 🔵 SCOUTING. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
 | **F1** | **`t1362` CRITICAL** — pass 1 BLOCKED (3) → folded → 🔵 pass 2. **Streak 0/3.** | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
@@ -379,6 +382,74 @@ FIX IT NOW** — the addendum only records what was measured.
   not at lowering (today the ICE comes from the Tier 2a consume-site validator — wrong layer, wrong
   diagnostic). **No design question remains; this is an implementation track.**
 
+### ⛔ I REPORTED "WIDENING THE REJECT COSTS ZERO" TO THE OWNER. THE INSTRUMENT COULD NOT SEE THE COST.
+
+**Core #13 verbatim — pick an instrument that can SEE the failure class.** `total_allocs` and `live_bytes`
+increment **only** inside `__gorget_global_alloc_fn`
+(`grep -n '__gorget_total_allocated +=' src/backend/c/runtime/runtime_preamble.c`), and
+`__gorget_closure_env_alloc` calls **raw `malloc`**
+(`grep -n 'gorget_closure_env_alloc' -A 6 src/backend/c/runtime/runtime_string.c`). ⇒ **a closure-env
+allocation CANNOT MOVE EITHER COUNTER.** The headline was internally inconsistent on its face — **+5000 clones,
++0 allocations** — and I carried it anyway.
+⭐ **WHAT SURVIVES:** wall **5.87 → 5.42 ms** and peak RSS **9512 → 9516 kB** are instrument-independent. **The
+two allocation figures are NON-EVIDENCE.** Re-argue from ASan allocation counts, valgrind, or `/usr/bin/time -v`.
+⇒ **D13 EXTENDED: regenerating a number is not enough — CHECK THE INSTRUMENT CAN SEE THE CLASS.**
+
+### ⛔ TRACK D IS SPLIT — D0 GATES D1
+
+- ⛔ **THE BLAST RADIUS WAS A SELECTION: THREE fixtures move, not one, and TWO ARE ALLOWLIST-COUNT
+  VIOLATIONS** (`new_class` ⇒ **fatal**): `dict_box_callable` (no row at all ⇒ `new_leak`),
+  `httpserver_middleware` and `httpserver_router_extended` (env_alloc **×1 → ×2**). **And there are 12
+  httpserver rows over 24 importing fixtures, not "five"** (`grep -c '^httpserver' tests/sanitize/LEAK_ALLOWLIST.txt`).
+  **A raised count is forbidden inflow exactly as a new row is.**
+- ⛔ **`t0873(b)` AS FILED DOES NOT COVER THE CASE.** Its mechanism, headline, cited site (`insts.rs`, the
+  **array** ctor) and **both** repros are `Vector`. **The three failing fixtures are `Dict`.** ⇒ an executor
+  ships an array-path fix, greens both its repros, **and leaves D red on all three.**
+  ⭐ **The good news the brief must use: the fix site IS shared** — `elem_drop_fn_for_type` is called by both
+  the array path and the map `val_drop` path. **One fix can cover both; nothing in `t0873` says so.**
+- ⇒ **D0 = the collection-`Callable` `elem_drop` class fix across BOTH paths + a Dict repro + driving the two
+  httpserver rows to zero** — which is a **SHRINK**, so `sanitize_allowlists_shrink_only` then requires those
+  rows **retired the same round**. A third deliverable nobody had named. **D1 is gated on it.**
+⊕ **Confirmed and kept:** D1's core reversal is TRUE (with a regenerating command, and ⚠ **the function body is
+~1670 lines — a short grep window reads 0 and looks like a refutation**); ggdef is genuinely in-subset and
+genuinely 1 line; the return-position hole is real and **not index-specific** (`return h.f` → rc 0 + ASan
+double-free).
+⊕ **Errata worth keeping:** the omitted axis cells are covered **BY CONSTRUCTION** (the change adds a *shape*;
+the *type* test is the shared `needs_explicit_move`) — **stronger than a risk list**. ⚠ **The stale-`!` fix is
+8 sites and a BLIND SED IS DANGEROUS** — `!` is still the correct D29 fallible mark elsewhere. ⚠ **The full
+patch's `dict_box_callable.gg` hunk ships the remedy the scout measured as LEAKING — unshippable until D0
+lands.** 🆕 **Pre-existing ICE in the exact shape space the executor will write fixtures in:**
+`v.push(^afn)` on `Vector[Callable[int(int)]]` → rc 101 Tier 2a violation.
+
+### ✅ TRACK C IS SPLIT — TWO CLASSES, PROVEN TWO-DIRECTIONALLY (MA-5 DONE RIGHT)
+
+**The scout did exactly what MA-5 demands — applied each half ALONE to pristine HEAD and ran the OTHER half's
+cells:**
+
+| tree | 4 `t0011` cells | 7 `t0045` cells |
+|---|---|---|
+| HEAD | 134 double free | 134 double free |
+| **+ C1 alone** | **0** | **134 — UNMOVED** |
+| **+ C2 alone** | **134 — UNMOVED** | **0, ASan-clean** |
+| both | 0 | 0 |
+
+⭐ **What discriminates them:** `t0011` is a producer that **DESTROYED** provenance that existed; `t0045` is a
+producer that **NEVER MINTED** it. *"Same theme — but a theme is not a class, and neither fix moves the other's
+cells."*
+⭐ **C2's three halves are each other's positive controls** — view-only is safe but **LEAKS 34 B**; drop-reg
+without the view is **still 134**. **The third half was found by the Tier 2a validator refusing the second.**
+⊕ `self_host_bootstrap_fixed_point` **PASS (910 s)**; perf 4M iterations **no regression**.
+
+⛔ **THREE DECAYED PREMISES:** `t0011`'s *"same edit as `t0697`"* — **`t0697` CLOSED 2026-09-04**, the coupling
+is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABRTs — a live Core #8 event"* —
+**FALSE: ggdef has NO for-loop at all** (13 `Stmt::` arms, no `For`); it **abstains**. And **the ratified
+2026-08-18 doc write-through NEVER LANDED** though the ruling calls it *"MANDATORY … part of the fix"*.
+⛔ **A GUARD THAT CANNOT SEE ITS OWN CLASS (SIX-Q #2):** `str_view_producer_enumeration_is_closed` calls itself
+*"THE ENUMERATION … every view producer"* but **enumerates SYMBOLS, not SITES** — C2's brand-new emit site is
+invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
+🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
+incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
 ### ⚠ F1's PASS 1 BLOCKED ON THREE COUNTS — AND ONE OF THEM IS AN UNVERIFIED CLAIM I FILED
 
 - ⛔ **THE ARM DISCRIMINATOR WAS FACTUALLY WRONG.** The brief said the trivial-getter arm is *"the only sibling
@@ -568,7 +639,7 @@ actually read.
 ⛔ **THE CLONE-BAND ANCHORS WERE RE-SEEDED AT THIS ROUND'S OPEN** (date 2026-09-05, one sha, values
 unchanged — R49 moved the clone meter not at all). `clone_band_anchor_is_reseeded_before_work_resumes` is the
 gate that enforces it; do not let it drift.
-⛔ **FIRST UNISSUED `todo/` ID: `t1393`.** ⊕ **BLOCKS: A1 `t1309`–`t1318` · B `t1319`–`t1328` · C `t1329`–`t1338` · D `t1339`–`t1348` · E `t1349`–`t1358` · F2/F3 `t1362`(used)+`t1363`–`t1371` → **F1 owns `t1363`–`t1372`** · A2 `t1373`–`t1382`.** Allocate a private disjoint block per executor (MA-3b).
+⛔ **FIRST UNISSUED `todo/` ID: `t1403`.** ⊕ **BLOCKS: A1 `t1309`–`t1318` · B `t1319`–`t1328` · C `t1329`–`t1338` · D `t1339`–`t1348` · E `t1349`–`t1358` · F2/F3 `t1362`(used)+`t1363`–`t1371` → **F1 owns `t1363`–`t1372`** · A2 `t1373`–`t1382`.** Allocate a private disjoint block per executor (MA-3b).
 
 ⚠ **THE ONE THING R49 PAID FOR REPEATEDLY, AND THE ONE THING TO CARRY:** **A SELECTION PRESENTED AS AN
 ENUMERATION.** It fired on a constant censused without the branch that moved it · on figures inherited rather
