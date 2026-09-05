@@ -13,7 +13,7 @@
 | **C1** | ⛔ **v3 pass 1: 4 BLOCKING — *"half"* names THREE changes, and `clone_fn` ALONE re-enters v2's blocked defect through ORDERING.** Fold → `v4`. Streak 0/3. | `t1329`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D0′** | ✅✅ **TRIGGER SITE RULED: reading (a) — the shadowing DECLARATION fails.** Fold ruling + 5 blocking → `v5`. Streak 0/3. | `t1394`–`t1402` |
+| **D0′** | ✅✅✅ **ALL THREE RULINGS IN.** `v5` written — rulings + 5 blocking + errata folded; 🔵 pass 1. Streak 0/3. ⭐ **f-string walk PULLED OUT (own candidate: `t0691`).** | `t1394`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | ✅✅ **G** | **INTEGRATED** (9 commits, `2d647456c`). 819 cells + 3 guards + 4 filings. Gates on the merged tree: lib 1187, lints **237**, gen-check, known-gaps census — all green. | `t1384`–`t1392` |
@@ -1367,6 +1367,31 @@ breach stands — the DIAGNOSTIC'S OWN fix-it is broken — but say that.**
 refuses to build at all is **definitionally new**.
 ⭐ **VERIFIED: the killer sentence is LIVE**, the `.clone()` C is **byte-identical (3906 lines each)**, all five
 of my other errata land, and **the four `is_box: true` sites are LINT-PINNED** — a real readiness-row-2 witness.
+
+### ✅✅✅ RULING 3 (owner 2026-09-05) — **THE CHECK KEYS ON `DefKind`, NEVER A NAME LIST**
+
+> *"Reject a value binding whose name resolves to a type-kind def — read `DefKind` from the resolver, not from
+> any list. This is the way to go."*
+
+⭐ **All three D0′ questions are now settled, and `v5` is written on them.** ⛔ **Ruling 3 is the one that keeps
+the executor honest: it needs NO name set, so it CANNOT be incomplete, and it is Core #2-clean BY
+CONSTRUCTION.** ⇒ **`todo/t1408`'s two-sources-of-truth defect stops being a hole in the CHECK and becomes a
+registration repair on its own schedule — close it and the check picks up the callable family with ZERO CHANGE.**
+⚠ **The residual is stated in the brief and belongs in the check's own DOC COMMENT, never papered with
+literals.**
+
+### ⭐ SCOPE CALL — **THE F-STRING WALK IS PULLED OUT OF D0′**
+
+My E2 called it *"one line, blast radius one row"*. **Measured with an instrument blind to the class** (a
+`gg check` rc diff, while the walk's effect is on **LOWERING**). **Real radius: SEVEN files — six
+`robustness_map/cells/*` and a filed HIGH it CLOSES (`t0691`, both lanes, LLVM SILENT WRONG VALUE, with a
+durable repro and an `#[ignore]`d test).** ⇒ **it touches a five-lane gate whose SELF-HOST lane will not have
+the fix, and graduating a `known_gaps` fixture carries census + sanitize + Core #9 consequences of its own.**
+**OUT of D0′; `t0691` becomes its own candidate.**
+⊕ **AND MY *"redesign around a gap"* CHARGE IS WITHDRAWN** — `t0691`'s own text says the tree has a standing
+rule that accept/reject must NEVER be observed through an f-string, *"it changes the LOWERING"* ⇒ **rewriting
+the repro to the plain spelling is RESTORING PROBE HYGIENE.** *The reviewer who overruled me was itself
+overruled, on the item's own words.*
 
 ### ⭐ THE `Callable`/`Owned` GAP IS NOT A CAVEAT — IT IS A **SECOND SOURCE OF TRUTH**, FILED AS `t1408`
 
