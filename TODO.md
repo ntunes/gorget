@@ -11,7 +11,7 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⛔ **THE OWNER REJECTED ALL THREE OF MY OPTIONS 2026-09-05 — THE ASK IS WITHDRAWN, THE TRACK IS RE-AIMED AT *MAKE IT WORK*.** 🔵 reference-grade SCOUT running. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| **C2** | **`t0045`** — code SIGNED OFF. ⛔ **CONFIRMING PASS: 2 BLOCKING + 5 errata — BOTH BLOCKERS ARE THE ORIGINAL DEFECT REPRODUCED.** 🟢 executor resumed. ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| **C2** | **`t0045`** — code SIGNED OFF. ⛔⛔ **DOC ROT IS ON ITS THIRD GENERATION — a phrase-scoped "zero hits repo-wide" that the ORCHESTRATOR falsified with one grep. NOT INTEGRATED.** 🟢 executor resumed. ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ⛔⛔ **REBUILT TWICE. Streak 0/3, 🔵 SCOUT on `v3`.** Read-site route dead (5 corrupting cells); **write-site route ALSO dead** (1 corrupting cell; its "zero corruption" table was the **no-op column** — byte-identical C to HEAD on all 11 cells). ⭐ **v3 = PARSER FIRST:** make `d[k](v)` parse ⇒ the 8 `httpserver` BINDS migrate to the ratified **callee borrow** ⇒ the bind reject gains a recourse ⇒ `elem_drop` is safe on every provenance. **No owner ruling needed — `t1225`'s directive is honoured, not overridden.** | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
@@ -1274,6 +1274,44 @@ TOP LEVEL** (measured MATCH, zero non-MATCH inflow); memory-safety rows and the 
 fix **moves the String cell OUT of memory-unsafety INTO an already-filed class**; and **String was the LAST
 broken cell of ratified consequence (a)** — nested Vector, struct and dict-value already bare-rebind as
 non-crashing private copies. ⇒ **the fix COMPLETES the ratified rule.**
+
+### ⛔⛔⛔ C2's DOC ROT, GENERATION **THREE** — AND I CAUGHT IT BY NOT TRUSTING A TOTAL CLAIM
+
+⭐⭐ **THE CLAIM WAS *"post-fix sweep for the label is now ZERO HITS REPO-WIDE"*. TRUE FOR THE PHRASE, FALSE FOR
+THE CLASS — falsified in ONE grep**
+(`grep -nE 'element is immutable|bare element immutable' tests/integration.rs`):
+
+```
+/// CoW Track 1A — bare `for c in a` element is immutable (materialize control).
+#[test]
+fn cow_for_bare_vector_control() {
+```
+⇒ ⛔ **THE EXECUTOR FIXED THE FIXTURE'S HEADER — which now correctly reads *"a MUTABLE PRIVATE COPY (§3.1)"* —
+AND LEFT THE DOC COMMENT THAT DOCUMENTS THAT VERY FIXTURE SAYING THE OPPOSITE**, same round, same construct.
+⊕ **A second hit is self-contradictory INSIDE ONE SENTENCE:** *"§3.1 makes the bare element **immutable**, so
+the write **lands in a private copy**"* — **if it were immutable the write would be REJECTED, not land**, and
+the fixture proves it is ACCEPTED. **It cites §3.1, the section that says the opposite.**
+
+⭐⭐⭐ **THE THREE GENERATIONS ARE ONE LESSON, AND IT IS ABOUT THE INSTRUMENT, NOT THE DILIGENCE:**
+1. enumerated citation **SITES** naming a deleted symbol — never behaviour **CLAIMS**;
+2. the replacement grep scoped to **`docs/`** — the README survived;
+3. the repo-wide grep scoped to **ONE PHRASE** — a **different spelling of the same retired concept** survived.
+⇒ ⛔ **A SET DEFINED BY A STRING IS NEVER TOTAL. DEFINE IT BY THE CONSTRUCT** — *every site that describes what
+the bare `for x in coll` element binding IS* — and **name the instrument that BOUNDS it (Core #13), because a
+phrase-grep FINDS candidates and cannot BOUND a class.**
+
+⚠⚠ **AND THE SAME BINDS ME: MY OWN SEARCH WAS ALSO PHRASE-SCOPED.** I grepped three spellings. **I am not
+claiming I found them all, and I told the executor not to claim it either.** *The failure is not that anyone
+searched carelessly — it is that a phrase is the wrong KIND of boundary for this set.*
+
+⊕ **ONE JUDGMENT CALL HANDED BACK RATHER THAN DECIDED:** `docs/book/12-borrowing.md:189` — *"Reading an element
+from a collection returns a **read-only borrow**"* — is very likely a DIFFERENT construct (a `.get()` bind, which
+`tests/fixtures/cow_p3_readonly_borrow.gg` treats as its own position). **Close enough to need a STATED
+disposition rather than silence.**
+
+⭐ **THE PROCESS POINT: I VERIFIED A TOTAL CLAIM MYSELF INSTEAD OF SPAWNING A THIRD REVIEW OF A DOCS DELTA.**
+Two greps, no agent, and it was the right call — **the base rate of defects in this track's folds is what
+justified the check, not suspicion of the executor.**
 
 ### ✅ C1's OWNER ASK IS **WITHDRAWN** — THE OWNER REJECTED THE QUESTION, NOT THE ANSWER (2026-09-05)
 
