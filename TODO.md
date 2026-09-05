@@ -11,7 +11,7 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| **C2** | ✅ **DESIGN SIGNED OFF (7th reproduction).** 6 folds → 🔵 **narrow pass 7** on the ONE new deliverable only. ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| ✅ **C2** | **`t0045`** — **7 passes, design signed off, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D01** | ⛔ **MERGED — ONE OWNERSHIP INVARIANT, ONE COMMIT.** 🔵 brief-review pass 1. **Streak 0/3.** | `t1339`–`t1348` + `t1393`–`t1402` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
@@ -449,6 +449,33 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### 🟢 C2's EXECUTOR IS LAUNCHED — SEVEN PASSES, AND THE LAST ONE SIGNED OFF THE DELIVERABLE
+
+⭐ **Pass 7 reproduced all four lanes on the exact candidate, and its self-host measurement is STRONGER than the
+one it checked: it rebuilt the driver with the PATCHED compiler** — the configuration `spec_conformance_selfhost`
+actually uses. ⭐ **And it discharged a harness risk nobody had named: `ggdef gen` on the hand-written candidate
+is BYTE-IDENTICAL, so the prescribed `expect:` block is already the gen fixed point** — which `gen_idempotent.rs`
+requires and whose doc forbids hand-editing.
+
+⭐ **DECIDED — the spectest REPLACES the top-level fixture.** The fork had **different constant obligations**:
+replace ⇒ five bumps and **zero parity inflow**; keep both ⇒ a top-level fixture entering the parity corpus, a
+**hand-run** self-host MATCH (⚠ **the non-MATCH ceiling NO-OPS IN DEBUG**), and a **seventh** ratchet.
+**The spectest is four-lane BY CONSTRUCTION — precisely what going top-level was for.**
+
+⛔ **THERE IS A SIXTH CONSTANT, AND ITS CORRECT ACTION IS *NO CHANGE* — WHICH IS EXACTLY WHY IT MUST BE NAMED.**
+`GGDEF_SKIP_CEILING` is **shrink-only — the second direction the MATCH floor structurally cannot see.** The new
+seed MATCHes, so the floor rises and the ceiling is untouched. ⚠ **Had the seed landed OUT-OF-SUBSET it would
+have become a SKIP, the floor would NOT have risen, the ceiling would have gone RED — and the executor's
+obvious move is the one that file's own comment calls "the drift it exists to stop."**
+⛔ **And it lives in a DIFFERENT CARGO TARGET: `--test spec_conformance` never reaches it. `cargo test -p ggdef`
+added to the gate list.**
+
+⛔⛔ **AND THE CHECKLIST BUILT TO STOP DROPPED PRESCRIPTIONS DROPPED ITS OWN HEADLINE — TWICE.** D24 was missing
+**four rows and one undecided fork**, including **no row at all for the spectest + five bumps**, the single most
+consequential deliverable in the addendum that created it. ⇒ **D24 is now 19 rows, row 8 is resolved, and the
+executor is told: *if something in an addendum has no row, that is a defect in the CHECKLIST, not an optional
+item.***
 
 ### ⛔⛔ D0 AND D1 ARE **ONE OWNERSHIP INVARIANT** — MERGED. NEITHER IS SHIPPABLE ALONE.
 
