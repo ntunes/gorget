@@ -47,6 +47,23 @@ claims folded into this handover long ago. **Everything else stayed.**
 `CARGO_TARGET_DIR` for a lint; deleting it forces a full rebuild on every `cargo test --test lints`),
 `execE_01db12fc`, and `rev2_a2e446ab`. **None of them is prunable until its track integrates.**
 
+### ⚠⚠ MA-5 RE-MEASURED FOR THE THREE PENDING INTEGRATIONS — **MY EARLIER PREDICTION NAMED THE WRONG FILE**
+
+I predicted the collision would be the **four leak counters**. Measured across all three pending branches:
+`git diff --name-only 1d91951dc..<branch> | grep -E 'LEAK_ALLOWLIST|figures.db|lints.rs'` →
+⭐ **NEITHER J NOR L TOUCHES `LEAK_ALLOWLIST.txt` OR `figures.db`.** Only **E** moved the four pins, and **E is
+already integrated** ⇒ **the shared-counter hazard I flagged is DISCHARGED, not pending.**
+⛔⛔ **THE REAL COLLISION IS `tests/lints.rs`, AND IT IS A CERTAINTY: J AND L BOTH EDIT IT AT THE SAME LINE**
+(`git diff -U0 … -- tests/lints.rs | grep -oE '^@@ -[0-9]+'` → **the same hunk start for both**). Both append a
+new lint at the file's end.
+⇒ ⛔ **RESOLUTION IS PRESCRIBED IN ADVANCE, BECAUSE THE MECHANICAL ONE ALREADY BROKE THE BUILD THIS ROUND:**
+when C2 × F1r collided, a *"keep both sides"* merge **spliced one function into the middle of another**. The
+fix that worked was to **diff each branch against ITS OWN BASE, confirm each is a PURE APPEND, and rebuild as
+base + append + append** — never to resolve the conflict hunk in place.
+⊕ **AND THE LINT COUNT MUST BE RE-MEASURED, NOT PREDICTED**: it has moved 237 → 238 → 239 across this round's
+integrations, and two more lints are inbound. **Read it off `cargo test --test lints`, do not arithmetic it.**
+⊕ **A2 touches none of the three files** — it is the clean one to integrate first if ordering matters.
+
 ### ✅✅ E INTEGRATED (7th) · J's RED RESOLVED · L REFUSED A BRIEFED SHAPE AND WAS RIGHT
 
 - ⭐ **THREE SEPARATE EXECUTORS INDEPENDENTLY FOUND THE CENSUS RED — E, J AND L — AND ALL THREE FROZE BEFORE THE
