@@ -277,6 +277,45 @@ arms:
 - **`CallExtern`** delegates to `emit_call_extern` (`mod.rs:2585`, body in
   `emit_call_extern.rs`).
 
+- **Arithmetic that carries an overflow mode** — `Add`, `Sub` and `Mul` — all
+  delegate to a single `emit_arith`, selected by an `ArithOp` discriminant.
+  Trapping signed arithmetic becomes `__builtin_<op>_overflow` guarding a
+  `gorget_trap_at`; everything else is *computed in a wider unsigned type and
+  converted back*. That second cell is where the wrapping operators `+% -% *%`
+  live, and the round trip is a correctness requirement rather than a
+  stylistic one: a plain signed C `+`/`-`/`*` is undefined on overflow, which
+  is precisely the input those operators exist to handle, so emitting one hands
+  the optimizer a licence on the operator's own domain. The LLVM lane emits
+  flagless integer ops, which LLVM defines as wrapping, so leaving the C lane
+  signed would put the two backends at different levels of *defined-ness* for
+  the same program.
+
+  The computing type comes from one accessor, `LirType::wrapping_compute_c`,
+  and it is `uint64_t` at every declared width. The width choice is the
+  interesting part. The intuitive answer — the unsigned companion of the *same*
+  width — does not work below `int` width, because C's integer promotions
+  convert that companion straight back to signed `int` before the operation
+  runs; the arithmetic is then not performed in an unsigned type at all, and a
+  16-bit multiply of unsigned operands overflows `int`. Worse, a same-width cast
+  *widens the operand range* of a signed narrow type, so it can make a cell that
+  was well defined newly undefined. Requiring rank ≥ `int` removes the
+  per-width argument entirely: nothing promotes, and the low bits of `+`, `-`
+  and `*` depend only on the low bits of the operands, so the convert-back is
+  exact at every width.
+
+  `Shl` computes in the same type, for the neighbouring reason — shifting into
+  the sign bit of a signed integer is undefined — while its count guard stays on
+  the *declared* type, so the trap boundary does not move. **`Shr` deliberately
+  does not**: a right shift widened to an unsigned type is a *logical* shift, so
+  unifying it would change answers rather than merely define them. That
+  asymmetry is the layering rule in miniature — one source of truth per axis,
+  and the axis here is "the type an operation is defined in", not "the unsigned
+  spelling of a type".
+
+  Unary negation is not part of this set. `Inst::Neg` carries no overflow mode,
+  so it has no trap-versus-wrap policy to route, and giving its emission one
+  would decide a semantic question the language has not yet answered.
+
 - **Canonical ops** (`SizeOf`, `EnumInit`, `EnumCheck`, `EnumExtract`,
   `StructInit`, `CowClone`, `TraitCall`, `HofExpand`, `AddressOf`, `BoxAlloc`)
   are `unreachable!` (`mod.rs:2044-2055`) — they were expanded by the BIR pass

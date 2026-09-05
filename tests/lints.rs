@@ -31691,3 +31691,189 @@ fn runtime_duplicating_stores_are_declared() {
         String::from_utf8_lossy(&out.stderr),
     );
 }
+
+/// todo/t1410 class-retirement guard: every `Overflow`-carrying arithmetic
+/// `Inst` emits through `emit_arith`, the single place that knows
+/// `Overflow::Wrap` must not be a plain signed C operator — and that emitter
+/// computes in the type `LirType::wrapping_compute_c` names.
+///
+/// THE CLASS THIS RETIRES. Before the fix, `Inst::Add` / `Sub` / `Mul` each
+/// carried their own copy of
+///
+///     if *overflow == Overflow::Trap && matches!(ty, I64|I32|I16|I8) {
+///         __builtin_<op>_overflow(...)
+///     } else {
+///         {d} = ({ct}){l} <op> ({ct}){r};       // <-- plain SIGNED C
+///     }
+///
+/// and that `else` is exactly the `Overflow::Wrap` case — undefined in C on
+/// overflow, i.e. on the only input the wrapping operators `+% -% *%` exist
+/// for. Three identical copies is what let one shape be wrong three times.
+///
+/// BOTH DIRECTIONS, which is what makes it a ratchet and not a tolerance band:
+///   * a FOURTH `Overflow` carrier (D28 ratified wrapping `**%`, deferred)
+///     trips the carrier count and must be routed through `emit_arith`;
+///   * an existing arm that stops delegating trips the per-arm check;
+///   * the computing type narrowing trips part (3).
+///
+/// ⚠ WHAT THIS LINT CANNOT SEE, so it is not read as total. Its witness is the
+/// `overflow: Overflow` FIELD, so `Inst::Neg` — which carries no such field
+/// and is therefore not a member of the class at all — is invisible to it by
+/// construction. That is not a hole in this guard: unary negation's overflow
+/// behaviour is an OPEN SEMANTICS QUESTION owned by todo/t1443, on both the
+/// Rust and self-host lanes. Post-split the witness matches the shipping scope
+/// cell-for-cell.
+///
+/// ⚠ AND WHAT IT DOES NOT COVER AT ALL: the emitted C. Part (3) pins what the
+/// accessor RETURNS; only `wrapping_arith_computes_in_uint64` in
+/// `tests/c_runtime.rs` pins that the emitted arithmetic actually USES it —
+/// the composition of accessor value x delegation x new arm.
+///
+/// Precedent: `container_literal_arms_count`. Core #6 + Core #4.
+#[test]
+fn c_lir_overflow_arith_arms_go_through_emit_arith() {
+    // (1) THE INDEPENDENT WITNESS for the set is the LIR type definition, not
+    // a grep of the backend: an `Inst` is in this class iff it carries an
+    // `overflow: Overflow` field.
+    let lir = fs::read_to_string("src/lir/mod.rs").expect("read src/lir/mod.rs");
+    let carriers: Vec<&str> = lir
+        .lines()
+        .filter(|l| l.contains("overflow: Overflow }"))
+        .filter_map(|l| l.trim().split_whitespace().next())
+        .collect();
+    // Baseline 2026-09-05: Add, Sub, Mul.
+    const EXPECTED_CARRIERS: &[&str] = &["Add", "Sub", "Mul"];
+    assert_eq!(
+        carriers, EXPECTED_CARRIERS,
+        "The set of `Overflow`-carrying LIR arithmetic ops changed: {carriers:?}.\n\n\
+         A NEW carrier (D28's wrapping `**%` is the expected next one) MUST emit \
+         through `emit_arith` in src/backend/c_lir/mod.rs — that is the only site \
+         that performs the `Overflow::Wrap` operation in the type \
+         `LirType::wrapping_compute_c` names, where C defines wraparound at every \
+         width. Emitting a plain signed C operator for the wrap case is UNDEFINED \
+         BEHAVIOUR on the operator's own input (todo/t1410). Add the op here and \
+         to `enum ArithOp`.",
+    );
+
+    // (2) Each carrier's C-emit arm delegates rather than re-inlining the
+    // trap/else shape.
+    //
+    // ⚠ This matches the arm header by EXACT SOURCE TEXT, so reordering the
+    // fields of `Inst::Add`/`Sub`/`Mul` makes `.find()` return `None` and this
+    // panics with "no C-emit arm found". That failure is LOUD and names the
+    // arm, so it is acceptable — but it is a maintenance cost, not a defect
+    // being reported.
+    let c_lir = fs::read_to_string("src/backend/c_lir/mod.rs")
+        .expect("read src/backend/c_lir/mod.rs");
+    for op in EXPECTED_CARRIERS {
+        let arm = format!("Inst::{op} {{ dst, ty, lhs, rhs, overflow }} => {{");
+        let at = c_lir
+            .find(&arm)
+            .unwrap_or_else(|| panic!("no C-emit arm found for Inst::{op} (looked for `{arm}`)"));
+        // The delegating arm is a single call; 200 bytes is generous for it and
+        // far too small to hold a re-inlined trap/else block.
+        let body = &c_lir[at..(at + 200).min(c_lir.len())];
+        assert!(
+            body.contains("emit_arith("),
+            "Inst::{op}'s C-emit arm no longer delegates to `emit_arith`.\n\n\
+             Re-inlining `if Overflow::Trap {{ .. }} else {{ .. }}` here is how \
+             todo/t1410 happened: the `else` branch IS the `Overflow::Wrap` case, \
+             and a plain signed C `+`/`-`/`*` is undefined on overflow. Keep the \
+             round-trip in one place.",
+        );
+    }
+
+    // (3) WHAT `emit_arith` COMPUTES IN — a real API call over the TOTAL
+    // integer axis, rustc-checked and refactor-safe, rather than a source-text
+    // grep. Part (2) pins WHO delegates; this pins what they delegate TO.
+    //
+    // `uint64_t` at EVERY width is the point, not an accident of the 64-bit
+    // cells: a SAME-WIDTH unsigned companion promotes back to signed `int`
+    // below `int` width, which leaves `u16 *%` undefined (as it is at HEAD)
+    // and makes `i16 *%` — DEFINED at HEAD — newly undefined. See the
+    // accessor's own doc comment.
+    use gorget::lir::LirType;
+    for ty in [
+        LirType::I8,
+        LirType::I16,
+        LirType::I32,
+        LirType::I64,
+        LirType::U8,
+        LirType::U16,
+        LirType::U32,
+        LirType::U64,
+    ] {
+        assert_eq!(
+            ty.wrapping_compute_c(),
+            Some("uint64_t"),
+            "`{ty:?}.wrapping_compute_c()` must be `uint64_t`: the contract is a \
+             C type in which the operation is DEFINED FOR EVERY INPUT, which \
+             requires rank >= `int` so C's integer promotions cannot convert it \
+             back to signed `int` before the arithmetic runs. Narrowing it is \
+             invisible to both stdout and UBSan (todo/t1410).",
+        );
+    }
+    // And the domain is exactly the integers — no float or pointer type may
+    // acquire a computing type by accident.
+    for ty in [LirType::F32, LirType::F64, LirType::Ptr, LirType::Void] {
+        assert_eq!(
+            ty.wrapping_compute_c(),
+            None,
+            "`{ty:?}` is not an integer; `wrapping_compute_c` must return None \
+             so `emit_arith` falls through to the plain-infix float arm.",
+        );
+    }
+}
+
+/// todo/t1410, self-host half: the self-host's own C emitter performs
+/// `Overflow::Wrap` arithmetic in `wrapping_compute_c(ty)`, not in a plain
+/// signed C operator.
+///
+/// ⚠⚠ THIS LINT EXISTS BECAUSE NOTHING ELSE CAN SEE THAT HALF REVERT. The
+/// self-host lane's emitter is an ordinary `.gg` fixture, `self_host_lowerer`
+/// is an `OUT` row in `tests/sanitize/CORPUS_MANIFEST.txt` (so no UBSan gate
+/// walks it), and the parity corpus pins VALUES — which a defined-ness fix
+/// leaves byte-identical by construction. Reverting the port would therefore
+/// turn no other row red anywhere in the battery. A source-text ratchet is a
+/// weak instrument, but it is the only one this lane currently has, and Core
+/// #6 prefers a weak executable guard to a strong comment.
+///
+/// SCOPE: `IAdd` / `ISub` / `IMul` only. `INeg` is an unratified semantics
+/// question (todo/t1443, both lanes) and the SHIFT FAMILY — `IShl` and `IShr`,
+/// which discard `ty` and emit a bare shift with no count trap — is
+/// todo/t1442, because making a shift defined requires ADDING the trap, an
+/// observable behaviour change. Neither is a hole in this guard; both belong
+/// to a filed item.
+#[test]
+fn self_host_wrap_arith_uses_wrapping_compute_c() {
+    // lir_codegen.gg lives ONLY in self_host_lowerer — a real file, not a
+    // symlink, with no driver mirror. There is nothing else to keep in sync.
+    let codegen = "tests/fixtures/self_host_lowerer/lir_codegen.gg";
+    let src = fs::read_to_string(codegen)
+        .unwrap_or_else(|e| panic!("read {codegen}: {e}"));
+
+    assert!(
+        src.contains("String wrapping_compute_c(int ty):"),
+        "{codegen} lost its `wrapping_compute_c` helper. The self-host's C \
+         emitter must mirror `LirType::wrapping_compute_c` (src/lir/mod.rs): \
+         `Overflow::Wrap` arithmetic computed as a plain signed C `+`/`-`/`*` \
+         is UNDEFINED on overflow, on the exact input `+% -% *%` exist for \
+         (todo/t1410).",
+    );
+
+    for (case, op) in [("IAdd", '+'), ("ISub", '-'), ("IMul", '*')] {
+        // Anchored from `uct` inward, so the OUTER convert-back cast can be
+        // respelled without silently disarming the guard.
+        let good = format!("uct + \")\" + v(lhs) + \" {op} (\" + uct + \")\" + v(rhs)");
+        assert!(
+            src.contains(&good),
+            "{codegen}'s `{case}` arm no longer emits the wrapping case through \
+             `wrapping_compute_c` (looked for the `uct` operand casts).\n\n\
+             The non-OVF_TRAP fall-through IS the `Overflow::Wrap` case. \
+             Emitting `({{ct}})lhs {op} ({{ct}})rhs` there is signed-overflow UB \
+             (todo/t1410) — and the self-host is the lane the succession plan \
+             makes the PRIMARY reference, so it must not emit UB the current \
+             reference does not.",
+        );
+    }
+}

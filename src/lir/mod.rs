@@ -225,6 +225,46 @@ impl LirType {
         matches!(self, LirType::F32 | LirType::F64)
     }
 
+    /// The C type an integer operation on `self` is COMPUTED IN so that it is
+    /// defined for every input; `None` for every non-integer type.
+    ///
+    /// THE CONTRACT: a C type in which the operation is defined for every
+    /// input, and whose low-N bits agree with the declared type — so the
+    /// convert-back to the declared type is exact. The C backend needs it
+    /// wherever an operation is DEFINED to wrap but C leaves the signed form
+    /// undefined on overflow (`Overflow::Wrap`, i.e. `+% -% *%`).
+    ///
+    /// ⚠ THE ANSWER IS `uint64_t` AT EVERY WIDTH, AND THE WIDENING IS THE
+    /// POINT — a SAME-WIDTH unsigned companion does NOT satisfy the contract.
+    /// At 8 and 16 bits C's integer promotions convert the companion straight
+    /// back to signed `int` before the arithmetic runs, so the operation is
+    /// not performed in an unsigned type at all: `(uint16_t)65535 *
+    /// (uint16_t)65535` promotes to `int` and overflows it. A same-width
+    /// companion would therefore leave `u16 *%` undefined (as it already is at
+    /// HEAD) AND make `i16 *%` — which is DEFINED at HEAD, because signed
+    /// 16-bit operands cap the product at 2^30 — newly undefined. `uint64_t`
+    /// has rank ≥ `int` on any conforming target, so no promotion happens at
+    /// any width and no per-width promotion argument is needed. (`uint32_t` is
+    /// NOT portably rank ≥ `int`; `unsigned int` can be narrower than the
+    /// declared type and would change values.) The residual assumption is a
+    /// target whose `int` is wider than 64 bits; none exists, and `Inst::Shl`'s
+    /// count guard already hard-codes `uint64_t`, so this adds no new one.
+    ///
+    /// ⛔ `Inst::Shr` MUST NOT READ THIS. Widening a right shift changes the
+    /// ANSWER: `(int64_t)((uint64_t)l >> r)` is a LOGICAL shift, so for
+    /// `l = -8, r = 1` it yields `9223372036854775804` where the arithmetic
+    /// shift yields `-4`. Narrow widths happen to agree only because the
+    /// convert-back truncates; `I64` is a silent-wrong-output miscompile.
+    /// Right shift is impl-defined, not undefined, and needs no widening.
+    ///
+    /// Consumers: `emit_arith`'s `Overflow::Wrap` path and `Inst::Shl`.
+    pub fn wrapping_compute_c(&self) -> Option<&'static str> {
+        // Domain-preserving by construction: `is_integer()` is exactly the
+        // eight integer arms, so this cannot silently drop a width the way an
+        // open-coded `match` with a `_ =>` fall-through can.
+        if self.is_integer() { Some("uint64_t") } else { None }
+    }
+
     /// True if this is any pointer-shaped type (`Ptr`, `PtrTo`, `FuncRef`, or
     /// pointer-shaped `Resource`). All lower to a single 8-byte register-sized
     /// pointer at the C/LLVM ABI.

@@ -546,3 +546,105 @@ fn assert_no_implicit_decls(fixture: &str) {
 fn runtime_has_no_implicit_function_declarations() {
     assert_no_implicit_decls("time_format.gg");
 }
+
+/// todo/t1410 — every `Overflow`-carrying arithmetic op is COMPUTED IN
+/// `uint64_t` in the emitted C, at every declared width.
+///
+/// ⚠⚠ THIS GUARD EXISTS BECAUSE NO RUNTIME INSTRUMENT CAN SEE THE CELL IT
+/// COVERS, AND THAT IS NOT A FIGURE OF SPEECH. Seven of the axis fixture's 24
+/// cells are undefined at HEAD; six of them fire a UBSan `runtime error:` and
+/// are pinned by `wrapping_ops_axis_defined` in `tests/integration.rs`. The
+/// seventh — `u16_mul` — fires NOTHING, because GCC's `shorten_binary_op`
+/// narrows the truncated multiply and the diagnostic never appears in the
+/// shape the backend emits. Stdout is blind too: every value on the axis was
+/// byte-identical before and after the fix, at `-O0` and `-O2`. So a
+/// same-width unsigned companion — which would leave `u16_mul` undefined AND
+/// make `i16_mul`, DEFINED at HEAD, newly undefined — would pass the entire
+/// runtime battery. The emitted shape is the only place that failure mode is
+/// visible (Core #13: pick an instrument that can SEE the failure class).
+///
+/// WHAT IT ASSERTS, and why the predicate is shaped this way:
+///   * the `__v<n>` anchor is what makes false positives structurally
+///     impossible — LIR value names appear only in emitted user code, never in
+///     the hand-written runtime, which shares this compilation unit;
+///   * `Div` / `Rem` are outside the operator class (`[-+*]`) and `Mod`'s
+///     addition carries no cast, so neither is matched;
+///   * the count self-check is the precedent's step 2
+///     (`assert_no_implicit_decls`): a guard whose fixture stopped emitting
+///     the construct under guard would silently pass on nothing.
+///
+/// MEASURED: against the same-width-companion prototype the same unit has 24
+/// sites and 18 violations ⇒ RED. Reverting `wrapping_compute_c`'s body to a
+/// same-width `match` reproduces that.
+#[test]
+fn wrapping_arith_computes_in_uint64() {
+    // 8 integer widths x 3 `Overflow`-carrying ops. If a new carrier lands
+    // (D28's wrapping `**%` is the expected next one) this rises by 8 and the
+    // self-check below is the thing that says so.
+    const EXPECTED_SITES: usize = 24;
+    const FIXTURE: &str = "known_gaps/t1410_wrapping_ops_axis.gg";
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(FIXTURE);
+    assert!(
+        fixture_path.exists(),
+        "guard fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let mut emit_cmd = Command::new(gg_binary());
+    emit_cmd.arg("build").arg(&fixture_path).arg("--emit-c-lir");
+    let emit = run_or_panic(&mut emit_cmd, "gg build --emit-c-lir", Duration::from_secs(300));
+    assert!(
+        emit.status.success(),
+        "`gg build {FIXTURE} --emit-c-lir` failed:\n{}",
+        String::from_utf8_lossy(&emit.stderr)
+    );
+    let emitted = String::from_utf8_lossy(&emit.stdout);
+
+    // A cast to ANY integer width immediately left of an infix `+`/`-`/`*`
+    // whose right operand is also parenthesised — i.e. the computing type of
+    // an emitted arithmetic op.
+    let re = regex::Regex::new(r"\((u?int(?:8|16|32|64)_t)\)__v[0-9]+ [-+*] \(")
+        .expect("guard regex");
+
+    let mut sites = 0usize;
+    let mut violations: Vec<String> = Vec::new();
+    for caps in re.captures_iter(&emitted) {
+        sites += 1;
+        let computing_ty = caps.get(1).unwrap().as_str();
+        if computing_ty != "uint64_t" {
+            violations.push(caps.get(0).unwrap().as_str().to_string());
+        }
+    }
+
+    // Step 1: the class is clean.
+    assert!(
+        violations.is_empty(),
+        "{} emitted arithmetic site(s) compute in a type NARROWER than \
+         `uint64_t`: {:?}\n\n\
+         Below `int` width C's integer promotions convert a narrow unsigned \
+         companion straight back to signed `int` before the operation runs, so \
+         the arithmetic is NOT performed in an unsigned type and is \
+         signed-overflow UB whenever the `int`-width result exceeds INT_MAX \
+         (`(uint16_t)65535 * (uint16_t)65535`). Compute in the type \
+         `LirType::wrapping_compute_c` names — it has rank >= `int` at every \
+         width — and convert back. UBSan CANNOT see this: GCC narrows the \
+         truncated multiply, and every value is unchanged either way \
+         (todo/t1410).",
+        violations.len(),
+        violations,
+    );
+
+    // Step 2: the fixture must still exercise the class, or step 1 passed on
+    // nothing. If this trips because the axis fixture changed shape, fix the
+    // count with a regenerated number — never by loosening the assertion.
+    assert_eq!(
+        sites, EXPECTED_SITES,
+        "guard fixture {FIXTURE} emitted {sites} arithmetic sites, expected \
+         {EXPECTED_SITES} (8 integer widths x 3 `Overflow`-carrying ops). \
+         Regenerate with:\n  \
+         gg build tests/fixtures/{FIXTURE} --emit-c-lir | \\\n    \
+         grep -coE '\\((u?int(8|16|32|64)_t)\\)__v[0-9]+ [-+*] \\('",
+    );
+}

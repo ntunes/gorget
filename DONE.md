@@ -1,3 +1,80 @@
+- [2026-09-05] ⚠ **NAMED OMISSIONS FROM `t1410`'s CLOSURE (R50 Track L).** Written here because a brief dies
+  at round close and *"nothing recorded what was never run"* is how a family gets declared closed.
+  **(1) THE SELF-HOST PORT'S ONLY INSTRUMENT IS A SOURCE-TEXT RATCHET.** `self_host_lowerer` is an `OUT` row
+  in `tests/sanitize/CORPUS_MANIFEST.txt`, so no UBSan gate walks it, and the parity corpus pins VALUES —
+  which a defined-ness fix leaves byte-identical by construction. **Reverting the port turns no behavioural
+  row red anywhere in the battery.** `self_host_wrap_arith_uses_wrapping_compute_c` (`tests/lints.rs`) was
+  landed rather than recording a bare omission, and it IS RED-verified — but it reads source text, so it
+  cannot see a semantic regression, only a textual one. Carried into `todo/t1442`.
+  **(2) THE PERF IDENTITY DOES NOT COVER `-O3`.** At `-O2` — the only level `gg` emits (`grep -n '"-O2"\|"-O3"\|user_opt' src/main.rs`)
+  — the widened form is instruction-identical to the same-width one except that `Shl` widens to 64-bit
+  register ops at equal instruction count (10 v 10), values unaffected. **At `-O3` the 8-bit dependent chain
+  loses a 16-lane SIMD unroll (114 → 11 insns).** That is a real divergence, recorded so it resurfaces if
+  anyone raises the optimization level. It is a perf question, not a correctness one.
+  **(3) WHAT THE FIRE COUNTS DO NOT COVER.** `2` sites in the probe and `8` in a hashing binary (regenerate:
+  `diff /tmp/scoutL_*/chain_pre.c .../chain_post.c | grep -c '^>'`, same on `bench_*.c`) are **both 64-bit**,
+  where the shipped `uint64_t` and a same-width companion COINCIDE. **The narrow-width emitted shape had
+  never been produced by the compiler before this round**; its fire count is the `== 24` self-check inside
+  `wrapping_arith_computes_in_uint64`, which is regenerated per run, not inherited.
+  **(4) NOT MEASURED AT ALL:** x86_64 codegen identity (no cross-compiler on this box; dev is aarch64), and
+  `**%`, which D28 deferred and which does not exist.
+  **(5) THREE REVERTS CORRECTLY PIN NOTHING, which is different from being uncovered.** Collapsing the
+  computing type *upward* is inert (the low N bits of ±/× depend only on the low N bits of the operands);
+  `Inst::Shl` reading the accessor is value-inert for the same reason; and the `Neg`-only revert is **OUT OF
+  SCOPE**, not inert — post-split nothing was checked there because nothing changed.
+  **(6) ⚠ ONE HANDED-DOWN FIGURE DID NOT REGENERATE, AND IT WAS ABOUT TO LAND AS DURABLE FIXTURE TEXT.** The
+  review record's *"set the accessor to `uint8_t` and `i16_add` goes **-511**"* — the evidence that the value
+  rows pin the computing width DOWNWARD — measures **256** (and `i64_add` 256 too). The CLAIM survives, the
+  NUMBER did not; the fixture now carries the measured value plus the one-line change that regenerates it.
+  Two other load-bearing figures were re-measured rather than inherited and DID hold: the sweep pin
+  (`ubsan: 0` → `ubsan: 1 … wrapping_ops_defined`, re-run on the 3-cell post-split fixture through
+  `FIXLIST=… scripts/sanitize_sweep.sh`, because the original was taken with `neg64` still in the file), and
+  the 16-bit promotion (`(uint16_t)65535 * (uint16_t)65535` fires `signed integer overflow … type 'int'` at
+  `-O0` AND `-O2` when observed at `int` width, and fires NOTHING in the truncated shape the backend emits —
+  which is exactly why the emitted-shape guard exists).
+
+- [2026-09-05] **`t1410` CLOSED — THE WRAPPING OPERATORS EMITTED UNDEFINED C ON THE INPUT THEY EXIST FOR, AND
+  ONE OF THE 24 CELLS NO INSTRUMENT IN THE TREE COULD SEE (R50 Track L).** `+% -% *%` carry `Overflow::Wrap`
+  intact through GIR and LIR and then lowered to a plain SIGNED C `+`/`-`/`*` — undefined on overflow, i.e.
+  on the only input the operator exists to handle — while the LLVM lane emits flagless ops (`grep -c nsw
+  src/backend/llvm/mod.rs` → 0) and is correct, so the two lanes differed in DEFINED-NESS (Core #8). The three
+  `Inst` arms each carried their own copy of the same `if Trap { .. } else { .. }` shape, and that `else` WAS
+  the wrap case; they now share one `emit_arith` + `enum ArithOp`, and the width pairing lives in one accessor,
+  `LirType::wrapping_compute_c` (layering rule 3). Ported to the self-host's own C emitter the same round
+  (`lir_codegen.gg`, `IAdd`/`ISub`/`IMul`).
+  ⭐ **THE ACCESSOR COMPUTES IN `uint64_t` AT EVERY WIDTH, AND THAT IS THE WHOLE FIX, NOT A HARDENING.** The
+  obvious same-width unsigned companion is **wrong in both directions below `int` width**, because C's integer
+  promotions convert it straight back to signed `int` before the arithmetic runs: it leaves `u16 *%` undefined
+  — **which HEAD already was, so the "exactly 6 UB cells" in the original filing was wrong about HEAD, not just
+  about the fix; the true count is 7 of 24** — and it makes `i16 *%`, **DEFINED at HEAD** because signed 16-bit
+  operands cap the product at 2^30, **newly undefined**. A same-width fix would have been a NET REGRESSION on
+  one cell, of the very class the track existed to close.
+  ⭐⭐ **AND SIX OF THOSE SEVEN CELLS ARE ALL THAT UBSan CAN SEE.** GCC narrows the truncated multiply, so
+  `u16_mul` fires nothing in the shape the backend emits; stdout is blind too — **all 24 values were
+  byte-identical before and after, measured in both directions**. So the same-width prototype would have
+  passed the entire runtime battery. The instrument that sees it is an emitted-shape guard,
+  `wrapping_arith_computes_in_uint64` (`tests/c_runtime.rs`, on the `assert_no_implicit_decls` harness and
+  copying its step-2 self-check): every `(uint*_t)__v<n> [-+*] (` match in the `--emit-c-lir` unit must be
+  `(uint64_t)`, and there must be exactly 24 of them. **RED-verified by reverting the accessor BY LINE — 24
+  sites, 18 violations.**
+  ⚖ **`Inst::Neg` WAS SPLIT OUT RATHER THAN FIXED.** It carries no `Overflow` field, so it has no policy at
+  all: `0 - INT64_MIN` traps `T_Overflow` while `-INT64_MIN` silently wraps. D30 lists defined-wrap among its
+  REJECTED alternatives and unary negation appears nowhere in the ledger, so merely making it DEFINED would
+  have picked the wrapping answer by implementation — and pinning it in a top-level fixture would have ratified
+  it by entering the parity corpus and the sanitize sweep. **`todo/t1443` owns it on both lanes** (Core #9),
+  with a durable repro that is RED at HEAD and green under EITHER ruling. The shift family on the self-host
+  (`IShl`/`IShr`, no count trap, `ty` discarded) stays `todo/t1442`; ggdef has no wrapping variants at all and
+  so renders no verdict here, `todo/t1440`. **The class is TOTAL but it does NOT close with this track — it
+  closes across three items.**
+  Guards: `c_lir_overflow_arith_arms_go_through_emit_arith` (carrier count from `src/lir/mod.rs` as the
+  independent witness, per-arm delegation, and the accessor's value over the whole 8-width axis as a real API
+  call) · `self_host_wrap_arith_uses_wrapping_compute_c` · `wrapping_arith_computes_in_uint64`. Fixtures:
+  `wrapping_ops_defined.gg` (top-level, 3 cells measured MATCHING on self-host, so the sweep pins defined-ness
+  without booking own inflow into `RUNTIME_DIFF_NONMATCH_CEILING`) + `known_gaps/t1410_wrapping_ops_axis.gg`
+  (all 24 cells, in `known_gaps/` for PLACEMENT only with a LIVE test, because the self-host still treats every
+  narrow integer as int64 — `todo/t0655`). The superseded `t1410_wrapping_mul_signed_overflow_ub` fixture and
+  its `#[ignore]`d test graduated out; the axis fixture strictly supersedes them.
+
 - [2026-09-05] **`t1407` CLOSED — `fill` DUPLICATED ONE HEAP PAYLOAD INTO N SLOTS AND HANDED THE RUNTIME A
   POINTER INTO THE BUFFER IT WAS ABOUT TO REALLOC; BOTH DEFECTS CLOSE AT THE WRITE SITE (R50 Track J).**
   `Vector[String].fill(3, mk(…))` double-freed on both backends with `gg check` clean, and

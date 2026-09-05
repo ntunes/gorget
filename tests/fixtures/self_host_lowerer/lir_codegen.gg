@@ -116,6 +116,25 @@ String c_type_name(int ty, Vector[String] sn):
         return "void*"
     return "void*"
 
+# The C type an integer operation on `ty` is COMPUTED IN so that it is defined
+# for every input; "" for every non-integer type. Mirrors
+# `LirType::wrapping_compute_c` in src/lir/mod.rs (todo/t1410).
+#
+# THE CONTRACT: a C type in which the operation is defined for every input, and
+# whose low-N bits agree with the declared type, so the convert-back is exact.
+# Needed wherever an operation is DEFINED to wrap but C leaves the signed form
+# undefined on overflow -- the wrapping operators `+% -% *%`.
+#
+# The answer is `uint64_t` at EVERY width, and the widening is the point: a
+# same-width unsigned companion is converted straight back to signed `int` by
+# C's integer promotions below `int` width, so the operation is not performed
+# in an unsigned type at all. `uint64_t` has rank >= `int` on any conforming
+# target, so nothing promotes and no per-width argument is needed.
+String wrapping_compute_c(int ty):
+    if lir_is_integer(ty):
+        return "uint64_t"
+    return ""
+
 # ── Name helpers ───────────────────────────────────────────
 
 # Runtime struct names that should NOT be re-defined by codegen.
@@ -4570,11 +4589,22 @@ String emit_inst(LirInst inst, LirModule m, LirFunction func, Vector[String] sn,
             return v(dst) + " = __p" + int_to_str(index) + ";"
 
         # ── Arithmetic ──
+        #
+        # The non-OVF_TRAP fall-through of each arm below IS the wrapping case
+        # (`+% -% *%`), and it used to emit a plain signed C operator, which C
+        # leaves UNDEFINED on overflow -- on precisely the input those
+        # operators exist for. Each now computes in `wrapping_compute_c(ty)`
+        # and converts back, mirroring `emit_arith` in
+        # src/backend/c_lir/mod.rs (todo/t1410). VALUES ARE UNCHANGED: the low
+        # N bits of +, - and * depend only on the low N bits of the operands.
         case IAdd(dst, ty, lhs, rhs, overflow):
             if overflow == OVF_TRAP and lir_is_integer(ty):
                 String ct = c_type_name(ty, sn)
                 return "if (__builtin_add_overflow((" + ct + ")" + v(lhs) + ", (" + ct + ")" + v(rhs) + ", &" + v(dst) + ")) { gorget_trap(\"T_Overflow\", \"integer overflow\"); }"
             String ct = c_type_name(ty, sn)
+            String uct = wrapping_compute_c(ty)
+            if uct != "":
+                return v(dst) + " = (" + ct + ")((" + uct + ")" + v(lhs) + " + (" + uct + ")" + v(rhs) + ");"
             return v(dst) + " = (" + ct + ")" + v(lhs) + " + (" + ct + ")" + v(rhs) + ";"
 
         case ISub(dst, ty, lhs, rhs, overflow):
@@ -4582,6 +4612,9 @@ String emit_inst(LirInst inst, LirModule m, LirFunction func, Vector[String] sn,
                 String ct = c_type_name(ty, sn)
                 return "if (__builtin_sub_overflow((" + ct + ")" + v(lhs) + ", (" + ct + ")" + v(rhs) + ", &" + v(dst) + ")) { gorget_trap(\"T_Overflow\", \"integer overflow\"); }"
             String ct = c_type_name(ty, sn)
+            String uct = wrapping_compute_c(ty)
+            if uct != "":
+                return v(dst) + " = (" + ct + ")((" + uct + ")" + v(lhs) + " - (" + uct + ")" + v(rhs) + ");"
             return v(dst) + " = (" + ct + ")" + v(lhs) + " - (" + ct + ")" + v(rhs) + ";"
 
         case IMul(dst, ty, lhs, rhs, overflow):
@@ -4589,6 +4622,9 @@ String emit_inst(LirInst inst, LirModule m, LirFunction func, Vector[String] sn,
                 String ct = c_type_name(ty, sn)
                 return "if (__builtin_mul_overflow((" + ct + ")" + v(lhs) + ", (" + ct + ")" + v(rhs) + ", &" + v(dst) + ")) { gorget_trap(\"T_Overflow\", \"integer overflow\"); }"
             String ct = c_type_name(ty, sn)
+            String uct = wrapping_compute_c(ty)
+            if uct != "":
+                return v(dst) + " = (" + ct + ")((" + uct + ")" + v(lhs) + " * (" + uct + ")" + v(rhs) + ");"
             return v(dst) + " = (" + ct + ")" + v(lhs) + " * (" + ct + ")" + v(rhs) + ";"
 
         case IDiv(dst, ty, lhs, rhs):
@@ -4665,6 +4701,11 @@ String emit_inst(LirInst inst, LirModule m, LirFunction func, Vector[String] sn,
                 return v(dst) + " = ((" + fc_ct + ")" + v(rhs) + " == 0);"
 
         case INeg(dst, ty, operand):
+            # ⚖ NOT routed through `wrapping_compute_c`, deliberately: `-x` at
+            # TYPE_MIN is undefined in C, but WHAT it should do is an open
+            # semantics question (`0 - INT64_MIN` traps while `-INT64_MIN`
+            # wraps), and todo/t1443 owns it on BOTH lanes. A naive mirror
+            # would also break the cited `(intptr_t)` cast below.
             # Float negation must NOT route through the int64_t cast below —
             # that truncates the mantissa (`-1.5` → `-1`). Emit a plain
             # `-operand` for float types.
@@ -4689,6 +4730,12 @@ String emit_inst(LirInst inst, LirModule m, LirFunction func, Vector[String] sn,
         case IBitNot(dst, _, operand):
             return v(dst) + " = ~" + v(operand) + ";"
 
+        # ⚠ THE SHIFT FAMILY IS STILL UNGUARDED HERE, AND IT IS FILED, NOT
+        # FORGOTTEN: both arms discard `ty` and emit a bare shift with NO count
+        # trap, while the Rust lane traps a count >= width on both. Fixing them
+        # is NOT pure defined-ness -- an unsigned computing type alone does not
+        # help, because a count >= width is undefined for unsigned too -- so it
+        # requires ADDING the trap, an observable behaviour change. todo/t1442.
         case IShl(dst, _, lhs, rhs):
             return v(dst) + " = " + v(lhs) + " << " + v(rhs) + ";"
 

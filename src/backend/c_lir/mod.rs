@@ -2304,6 +2304,116 @@ fn compute_live_blocks(func: &LirFunction, v_used: &[bool]) -> Vec<Vec<usize>> {
     live_blocks
 }
 
+/// The LIR arithmetic ops that carry an [`Overflow`] mode.
+///
+/// One variant per `Inst` that has an `overflow:` field. ⚠ `rustc`'s
+/// exhaustiveness check is the witness for THIS enum's own arms only — nothing
+/// in the type system ties `ArithOp` to the `Overflow` carriers in
+/// `src/lir/mod.rs`. The guard that a new carrier is added here (and routed
+/// through `emit_arith`) is the lint
+/// `c_lir_overflow_arith_arms_go_through_emit_arith` in `tests/lints.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+}
+
+impl ArithOp {
+    /// The C infix operator.
+    fn c_operator(self) -> &'static str {
+        match self {
+            ArithOp::Add => "+",
+            ArithOp::Sub => "-",
+            ArithOp::Mul => "*",
+        }
+    }
+
+    /// The `__builtin_<x>_overflow` mnemonic used by the trapping path.
+    fn overflow_builtin(self) -> &'static str {
+        match self {
+            ArithOp::Add => "add",
+            ArithOp::Sub => "sub",
+            ArithOp::Mul => "mul",
+        }
+    }
+}
+
+/// Emit one `Overflow`-carrying arithmetic instruction.
+///
+/// THE THREE CELLS, and why each is spelled the way it is:
+///
+/// * **`Overflow::Trap` on a SIGNED integer** — `__builtin_<op>_overflow` into
+///   `dst`, trapping `T_Overflow`. Unchanged.
+///
+/// * **Any other INTEGER cell** — compute in the type `wrapping_compute_c`
+///   names (`uint64_t`, at every width), then convert back. This covers
+///   `Overflow::Wrap` (the wrapping operators `+% -% *%`, whose whole contract
+///   is two's-complement wraparound) and, incidentally, `Overflow::Trap` on an
+///   unsigned type.
+///
+///   The round-trip is REQUIRED, not cosmetic: plain signed `a * b` is
+///   UNDEFINED in C on overflow (C17 §6.5p5), so the wrapping operators were
+///   handing the optimizer a licence on exactly the input they exist to
+///   handle — `-O2` may assume the overflow cannot happen. The convert-back is
+///   the implementation-defined (C17 §6.3.1.3p3) two's-complement
+///   reinterpretation that GCC and Clang both document, and is C23's mandated
+///   behaviour. `Inst::Shl` computes in the same type, through the same
+///   accessor. See todo/t1410.
+///
+///   ⚠ THE PROPERTY THAT MAKES THIS WORK IS RANK ≥ `int`, NOT MODULARITY. A
+///   same-width unsigned companion is modular too and would still be wrong:
+///   below `int` width C's integer promotions convert it back to signed `int`
+///   before the operation runs. `wrapping_compute_c`'s doc comment carries the
+///   width argument in full.
+///
+///   ⚠ `Overflow::Trap` on an UNSIGNED type still WRAPS rather than trapping.
+///   That is a SEPARATE, already-filed defect (D30 / todo/t0321, and the
+///   sharper todo/t1438: the C lane gates the trap on signed types while LLVM
+///   gates it on `is_integer()`, so the two lanes disagree on the ANSWER) and
+///   this function deliberately leaves its VALUE unchanged — that track adds
+///   the unsigned trapping arm here.
+///
+///   ⚠ AND UNARY NEGATION IS NOT IN THIS SET AT ALL. `Inst::Neg` carries no
+///   `Overflow` field, so it has no policy to route; whether `-INT64_MIN`
+///   traps or wraps is unratified (todo/t1443).
+///
+/// * **Float** — plain infix; no overflow semantics (IEEE, D8/D18).
+#[allow(clippy::too_many_arguments)]
+fn emit_arith(
+    out: &mut String,
+    op: ArithOp,
+    dst: ValueId,
+    ty: &LirType,
+    lhs: ValueId,
+    rhs: ValueId,
+    overflow: Overflow,
+    sn: &HashMap<u32, String>,
+    loc: &(String, u32, u32),
+) {
+    let ct = c_type_named(ty, sn);
+    let (d, l, r) = (format!("__v{}", dst.0), format!("__v{}", lhs.0), format!("__v{}", rhs.0));
+
+    if overflow == Overflow::Trap
+        && matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8)
+    {
+        write!(
+            out,
+            "if (__builtin_{b}_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ gorget_trap_at(\"{ov}\", \"integer overflow\", \"{f}\", {ln}, {cl}); }}",
+            b = op.overflow_builtin(),
+            ov = TrapKind::Overflow.code(),
+            f = loc.0,
+            ln = loc.1,
+            cl = loc.2
+        )
+        .unwrap();
+    } else if let Some(uct) = ty.wrapping_compute_c() {
+        write!(out, "{d} = ({ct})(({uct}){l} {o} ({uct}){r});", o = op.c_operator()).unwrap();
+    } else {
+        write!(out, "{d} = ({ct}){l} {o} ({ct}){r};", o = op.c_operator()).unwrap();
+    }
+}
+
 fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u32, u32)) {
     let func = ctx.func;
     let module = ctx.module;
@@ -2502,35 +2612,22 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
         }
 
         // Arithmetic
+        //
+        // The three `Overflow`-carrying ops share ONE emitter (`emit_arith`).
+        // Do NOT re-inline a per-op `if Trap { .. } else { .. }` here: the
+        // `else` branch of that shape is exactly where `Overflow::Wrap` fell
+        // through to plain SIGNED C arithmetic, which is undefined on the very
+        // input the wrapping operators exist for (todo/t1410). The arm-count
+        // lint `c_lir_overflow_arith_arms_go_through_emit_arith` forces the
+        // next such operator (D28's `**%`) through here too.
         Inst::Add { dst, ty, lhs, rhs, overflow } => {
-            if *overflow == Overflow::Trap && matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
-                let ct = c_type_named(ty, sn);
-                write!(out, "if (__builtin_add_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ gorget_trap_at(\"{ov}\", \"integer overflow\", \"{f}\", {ln}, {cl}); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs), ov = TrapKind::Overflow.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
-            } else {
-                let ct = c_type_named(ty, sn);
-                write!(out, "{d} = ({ct}){l} + ({ct}){r};", d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
-            }
+            emit_arith(out, ArithOp::Add, *dst, ty, *lhs, *rhs, *overflow, sn, loc);
         }
         Inst::Sub { dst, ty, lhs, rhs, overflow } => {
-            if *overflow == Overflow::Trap && matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
-                let ct = c_type_named(ty, sn);
-                write!(out, "if (__builtin_sub_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ gorget_trap_at(\"{ov}\", \"integer overflow\", \"{f}\", {ln}, {cl}); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs), ov = TrapKind::Overflow.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
-            } else {
-                let ct = c_type_named(ty, sn);
-                write!(out, "{d} = ({ct}){l} - ({ct}){r};", d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
-            }
+            emit_arith(out, ArithOp::Sub, *dst, ty, *lhs, *rhs, *overflow, sn, loc);
         }
         Inst::Mul { dst, ty, lhs, rhs, overflow } => {
-            if *overflow == Overflow::Trap && matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
-                let ct = c_type_named(ty, sn);
-                write!(out, "if (__builtin_mul_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ gorget_trap_at(\"{ov}\", \"integer overflow\", \"{f}\", {ln}, {cl}); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs), ov = TrapKind::Overflow.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
-            } else {
-                let ct = c_type_named(ty, sn);
-                write!(out, "{d} = ({ct}){l} * ({ct}){r};", d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
-            }
+            emit_arith(out, ArithOp::Mul, *dst, ty, *lhs, *rhs, *overflow, sn, loc);
         }
         Inst::Div { dst, ty, lhs, rhs } => {
             // Signed integer division has TWO C-UB cases:
@@ -2663,6 +2760,18 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
             }
         }
         Inst::Neg { dst, operand, .. } => {
+            // ⚖ DELIBERATELY NOT ROUTED THROUGH `wrapping_compute_c` — `-x` on
+            // a signed integer IS undefined in C at TYPE_MIN, but WHAT it
+            // should do is an OPEN SEMANTICS QUESTION, not a defined-ness one.
+            // At HEAD `0 - INT64_MIN` traps `T_Overflow` while `-INT64_MIN`
+            // silently wraps, because `Inst::Neg` carries no `Overflow` field
+            // and therefore has no policy at all; D30 lists defined-wrap among
+            // its REJECTED alternatives, and unary negation's overflow
+            // semantics appear nowhere in the ledger. Merely making this arm
+            // DEFINED would pick the wrapping answer by implementation, so the
+            // ruling — and the fix on BOTH lanes (Core #9) — is todo/t1443.
+            // This arm also DISCARDS `ty`, which that fix must un-discard.
+            // Repro: tests/fixtures/known_gaps/t1443_neg_overflow.gg.
             write!(out, "{} = -{};", v(*dst), v(*operand)).unwrap();
         }
 
@@ -2683,23 +2792,28 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
             // Two classes of C UB to defeat:
             //   1. shift-count >= bit-width (and negative counts, via the unsigned cast).
             //   2. shift-into-the-sign-bit of a signed integer (`1 << 63` on int64_t).
-            // (1) is guarded explicitly. (2) is avoided by widening through the unsigned
-            // companion type before shifting, which is well-defined for every count in
+            // (1) is guarded explicitly. (2) is avoided by shifting in the type
+            // `wrapping_compute_c` names, which is well-defined for every count in
             // [0, width), then casting back. Bit pattern is preserved.
             let ct = c_type_named(ty, sn);
-            let uct = match ty {
-                LirType::I64 | LirType::U64 => "uint64_t",
-                LirType::I32 | LirType::U32 => "uint32_t",
-                LirType::I16 | LirType::U16 => "uint16_t",
-                LirType::I8  | LirType::U8  => "uint8_t",
-                _ => ct.as_str(),
-            };
+            // The SAME computing type the `Overflow::Wrap` arithmetic path uses,
+            // read through the single accessor (layering rule 3: one source of
+            // truth per axis). The trap boundary above is unaffected — it reads
+            // `sizeof({ct})` on the DECLARED type, not on the computing type.
+            let uct = ty.wrapping_compute_c().unwrap_or(ct.as_str());
             write!(out, "if ((uint64_t){r} >= (uint64_t)(sizeof({ct}) * 8)) {{ gorget_trap_at(\"{ov}\", \"shift out of range\", \"{f}\", {ln}, {cl}); }} {d} = ({ct})(({uct}){l} << {r});",
                 d = v(*dst), l = v(*lhs), r = v(*rhs), ov = TrapKind::Overflow.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
         }
         Inst::Shr { dst, ty, lhs, rhs } => {
             // C `>>` on signed negatives is implementation-defined (arithmetic shift on
             // every real target), so only the shift-count needs guarding.
+            //
+            // ⛔ DO NOT UNIFY THIS WITH `Inst::Shl` VIA `wrapping_compute_c` —
+            // it would be a SILENT-WRONG-OUTPUT MISCOMPILE, not a widening.
+            // `(int64_t)((uint64_t)l >> r)` is a LOGICAL shift: at `l = -8,
+            // r = 1` it yields `9223372036854775804` where this arm yields
+            // `-4`. Narrow widths agree only because the convert-back
+            // truncates. The full reason lives on the accessor's doc comment.
             let ct = c_type_named(ty, sn);
             write!(out, "if ((uint64_t){r} >= (uint64_t)(sizeof({ct}) * 8)) {{ gorget_trap_at(\"{ov}\", \"shift out of range\", \"{f}\", {ln}, {cl}); }} {d} = ({ct}){l} >> {r};",
                 d = v(*dst), l = v(*lhs), r = v(*rhs), ov = TrapKind::Overflow.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();

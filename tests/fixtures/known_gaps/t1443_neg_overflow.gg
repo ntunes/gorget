@@ -1,0 +1,61 @@
+# KNOWN GAP todo/t1443 — unary negation of TYPE_MIN has NO POLICY, and the two
+# spellings of the same overflow disagree.
+#
+# MEASURED at HEAD, same program, same overflow:
+#     0 - INT64_MIN   ->  trap[T_Overflow]: integer overflow
+#     -INT64_MIN      ->  -9223372036854775808     (silent wrap, NO trap)
+#
+# THE ASYMMETRY IS STRUCTURAL, not a missing case in a rule. `GirBinOp::Sub`
+# lowers to `Inst::Sub { .., overflow: default_overflow }`, while
+# `GirUnOp::Neg` lowers to `Inst::Neg { dst, ty, operand }` — a variant that
+# carries NO `Overflow` field (regenerate: `grep -n 'Neg {' src/lir/mod.rs`).
+# It therefore has no trap-vs-wrap policy at all, which is why nobody chose
+# this behaviour. The C emit arm additionally DISCARDS `ty`.
+#
+# ⚠ WHY THIS IS AN OPEN QUESTION AND NOT A BUG WITH A KNOWN FIX. D30 lists
+# defined-wrap among its REJECTED alternatives ("silent corruption +
+# inconsistent with int's trap"), and D30's premise is "64-bit `int` overflow
+# already trapped" — which unary negation is the counter-example to. But D30's
+# SUBJECT is the narrow paths, and `-INT64_MIN` is not narrow: no widening of
+# D30 reaches it. Unary negation's overflow semantics appear NOWHERE in the
+# ledger. And Core #8 applies — BOTH backends agree on the wrap, which is
+# necessary and not sufficient.
+#
+# ⚠ WHAT THE TEST ASSERTS, AND WHAT IT REFUSES TO. It asserts ONLY that the
+# emitted C is not UNDEFINED — true under BOTH candidate rulings (a trapping
+# implementation checks with `__builtin_sub_overflow`; a wrapping one computes
+# in `wrapping_compute_c`) and FALSE AT HEAD. It does NOT pin the VALUE:
+# pinning `-9223372036854775808` would ratify defined-wrap by fixture, the
+# alternative D30 lists among its REJECTED ones. That is also why these cells
+# are not in the top-level `wrapping_ops_defined.gg`, which would enter them
+# into `runtime_parity_corpus` and the sanitize sweep.
+#
+# MEASURED AT HEAD, recorded rather than asserted:
+#     stdout:  neg64=-9223372036854775808
+#              neg32=-2147483648
+#     stderr:  runtime error: negation of -9223372036854775808 cannot be
+#              represented in type 'long int'
+#
+# INTENDED (either ruling): `-TYPE_MIN` behaves the SAME as `0 - TYPE_MIN`, on
+# both backends and on the self-host (Core #9), and the emitted C is defined
+# for every input. This fixture is RED until that lands — which is what an
+# `#[ignore]`d durable repro is for.
+#
+# ⚠ THE OPERANDS MUST BE NON-CONSTANT — `z()` is a runtime-computed 0. With
+# literals the whole expression folds, the negation never runs, and the probe
+# is green for a reason unrelated to what it tests (SIX-Q #6).
+
+int z():
+    String s = ""
+    return s.byte_len()
+
+
+int32 i32(int x):
+    return x as int32
+
+
+void main():
+    int k = z()
+    # The two spellings of the SAME overflow, side by side.
+    print(f"neg64={-(-9223372036854775807 - 1 + k)}")
+    print(f"neg32={-i32(-2147483648 + k)}")

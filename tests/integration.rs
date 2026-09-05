@@ -5839,58 +5839,6 @@ fn vector_set_element_double_free() {
     run_gg("known_gaps/t1088_vector_set_element_double_free.gg", "aabc");
 }
 
-/// KNOWN GAP todo/t1410 — `*%` / `+%` / `-%` lower to plain SIGNED C
-/// arithmetic, which is UB on overflow, on the exact input the wrapping
-/// operator exists to handle.
-///
-/// ⚠ THIS TEST DOES NOT USE `assert_gg_sanitize_clean`, ON PURPOSE. That
-/// helper's predicate matches only `LeakSanitizer` / `AddressSanitizer` /
-/// `ERROR:` / `SUMMARY:`, and a non-fatal UBSan finding prints lowercase
-/// `runtime error:` and exits 0 — so it is structurally blind to this class
-/// (`todo/t1411`). Core #13: pick an instrument that can SEE the failure.
-/// The value itself is already correct, so a `run_gg` cannot see it either.
-#[test]
-#[ignore = "KNOWN GAP: the wrapping operators emit plain signed C arithmetic \
-— UBSan `signed integer overflow` on the C lane; LLVM emits a flagless `mul` \
-and is correct; todo/t1410."]
-fn wrapping_mul_signed_overflow_ub() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture = manifest_dir
-        .join("tests/fixtures/known_gaps/t1410_wrapping_mul_signed_overflow_ub.gg");
-    assert!(fixture.exists(), "fixture not found: {}", fixture.display());
-
-    let tmp_root = std::env::temp_dir().join(format!(
-        "gg_ubsan_wrapmul_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0),
-    ));
-    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
-    let bin = tmp_root.join("wrapmul_ubsan");
-
-    let build = build_with_timeout(
-        gg_command("build").arg("--sanitize").arg(&fixture).arg("-o").arg(&bin),
-        "wrapping_mul_signed_overflow_ub",
-    );
-    assert!(build.status.success(), "gg build --sanitize failed");
-
-    let run = run_with_timeout(&mut Command::new(&bin), "wrapping_mul_signed_overflow_ub");
-    let stderr = String::from_utf8_lossy(&run.stderr).to_string();
-    let stdout = String::from_utf8_lossy(&run.stdout).trim_end().to_string();
-    let _ = std::fs::remove_dir_all(&tmp_root);
-
-    // The VALUE is already right — two's-complement wrap. What is wrong is
-    // that the C the backend emitted has undefined behaviour on this input.
-    assert_eq!(stdout, "mul=-7285721176076128970");
-    assert!(
-        !stderr.contains("runtime error:"),
-        "`*%` must lower to DEFINED wraparound (do the op in the unsigned \
-         counterpart and cast back), not to a plain signed C multiply; \
-         todo/t1410. UBSan said:\n{stderr}",
-    );
-}
 
 /// KNOWN GAP todo/t1083, MINIMAL CELL — `Vector[Box[T]]` does not compile for
 /// ANY `T`, with no trait and no vtable anywhere.
@@ -14211,6 +14159,248 @@ fn div_by_zero() {
 #[test]
 fn shift_oob_traps() {
     run_gg_panics("shift_oob_traps.gg", "trap[T_Overflow]: shift out of range");
+}
+
+/// todo/t1410 — the wrapping operators `+%` / `-%` / `*%` produce DEFINED
+/// two's-complement wraparound at `int` (64-bit) width.
+///
+/// ⚠ THIS TEST PINS THE VALUES ONLY, AND THAT IS DELIBERATELY NOT THE WHOLE
+/// PIN. Before the fix the C backend emitted a plain signed `+`/`-`/`*` for
+/// `Overflow::Wrap` — undefined in C on overflow — and every value below was
+/// ALREADY byte-identical. A stdout assertion cannot see that defect in either
+/// direction. The DEFINED-NESS is pinned by `scripts/sanitize_sweep.sh` at
+/// `UBSAN_CEILING=0`, which walks this fixture because it is TOP-LEVEL
+/// (the sweep corpus is the top-level `*.gg` plus every `*.gg` under an IN
+/// directory, and every manifest directory is currently OUT). MEASURED:
+/// reverting the fix moves the sweep from `ubsan: 0` to `ubsan: 1` naming
+/// `wrapping_ops_defined`. Both instruments are required; neither alone is
+/// coverage (Core #12, Core #13).
+///
+/// Unary `-` is NOT here: `-INT64_MIN`'s semantics are unratified (todo/t1443)
+/// and a top-level pin would ratify the current value by fixture. Its repro is
+/// `known_gaps/t1443_neg_overflow.gg`.
+///
+/// The NARROW-WIDTH cells live in `known_gaps/t1410_wrapping_ops_axis.gg`
+/// (see `wrapping_ops_axis_defined`) because the self-host lane still treats
+/// every narrow integer as int64 and top-level placement would book this
+/// round's own inflow into `RUNTIME_DIFF_NONMATCH_CEILING`.
+#[test]
+fn wrapping_ops_defined() {
+    run_gg(
+        "wrapping_ops_defined.gg",
+        "i64_add=-9223372036854775808\n\
+         i64_sub=9223372036854775807\n\
+         i64_mul=-4611686018427387904",
+    );
+}
+
+/// todo/t1410, self-host lane — the same three cells, through the self-host's
+/// own C emitter, whose `IAdd`/`ISub`/`IMul` arms were ported this round.
+///
+/// ⚠ THIS IS THE OBLIGATION, NOT A BONUS: a NEW top-level fixture enters
+/// `runtime_parity_corpus`, and the rule is that it COMPILES and MATCHES on
+/// this lane in the round that adds it — measured here rather than reasoned
+/// about. These three cells are the 64-bit subset precisely because the
+/// self-host still treats every narrow integer as int64 (todo/t0655), which is
+/// why the full 24-cell axis stays in `known_gaps/`.
+///
+/// ⚠ IT DOES NOT PIN THE PORT. The port is a DEFINED-NESS change and leaves
+/// every value byte-identical, so this row stays green if the port is reverted.
+/// The port's guard is the source-text ratchet
+/// `self_host_wrap_arith_uses_wrapping_compute_c` in `tests/lints.rs`; that
+/// asymmetry is recorded as a named omission in `DONE.md`.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_wrapping_ops_defined() {
+    assert_self_host_stdout(
+        "wrapping_ops_defined.gg",
+        "sh_wrapping_ops_defined",
+        "i64_add=-9223372036854775808\n\
+         i64_sub=9223372036854775807\n\
+         i64_mul=-4611686018427387904",
+    );
+}
+
+/// todo/t1410 — the FULL typed axis: 3 operators x 4 widths x
+/// {signed, unsigned} = 24 cells, all overflowing.
+///
+/// TWO ASSERTIONS, because the two halves of the defect need two instruments:
+///   * the VALUES, via stdout;
+///   * the DEFINED-NESS, via `--sanitize` + an explicit `runtime error:` grep.
+///
+/// ⚠ THIS TEST DOES NOT USE `assert_gg_sanitize_clean`, ON PURPOSE — that
+/// helper's predicate matches only `LeakSanitizer` / `AddressSanitizer` /
+/// `ERROR:` / `SUMMARY:`, while a non-fatal UBSan finding prints lowercase
+/// `runtime error:` and exits 0, so it is structurally blind to this class
+/// (todo/t1411). The fixture is in `known_gaps/` for PLACEMENT only and is
+/// NOT broken — hence a LIVE test (precedent:
+/// `callable_amp_struct_iterator_body_writes_through`). `known_gaps/` is an
+/// OUT row in the sanitize manifest, so this test IS the UB pin for the
+/// narrow cells.
+///
+/// MEASURED partial-revert matrix (each row went RED on the UBSan lane):
+///   * revert the round-trip entirely → 6 cells UB ({int32,int64} x {+%,-%,*%})
+///   * route `Mul` around it          → i32_mul, i64_mul
+///   * route `Sub` around it          → i32_sub, i64_sub
+///   * route `Add` around it          → i32_add, i64_add
+///
+/// ⚠ THREE REVERTS THAT THIS FIXTURE CORRECTLY PINS NOTHING AGAINST, stated so
+/// they are not mistaken for coverage holes:
+///   * NARROWING the computing type from `uint64_t` to a same-width companion
+///     changes DEFINED-NESS at `u16_mul` only, and GCC narrows the truncated
+///     multiply so UBSan never sees it. Its instrument is the emitted-shape
+///     guard `wrapping_arith_computes_in_uint64` in `tests/c_runtime.rs`.
+///     (Narrowing BELOW the declared width does turn rows red here — that is a
+///     different revert, and it pins width-correctness downward only.)
+///   * `Inst::Shl` reading the accessor is value-inert by construction: the
+///     low N bits of a left shift depend only on the low N bits of the operand.
+///   * unary `-` is not in this fixture at all (todo/t1443).
+#[test]
+fn wrapping_ops_axis_defined() {
+    const FIXTURE: &str = "known_gaps/t1410_wrapping_ops_axis.gg";
+    const EXPECTED: &str = "i64_add=-9223372036854775808\n\
+         i64_sub=9223372036854775807\n\
+         i64_mul=-4611686018427387904\n\
+         i32_add=-2147483648\n\
+         i32_sub=2147483647\n\
+         i32_mul=-1073741824\n\
+         i16_add=-32768\n\
+         i16_sub=32767\n\
+         i16_mul=-16384\n\
+         i8_add=-128\n\
+         i8_sub=127\n\
+         i8_mul=-64\n\
+         u64_add=0\n\
+         u64_sub=18446744073709551615\n\
+         u64_mul=9223372036854775808\n\
+         u32_add=0\n\
+         u32_sub=4294967295\n\
+         u32_mul=2147483648\n\
+         u16_add=0\n\
+         u16_sub=65535\n\
+         u16_mul=32768\n\
+         u8_add=0\n\
+         u8_sub=255\n\
+         u8_mul=128";
+
+    // 1. The VALUES.
+    run_gg(FIXTURE, EXPECTED);
+
+    // 2. The DEFINED-NESS, under the sanitizer, with an instrument that can
+    //    SEE a UBSan finding.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir.join("tests/fixtures").join(FIXTURE);
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_ubsan_wrapaxis_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let bin = tmp_root.join("wrapaxis_ubsan");
+
+    let build = build_with_timeout(
+        gg_command("build").arg("--sanitize").arg(&fixture).arg("-o").arg(&bin),
+        "wrapping_ops_axis_defined",
+    );
+    assert!(build.status.success(), "gg build --sanitize failed");
+
+    let run = run_with_timeout(&mut Command::new(&bin), "wrapping_ops_axis_defined");
+    let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    let _ = std::fs::remove_dir_all(&tmp_root);
+
+    assert!(
+        !stderr.contains("runtime error:"),
+        "`+%` / `-%` / `*%` must lower to DEFINED wraparound — do the \
+         operation in the type `wrapping_compute_c` names and convert back, \
+         never a plain signed C operator, which C leaves undefined on \
+         overflow (todo/t1410). UBSan said:\n{stderr}",
+    );
+}
+
+/// KNOWN GAP todo/t1443 — unary negation of TYPE_MIN has NO POLICY. At HEAD
+/// `0 - INT64_MIN` traps `T_Overflow` while `-INT64_MIN` silently wraps,
+/// because `Inst::Neg` carries no `Overflow` field at all — and the C it emits
+/// is signed-overflow UB either way.
+///
+/// ⚠⚠ WHAT THIS ASSERTS, AND WHY IT IS THE ONE ASSERTION THAT DOES NOT
+/// PRE-EMPT THE RULING. The open question is whether `-INT64_MIN` TRAPS
+/// (consistent with `0 - INT64_MIN`, and with D30's stated reason for
+/// rejecting defined-wrap) or is DEFINED TO WRAP. This test takes no position:
+/// it asserts only that the emitted C is not UNDEFINED — which is true under
+/// BOTH rulings (a trapping implementation checks with
+/// `__builtin_sub_overflow`; a wrapping one computes in `wrapping_compute_c`)
+/// and FALSE AT HEAD, where UBSan reports
+/// `negation of -9223372036854775808 cannot be represented in type 'long int'`.
+///
+/// ⛔ IT DELIBERATELY DOES NOT PIN THE VALUE. `-9223372036854775808` is what
+/// HEAD prints, and it is recorded in the fixture's header as a measurement,
+/// NOT asserted here — asserting it would ratify defined-wrap by fixture, the
+/// alternative D30 lists among its REJECTED ones. That is also why the two
+/// `neg` cells are in this fixture and not in `wrapping_ops_defined.gg`
+/// (top-level ⇒ `runtime_parity_corpus` + the `UBSAN_CEILING=0` sanitize
+/// sweep) nor in the `t1410` axis fixture, whose own `runtime error:`
+/// assertion they would make RED ON ARRIVAL.
+///
+/// ⚠ SO IT IS RED AT HEAD, ON PURPOSE, AND STAYS RED UNTIL THE RULING LANDS —
+/// which is what an `#[ignore]`d durable repro is for, and what keeps it out
+/// of the graduation census's PASS set (`tests/gaps/PASSING_ALLOWLIST.txt` is
+/// a SHRINK-ONLY ratchet; a green-on-arrival repro would have had to grow it,
+/// and would have pinned nothing either — Core #12).
+///
+/// Sibling: the self-host's `INeg`, which todo/t1443 also owns, because one
+/// ruling lands on every lane in the same round (Core #9).
+#[test]
+#[ignore = "KNOWN GAP: `-INT64_MIN` emits signed-overflow UB on the C lane, \
+and silently wraps while `0 - INT64_MIN` traps T_Overflow; `Inst::Neg` carries \
+no Overflow field so it has no policy at all, and which answer is correct is \
+unratified; todo/t1443."]
+fn neg_type_min_is_not_undefined() {
+    const FIXTURE: &str = "known_gaps/t1443_neg_overflow.gg";
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir.join("tests/fixtures").join(FIXTURE);
+    assert!(fixture.exists(), "fixture not found: {}", fixture.display());
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_ubsan_negmin_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let bin = tmp_root.join("negmin_ubsan");
+
+    let build = build_with_timeout(
+        gg_command("build").arg("--sanitize").arg(&fixture).arg("-o").arg(&bin),
+        "neg_type_min_is_not_undefined",
+    );
+    assert!(build.status.success(), "gg build --sanitize failed");
+
+    let run = run_with_timeout(&mut Command::new(&bin), "neg_type_min_is_not_undefined");
+    let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&run.stdout).trim_end().to_string();
+    let _ = std::fs::remove_dir_all(&tmp_root);
+
+    // This does NOT use `assert_gg_sanitize_clean`: that helper matches only
+    // `LeakSanitizer` / `AddressSanitizer` / `ERROR:` / `SUMMARY:`, while a
+    // non-fatal UBSan finding prints lowercase `runtime error:` and exits 0,
+    // so it is structurally blind to this class (todo/t1411).
+    assert!(
+        !stderr.contains("runtime error:"),
+        "unary `-` on TYPE_MIN must lower to DEFINED C, whichever way todo/t1443 \
+         is ruled: a TRAPPING implementation checks with `__builtin_sub_overflow` \
+         and a WRAPPING one computes in `LirType::wrapping_compute_c` — neither \
+         emits a bare `-x`, which C leaves undefined at TYPE_MIN. This assertion \
+         takes NO position on which ruling is right, and it must not be given \
+         one by pinning the value.\n\
+         stdout was: {stdout}\n\
+         UBSan said:\n{stderr}",
+    );
 }
 
 // The MESSAGE-LESS comparison assert (`assert 1 == 2`) takes the

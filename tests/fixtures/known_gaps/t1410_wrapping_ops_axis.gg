@@ -1,0 +1,162 @@
+# todo/t1410 — the FULL TYPED AXIS for the wrapping operators:
+# 3 operators x 4 widths x {signed, unsigned} = 24 cells.
+# Every cell overflows: that is the input these operators exist for.
+#
+# ⚠ UNARY `-` IS DELIBERATELY ABSENT. `-TYPE_MIN` is signed-overflow UB in C
+# too and `Inst::Neg` carries no `Overflow` field at all, but WHAT it should do
+# is unratified (`0 - INT64_MIN` traps `T_Overflow`; `-INT64_MIN` silently
+# wraps). Its repro is `known_gaps/t1443_neg_overflow.gg`, whose test is
+# `#[ignore]`d and asserts the finding rather than sanitizer-cleanliness; the
+# ruling is todo/t1443. If the neg cells were here, this fixture's own
+# `runtime error:` assertion would be RED ON ARRIVAL.
+#
+# ⚠ THIS FIXTURE IS NOT BROKEN. It sits in `known_gaps/` FOR PLACEMENT ONLY,
+# with a LIVE test (precedent: `callable_amp_struct_iterator_body_writes_through`,
+# "Stays in known_gaps/ (out of runtime_parity_corpus) with a LIVE test").
+# `runtime_parity_corpus` auto-scans every TOP-LEVEL `tests/fixtures/*.gg`, and
+# the SELF-HOST lane still treats every narrow integer as int64 — MEASURED at
+# 2026-09-05: the great majority of these cells diverge on the self-host
+# (`i8_add` -> 128 not -128, `u8_add` -> 256 not 0, `u64_sub` -> -1 not
+# 18446744073709551615). That is todo/t0655's narrow-width gap, open on the
+# self-host lane. Top-level placement would book this round's OWN inflow into
+# `RUNTIME_DIFF_NONMATCH_CEILING`, which Core #9 forbids. The three 64-bit
+# cells that DO match the self-host live top-level in `wrapping_ops_defined.gg`.
+#
+# ⚠ CONSEQUENCE OF THAT PLACEMENT: `known_gaps/` is an OUT row in
+# tests/sanitize/CORPUS_MANIFEST.txt, so `scripts/sanitize_sweep.sh` does NOT
+# walk this file. Its UB pin is therefore the LIVE test
+# `wrapping_ops_axis_defined` in tests/integration.rs, which builds with
+# `--sanitize` and greps stderr for `runtime error:` ITSELF. It must NOT use
+# `assert_gg_sanitize_clean`: that helper matches only LeakSanitizer /
+# AddressSanitizer / ERROR: / SUMMARY:, while a non-fatal UBSan finding prints
+# lowercase `runtime error:` and exits 0 (todo/t1411).
+#
+# MEASURED CELL TABLE AT HEAD (pre-fix), and the promotion argument stated
+# CORRECTLY, because a cell-by-cell promotion argument is exactly where this
+# got wrong twice:
+#   * 32- and 64-bit operands do NOT promote, so all six signed cells
+#     {int32, int64} x {+%, -%, *%} are UB at HEAD.
+#   * At 8 and 16 bits the operands promote to `int` and the operation happens
+#     there. For `+` and `-` at both widths, and for `*` at 8 bits, the `int`
+#     result cannot overflow, so those cells are DEFINED.
+#   * `*` AT 16 BITS IS THE EXCEPTION. Signed 16-bit operands cap the product
+#     at 2^30, so `i16_mul` is defined at HEAD — but UNSIGNED ones reach
+#     65535 * 65535 = 4294836225 > INT_MAX, so `u16_mul` IS UB AT HEAD. "Every
+#     unsigned cell is C-defined" is FALSE, and so is "int8/int16 are laundered
+#     by promotion" without the `*`-at-16-bits carve-out.
+#   * ⇒ SEVEN of the 24 cells are UB at HEAD: the six signed 32/64-bit cells
+#     plus `u16_mul`.
+#
+# ⚠ AND THAT IS WHY THE FIX COMPUTES IN `uint64_t` RATHER THAN IN A SAME-WIDTH
+# UNSIGNED COMPANION. A same-width companion would leave `u16_mul` undefined
+# AND make `i16_mul` — defined at HEAD — newly undefined, because the
+# `uint16_t` cast widens the operand range to [0, 65535]. It would be a NET
+# REGRESSION on one cell. `uint64_t` has rank >= `int`, so nothing promotes at
+# any width and no per-width argument is needed at all.
+#
+# ⚠ SIX of those seven are visible to UBSan; `u16_mul` is NOT, because GCC
+# narrows the truncated multiply and the diagnostic never appears in the shape
+# the backend emits. That cell's instrument is the emitted-shape guard
+# `wrapping_arith_computes_in_uint64` in tests/c_runtime.rs. A count of UBSan
+# `runtime error:` lines is an INSTRUMENT COUNT, NOT A DEFECT COUNT.
+#
+# ⚠ WHAT THE VALUE ROWS DO AND DO NOT PIN (do not conclude the guard above is
+# redundant). They pin that the computing type is not NARROWER than the
+# declared type: narrow `LirType::wrapping_compute_c` to `uint8_t` at every
+# width, rebuild, and `i16_add` reads 256 instead of -32768 (`i64_add` reads
+# 256 too) -- RED. MEASURED 2026-09-05; regenerate by making that one-line
+# change and running this fixture.
+# They CANNOT pin that the computing type is WIDE ENOUGH: every value here was
+# already byte-identical before the fix, and byte-identical again under a
+# SAME-WIDTH companion (measured both directions). No runtime instrument can
+# see that; the emitted-shape guard is what does.
+#
+# ⚠ THE UNSIGNED CELLS LEGITIMATELY WRAP, AND THAT IS NOT todo/t1438. They use
+# `+%` / `*%`, whose contract IS wraparound. Plain unsigned `+` currently wraps
+# too — on the C lane only, while LLVM traps it — and D30 rules that one wrong;
+# that is todo/t1438's divergence and those answers must flip. The rows here
+# must not be read as ratifying it.
+#
+# ⚠ THE OPERANDS MUST BE NON-CONSTANT — `z()` is a runtime-computed 0. With
+# literals the whole expression folds and the probe is green for a reason
+# unrelated to what it tests (SIX-Q #6).
+#
+# ⚠ AND THE `i16_mul` / `u16_mul` OPERANDS BELOW (49152 and 98304 at `int`
+# width) ARE THREE ORDERS OF MAGNITUDE BELOW `INT_MAX`. A green row here does
+# NOT cover the 16-bit multiply boundary; only the emitted-shape guard does.
+
+int z():
+    String s = ""
+    return s.byte_len()
+
+
+int8 i8(int x):
+    return x as int8
+
+
+int16 i16(int x):
+    return x as int16
+
+
+int32 i32(int x):
+    return x as int32
+
+
+uint8 u8(int x):
+    return x as uint8
+
+
+uint16 u16(int x):
+    return x as uint16
+
+
+uint32 u32(int x):
+    return x as uint32
+
+
+uint64 u64(int x):
+    return x as uint64
+
+
+void main():
+    int k = z()
+
+    # ── signed, 64-bit (int) ──
+    print(f"i64_add={9223372036854775807 + k +% (1 + k)}")
+    print(f"i64_sub={-9223372036854775807 - 1 + k -% (1 + k)}")
+    print(f"i64_mul={(4611686018427387904 + k) *% (3 + k)}")
+
+    # ── signed, 32-bit ──
+    print(f"i32_add={i32(2147483647 + k) +% i32(1 + k)}")
+    print(f"i32_sub={i32(-2147483648 + k) -% i32(1 + k)}")
+    print(f"i32_mul={i32(1073741824 + k) *% i32(3 + k)}")
+
+    # ── signed, 16-bit ──
+    print(f"i16_add={i16(32767 + k) +% i16(1 + k)}")
+    print(f"i16_sub={i16(-32768 + k) -% i16(1 + k)}")
+    print(f"i16_mul={i16(16384 + k) *% i16(3 + k)}")
+
+    # ── signed, 8-bit ──
+    print(f"i8_add={i8(127 + k) +% i8(1 + k)}")
+    print(f"i8_sub={i8(-128 + k) -% i8(1 + k)}")
+    print(f"i8_mul={i8(64 + k) *% i8(3 + k)}")
+
+    # ── unsigned, 64-bit ──
+    print(f"u64_add={u64(-1 + k) +% u64(1 + k)}")
+    print(f"u64_sub={u64(0 + k) -% u64(1 + k)}")
+    print(f"u64_mul={u64(-9223372036854775807 - 1 + k) *% u64(3 + k)}")
+
+    # ── unsigned, 32-bit ──
+    print(f"u32_add={u32(4294967295 + k) +% u32(1 + k)}")
+    print(f"u32_sub={u32(0 + k) -% u32(1 + k)}")
+    print(f"u32_mul={u32(2147483648 + k) *% u32(3 + k)}")
+
+    # ── unsigned, 16-bit ──
+    print(f"u16_add={u16(65535 + k) +% u16(1 + k)}")
+    print(f"u16_sub={u16(0 + k) -% u16(1 + k)}")
+    print(f"u16_mul={u16(32768 + k) *% u16(3 + k)}")
+
+    # ── unsigned, 8-bit ──
+    print(f"u8_add={u8(255 + k) +% u8(1 + k)}")
+    print(f"u8_sub={u8(0 + k) -% u8(1 + k)}")
+    print(f"u8_mul={u8(128 + k) *% u8(3 + k)}")

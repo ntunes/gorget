@@ -1,0 +1,54 @@
+# The wrapping operators `+%` / `-%` / `*%` produce DEFINED two's-complement
+# wraparound at `int` (64-bit) width (todo/t1410).
+#
+# ⚠ UNARY `-` IS NOT HERE, AND ITS ABSENCE IS DELIBERATE. `-INT64_MIN` is
+# signed-overflow UB in C too, but WHAT it should do is unratified: at HEAD
+# `0 - INT64_MIN` traps `T_Overflow` while `-INT64_MIN` silently wraps, because
+# `Inst::Neg` carries no `Overflow` field and so has no policy at all. Pinning
+# the current value in a TOP-LEVEL fixture would enter it into
+# `runtime_parity_corpus` and the sanitize sweep, i.e. ratify by fixture a
+# value that may flip. The repro lives in `known_gaps/t1443_neg_overflow.gg`
+# with an `#[ignore]`d test; the ruling is todo/t1443.
+#
+# ⚠ WHY THIS FIXTURE IS 64-BIT ONLY, AND WHERE THE REST OF THE AXIS LIVES.
+# The full typed axis (3 operators x 4 widths x {signed, unsigned} = 24 cells)
+# is `known_gaps/t1410_wrapping_ops_axis.gg`, which is parked
+# there FOR PLACEMENT: `runtime_parity_corpus` auto-scans every top-level
+# `*.gg`, and the SELF-HOST lane still treats every narrow integer as int64
+# (MEASURED: `i8_add` -> 128 not -128, `u8_add` -> 256 not 0, `u64_sub` -> -1
+# not 18446744073709551615 -- the great majority of the narrow cells diverge).
+# That is todo/t0655's narrow-width gap, still open on the self-host. Booking
+# those rows top-level would raise `RUNTIME_DIFF_NONMATCH_CEILING` for this
+# round's own inflow, which Core #9 forbids. The three cells BELOW were
+# measured MATCHING on the self-host lane, so they belong top-level and the
+# rest does not.
+#
+# TWO INSTRUMENTS PIN THIS FILE, and it is top-level so BOTH can reach it:
+#   1. THE VALUES — `wrapping_ops_defined` in tests/integration.rs.
+#   2. THE DEFINED-NESS — `scripts/sanitize_sweep.sh` at `UBSAN_CEILING=0`.
+#      The corpus is "the top-level `*.gg` plus every `*.gg` under an IN
+#      directory", and every manifest directory is currently OUT, so top-level
+#      placement IS the sweep pin. MEASURED: reverting the fix takes the sweep
+#      from `ubsan: 0` to `ubsan: 1` naming this fixture.
+#
+# ⚠ THE VALUE PIN ALONE IS NOT COVERAGE. Before the fix the C backend emitted a
+# plain SIGNED `+`/`-`/`*` for `Overflow::Wrap` -- undefined in C on overflow --
+# and every value below was ALREADY CORRECT and byte-identical. What was wrong
+# was the licence the emitted C handed the optimizer at -O2. No stdout
+# assertion can see that, in either direction; the UBSan lane is the only
+# instrument that can (Core #13).
+#
+# ⚠ AND THE OPERANDS MUST BE NON-CONSTANT. `z()` is a runtime-computed 0. With
+# literals the whole expression is constant-folded, the arithmetic never runs,
+# and the probe is green for a reason unrelated to what it tests (SIX-Q #6).
+
+int z():
+    String s = ""
+    return s.byte_len()
+
+
+void main():
+    int k = z()
+    print(f"i64_add={9223372036854775807 + k +% (1 + k)}")
+    print(f"i64_sub={-9223372036854775807 - 1 + k -% (1 + k)}")
+    print(f"i64_mul={(4611686018427387904 + k) *% (3 + k)}")
