@@ -43,6 +43,29 @@ HOF's element pointer. `D40` (return-view lazy materialization) is already in th
 ⊕ **The owner's three words are the ACCEPTANCE CRITERIA: PERFORMANT · SIMPLE · SAFE.** A model that is safe
 and fast but makes users reason about compiler internals fails *simple* — the exact objection that killed
 `Ref[T]`-by-default.
+⭐⭐ **THE LAZY ITERATOR *IS* DOCUMENTED, AND ONE OF THE THREE DOCS MAY ALREADY BE THE UNIFIED MODEL**
+(owner recalled it 2026-09-05; orchestrator located it):
+- **`docs/language-design.md` §3.5 — "The Borrow Rule — one rule, with a lazy escape."** ⭐ **It is ALREADY a
+  single rule spanning legality AND cost:** *"A conflict is rejected — **unless** the conflicting path is a
+  reader and the compiler can place its clone **lazily**, at a visible mutation point, in which case it
+  materializes instead."* ⇒ **The legality/cost seam lives INSIDE one sentence.** The two internals notes may
+  be elaborations that DRIFTED APART from a rule that was already unified. **So the question is not "what
+  unified model should exist" but "why did §3.5 need two notes, and what does each add that the rule does not
+  already say?"**
+  ⚠ **Its own follow-on is this round's recurring defect, stated as DESIGN years before the bugs:**
+  *"The test is **ability to write**, not the sigil"* and *"Overlap is about storage, not spelling."* **R49's
+  S-a2 found a gate that read the source's SPELLING not the position; `t0045` (CRITICAL) warns in its own text
+  that THE `&` IS NOT THE DISCRIMINATOR.** The doc already says the rule; **the implementation keeps
+  re-deriving it wrong.** ⇒ **Can the model make that MECHANICAL rather than remembered?**
+- **`docs/language-design.md` line 54 — the OWNER'S END GOAL, already a stated pillar:** *"Value semantics at
+  hand-optimal cost — CoW + liveness + lazy materialization make the compiler place the minimal clone set,
+  **as if the user had written every copy by hand**."* ⇒ **The pivot is NOT a new direction — it is a return
+  to a pillar that was written down and not yet delivered.** It is the acceptance criterion in the project's
+  own words, and it PREDATES the ask.
+- **`docs/devbook/23-stdlib.md` §23.6 "Iterator: the M+N payoff"** — *"Lazy adapters (concrete return, not
+  trait object)"* and *"Lazy by default — no eager interim."* **Laziness here is a DELIBERATE design choice,
+  not an implementation accident** — which is why the stored borrow exists at all.
+
 ⚠ **The measured baseline still comes FIRST.** *"Whatever we replace it with must be equally fast"* is a hard
 gate on any model, so a model that cannot be measured against the current fast path is a proposal, not an
 answer.
