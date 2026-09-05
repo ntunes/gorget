@@ -115,11 +115,43 @@ degenerates into a straight-line mutation after the handler and so is not a
 nested-block cell at all; `Snapshot`, `AssertReturn`, the six `Meta*` variants
 and `Item` are compile-time or item-level and take no runtime mutation.
 
-PAYLOAD is total on the axis that matters. The TYPE axis is infinite; the DROP
-STRATEGY axis is closed (`DropStrategy` = None | Trivial | Recursive | Custom in
-`src/ir/types.rs`) and these seven payloads cover all four values. An eighth,
-`Vector[Option[String]]`, was dropped: all 99 of its cells fail to BUILD on both
-value lanes today (`todo/t0002`), so they would measure nothing at all.
+PAYLOAD is a SELECTION on the drop-strategy axis. The TYPE axis is infinite; the
+DROP STRATEGY axis is closed (`DropStrategy` = None | Trivial | Recursive |
+Custom, `src/ir/types.rs`), and the four values are NOT equally reachable by a
+cell of this shape. Value by value:
+
+  * `Trivial` (one free call, `gorget_string_free` / `gorget_array_free`) is what
+    all seven payloads are. This is the covered value.
+
+  * `Recursive` (compiler-generated field-by-field glue, assigned to structs
+    holding droppable fields) appears in this corpus only on the SOURCE side --
+    the `Store` / `Inner` / `Outer` wrappers -- and NEVER as the aliased payload.
+    A struct-valued payload is a REAL WIDENING TARGET, not a no-subject cell:
+    measured, `Store t = s` for `struct Store: Vector[int] f` checks clean.
+
+  * `None` is primitives and Copy structs. A Copy bind DUPLICATES the storage
+    instead of sharing it, so the two places do not overlap and the rule has
+    nothing to say about them -- 3.5's "overlap is about storage, not spelling".
+    No subject, and widening cannot manufacture one.
+
+  * `Custom` IS A CELL WITH NO SUBJECT, and this one NO WIDENING REACHES. Both
+    lines that assign it are gated on a `Drop` impl and set `CopySemantics::
+    Resource` on the same line (`grep -rn "DropStrategy::Custom"
+    src/ir/lowering/mod.rs`), and a resource is single-owner, so the bare view
+    bind every one of these 820 cells is built on is REJECTED:
+        error[E_MoveWithoutOperator]: cannot copy `v`: `v` is a resource
+        (a type with a custom `Drop` is single-owner)
+    There is no second live place, so "every other place reads the value it had
+    before" has no other place to speak about.
+    !! MEASURED, NOT DEDUCED. The obvious inference -- that the upgrade scan
+    setting `Resource` alongside `Recursive` rejects those binds too -- is FALSE;
+    `Store t = s` is accepted. The rejection is specific to a CUSTOM `Drop`, not
+    to `CopySemantics::Resource` in general. A reader who reasons it out instead
+    of running it gets the `Recursive` row wrong.
+
+An eighth payload, `Vector[Option[String]]`, was dropped for an unrelated
+reason: all 99 of its cells fail to BUILD on both value lanes today
+(`todo/t0002`), so they would measure nothing at all.
 
 DIRECTION is a two-valued axis and the mirror covers 2 of the 11 sites. That is
 not sampling for its own sake: SITE is measurably SATURATED at HEAD -- every
@@ -550,9 +582,20 @@ def main():
         return 1
 
     if new_rows and not args.check:
-        # Topic 30 sorts last, and the file is ordered by (topic, cell), so the
-        # new block appends. Sorting the whole file instead would rewrite rows
-        # this generator does not own.
+        # REGENERATION NORMALIZES THE WHOLE FILE to (topic, cell) order, and
+        # that DOES move rows this generator does not own -- 489 legacy rows
+        # shifted on the first run, measured. Say so plainly: an earlier draft of
+        # this comment claimed the opposite while the very next line sorted
+        # everything, which is a comment falsified by its own code (Core #14).
+        #
+        # It is safe, and the distinction is ORDER versus CONTENT. Only `new_rows`
+        # is constructed here; an existing row is the parsed list itself and is
+        # mutated only in the OWNED columns, only for cells this generator emits.
+        # Nothing downstream reads position either: `robustness_map.py` keys every
+        # lookup on the cell NAME, and `--accept` rewrites the file wholesale from
+        # its own in-memory list. What normalizing buys is that the committed file
+        # has ONE canonical order, so a later topic cannot land a diff whose noise
+        # is "where the rows went".
         rows = rows + new_rows
         rows.sort(key=lambda r: (r[COL_TOPIC], r[COL_CELL]))
         MANIFEST.write_text(header + "\n"

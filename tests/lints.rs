@@ -30980,13 +30980,43 @@ fn robustness_map_manifest_and_cells_reconcile() {
             }
         }
     }
-    assert!(
-        control_rows >= 2,
-        "expected at least two CONTROL rows (the harness's own \
-         `_POSITIVE_CONTROL_broken` and topic 30's), found {control_rows}. A \
-         positive control proves the comparison can FAIL; deleting one makes the \
-         gate unfalsifiable."
+    // The CONTROL carve-out above is a PREDICATE, which is right -- a by-name
+    // allowlist would go red the moment a topic adds its own control. But a
+    // predicate with only a FLOOR under it is SELF-AUTHORISING: any row can
+    // exempt itself from the empty-baseline guard by writing `CONTROL` into
+    // column 3, and it would then be both exempt AND green. The subset where
+    // that matters is exactly the dangerous one -- a cell broken on all five
+    // lanes. So the set is DECLARED, the same discipline `LEGACY_UNBASELINED`
+    // uses, and the count is EXACT rather than a lower bound.
+    const DECLARED_CONTROLS: &[(&str, &str)] = &[
+        (
+            "_POSITIVE_CONTROL_broken",
+            "the harness's own control: proves the map can see a failure at all",
+        ),
+        (
+            "vsm_POSITIVE_CONTROL_view_reads_pre_mutation",
+            "topic 30's control: proves THIS topic's comparison fires, by \
+             expecting the mutated value where the rule says the pre-mutation one",
+        ),
+    ];
+    let declared: std::collections::BTreeSet<&str> =
+        DECLARED_CONTROLS.iter().map(|(n, _)| *n).collect();
+    let actual_controls: std::collections::BTreeSet<&str> = rows
+        .iter()
+        .filter(|r| r[RMAP_COL_C] == "CONTROL")
+        .map(|r| r[RMAP_COL_CELL].as_str())
+        .collect();
+    assert_eq!(
+        actual_controls, declared,
+        "the set of CONTROL rows in MANIFEST.tsv is not the declared set.\n\
+         A row reading CONTROL in column 3 is EXEMPT from the empty-baseline \
+         assertion below and has its verdict INVERTED by the runner, so an \
+         undeclared one is a cell that exempted itself from the gate. Adding a \
+         control is fine and welcome -- declare it here with what it proves. \
+         Removing one makes that gate unfalsifiable and needs the same \
+         justification as deleting any positive control."
     );
+    assert_eq!(control_rows, DECLARED_CONTROLS.len());
     assert!(
         ungated.is_empty(),
         "{} cell-lane(s) are measured every run but have an EMPTY baseline, so \
@@ -30997,6 +31027,39 @@ fn robustness_map_manifest_and_cells_reconcile() {
         ungated.len(),
         ungated.join("\n  ")
     );
+
+    // THE TOPIC-30 CONTROL'S LOAD-BEARING INVARIANT, WHICH NOTHING ELSE
+    // ENFORCES. That control expects the MUTATED value, and it only proves
+    // anything while the program it is drawn from actually prints the
+    // pre-mutation one. If `vsm_field__straight__vec_int` ever regresses, the
+    // control's expectation starts MATCHING, the row buckets WORKS, and the map
+    // reports "CONTROL PASSED - harness is blind" -- announcing a broken harness
+    // when what actually happened is a COMPILER REGRESSION. The generator's
+    // comment says "re-point it if that row ever stops being green"; a comment
+    // asking to be re-checked with nothing checking it is Core #14 rot, so this
+    // is the guard that makes it binding.
+    let control_src = rows
+        .iter()
+        .find(|r| r[RMAP_COL_CELL] == "vsm_field__straight__vec_int")
+        .expect(
+            "vsm_field__straight__vec_int is gone: topic 30's positive control is \
+             drawn from it. Re-point CONTROL_SOURCE/SITE/PAYLOAD in \
+             scripts/gen_value_semantics_cells.py at another row that is green on \
+             every lane, and update this guard in the same commit.",
+        );
+    for (col, lane) in RMAP_LANE_COLS {
+        assert_eq!(
+            control_src[*col], "WORKS",
+            "vsm_field__straight__vec_int is {} on the {lane} lane, but topic 30's \
+             positive control is drawn from it and needs it GREEN ON EVERY LANE.\n\
+             While it is broken the compiler already prints the mutated value, so \
+             the control MATCHES its deliberately-wrong expectation, scores WORKS, \
+             and the map cries \"harness is blind\" at what is really a compiler \
+             regression. Fix the regression, or re-point the control at another \
+             all-green row and update this guard together.",
+            control_src[*col]
+        );
+    }
 
     // A shrink-only list that never shrinks is prose. Assert every named
     // exemption is still a real row, so a retired cell cannot leave a dead
