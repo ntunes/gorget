@@ -74,6 +74,22 @@ is never pruned. **Nothing is integrable until it commits.**
   **Two `t0121` rows. Confirmed independently on my side.**
 - ⚠ **Owed to me at integration:** the handover still references `t1407` and `t1421`, both of which the diff
   removes. **That block is mine, correctly not touched by the track.**
+- ⛔ **AND MY "t1421 IS STILL PRESENT ON THE BRANCH" READ WAS STALE — I QUERIED THE WRONG TREE.**
+  `git ls-tree <branch>` reads the **committed** tree, which was still at base because the executor had not
+  committed; the fold lives in the **WORKING** tree (`git status` shows `D todo/t1421.md`, `M todo/t1083.md`).
+  ⭐ **When an agent has not committed, `git status` in ITS worktree is the only true reading — a branch query
+  answers a different question and looks authoritative while doing it.**
+- ⭐ **IT IS HOLDING THE COMMIT ON THE BOOTSTRAP rc, WHICH IS CORRECT** (*never commit red or skipped*).
+  Stage 1 done, stage 2 climbing, a monitor armed on the rc file. ⚠ **Four executors on one box is the
+  round's peak load and the bootstrap is paying for it** — a stage timeout here is **NOT a regression until
+  compared at HEAD.**
+- ⭐ **TWO MEASUREMENTS THAT STRENGTHEN THE READINESS ROWS:** the fire count read off the emitted C shows
+  **3 fill sites → exactly 1 call-site clone** (the live local; the temp and the dead local **move**), and on
+  the self-alias fixture **3 sites → 3 clones** with the chain `get_at → clone_to_owned → owned temp → fill`,
+  so **the runtime never receives a pointer into the receiver's buffer.** *That is clone-if-live /
+  move-if-dead mechanically visible — and it IS the n-vs-n+1 optimality claim.* ⊕ **And the LLVM lane was
+  RE-MEASURED on its own 10 fixtures rather than inheriting the scout's number** — all CLEAN under
+  `--sanitize --backend=llvm`, stdout byte-identical to C.
 
 ### 🟢 A2 LAUNCHED — **AND ITS PASS 4 RAISED THE TRACK'S SEVERITY BY MEASURING WHAT THE TITLE EXCLUDED**
 
