@@ -19,6 +19,8 @@
 | ✅✅ **G** | **INTEGRATED** (9 commits, `2d647456c`). 819 cells + 3 guards + 4 filings. Gates on the merged tree: lib 1187, lints **237**, gen-check, known-gaps census — all green. | `t1384`–`t1392` |
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
+| **H** | **`t1387`** — the map's KEY has no drop discipline. ✅✅ **DESIGN SIGNED OFF BY TWO PASSES, streak 2/3, 🔵 pass 3.** 5 record-level blockers folded. | `t1409`–`t1417` |
+| **J** | **`t1407`** — `Vector.fill` DOUBLE-FREES at pristine HEAD (CRITICAL, owner-approved 2026-09-05). 🔵 scout. Streak 0/3. | `t1418`–`t1427` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
@@ -1314,6 +1316,37 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ⭐⭐⭐ H PASS 2 RAN THE CONTROL PASS 1 NEVER RAN — AND THE FIGURE CAME BACK TO WHERE IT STARTED
+
+⭐⭐ **PASS 1 RAN ONLY THE POST-FIX LANE AND CREDITED EVERY `PROGRESS` ROW TO THE FIX.** Pass 2 ran the
+**pristine control**: fixed **7 PROGRESS / 0 REGRESSION**; pristine **2 PROGRESS / 1 REGRESSION**.
+**Set-diff: FIVE attributable — THE BODY'S ORIGINAL FIVE — and TWO green on pristine HEAD.**
+⇒ ⭐⭐⭐ ***AN ATTRIBUTION WAS MADE, CORRECTED, AND CORRECTED BACK: pass 1's charge that "five is a selection"
+WAS ITSELF THE SELECTION. A "PROGRESS" FIGURE WITH NO CONTROL IS NOT A MEASUREMENT.***
+⊕ The 2 stale-baseline cells are a **separate** finding (same under-reporting family). ⊕ **The population figure
+87 IS sound — COLUMN-audited, `SANITIZE-FAIL` absent from every other column, so the line-grep was not
+accidentally correct (SIX-Q #6).** ⛔ **Readiness row 3 has now been stated as 20, 8, 7 and 6 — pass 3 must
+SETTLE it, and ask whether `--lanes asan` is even the right instrument.**
+
+⛔⛔ **A CROSS-TRACK INTERACTION I CREATED BY INTEGRATING G, AND NEITHER THE BODY NOR PASS 1 SAW IT:** the same
+command now reports **234 `PROGRESS` rows — 227 of them `WRONG → WORKS` on `vsm_*`, TRACK G's corpus.**
+**`--accept` refuses ONLY on regressions; with zero regressions a bare `--accept` WRITES ALL 234 PLUS 5 DRIFTS
+INTO H's COMMIT**, silently ratcheting another track's baseline. ⇒ **the fold must be SCOPED.**
+
+⛔ **AND AN ID COLLISION THAT IS MINE:** I issued H the block `t1408`–`t1416` **and then filed `t1408` myself**
+for the D0′ registration defect — **the exact MA-3b failure that once "forced a renumber and left `t0946`
+permanently unused".** ⇒ **re-issued `t1409`–`t1417`; J gets `t1418`–`t1427`.**
+
+⛔ **THE COST TABLE DOES NOT SURVIVE RE-MEASUREMENT.** 40 **interleaved** reps: **only the `-O2` hit-path win
+(−15.6%) is real; every `-O0` cell is within ±3% noise and FLIPS SIGN across runs**; pass 1's `miss -O2 −4.7%`
+measures **~0%**. ⊕ **`always_inline` recovers NOTHING and would leave an `always_inline` function with EXTERNAL
+linkage under the LLVM path's `.replace("static inline ", "")`.** ⇒ **do not add it.**
+
+⭐ **WHAT PASS 2 ADDED THAT PASS 1 COULD NOT: the LLVM lane MEASURED END-TO-END** (pristine `rc 1`,
+`Direct leak of 4 byte(s)`; fixed `rc 0`, zero leaks) ⇒ **no longer an inherited argument** — **and an EXACT
+fire count: `total_frees` 60 → 200034, `live_bytes` 399948 → 0, `string_clone` IDENTICAL ⇒ 200034 − 60 =
+199,974 = 200,000 − 26 duplicate puts. ONE FREE PER DUPLICATE PUT, EXACTLY.**
 
 ### ⛔⛔ C1 v4 PASS 1 — SPINE CONFIRMED, **SCOPE WRONG**, AND IT FOUND TWO CRITICALS AT PRISTINE HEAD
 
