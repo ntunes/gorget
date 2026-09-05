@@ -7,7 +7,7 @@
 **ROSTER — five tracks, each with a private disjoint ID BLOCK (MA-3b; a track NEVER picks its own):**
 | track | scope | ids |
 |---|---|---|
-| **A1** | **`t1077` ONLY** — 3 passes confirmed the design; **SPLIT 2026-09-05**, s06 excised. 🔵 confirming pass on the extraction. | `t1309`–`t1318` |
+| **A1** | **`t1077` ONLY** — **4 passes; design signed off. 🟢 EXECUTOR LAUNCHED 2026-09-05.** | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C** | 🔵 SCOUTING. **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
@@ -88,6 +88,40 @@ retire a ratified owner exception naming this exact cell.
 The DEAD-cell argument is sound and pass 1 confirmed it independently — live ranges do not intersect, so §3.5
 finds **no conflict**, and reader-vs-writer does not gate that row. **But that is a SEMANTICS question for the
 owner, not something a measurement settles.**
+
+### 🟢 A1's EXECUTOR IS LAUNCHED — AND THE LAUNCH FOLD CAUGHT A FOURTH-GENERATION DEFECT IN MY OWN ADDENDUM
+
+The confirming pass re-verified readiness row (4) a **third** time independently (binary hashes as positive
+controls; revert restored the pristine hash exactly, twice) and found **three launch-blocking brief defects,
+all one-line text fixes, none touching the design.** Folded as ADDENDUM 4:
+
+- ⛔ **N5 WAS ORPHANED AND LIVE, TARGETING THE LINE BEING EDITED.** ADDENDUM 3's D12 struck D9 — but **D9's
+  other job was retracting N5**, so under strict precedence N5's *"make it an ICE"* at
+  `src/ir/lowering/exprs/mod.rs:735` came back to life **inside the edited block**. Instrumented **by line
+  index**: **PRE-fix 1 fire in 207 fixtures scanned, and the single fire IS THIS TRACK'S OWN FIXTURE**;
+  POST-fix 0. An ICE there would make the RED-verify emit an ICE instead of `139` and the executor would
+  conclude the revert did not take. ⊕ **D9's own basis was also wrong** — it claimed *"no fire count exists in
+  either direction"*; **it is 1 PRE / 0 POST.** Conclusion unchanged, now better founded. ⭐ **Free finding:
+  line 735 is the mechanism's SECOND HALF** (`__slit_2` goes `"%lld\n"` → `"%.*s\n"` in emitted C) ⇒ N1's
+  causal story localized to a line **plus a measured Core #6 ratchet, 1 → 0.**
+- ⛔ **ADDENDUM 3's E7 IS MEASURED FALSE — AND IT IS THE FOURTH GENERATION OF WHAT D13 EXISTS TO STOP, INSIDE
+  THE ADDENDUM THAT CONTAINS D13.** E7 ordered the leak's mechanism into a durable filing. The type change is
+  real; the consequence is not: `--clones=sites` PRE and POST are **identical** (1 implicit `String` clone, CoW
+  materialization), emitted C has **no `Box__GorgetString__clone` in either state**, and ASan is
+  **byte-identical to the no-op-cell control in both states**. Why it cannot fire:
+  `grep -n 'pub fn is_resource_type' -A 4 src/ir/types.rs` matches `GirType::Named(name)`, which **does not
+  admit `Box__GorgetString`**. ⇒ **`t1309` records the leak as construction-only, MECHANISM UNDETERMINED.**
+  ⊕ It **strengthens** the Core #8 ship disposition, which had rested on a control that **structurally could
+  not discriminate a read-path clone**.
+  ⛔ **THE DEFECT WAS FOLDING A REVIEWER'S *"plausible mechanism… give it a disposition"* AS *"say so"* — AN
+  ILLUSTRATION PROMOTED TO A PRESCRIPTION**, the exact class AGENTS.md already names. ⇒ **D13 SHARPENED: a fold
+  states a MECHANISM only with the command that measured it, or states the mechanism is UNDETERMINED.**
+- ⛔ **THE SPLIT DID NOT RE-PARTITION THE ID BLOCK (MA-3b)** — A1 and A2 briefs both offered `t1314`–`t1318`.
+  **A1 owns `t1309`–`t1318`; A2 owns `t1373`–`t1382` and nothing in A1's range.**
+⊕ **D10's open question is ANSWERED, not open:** `SlotKind::BorrowedPtr` says a slot holds a non-owning pointer
+and **nothing about the pointee being a Box**, so it cannot decide the peel alone; `ptr_to_box` is built from
+two typed accessors. ⇒ **`ptr_to_box` IS the minimal typed discriminator; `SlotKind` is orthogonal — no Core #1
+conflict.**
 
 ### ⛔ TRACK A IS SPLIT — A1 (`t1077`) IS READY; s06 BECOMES A2 WITH ITS OWN SCOUT
 
