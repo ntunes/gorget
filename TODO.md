@@ -13,7 +13,8 @@
 | **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
 | ✅ **C2** | **`t0045`** — **7 passes, design signed off, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D01** | ⛔ **MERGED — ONE OWNERSHIP INVARIANT, ONE COMMIT.** 🔵 brief-review pass 1. **Streak 0/3.** | `t1339`–`t1348` + `t1393`–`t1402` |
+| **D0′** | ⛔ **RE-SPLIT 2026-09-05** — the `elem_drop`/`elem_clone` half **+ the Deque precondition**. Self-contained. Needs re-brief. | `t1393`–`t1402` |
+| **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | **G** | passes 1–4 BLOCKED → 4 folds → 🔵 pass 5. **Streak 0/3.** ⭐ **Every remaining item now has a MEASURED prototype.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
 | ✅ **F1r** | **3 passes, design signed off, 🟢 EXECUTOR LAUNCHED 2026-09-05.** `t1362`+`t0750` as ONE fix. | `t1363`–`t1372` |
@@ -449,6 +450,58 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ⛔⛔ D01 IS RE-SPLIT — THE MERGED COMMIT SHIPS A MEMORY-CORRUPTION REGRESSION, AND HALF OF IT DECIDES AN OPEN OWNER QUESTION
+
+**The merge premise was confirmed cell by cell** — HEAD really is wrong in both cells of the controlled pair,
+and `CORRUPTION_CEILING` really is an `assert_eq!`. ⛔ **But the merge's CONCLUSION is false over an axis nobody
+enumerated.**
+
+⛔⛔ **B1 — THE FIX TURNS A LEAK INTO A DOUBLE-FREE ON `Deque[Callable]`:**
+
+| same shape | HEAD | D0 half | D0+full |
+|---|---|---|---|
+| `Vector[Callable]` | 32 B leak | **CLEAN** | CLEAN |
+| `Dict[String,Callable]` | 32 B leak | **CLEAN** | CLEAN |
+| **`Deque[Callable]`** | 16 B leak | ⛔ **double-free** | ⛔ **double-free** |
+
+**Mechanism, from the emitted C: `Deque`'s `main` DOES NOT emit the `.clone()`** — it is silently elided, the
+local aliases the element, and the newly-installed `elem_drop` frees the env the local also frees.
+⇒ ⛔ ***"Together → exactly one free" holds for Vector and Dict and IS A DOUBLE-FREE AT DEQUE — and the
+brief's OWN fatality argument applies to the merged commit.***
+⛔ **AND `t1393` IS NOT "STRUCTURALLY UNREACHABLE" — IT IS A PRECONDITION.** I wrote that the decider is never
+called so the fix cannot reach it; **measured, the fix demonstrably CHANGES Deque behaviour.** ⚠ **And the
+reviewer could NOT reproduce `t1393`'s stated `rc 139 SEGV` — RE-DERIVE THAT FILING'S SYMPTOM BEFORE QUOTING
+IT.** ⊕ It is invisible today only because **no `Deque[Callable]` fixture exists in the tree** (verified) — so
+it lands as **inflow** the moment the 60-cell matrix does.
+
+⛔ **B5 — AND THAT IS THE PROOF THE 60-CELL ENUMERATION IS A SELECTION: it has no READ-SHAPE axis.** Run under
+the fix with a `.clone()` read, the Deque cell would have shown B1. It was not. **Name all three axes; run the
+matrix at HEAD *and* under the fix; cover {push-only, bare index read, `.clone()` read, read-and-call}.**
+
+⛔ **B3/B4 — THE ROOT CAUSE IS TWO MECHANISMS CONFLATED, AND HALF OF MY STATEMENT IS FALSE.** Instrumented:
+**Vector** → the registrar **fires 8×** but the LIR asks the **other spelling** (a pure *spelling mismatch*);
+**Dict** → the registrar **never fires** (a pure *missing registration*). **"Never called at all" is false for
+the case my paragraph was about, and the two cells fail for OPPOSITE reasons.**
+⇒ ⛔ **And Core #1 bites: I picked a READ-SITE fallback while my own evidence named the WRITE-SITE defect.** The
+reviewer **prototyped the write site: ONE edit** (register the missing singleton), measured, healing the Vector
+cell. ⇒ **take the write-site route, or present the enumeration that shows it is open-ended — with a
+disposition per row.**
+
+### ⚖⚖ SECOND OWNER ASK — `t1225` DECIDES A QUESTION WHOSE RULING IS **NOT IN THE LEDGER**
+
+⛔ **`t1225`'s OWN TEXT: *"the sequence is: land the callee-borrow rule, then this closes; **do not widen the
+reject ahead of it**."*** The same sentence is in `src/semantic/safety/check_expr.rs` and `docs/devbook/11`.
+⛔ **And the ruling it names is ABSENT from the ratified ledger — verified again this heartbeat: zero hits.**
+⛔ **The prescribed diff IS the 8-site `.clone()` on `lib/xtd/httpserver.gg` that the item calls the charter
+breach the ruling exists to remove.** My only counter was a COST premise — **which is not what the ruling is
+about**, and rests on **one wall-clock pair (n=1, no variance) showing an ~8% IMPROVEMENT from ADDING clones,
+which reads as noise.**
+⊕ **B6 has teeth: under the fix, `known_gaps/callable_index_place_double_free.gg` flips rc 0 → REJECT** — and
+`t1225` says pinning the reject *"would pin one of two open answers."* **The commit silently picks one.**
+
+⇒ ⭐ **RE-SPLIT (the reviewer's own recommendation): `D0′` = the `elem_drop`/`elem_clone` half **plus the Deque
+precondition**, self-contained. `D1` (`t1225`) HELD on the owner ask.**
 
 ### ⭐⭐ TWO TRACKS INDEPENDENTLY FOUND THE SAME UNNAMED ZERO-SLACK GATE — IT IS SYSTEMIC
 
