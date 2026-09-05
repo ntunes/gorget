@@ -360,7 +360,7 @@ MIRROR_SITES = ["straight", "while"]
 # THE TOPIC'S OWN POSITIVE CONTROL.
 #
 # The map's `_POSITIVE_CONTROL_broken` proves the HARNESS can see a failure. It
-# does not prove that THIS topic's comparison fires, and a 819-cell topic that
+# does not prove that THIS topic's comparison fires, and an 820-cell topic that
 # cannot demonstrate its own instrument is exactly the kind of thing that
 # quietly measures nothing.
 #
@@ -488,6 +488,9 @@ def main():
             new_rows.append(row)
             continue
         want = {COL_TOPIC: TOPIC, COL_EXPECTED: expected, COL_NOTE: note}
+        # OWNED is the contract; this keeps it enforcing rather than decorative.
+        # COL_CELL is owned but is the key, so it can never differ here.
+        assert set(want) | {COL_CELL} == set(OWNED), "OWNED and `want` disagree"
         for col, value in want.items():
             if existing[col] == value:
                 continue
