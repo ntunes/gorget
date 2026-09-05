@@ -10,7 +10,7 @@
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
-| **C1** | 🔵 brief-review pass 1. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
+| **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
 | **C2** | passes 1–3 BLOCKED → 3 folds → 🔵 pass 4. **Streak 0/3.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0** | 🆕 **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1. | `t1393`–`t1402` |
@@ -449,6 +449,46 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ⚖⚖ OWNER ASK — TRACK C1 MAKES A **WORKING** PROGRAM STOP COMPILING, AND THERE IS NO WAY TO WRITE IT INSTEAD
+
+⛔ **MY BRIEF SAID HEAD WAS `rc 139 SIGSEGV`. MEASURED FALSE at HEAD by the orchestrator:**
+
+```gorget
+struct H:
+    Box[String] b
+void main():
+    H h = H(Box.new("hi"))
+    Box[Box[String]] outer = Box.new(h.b)
+    print((*(*outer)))          # HEAD: prints "hi", rc 0, ASan SILENT
+```
+**Under C1's prototype: `gg build` rc 101, `lower-or-reject`.** ⛔ **The `139` was carried from `t0682`'s note
+about the *ctor* spelling on a *PRE-M1* compiler** — so the fixture the executor was told to write would have
+recorded a false HEAD measurement.
+
+⛔ **NO RECOURSE — all three measured:** `Box.new(^h.b)` → **`E_PartialMove`** (already rejected at HEAD) ·
+**`Box[T]` has NO `clone_fn`** · **`t1077` records that `^` does not rescue nested `Box[Box[T]]`.**
+⇒ **under C1 there is NO WAY TO WRITE THIS PROGRAM.** ⊕ **A second cell has the same trade** — a Box-typed
+**parameter** (`Box[Box[String]] wrap(Box[String] s): return Box.new(s)`): HEAD rc 0 correct, prototype rc 101.
+
+⛔ **AND IT IS THE WRONG KIND OF REFUSAL.** `t0682` asks for a **CHECK-TIME DIAGNOSTIC**; the prototype ships a
+**`panic!` with a `RUST_BACKTRACE` note** on a program that previously produced the right answer. **Core #8's
+reference-grade bar, failed.**
+
+⚖ **THE DECISION, and it is genuinely the owner's:** C1 fixes a **double free** (`gg check` clean, rc 134) by
+deleting a 123-line hand-rolled mint and delegating to the shared producer — Core #4's preferred shape, and the
+self-host already does exactly this. **The cost is that two nested-`Box` shapes that WORK today stop
+compiling.** Options, with what each costs:
+- **(a) SHIP IT** — the double free goes, two working shapes become uncompilable with no recourse. ⚠ Both are
+  shapes `t0682`/`t1077` already track as *intended* to be refused, so this is arguably early rather than
+  wrong — **but "intended to be refused" was decided when they were believed BROKEN, and they are not.**
+- **(b) SHIP IT + a CHECK-TIME DIAGNOSTIC** (what `t0682` actually asks for). **Strictly better than (a)
+  regardless of the ruling** — a cited refusal instead of a compiler panic. **Costs an accept→reject surface
+  change ⇒ Core #9 binds all three lanes.**
+- **(c) NARROW C1** so the nested cells keep working. ⚠ **UNMEASURED — it may not be possible without giving up
+  the delegation that fixes the double free.** Owes a scout.
+
+⛔ **HELD until ruled. I am not launching an executor against a ⭐ "improvement" that is a regression.**
 
 ### ✅ THE F1 REBUILD IS CONFIRMED — ONE FIX, ONE CONSUMER, AND `array_clone` MOVES BY ZERO
 
