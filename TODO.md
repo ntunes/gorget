@@ -13,7 +13,7 @@
 | **C1** | **`v4` written — THREE named changes `{U, C, R}`, ONE commit, `R` WITH-OR-BEFORE `C`.** 🔵 pass 1. Streak 0/3. | `t1329`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D0′** | ✅✅✅ **ALL THREE RULINGS IN.** `v5` written — rulings + 5 blocking + errata folded; 🔵 pass 1. Streak 0/3. ⭐ **f-string walk PULLED OUT (own candidate: `t0691`).** | `t1394`–`t1402` |
+| **D0′** | ⚖⚖ **OWNER ASK — RULING 3 IS NOT IMPLEMENTABLE AS WRITTEN; `t1408` MUST LAND FIRST.** ⛔ And as designed the track would ship an **accept→MEMORY-UNSAFETY** change. Streak 0/3. | `t1394`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | ✅✅ **G** | **INTEGRATED** (9 commits, `2d647456c`). 819 cells + 3 guards + 4 filings. Gates on the merged tree: lib 1187, lints **237**, gen-check, known-gaps census — all green. | `t1384`–`t1392` |
@@ -1401,6 +1401,68 @@ breach stands — the DIAGNOSTIC'S OWN fix-it is broken — but say that.**
 refuses to build at all is **definitionally new**.
 ⭐ **VERIFIED: the killer sentence is LIVE**, the `.clone()` C is **byte-identical (3906 lines each)**, all five
 of my other errata land, and **the four `is_box: true` sites are LINT-PINNED** — a real readiness-row-2 witness.
+
+### ⚖⚖⚖ OWNER ASK — **RULING 3 CANNOT BE IMPLEMENTED AS WRITTEN, AND THE REASON IS ITS OWN WORKED EXAMPLE**
+
+⛔⛔ **THE `DefKind` IS AVAILABLE. THE TYPE-KIND SET IS NOT WELL-DEFINED, AND NO PARTITION OF IT WORKS.**
+**All 16 builtin generic types are registered as `DefKind::Import` with `Span::dummy()`** — **the SAME kind
+`collect_import` assigns to every user `import X` / `from X import y`, including imports of FUNCTIONS and
+CONSTANTS.** Measured with a probe in `define_with_mutability`:
+
+| case | `lookup_type` hit | required verdict |
+|---|---|---|
+| **`int Vector = 5`** — *ruling 2's own example* | `kind=Import dummy=true` | **must be CAUGHT** |
+| `from std.os import args` + a param named `args` | `kind=Import dummy=false` | **must NOT be caught** |
+| `from gir import CMP_NE` + a sibling's `const int CMP_NE = 1` | `kind=Import dummy=false` | **must NOT be caught** |
+
+⇒ ⛔ **BOTH BRANCHES ARE WRONG.** **Include `Import`** → **1191 fires across 92 distinct files** (1190 of them
+`dummy=false`) — **ordinary correct code**: `args` ×326, `CMP_NE`/`CMP_EQ` ×27 each, `OP_ADD`, `stderr`; **all
+five self-host drivers among the 92.** **Exclude `Import`** → **the rule does NOT reject `int Vector = 5`**, nor
+`Box`/`Dict`/`Set`/`Shared`/… — residual coverage across the whole corpus is **exactly ONE cell.**
+⛔⛔ **AND EVERY DISCRIMINATOR INSIDE `Import` IS THE FORBIDDEN NAME LIST IN DISGUISE:** `span == Span::dummy()`
+selects **exactly `BUILTIN_GENERIC_TYPES` + prelude** — ***the list, keyed on a span.*** Resolving the import to
+its TARGET's kind would work, **but the resolver never writes that through** — imports stay `Import`
+placeholders, and other code depends on that.
+
+⭐⭐ **AND THE FAILURE IS MINE IN A NAMED WAY: MY B1 COUNTED THE FIRES AND REPORTED THEM AS A *COST TO BE
+BORNE*. THEY ARE PROOF THE PREDICATE IS WRONG.** *I asked "how many fire?" and never asked "what should the
+check DO with `DefKind::Import`?" — nor noticed that the ruling's own worked example IS one.* **That is the axis
+v5 held fixed.**
+
+⇒ ⚖ **THE ASK: `t1408` — WIDENED TO COVER `Import` — MUST LAND *BEFORE* D0′'s SHADOW-REJECT.** ⛔ **AND THIS
+REVERSES WHAT I TOLD THE OWNER TWO HEARTBEATS AGO** (*"`t1408` next round; landing it second is the experiment
+that proves D0′'s layering"*). **That advice was sound as an ORDERING PREFERENCE and is FALSIFIED AS A
+FEASIBILITY CLAIM: the check is not merely UNDER-COVERING without `t1408`, it is UNDECIDABLE ON THE FLAGSHIP
+CASE.**
+
+### 🚨🚨 AND AS DESIGNED, D0′ WOULD SHIP AN **ACCEPT→MEMORY-UNSAFETY** CHANGE
+
+⛔ **My B5 blamed the residual SIGSEGVs on "construction sensitivity". WRONG — they have NOTHING to do with
+`expr[...](args)`.** `gg parse` on the literal-index cell shows `Call { callee: Index { Index { … } } }` — **no
+generic call, no ambiguity** — and the bind-then-call cell has **no call-through-index at all.** They are
+**`Vector[Callable[…]]` built from a CONTAINER LITERAL, memory-unsafe on ANY read, both backends.**
+⭐ **ALREADY FILED AS `todo/t0873(a)`**, HIGH, with a durable repro and **explicitly sequenced behind `t0406`.**
+⇒ **cite `t0873(a)` and `t0406` and sequence around them; do NOT pin a symptom of theirs inside `t1393`.**
+
+⛔⛔ **CORE #8 — THE REFERENCE-GRADE GATE FIRES:** D0′ turns `fs[n](7)` from a **safe REJECT** into an **ACCEPT**.
+On a literal-built container that accept is **`gg check` clean, `gg build` rc 0, SIGSEGV.** ⊕ **And
+`row = vv[0]; row[n](7)` REJECTS CLEANLY AT HEAD and would become an accept onto the crashing path.**
+⭐ **SIX-Q #6 AT THE DESIGN LEVEL: the prototype's ONE green cell is `.push`-constructed — and `.push`-constructed
+`vv[0][0](7)` ALREADY PRINTS 21 AT HEAD WITH NO FIX.** ⇒ **the disambiguation does real work only in a narrow
+cell, and the brief never separates the two effects.**
+
+⊕ **ER-a — MY ER1 OVER-CORRECTED, AND THE INSTRUCTION WAS THE DANGEROUS DIRECTION.** `self_host_check` and
+`self_host_lowerer`'s `resolve.gg` are **SYMLINKS** (`-type f` → **2**, `-type l` → **2**). ⇒ ***"two copies" was
+RIGHT; my "FOUR files ⇒ two drivers unported" is FALSE, and an executor told "four files" MAY CONVERT SYMLINKS
+INTO REGULAR FILES AND MANUFACTURE THE DIVERGENCE THE ERRATUM WARNED ABOUT.***
+⊕ **ER-e — THE CITED PROTOTYPE IS NOT ON THIS BOX** (`ls /tmp/*ckpt*` → no matches) ⇒ **every "under the
+prototype" claim is unverifiable by the executor**, against the fold rule. ⊕ **ER-b — `4909 files` has NO
+regenerating command and does NOT reproduce** (5730 / 5380 / 2249 depending on the corpus definition).
+⊕ **ER-c — the f-string split names no RECEIVING TRACK**, and the rule is *"each half becomes its own track in
+the SAME round; a split is division, never deferral."*
+⭐ **VERIFIED CORRECT:** B4's two mandatory defences (both hazards real, both defences right), B2 (**ggdef
+accepts and runs BOTH shadow shapes** ⇒ mirror + conformance fixture owed), ER6, **ER9's D38/D39 asymmetry
+framing**, and the ID block.
 
 ### ✅✅✅ RULING 3 (owner 2026-09-05) — **THE CHECK KEYS ON `DefKind`, NEVER A NAME LIST**
 
