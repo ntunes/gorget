@@ -27,6 +27,30 @@
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
 
+### ⚠⚠ MA-5 PREDICTED FOR J × E — **RECORDED BEFORE EITHER RETURNS, BECAUSE THE PARENT IS THE ONE WHO RE-MEASURES**
+
+**Two executors are live on coupled ownership machinery. File zones are disjoint; MA-5 says that settles
+NOTHING.** Concretely, at the merged tree I must check:
+1. ⛔ **THE FOUR LEAK PINS ARE SHARED COUNTERS, AND THIS EXACT HAZARD ALREADY BIT THIS ROUND** (C2 × F1r).
+   **E moves them** (its own delta plus **retiring/tightening rows**), and **J may** (its fixtures are
+   leak-gated). **Each is correct alone and possibly RED together, because each measured base+itself.**
+   ⇒ ⛔ **RE-MEASURE ALL FOUR FROM THE MERGED TREE AND SET THEM FROM THE MEASURED OUTPUT — NEVER BY ADDING**
+   (Core #5). The values are `assert_eq!` and figures-DB mirrored, so an arithmetic guess is a red gate.
+2. ⛔ **E SWAPS THE SANITIZE GATE'S POSITIVE CONTROLS.** Until that lands, **the sweep hard-fails *"the gate's
+   own instrument is broken"* BEFORE producing any corpus verdict** ⇒ **integrate E's control swap before
+   running ANY sweep on the merged tree**, or the round-close battery reds for a reason unrelated to either
+   diff.
+3. ⚠ **A `Vector[Callable]` ELEMENT WOULD ROUTE THROUGH BOTH PATCHES** — J makes `fill`'s element a **consuming
+   position** (`consuming_positions_by_name`), and E rewrites how a **closure argument** is minted and drained.
+   **Neither track's fixtures exercise that intersection**, and *"a diff of two PROGRAMS cannot show whether two
+   PATCHES compose."* ⇒ **build `Vector[Callable].fill` at the merged tree; it is one probe.**
+4. ⊕ **Both touch `tests/sanitize/LEAK_ALLOWLIST.txt`** — E for the controls and its retirements, J for its
+   fixtures. **A textual merge that resolves cleanly can still be semantically wrong: re-derive the row set, do
+   not eyeball the conflict.**
+
+⭐ **Recorded NOW rather than at integration, because the merged-tree re-measure is the parent's job and the
+briefs that would have reminded me are deleted at round close.**
+
 ### ⚖⚖ A GENUINE OWNER ASK — **AND MY BRIEF TOLD THE EXECUTOR NOT TO RAISE IT** (`t1443`, non-blocking)
 
 **L's pass 4 refused an instruction reading *"✅ NO OWNER ASK — Settled. Do not raise a question."* It was right.**
