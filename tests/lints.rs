@@ -31065,12 +31065,18 @@ fn robustness_map_manifest_and_cells_reconcile() {
     let control_src = rows
         .iter()
         .find(|r| r[RMAP_COL_CELL] == CONTROL_SRC)
-        .expect(
-            "{CONTROL_SRC} is gone: topic 30's positive control is \
-             drawn from it. Re-point CONTROL_SOURCE/SITE/PAYLOAD in \
-             scripts/gen_value_semantics_cells.py at another row that is green on \
-             every lane, and update this guard in the same commit.",
-        );
+        // `Option::expect` takes a plain &str, NOT a format string, so `{}`
+        // would print literally here. `unwrap_or_else(|| panic!(...))` is the
+        // interpolating form; the `assert!`/`assert_eq!` siblings below are
+        // format contexts already and interpolate correctly.
+        .unwrap_or_else(|| {
+            panic!(
+                "{CONTROL_SRC} is gone: topic 30's positive control is drawn \
+                 from it. Re-point CONTROL_SOURCE/SITE/PAYLOAD in \
+                 scripts/gen_value_semantics_cells.py at another row that is \
+                 green on every lane, and update this guard in the same commit."
+            )
+        });
     for (col, lane) in RMAP_LANE_COLS {
         assert_eq!(
             control_src[*col], "WORKS",

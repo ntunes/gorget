@@ -261,7 +261,11 @@ COL_LLVM, COL_SELFHOST, COL_DIVERGE, COL_ASAN, COL_GGDEF = 6, 7, 8, 9, 10
 OWNED = (COL_TOPIC, COL_CELL, COL_EXPECTED, COL_NOTE)
 
 # --------------------------------------------------------------------------
-# PAYLOAD axis. Witness: `DropStrategy` (src/ir/types.rs) x container kind.
+# PAYLOAD axis. Witness: the "Valid combinations" table in `src/ir/types.rs`,
+# which enumerates the legal `(CopySemantics, DropStrategy)` PAIRS. The axis is
+# the PAIR, never `DropStrategy` alone -- see the SCOPE LIMITS section of the
+# module docstring, which dispositions all six and records that these seven
+# payloads are ONE of them, `(Resource, Trivial)`.
 #   ty   : declared type of the local / field that is VIEWED
 #   init : initial value expression
 #   mut  : the mutation, "{T}" = the place being mutated
@@ -625,11 +629,15 @@ def main():
         # Regenerate the reordering from the two committed revisions rather than
         # trusting a figure here (Core #15a). `224da7ae7` is the last revision
         # before topic 30; `82bbdf12f` is the one that landed it:
+        #   D=$(mktemp -d)          # NEVER bare /tmp/before -- /tmp is shared
+        #                           # across every agent on the box and a
+        #                           # fixed filename there collides SILENTLY
+        #                           # (AGENTS.md multi-agent rule 9).
         #   git show 224da7ae7:tests/fixtures/robustness_map/MANIFEST.tsv \
-        #     | tail -n +2 | cut -f2 > /tmp/before
+        #     | tail -n +2 | cut -f2 > "$D/before"
         #   git show 82bbdf12f:tests/fixtures/robustness_map/MANIFEST.tsv \
-        #     | tail -n +2 | cut -f2 | grep -v '^vsm_' > /tmp/after
-        #   diff /tmp/before /tmp/after | grep -c '^<'
+        #     | tail -n +2 | cut -f2 | grep -v '^vsm_' > "$D/after"
+        #   diff "$D/before" "$D/after" | grep -c '^<'
         #
         # !! AND STATE WHICH MEASURE, because the two obvious ones disagree by
         # 50%: that command counts rows in the MINIMAL EDIT SCRIPT (317), while
@@ -638,7 +646,7 @@ def main():
         # regenerable claim. The load-bearing fact is not the count at all -- it
         # is that the SET is identical and only the ORDER changed, which the same
         # two files show:
-        #   diff <(sort /tmp/before) <(sort /tmp/after)   # empty
+        #   diff <(sort "$D/before") <(sort "$D/after")   # empty
         #
         # It is safe, and the distinction is ORDER versus CONTENT. Only `new_rows`
         # is constructed here; an existing row is the parsed list itself and is

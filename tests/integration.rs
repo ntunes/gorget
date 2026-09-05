@@ -5808,6 +5808,59 @@ fn known_gap_weak_vector_bound_handle_upgrade_leak() {
     assert_gg_sanitize_clean("known_gaps/weak_vector_bound_handle", "2\n9");
 }
 
+/// `todo/t1388` — THE FOURTH ROUTE OF `t0840`'s CLASS, and the one its fix did
+/// not add a consumer for.
+///
+/// `t0840` (DONE.md 2026-08-31) established that `Shared__T__clone` takes its
+/// handle BY VALUE while `Shared__T__drop` takes it BY ADDRESS, so any site that
+/// hands the SLOT ADDRESS to the incref increfs whatever the address points at.
+/// Its fix added three consumers of `is_refcount_clone_type_name` — the
+/// container write, the receiver, and the element read. A BARE LOCAL BIND is a
+/// fourth route, and it consults nothing:
+///
+/// ```text
+/// grep -c "is_refcount_clone_type" src/ir/lowering/stmts/mod.rs   # -> 0
+/// ```
+///
+/// The emitted C is unambiguous — `__v3 = &__s1; __v5 = Shared__int64_t__clone(__v3);`
+/// into a by-value parameter. `strong` is field 0, so the incref adds 1 to the
+/// bytes of `__s1` itself and returns `&__s1` as `b`.
+///
+/// ⚠ TWO ROWS, ONE DEFECT, AND THE QUIET ONE IS THE REASON THIS FIXTURE READS
+/// BOTH NAMES. Reading `a` SIGSEGVs; reading `b` ALONE returns a garbage integer
+/// at **rc 0 on both backends** — silent wrong output. A fix that clears the
+/// crash and stops leaves that standing.
+///
+/// The contrast that localizes it: `Shared[int] b = a.clone()` prints the
+/// intended `7 / 7`, because the explicit-clone path DOES read the predicate
+/// (`src/ir/lowering/exprs/methods.rs`). Same program, same types, one spelling
+/// apart — Core #8's "two spellings, different results".
+///
+/// Un-ignore when the bare bind loads the handle before the incref.
+#[test]
+#[ignore = "todo/t1388 — a bare local bind of a refcount handle (`Shared[int] b = a`) passes the \
+SLOT ADDRESS to the by-VALUE incref, corrupting `a` (SIGSEGV) and making `b` point at `a`'s stack \
+slot (garbage at rc 0 on both backends). Fourth route of t0840's class; the bare-bind path never \
+consults `is_refcount_clone_type_name`. Asserts the intended value on BOTH names."]
+fn known_gap_shared_bare_bind_handle_segv() {
+    run_gg("known_gaps/shared_bare_bind_handle_segv.gg", "7\n7");
+}
+
+/// The SANITIZER twin of `known_gap_shared_bare_bind_handle_segv`, and an
+/// ADDITION beside it rather than a rewire of it.
+///
+/// The value lane sees the crash but is structurally blind to WHY: under ASan
+/// the same program reports the misaligned/invalid access inside
+/// `Shared__int64_t__get`, which is what distinguishes "the handle was
+/// corrupted" from "the value was wrong". A memory defect pinned only on a value
+/// lane is pinned by an instrument that cannot see its own class (Core #13).
+#[test]
+#[ignore = "todo/t1388 — the ASan twin of the bare-bind handle corruption. Asserts the intended \
+sanitizer-clean run printing 7 and 7."]
+fn known_gap_shared_bare_bind_handle_segv_sanitize() {
+    assert_gg_sanitize_clean("known_gaps/shared_bare_bind_handle_segv", "7\n7");
+}
+
 #[test]
 fn channel_clone_by_value_incref() {
     // Cell: handle = Channel — and the first half needs NO container: the

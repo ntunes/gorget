@@ -1,0 +1,31 @@
+# todo/t1388 — a BARE LOCAL BIND of a refcount handle passes the SLOT ADDRESS to
+# a by-VALUE incref. No call, no container, no sigil: two names and a read.
+#
+# `Shared__T__clone` takes its handle BY VALUE while `Shared__T__drop` takes it
+# BY ADDRESS, and the bind emits `clone(&__s1)`. `strong` is field 0, so the
+# incref adds 1 to the bytes of the pointer variable `__s1` ITSELF, and the
+# "clone" it returns is the address of `a`'s own stack slot. Hence BOTH rows
+# below, from one defect:
+#
+#   * reading `a` after the bind  -> the corrupted handle -> SIGSEGV
+#   * reading `b` after the bind  -> `a`'s stack slot as a handle -> a garbage
+#     integer at rc 0, on BOTH backends. SILENT WRONG OUTPUT, no crash. An
+#     executor who fixes the crash and stops leaves this one standing, which is
+#     why both reads are in this fixture rather than only the loud one.
+#
+# This is the SAME class as the closed `t0840` (DONE.md 2026-08-31), whose fix
+# added THREE consumers of `is_refcount_clone_type_name` — the container write,
+# the receiver, and the element read — and left the bare-bind path with none:
+#   grep -c "is_refcount_clone_type" src/ir/lowering/stmts/mod.rs   -> 0
+# `a.clone()` prints the intended `7 / 7` precisely BECAUSE the explicit-clone
+# path does consult the predicate (`src/ir/lowering/exprs/methods.rs`).
+#
+# INTENDED: the incref takes the handle by VALUE, `b` is an independent handle
+# on the same control block, and both names read 7.
+from std.sync import Shared
+
+void main():
+    Shared[int] a = Shared[int](7)
+    Shared[int] b = a
+    print(f"{a.get()}")
+    print(f"{b.get()}")
