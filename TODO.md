@@ -16,7 +16,7 @@
 | **D0′** | ⭐ **SCOUT DELIVERED — HYPOTHESIS HALF RIGHT; the fix is REAL but it is NOT a parser fix and the ORDER REVERSES.** Streak 0/3, brief `v3` next. ⚖ one PRECISE ratification question. | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| ✅ **G** | **6 passes, DESIGN SIGNED OFF, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⚖ owner-ratified. **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
+| **G** | **`831d5b37e`** — OUTPUT-REVIEW: everything substantive VERIFIED (several to the cell); **1 BLOCKING (doc-only) + 4 errata.** 🟢 executor resumed. ⭐ **The review ANSWERED the question the executor could not: the red battery IS clearable this round.** | `t1384`–`t1392` |
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
@@ -1314,6 +1314,58 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ⭐⭐⭐ G's OUTPUT-REVIEW — THE RED FIVE-LANE GATE **IS CLEARABLE THIS ROUND**, BY A COMMAND ITS OWN ITEM SAYS DOES NOT EXIST
+
+⭐⭐ **`t1385`'s CENTRAL MECHANISM CLAIM IS WRONG, AND THE REVIEWER MEASURED THE ALTERNATIVE END-TO-END.** The
+item says *"`--seed-new` does not help either, for the same reason"* — **that reasoning covers only the
+`first_seen` branch.** It misses the **per-lane SECOND seeding branch**, which fires regardless of `first_seen`;
+and `diverges` is computed over VALUE lanes only, so ⭐ **a run measuring ONE value lane cannot produce a
+divergence at all.** Measured:
+```
+--lanes selfhost,asan,ggdef --accept --seed-new --topic "11 closures"   ->  63 rows SEEDED, BARE_RC=0
+--lanes all --topic "11 closures"                                        ->  8 divergences, 0 NOT in baseline, rc 0
+```
+⇒ **4 short runs (topics 07/10/11/13, 93 cell-lanes) + REVIEW THE PROPOSED BUCKETS + delete the 31 legacy
+entries.** ⚠ **The item was RIGHT that the real work is the bucket review, not the flag.** ⛔ **AND THE LIMIT IS
+NAMED: this works because all 11 divergences are BUCKET-VISIBLE; a future WRONG-vs-WRONG-DIFFERENT-VALUE row
+would NOT clear this way.**
+⛔ **`t1387` (the ASan leak) has NO ACCEPT PATH AT ALL and MUST BE FIXED** — `base` is non-empty `WORKS` ⇒ the
+REGRESSION branch; `--accept` refuses regressions, `--seed-new` needs `not base`, `--accept-drift` needs
+`base != good`. **Accepting it would pin a bug.** ⇒ **its own track — a drop-registration defect is a different
+CLASS from a corpus track.**
+
+⛔⛔ **AND A FACT THAT DECIDES WHETHER THE BATTERY IS EVEN GREEN: `AGENTS.md`'s round-close row prescribes BARE
+`python3 scripts/robustness_map.py`, WHICH IS `--lanes c` (the default) AND IS GREEN — while the prose beside it
+says "five lanes". CI runs `--lanes c,llvm` AND `--lanes all`, so CI's FIVE-LANE STEP IS RED.**
+⇒ ⭐ **THE BATTERY IS GREEN AS WRITTEN AND RED IN SPIRIT.** ⚠ **`round_close_battery_covers_ci_steps` reconciles
+the battery against CI and did NOT catch this — so it matches STEPS, not ARGUMENTS.** *That is the exact
+sentence the lint exists to keep true, failing on a flag.* **ORCHESTRATOR'S CALL, and it is not waivable.**
+
+### ⛔ G's BLOCKING FINDING IS **SIX-Q #4 IN THE SCOPE DISCLOSURE ITSELF**
+
+The generator claims its seven payloads *"cover all four values"* of `DropStrategy`. **`Custom` is NOT covered —
+zero cells carry a user `equip … with Drop`.** ⭐⭐ **And it is not a miscount: the same two lines that set
+`Custom` also set `CopySemantics::Resource`, so the BARE VIEW BIND ALL 819 CELLS RELY ON IS REJECTED**
+(`E_MoveWithoutOperator`). ⇒ ***the fourth value is A CELL WITH NO SUBJECT** — the rule "every other place reads
+the value it had before" has no second place there, and NO WIDENING REACHES IT.* **Text-only fix; by the
+track's own D11/D21 standard, a WRONG durable disclosure is worse than an incomplete one.**
+
+⊕ **Three more Core #14 / SIX-Q #2 residues:** a comment stating that sorting the whole file *"would rewrite
+rows this generator does not own"* — **on the line immediately above the code that sorts the whole file**, which
+**did** reorder legacy rows (content provably preserved) · the control's *"drawn from a row green on every
+lane"* invariant has **no enforcing guard**, so if that row regresses the control starts MATCHING and the map
+reports *"harness is blind"* **for a compiler regression** · and ⭐ **the CONTROL carve-out is
+SELF-AUTHORISING: a normal row can exempt itself from the empty-baseline guard by writing `CONTROL` into column
+3**, with `control_rows >= 2` a **floor and no ceiling** — a cell broken on all five lanes would be silently
+exempt AND green.
+
+⭐ **CORE #8 AT SCALE, CONFIRMED BY BUILDING BOTH LANES:** 237 DIVERGENT rows, **all C/LLVM against a self-host
+that is correct on all 819.** The reviewer's honest scoping: **narrower than *"the self-host is the better
+compiler"*, stronger than an anecdote — 819 programs in ONE bug family where the self-host implements the
+ratified §3.5/D52 answer and Rust gg does not on 237 of them, GATED rather than swept.** ⊕ **And the
+subdirectory premise is FALSE HERE:** the map runs its OWN self-host lane over every cell, per-row and gated
+⇒ **819/819 WORKS is a STRONGER same-round SH discharge than a top-level fixture would give.**
 
 ### ⏸ **RULING PAUSED BY THE OWNER 2026-09-05 — `d[k](v)` IS *NOT* RULED. TREAT v3 AS UNBLOCKED-PENDING.**
 
