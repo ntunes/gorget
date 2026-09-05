@@ -517,6 +517,21 @@ write site is **not regenerable by the command it names**; and *"sources for eve
 ⇒ ⚠ **THE ORACLE SET MUST BE PRESERVED WHOLE, NOT JUST `gg_ws`** — `gg_head`/`gg_d0`/`gg_full` are each other's
 controls and MA-6 prunes them at round close.
 
+### ▸ D0′ v3 IS A SCOUT, AND THE **CHEAP TRUE THINGS MUST NOT DIE WITH THE BRIEF**
+
+⭐ **Even a track that ships no fix this round owes these — all measured, all independent of which route wins:**
+`t1393` (Deque's index read elides `clone_to_owned`: 2 vs 3; **width is correct at 16 B**) · `t1394`
+(`Shared[T]`/`Box[T]` element never reaches the ctor decider) · `t1395` (`Vector[Box[UserStruct]]`
+`redefinition` — **PRE-EXISTING, identical on all four oracles**) · `t1396` (`Set`/`HashSet` accept a
+non-`Hashable` `Callable`) · the **3 Core #2 `starts_with("Callable__")` sites** · the **Core #14 dead
+"defensive backup" comment** · the **`Callable_Foo` prefix hazard** (prefix + next-byte-`_`, so a SINGLE
+underscore matches). ⚠ **The MECHANISMS are recorded ABOVE, in this committed file, precisely because briefs are
+`/tmp`-only and pruned at round close — that is the new rule applied to its own author.**
+
+⊕ **THE ORACLE SET IS PRESERVED WHOLE** — `gg_head` · `gg_d0` · `gg_full` · `gg_ws` + cell sources, out of
+`/tmp` and out of MA-6's round-close prune. **They are each other's CONTROLS; keeping only the "winner" is how
+the no-op column went unnoticed.**
+
 **Readiness: 0 of 5.** ⛔ **SIX-Q #2 IN ITS PUREST FORM: the full sanitize sweep, the 20-fixture set AND the
 10-cell matrix ALL PASS `gg_ws` while it double-frees.** The prescribed guard set green-lights the class it
 exists to retire — and *"the 20-fixture corpus contains no `[]`-literal + bare-index cell"* is **coverage luck,
