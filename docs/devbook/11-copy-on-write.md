@@ -788,7 +788,7 @@ unwrapped (guarded by `test_option_resource_field`). The discriminator is `place
 
 | Loop kind | Element handling | Status |
 |-----------|------------------|--------|
-| `for x in array` (and `.enumerate()`) — string element | `index_load_borrow` mints the DROP-SAFE `cap==0` view (`borrow_view_fn`); slot IS drop-registered and tagged `Borrowed{CollectionElement}` | borrow |
+| `for x in array` (and `.enumerate()`) — string element | `index_load_borrow` mints the DROP-SAFE `cap==0` view (`borrow_view_fn`); slot IS drop-registered and tagged `Borrowed`, with the origin following the SOURCE — `CollectionElement` for a local iterable, `FieldPath` for a field chain | borrow |
 | `for x in array` — recursive struct element | `Ptr(elem)` alias, no clone, no drop reg | borrow |
 | `for x in array` — enum element (Option/Result/user) | `Ptr(elem)` alias + `build_enum_recv_ptr` | borrow |
 | `for (i, x) in array.enumerate()` — recursive struct/enum element | `Ptr(elem)` alias, same gate as the plain array loop | borrow |

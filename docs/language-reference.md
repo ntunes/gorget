@@ -2549,11 +2549,13 @@ A move capture is never inferred; it is requested with `^`.
 > **for-loop** iterable the outcome depends on the form of the write far more
 > than on the element type. A mutation **through** the element (`e.field = …`,
 > `e.push(…)`) writes through correctly for a struct or `Vector` element;
-> **rebinding** the element (`e = …`) is silently lost at **every** element type
-> measured — `int`, plain struct, `Vector` and `String` alike — so it is the
-> whole-binding rebind, not the element type, that names the class. A `String`
-> element additionally loses a mutation-through (`e.push('!')`).
-> Continuing the divergences: `&` through a
+> **rebinding** the element **under `&`** (`for e in &coll: e = …`) is silently
+> lost at **every** element type measured — `int`, plain struct, `Vector` and
+> `String` alike — so it is the whole-binding rebind, not the element type, that
+> names the class. (Under the BARE form the same rebind is *correct*: that
+> binding is a mutable private copy and the collection is meant to be left
+> intact — §9.6.) A `String` element additionally loses a mutation-through
+> (`e.push('!')`). Continuing the divergences: `&` through a
 > `Callable`-typed **value** — a local, or a parameter whose type declares the
 > sigil (`Callable[void(int &)] cb`) — segfaults on both backends when called,
 > and a `&`-declared `Callable` parameter (`Callable[…] &cb`) ICEs the compiler
@@ -2861,8 +2863,9 @@ the job of the `&` sigil (and `for x in &coll`): a change made through an
 `&` borrow reaches the original. Gorget is deliberately more tolerant than
 Rust here — Rust rejects a mutation through an immutable borrow; Gorget
 copies instead. (See §9.1's status note: element write-through is currently
-lost through a comprehension iterable, and through a for-loop iterable it
-depends on the element type *and* on the form of the write.)
+lost through a comprehension iterable, and through a `&` for-loop iterable a
+whole-binding rebind is lost at every element type, while a mutation *through*
+the element lands for a struct or `Vector` element but not a `String` one.)
 
 The compiler also optimises last-use: if the source isn't live past the
 assign, the IR-lowering picks Move instead of Borrow (still no clone,
@@ -2919,7 +2922,7 @@ a closed inventory.
 
 **`.clone()` works on all types.** Explicit `.clone()` calls route to the correct clone function: collections use `gorget_array_clone`/`gorget_map_clone`/etc., user structs use generated `{Name}__clone`, copy types return the value unchanged.
 
-**Collection `.get()` returns a read-only borrow.** Both `auto` and typed bindings produce borrows — there is no implicit clone on read. Mutating the bound value materializes a private copy (the collection is untouched); to change the element in the collection, use a mutable borrow (`&`, `for x in &coll`) or a direct place mutation (`v[i] = x`, `v[i].m()`) — ⚠ the `&` forms are the specification, but the compiler currently drops a **whole-binding rebind** of a loop element (`for x in &coll: x = …`) at every element type — `int`, plain struct, `Vector` and `String` alike; only a mutation *through* the element (`x.field = …`) lands (see §9.1's status note) — so a program relying on that spelling is silently wrong today:
+**Collection `.get()` returns a read-only borrow.** Both `auto` and typed bindings produce borrows — there is no implicit clone on read. Mutating the bound value materializes a private copy (the collection is untouched); to change the element in the collection, use a mutable borrow (`&`, `for x in &coll`) or a direct place mutation (`v[i] = x`, `v[i].m()`) — ⚠ the `&` forms are the specification, but the compiler currently drops a **whole-binding rebind** of a loop element (`for x in &coll: x = …`) at every element type — `int`, plain struct, `Vector` and `String` alike. A mutation *through* the element (`x.field = …`, `x.push(…)`) lands for a struct or `Vector` element, but **a `String` element loses that too** (see §9.1's status note) — so a program relying on that spelling is silently wrong today:
 
 ```gorget
 auto entry = v.get(i).unwrap()    # read-only borrow into v's storage

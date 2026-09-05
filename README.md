@@ -117,7 +117,7 @@ void main():
     print(a[0])                    # 99 — the change reached the caller (&)
 ```
 
-That's the whole model: **bare borrows and copies-on-write, `&` writes through, `!` moves** — one rule at every position. (Where Rust would *reject* the write through a bare binding, Gorget copies instead — it's more tolerant.) It works the same for user structs, enum variants, and `for` loops: `for x in coll` borrows each element read-only, `for x in &coll` writes through.
+That's the whole model: **bare borrows and copies-on-write, `&` writes through, `!` moves** — one rule at every position. (Where Rust would *reject* the write through a bare binding, Gorget copies instead — it's more tolerant.) It works the same for user structs, enum variants, and `for` loops: `for x in coll` binds each element as a mutable private copy — writing to it is allowed and leaves the collection intact — and `for x in &coll` writes through.
 
 For comparison, Swift gives copy-on-write only to its **standard-library** collections (`Array`, `Dictionary`, `Set`, `String`) — your own types don't get it unless you implement `isKnownUniquelyReferenced` by hand. C++ copies eagerly via copy constructors; avoiding the copy is **manual** (`std::move`, references). Gorget's CoW is automatic, lazy, and applies to every resource type — user structs included.
 
