@@ -685,7 +685,47 @@ self-host closure — a bound on PLACES, not on clone VOLUME**, so one hot-path 
 ⚠ **F3 is unblocked; F2 remains gated on F1**, and ⛔ **row 4 of the decision table IS `t1362` — unsound at
 HEAD.** The ruling sits on top of a mechanism that is currently broken.
 
-### ⚖ R2 — STILL OPEN, AND BOTH OF MY EARLIER ARGUMENTS FOR IT WERE WRONG
+### ⚖ R2 — OWNER LEANS **BARE = SNAPSHOT, `&` = REJECT**, AND THE SIGIL ALREADY CARRIES THAT MEANING
+
+**Owner 2026-09-05: *"We have the `for i in v` vs `for i in &v` distinction. I think I would lean snapshot in
+the bare version."*** ⭐ **This is §3.5 read LITERALLY, through a sigil the compiler currently ignores at this
+position — not a new rule.**
+
+| spelling | what `&` ALREADY means | §3.5 | proposed |
+|---|---|---|---|
+| `for i in v` | no write path ⇒ **READER** | *"a reader can be rescued"* | **SNAPSHOT** |
+| `for i in &v` | *"the write goes through"* ⇒ **WRITER** | *"a **writer** never can, because copying a writer would silently discard its writes"* | **REJECT** |
+
+⭐⭐ **THE DISTINCTION IS ALREADY RATIFIED — `tests/fixtures/known_gaps/sound_for_amp_scalar_elem_writethrough.gg`
+says so in its own header:** *"`for x in &v` binds each element as a mutable borrow, **which is the whole point
+of the sigil** (D31 full-strict: `&` means the write goes through)"*, and *"the resource-element twins of this
+shape **already write through**"*. ⇒ **the owner is pointing §3.5 at a distinction the language already has,
+half-implemented and pinned.**
+
+⛔ **MEASURED AT HEAD — BOTH SPELLINGS REJECT IDENTICALLY** (`error[E_MutationWhileBorrowed]` for `for i in v`
+**and** `for i in &v`). **The sigil carries NO distinction at this position today**, so the ruling SUPPLIES
+meaning where the compiler collapses two cases — it does not undo a deliberate choice.
+
+⛔ **I RETRACT MY "REJECT BOTH" RECOMMENDATION.** It rested on *"§3.5's escape is calibrated for element-sized
+views"* — **a size criterion I INVENTED and attributed to §3.5, which says reader-vs-writer and nothing about
+size.** The charter objection also fails: under reject the user hand-writes `d.keys()` first, **the same O(n)
+copy, merely visible**; beating it needs ALGORITHM RESTRUCTURING, and the charter governs **clone placement**.
+
+**TWO CONDITIONS, both load-bearing:**
+1. ⛔ **`implicit_clones=warn` SHIPS WITH IT, NOT AFTER.** The rule **UN-REJECTS** — a compile error becomes a
+   silent O(n) **inside a loop**, the worst place for an invisible cost. ⭐ **Track F's scout reached the same
+   sequencing from MLKit's retrospective, independently and from the cost axis. Two lines landing on one
+   conclusion.**
+2. ⛔ **SCALAR `&` WRITE-THROUGH IS A PREREQUISITE, NOT A FOLLOW-UP.** Measured: `for i in &v: i = i * 2`
+   **type-checks clean and prints `1`** — the write is **silently discarded** (Core #10). **Until `&` honours
+   its own meaning it cannot be the discriminator** — it would reject on the strength of a capability it does
+   not have. Already scoped as [[t0045]] with a live pinned test asserting the correct answer.
+⊕ **A good property of the ruling: the implicit clone is ESCAPABLE BY A ONE-CHARACTER EDIT.** Writing `&v`
+gets an error telling you to restructure, instead of a snapshot you did not ask for.
+⛔ **AND IT IS A DEFECT UNDER EITHER RULING TODAY:** `for k, v in d.iter(): d.put(...)` **HANGS and is
+OOM-KILLED (rc 137)** — it neither rejects nor snapshots. **Needs filing regardless of which way R2 falls.**
+
+### ⚖ R2 — SUPERSEDED REASONING (retained; do not act on it)
 
 ⛔ **I told the owner `t1361` and R2 were structurally identical. THEY ARE NOT, and the owner caught it.**
 `t1361` is a **missing TYPE CHECK** — `p` is an `int`, `int` has no fields, `p.bogus_field` is ill-typed;
