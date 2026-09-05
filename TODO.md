@@ -48,8 +48,21 @@ namespace is **blind to the two spellings most likely to be shadowed by a callab
 ### ✅ ALL TEN TRACKS INTEGRATED — ROUND-CLOSE BATTERY IN FLIGHT (2026-09-05)
 
 **Integrated:** A1 · C2 · F1r · G · H · K · E · A2 · J · L. **Head at close-start: `ba1ca28b3`.**
-**Convergence (MEASURED, does not gate):** `known_gaps 17→17 · TODO items 870→936 · net +66`
-(regen: `scripts/convergence.sh 17 870 78` — 78 filed, 12 closed).
+**Convergence (MEASURED, does not gate):** `known_gaps 17→17 · TODO items 870→938 · net +68`
+(regen: `scripts/convergence.sh 17 870 94` — **94 filed, 26 closed**).
+⛔ **COUNT THE COMMIT RANGE, NOT THE TWO ENDPOINTS — MY FIRST FIGURE WAS WRONG IN BOTH COLUMNS.**
+`git diff --diff-filter=A|D bee51d536..HEAD -- todo/` reports **78 filed / 12 closed**; walking the range
+(`git log --diff-filter=D --name-only --format= bee51d536..HEAD -- todo/`) reports **94 / 26**. **Sixteen items
+were filed AND closed inside the round** — `t1362`, `t1385`, `t1387`, `t1407`, `t1410`, `t1421` among them —
+and an endpoint diff is structurally blind to every one. The round closed **more than twice** what I first
+reported.
+⚠⚠ **AND HERE IS WHY IT SURVIVED MY OWN CHECK: I VALIDATED AN ENDPOINT NUMBER AGAINST AN ENDPOINT NUMBER.**
+The convergence script's *implied closed* matched my *measured deletions* exactly — 12 = 12 — so it looked
+self-consistent. **Both came from the same blind method.** Two figures from one broken instrument agreeing is
+not corroboration; it is the instrument agreeing with itself. Same family as devbook/29's *"a control that
+shares the broken harness is not a control"*. ⇒ **the reconciliation that actually works is arithmetic against
+the TREE: `base + filed − closed == ls todo/*.md | wc -l`** (870 + 94 − 26 = 938 ✓; the endpoint figures give
+936 ✗).
 ⚠ **R49's RECORDED BASELINE DOES NOT REGENERATE — do not inherit it.** `DONE.md` records R49 as
 `todo_items=887`; the tree at `bee51d536` has **870** (`git ls-tree -r --name-only bee51d536 -- todo/ |
 grep -c '\.md$'`). Using 887 implied 29 closures against 12 measured deletions. **Measure the baseline from
