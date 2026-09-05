@@ -54,7 +54,7 @@
   **iff `CalleeBorrows && HeapOwned`**, because a `NullEnv` temp has no heap block and freeing it is a fault,
   not a leak fix; and mint-with-init because freeing an UNINITIALIZED `GorgetClosure` is corruption, not a
   leak. **Proven a PURE EXTRACTION: emitted C byte-identical on one firer of every (owner × arm) cell that
-  exists in the corpus** (5 cells; the case-2a × `DestinationOwns` firer is `dict_box_callable.gg`). The
+  exists in the corpus** (**SIX** cells — corrected by the output-review: the record said five and omitted `(DestinationOwns, case1_funcref)`, witnessed by `tests/fixtures/callable_callee_shape_axis.gg` at 10 fires. The conclusion holds *a fortiori* — that cell registers nothing under either owner — but the count was wrong. The case-2a × `DestinationOwns` firer is `dict_box_callable.gg`). The
   now-dead `debug_assert!` was **DELETED, not documented** (Core #14) — it was one-directional (it could fire
   only on over-registration, never on the FORGET that is the leak) and debug-only.
   ⛔ **AND `#[must_use]` DOES NOT CATCH THIS CLASS — MEASURED WITH rustc.** `mint();` warns; `let t = mint();`
