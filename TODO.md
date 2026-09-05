@@ -8,9 +8,9 @@
 | track | scope | ids |
 |---|---|---|
 | **A** | **`t1077`** ✅ SCOUTED → brief-review pass 1. **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
-| **B** | **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
-| **C** | **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D** | **`t1225`** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
+| **B** | 🔵 SCOUTING. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
+| **C** | 🔵 SCOUTING. **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
+| **D** | 🔵 SCOUTING. **`t1225`** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
@@ -102,6 +102,60 @@ and fast but makes users reason about compiler internals fails *simple* — the 
 gate on any model, so a model that cannot be measured against the current fast path is a proposal, not an
 answer.
 
+### ✅ THE COW DESIGN SCOUT RETURNED — AND IT INVERTED THE PREMISE IT WAS SENT TO PROTECT.
+**Its verdict on the owner's unified-model ask: `D41` DOES NOT NEED TO BEND, `SelfRef[T]` IS UNNECESSARY, and
+`docs/language-design.md` §3.5 ALREADY IS THE UNIFIED MODEL** — legality and cost are two outcomes of one
+conflict predicate, and *"eager vs lazy is not a rival seam; it is the length of the live range."* The
+apparent `D41` violation was **manufactured by a compiler defect**, so there was no design conflict to
+resolve.
+
+⛔ **`t1307`'s PREMISE IS MEASURED FALSE — the stored-borrow path was NEVER fast.** Regenerate (orchestrator
+ran this at HEAD, 500-entry `Dict[int,int]`, both forms printing the same correct answer):
+```bash
+./target/debug/gg run <fixture with `for k, v in d.iter()`> --clones=stats 2>&1 | grep clone-stats
+./target/debug/gg run <same fixture with builtin `for k, v in d`> --clones=stats 2>&1 | grep clone-stats
+```
+`.iter()` clones 4× per element and frees almost none; the builtin clones zero. The scout took it to
+**OOM-kill at N=200 000**. **Clone counts are IDENTICAL at the commit that introduced the "lazy bucket walk"
+and every commit since — the pointer walk NEVER EXISTED.** The `DONE.md` entry claiming *"no allocation
+beyond the iterator struct"* was **a source-read, not a run**, quoted forward for months.
+⚠ **It was already filed as `t0952`, and admitted on TEN `LEAK_ALLOWLIST.txt` rows — so the sanitizer has
+been green BY ADMISSION**, which is exactly why nobody looked. `t0952` **re-graded MED → HIGH**; its write
+site is **one layer above where the item pointed** (the generic collector degrades a declared `Ref[T]` param
+to `Unit`/`ByValue` through a mapper that refuses `Ref`). Measured prototype: **zero clones, zero leak** at
+`/tmp/recover_scout_cow_t0952_prototype.patch` — ⛔ **an executor USES THE PATCH, never a retyped snippet.**
+⊕ **This makes the owner's constraint EASY, not hard.** *"Whatever we replace it with must be equally fast"*
+names a bar that does not exist. ⚠ **`t1307` stays LOW/documentation per the owner, and the owner said DO NOT
+FIX IT NOW** — the addendum only records what was measured.
+
+**NEW ITEMS FROM THE SCOUT + THE ORCHESTRATOR'S OWN VERIFICATION — none is on a track yet:**
+- **`t1359` CRITICAL** — `gorget_set_clone` copies `key_drop` but NOT `key_clone`/`key_materialize`, while its
+  sibling `gorget_map_clone` copies all three; a cloned Set owns its keys and shallow-copies them on the next
+  clone. **Double-free from safe syntax.** Core #4 drift; ⭐ **fits R50's headline exactly — it is the next
+  track to launch when a slot frees.**
+- **`t1360` HIGH** — the leak sweep builds "no longer leaking" as *in the allowlist and not seen leaking*, and
+  `seen` is set ONLY by a `LEAK` verdict, so `SKIP_COPY`/`NO_BINARY`/`BUILD_FAIL`/`RUNNER_FAIL` all read as
+  FIXED. **Not merely advisory: the same blind set feeds `retire_due`, a ⛔ BLOCKING gate** — a build break can
+  force deletion of a row documenting a live defect. Fix is one intersection with `$OUT/covered`, already
+  computed three lines earlier. ⚠ **`t0952`'s ten-row retirement DEPENDS ON THIS** — the sweep currently
+  cannot tell "fixed" from "never ran".
+- **`t1361` HIGH** — member access on a `for p in <expr>.iter():` binding is UNCHECKED: `gg check` says
+  `OK: no semantic errors` to bogus field reads (run → prints `0`), bogus field WRITES (**silently
+  discarded** — Core #10 verbatim), bogus methods (build rc 1) and `String x = p` (ICE rc 101). The builtin
+  `for p in xs:` rejects every one. ⚠ **RE-GRADED CRITICAL → HIGH and the memory-safety claim WITHDRAWN** —
+  `print(p + 1)` prints `8`, proving the binding IS typed where used legitimately; there is no wild read.
+  **Do not let the withdrawn CRITICAL framing reach an executor** — it would send someone hunting a wrong
+  ownership tag when the write site is a missing type check on member access. **Blocks `t0041`** (the
+  owner-ratified campaign to make `for x in xs` the default idiom).
+
+⚖ **TWO OWNER ASKS ARE OPEN. They block the CoW work; they do NOT block the safety tracks — do not stall.**
+- **R1 — cost-axis ratification.** `docs/internals/cow-cost-contract.md` is **LEANING, not ratified**, except
+  the owner-chosen knob spelling. It needs a RATIFICATION pass before any executor, not a scout.
+- **R2 — the one genuine semantics question.** What does `for p in d.iter(): d.put(...)` mean — **reject, or
+  materialize-to-snapshot?** Today it is a silent live view and `remove` skips elements, while the builtin
+  `for` **rejects the same program**. ⚠ **Measurement cannot settle this one** (SIX-QUESTIONS #1: an
+  accept/reject asymmetry may be two ratified semantics, not a defect).
+
 ### 🟢 R49 IS CLOSED (2026-09-05).
 **R49's full record is in `DONE.md`** — seven tracks, two integration tracks, both owner rulings, and the
 complete battery. **Nothing about R49 belongs in this block any more.** This handover was 5550 lines of
@@ -114,7 +168,7 @@ actually read.
 ⛔ **THE CLONE-BAND ANCHORS WERE RE-SEEDED AT THIS ROUND'S OPEN** (date 2026-09-05, one sha, values
 unchanged — R49 moved the clone meter not at all). `clone_band_anchor_is_reseeded_before_work_resumes` is the
 gate that enforces it; do not let it drift.
-⛔ **FIRST UNISSUED `todo/` ID: `t1308`.** Allocate a private disjoint block per executor (MA-3b).
+⛔ **FIRST UNISSUED `todo/` ID: `t1362`.** Allocate a private disjoint block per executor (MA-3b).
 
 ⚠ **THE ONE THING R49 PAID FOR REPEATEDLY, AND THE ONE THING TO CARRY:** **A SELECTION PRESENTED AS AN
 ENUMERATION.** It fired on a constant censused without the branch that moved it · on figures inherited rather
