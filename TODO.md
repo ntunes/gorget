@@ -21,11 +21,47 @@
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | ✅ **H** | **`t1387`** — the map's KEY has no drop discipline. **SIGNED OFF 3/3, 🟢 EXECUTOR LAUNCHED 2026-09-05.** | `t1409`–`t1417` |
 | **K** | **`t1385`** — the bucket triage. **THE LAST BLOCKER TO A GREEN `--lanes all`.** 🔵 scout. Streak 0/3. | `t1428`–`t1437` |
-| **J** | **`t1407`** — `Vector.fill` DOUBLE-FREES at pristine HEAD (CRITICAL, owner-approved 2026-09-05). 🔵 scout. Streak 0/3. | `t1418`–`t1427` |
+| **J** | **`t1407`** — `Vector.fill` DOUBLE-FREES at pristine HEAD (CRITICAL, owner-approved 2026-09-05). ✅ SCOUTED → 🔵 **brief-review pass 1**, brief `/tmp/brief_J_v1.md`. **Streak 0/3.** ⭐ **TWO defects, not one**; scout FALSIFIED 3 of my claims and filed `t1418`+`t1419`. | `t1420`–`t1427` (`t1418`/`t1419` spent) |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ✅ TRACK J SCOUTED — **TWO DEFECTS IN ONE RUNTIME FUNCTION**, AND THE `memset` IS A GUARD-BLINDING FIX
+
+Brief `/tmp/brief_J_v1.md`; measured prototype **`/tmp/scoutJ_a0389441ab0625440/recover_scoutJ_04_FINAL_v2b.patch`**
+(use it, never retype). Findings that outlive the track:
+- ⛔ **TWO INDEPENDENT DEFECTS.** (1) `gorget_array_fill` memcpys one source into N slots with no per-slot
+  clone ⇒ N-way double-free. (2) **`v.fill(4096, v[0])` is a heap-UAF inside fill's OWN memcpy** — `val_src`
+  points into `arr->data` and `ensure_capacity` reallocs it away; **`v.fill(3, v[0])` prints EMPTY STRINGS.**
+  ⇒ **a per-slot-clone-only fix closes ONE of the two.** The fix must snapshot BEFORE the drop loop AND the
+  realloc.
+- ⭐ **`fill` is deliberately NOT a consuming position** (`grep -n "consuming_positions_by_name"
+  src/ir/lowering/exprs/methods.rs`) ⇒ **ALL N slots clone, not N−1** — the source is never consumed.
+- ⭐⭐ **THE `memset` IS LOAD-BEARING AND WAS FOUND ONLY BY MEASURING.** Under the snapshot-without-memset
+  intermediate a **pre-existing `Vector[Box[Speaker]]` leak DISAPPEARED, 3/3 runs** — the static thread-local
+  scratch is an **LSan ROOT**, so a stale element copy keeps a genuinely-leaked payload reachable and
+  **silently suppresses the report.** `sanitize_sweep.sh`'s `LSAN_OPTIONS='use_stacks=0'` disables **stack**
+  roots, not static ones. **A guard-blinding regression that would have shipped invisible.** Pre-existing
+  sites (`gorget_array_swap`, `gorget_array_remove_opt`) share the property with no memset — filed `t1419`.
+- ⭐ **NO OWNER ASK.** Ratified **D1** settles it (*copy timing/placement is unobservable implementation
+  freedom*; *allocator introspection observes the implementation, not the language*), and **ggdef — the
+  oracle — ALREADY implements it** (`repeat_n`) ⇒ the fix makes C/LLVM/self-host **converge on ggdef**.
+- ⭐ **THE ENUMERATION IS TOTAL, WITH A REAL WITNESS**: the runtime-symbol registry (`src/lir/runtime.rs`),
+  predicate run mechanically over all single-by-value-element rows. `gorget_array_fill` is the only member.
+  ⊕ **`gorget_heap_push` HAS NO C DEFINITION ANYWHERE** — a dangling registry row; `Heap.push` would fail to
+  link. ⊕ **`gorget_shared_array_set` double-frees too — a NEW CRITICAL, filed `t1418`, independent.**
+- ⚠ **THE SURFACE CLASS HAS TWO MEMBERS, NOT ONE**: `Vector.fill` **and `Deque.fill`** (`DEQUE.methods =
+  VECTOR.methods`), which is why a `grep 'name: "fill"'` witness undercounts.
+- ⛔ **`Deque.get(i)` IS A BLIND OBSERVATION CHANNEL** (`t1087`) — the scout's first probe read through it and
+  printed pointers; through `d[0]` it prints the string. **Any Deque fixture must use indexing or iteration.**
+- ⛔ **THE FIX UNMASKS A THIRD FACE OF `t0872`** (inline-ctor temp at a NON-consuming value position leaks;
+  a named local at the same position is clean). Pre-existing — proven by two controls that leak at HEAD and
+  at the fix alike. Must be fixed or landed `#[ignore]`+`known_gaps` citing `t0872`, never shipped silent.
+- **Cost, regenerated at both levels:** only the view/literal element at 2M scale moves (`-O0` ≈6.1×, `-O2`
+  ≈4.7×, peak RSS +12 KB); POD control unmeasurable. ⭐ **Every `.fill` in the self-host is `Vector[bool]`**
+  ⇒ the hot path pays nothing. **"Keep views as views" is UNSOUND — a `cap == 0` `Str` is not always static.**
+- **Allowlist delta ZERO (provisional)** ⇒ **no collision with H**, which retires 8 rows the same round.
 
 ⭐ **TRACK A's SCOUT LANDED — brief at `/tmp/brief_A_v1.md`, measured prototype at
 `/tmp/scout_a_protoA.patch` (USE IT, do not retype).** Findings that outlive the track:
