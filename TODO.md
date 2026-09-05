@@ -7,7 +7,7 @@
 **ROSTER — five tracks, each with a private disjoint ID BLOCK (MA-3b; a track NEVER picks its own):**
 | track | scope | ids |
 |---|---|---|
-| **A** | **`t1077`** ✅ SCOUTED → brief-review pass 1. **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
+| **A** | **`t1077`** ✅ SCOUTED · pass 1 BLOCKED (4) → folded → 🔵 pass 2. **Streak 0/3.** **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | 🔵 SCOUTING. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C** | 🔵 SCOUTING. **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D** | 🔵 SCOUTING. **`t1225`** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
@@ -41,6 +41,24 @@
   `Box[String](mk(a,b))` → **rc 134 double free** on the self-host; `Box.new(mk(a,b))` → rc 0 correct;
   **Rust gg correct on both.** Byte-identical but for the spelling, single level, not nesting. Filed as
   `t1310` by the track.
+⭐ **PASS 1 CONFIRMED THE DESIGN AND BLOCKED THE BRIEF (folded into `/tmp/brief_A_v1.md` ADDENDUM 1,
+which takes PRECEDENCE over the body).** It re-verified every body premise as TRUE and validated the one-line
+fix on **17 measured cells**. What it falsified was the brief's *enumeration* and its *`s06` rule*:
+- ⛔ **`s06`'s WRITE SITE IN THE BODY WAS WRONG — twice.** The real producer is **Box-TypeDef registration
+  site 3**, whose non-mutating `map_ast_type` is `try_map_ast_type(ty).unwrap_or(UNIT_TYPE)`, so
+  `Box__Box__int64_t` registers `_0: Unit`. Regenerate:
+  `grep -n 'let inner_type = mapper.map_ast_type(&_type_args\[0\].node);' src/ir/lowering/types.rs` and
+  `grep -n 'pub fn map_ast_type\b' -A 3 src/ir/lowering/types.rs`. **One-token fix verified green, and
+  SEPARABLE from `t1077`.** ⇒ **FOLDED IN under Core #4** (the 4 sites are lint-pinned) — **`t1312` RELEASED**.
+- ⛔ **THE FACE LIST WAS A SELECTION.** The class includes an **ICE (rc 101)** and a **link failure**, not just
+  SIGSEGV/silent-wrong — so **`t1077`'s severity text AND its `DONE.md` line UNDER-STATE it.** The real
+  discriminator is **`payload type × consume shape`**, not payload alone.
+- ⛔ **THE `^param` CELL THE BRIEF ASKED FOR LANDS RED AND IS NOT THIS TRACK'S INFLOW** — `int take(Box[int] ^b): return 1`
+  is rc 134 on the **pristine** compiler, wider than filed `t0010`. **Excluded; filed as `t1313`.**
+- ⭐ **THE SWEEP PROVIDES ESSENTIALLY ZERO EVIDENCE HERE** — the change is a no-op on ~2593 of 2594 programs.
+  **The new fixtures are the ENTIRE guard.**
+- ⚠ **A FALSE-CONFIRMATION TRAP:** the `--lir-c` driver spelling emits a **fragment** that fails `cc` for an
+  unrelated reason — reaching for it "confirms" *SH cannot compile it* for the wrong reason.
 ⊕ **IDS ISSUED FROM A's BLOCK:** `t1309` nested-box scope-exit LEAK (**`t0096` asked for this filing and
 nobody made it**) · `t1310` the SH constructor-spelling double free · `t1311` the SH `__gg_Box__<inner>`
 undefined typedef · `t1312` `s06` (nested box through a struct FIELD) **only if it is a different producer**;
