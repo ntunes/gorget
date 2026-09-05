@@ -8,7 +8,7 @@
 | track | scope | ids |
 |---|---|---|
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
-| **A2** | **`s06`** — the excised half. 🔵 **SCOUT LAUNCHED 2026-09-05**, starting from the demolition of my three struck decisions (guard measured FALSE — would ICE **ten shipping fixtures**; site unmeasured and its fall-through DOCUMENTED AS INTENDED; class **seven** sites, not six). | `t1373`–`t1382` |
+| **A2** | ⭐ **RESCOPED — NOT "nested Box": *EVERY GENERIC NEWTYPE*, both backends.** ✅ SCOUTED → 🔵 **pass 1. Streak 0/3.** ⛔ **The fix moves `Box`-inner newtypes UP the severity ladder (truncation → double-free) by unmasking `t1374` — the coupling is the decision.** | `t1375`–`t1382` |
 | **B** | ⚖⚖ **HELD — OWNER ASK (the capture cell). Pass 1: NOT SIGN OFF, 5 BLOCKING.** The brief was STALE BY CONSTRUCTION (my revert landed 3 min after it) and **overrode a ratified `decisions.md` clause with an agent's derivation.** Streak 0/3. Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⛔⛔ **BLOCKED A FOURTH TIME — `R`'s SUBJECT IS A SELECTION ON A THIRD AXIS. RECOMMEND CLOSE FOR R50: `R` NEEDS ITS OWN SCOUT.** Spine survives and measures STRONGER each pass. | `t1332`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
@@ -26,6 +26,40 @@
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ⭐⭐ A2's SCOUT — **THE TRACK'S OWN TITLE WAS WRONG, AND THE FIX MAKES ONE SHAPE WORSE**
+
+Brief `/tmp/brief_A2_v1.md`; patch `/tmp/scoutA2_a02efd745052694ac/recover_a02efd745052694ac_FIX_ONLY.patch`.
+- ⭐⭐ **IT IS NOT ABOUT NESTING.** `newtype` wrapping **ANY** generic type — `Box[int]`, `Vector[int]`,
+  `Option[int]`, **single level** — **fails to compile on LLVM and silently truncates the payload pointer into a
+  1-byte field on C.** ⭐ **Why nobody noticed: all four newtypes in the 2250-fixture corpus wrap a PRIMITIVE.
+  One sampled value on the typed axis — Core #12's anecdote, verbatim.** ⛔ **A brief scoped to "nesting" would
+  ship the fix and never test `newtype NX(Box[int])`.**
+- ⛔⛔ **THE COUPLING IS THE DECISION: THE FIX MOVES `Box`-INNER NEWTYPES *UP* THE SEVERITY LADDER** — silent
+  truncation → **double-free** (`rc 0` → **rc 134/139**) — because making the payload field faithful **UNMASKS**
+  a pre-existing defect that `_0: Unit` was hiding. **Filed `t1374`** (a newtype ctor storing a **slot address**
+  into a by-value field; a **fifth route** into `t1388`'s meta-class). ⭐ **Its source site is explicitly
+  UNDETERMINED — the scout measured the emitted C and refused to guess a line.**
+- ⛔⛔ **`t1373` MAY BE THE MOST SEVERE THING FOUND TODAY: `Box[T].get()` THROUGH A STRUCT-FIELD RECEIVER IS
+  SILENT-WRONG ON C** (garbage vs LLVM's `9`), from `struct { Box[int] }` — the plainest shape there is.
+  ⭐⭐ **It INVERTS a filed measurement**: `t0685` records the cell green on both backends — **true for a LOCAL
+  receiver, false for a FIELD one.** ⇒ **the axis that item enumerates is the PAYLOAD TYPE; the axis that
+  DISCRIMINATES is the RECEIVER PLACE.** `t0685` corrected in place.
+- ⭐ **THE FIX CANNOT ICE THE TRAIT FIXTURES, STRUCTURALLY:** `map_ast_type_mut` on a `Named` with **empty**
+  generic args falls through to `UNIT_TYPE` **byte-identically**, and a bare trait name has no generic args ⇒
+  **strict superset.** Corpus probe over all 2250: **15 fires → 14, exactly one row removed.**
+- ⛔ **MY THREE STRUCK CLAIMS WERE DIRECTIONALLY RIGHT AND NUMERICALLY WRONG.** *"SEVEN sites"* → **4** — **and
+  the grep I cited was SINGLE-FILE SCOPED**, hiding that repo-wide it is **43, of which 39 are the documented,
+  INTENDED `Callable` local-form invariant.** *"No fire count"* → **it fires 12 times, the dominant site.**
+  *"Would ICE ten"* → **twelve.**
+- ⛔ **DO NOT REBUILD THE `UNIT_TYPE` GUARD IN ANY FORM** — **14 of 15 corpus fires are legitimate bare trait
+  names**, so it green-lights nothing and reddens 12 shipping fixtures: **it fails its own class test.** The
+  roster lint replaces it. ⚠ **It lands in `tests/lints.rs`, which is Track L's zone — sequence it.**
+- ⚠ **TWO OF FOUR SITES ARE NOT PINNED** (`register_enum`, `monomorphize_struct`), and the scout said so rather
+  than claiming coverage. **The executor owes a repro or a documented unreachability statement for each.**
+- ⚠ **The self-host is ARCHITECTURALLY DIFFERENT** — it stores the inner type's **NAME**, not a TypeId, so it
+  has no registration to miss. **It may still be broken by a different mechanism; probe before any top-level
+  fixture.**
 
 ### ✅✅ L's SCOUT — **THE FIX IS FREE, AND MY BLAST RADIUS WAS OVERSTATED TWICE**
 
