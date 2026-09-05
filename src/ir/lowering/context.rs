@@ -3557,11 +3557,24 @@ impl<'a> LoweringContext<'a> {
     ///
     /// DELIBERATELY NOT covered — each measured already correct across the
     /// scope-introducing constructs WITHOUT a hoist, so a disjunct for them
-    /// would be one nothing tests:
-    ///   * Case 4 (`views_of_source`) / Case 6 (`field_borrows_of`) take a
-    ///     boundary-safe route that does not leave a discarded rebind behind;
-    ///   * Case 5 (`shared_heap_aliases_of_source`) only clears a typed tag —
-    ///     it emits no clone and binds no new local.
+    /// would be one nothing tests. ⚠ The three have DIFFERENT standing, and
+    /// the difference matters to whoever widens this next:
+    ///   * Case 4 (`views_of_source`) — MECHANISM ESTABLISHED. It dispatches to
+    ///     `cow_materialize_view`, which is the one materializer that does NOT
+    ///     rebind the name: `grep -n "self.register_local(&name, owned_local,
+    ///     inner_type);" src/ir/lowering/context.rs` returns three hits, two in
+    ///     `cow_materialize_alias` and one in `cow_materialize_collection_ref`,
+    ///     and none of them in `cow_materialize_view`. With no rebind there is
+    ///     nothing for `restore_locals` to discard.
+    ///   * Case 5 (`shared_heap_aliases_of_source`) — MECHANISM ESTABLISHED. It
+    ///     only clears a typed tag: it emits no clone and binds no new local.
+    ///   * Case 6 (`field_borrows_of`) — ⚠ MEASURED CORRECT, REASON NOT
+    ///     ESTABLISHED. Do not assume it is boundary-safe: it dispatches to
+    ///     `cow_materialize_alias`, the SAME rebinding materializer Cases 1 and
+    ///     2 use, so the structural argument that covers Case 4 does NOT cover
+    ///     it. It is excluded because the probe below finds no wrong cell, not
+    ///     because a mechanism was shown. If you widen this predicate, Case 6
+    ///     is the one to re-measure first.
     ///
     /// Re-measure before widening this: the probe is each case's own shape read
     /// AFTER a mutation, in straight-line / `if` / `while` form — Case 4

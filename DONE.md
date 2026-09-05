@@ -70,8 +70,14 @@
   is a real distinction, but it is **not** a distinction in the consumer that loses the result. A round got a
   CLOSURE of the family instead of a fifth narrow patch.
   **NARROW, NOT DEFENSIVE:** the predicate covers exactly the four arms that end in a rebind (Cases 1, 1b, 2,
-  3). Cases 4/5/6 were measured already correct without a hoist and are excluded WITH THEIR REASON in the
-  predicate's docstring — a disjunct with no cell behind it is a disjunct nothing tests.
+  3). Cases 4/5/6 were measured already correct without a hoist and are excluded in the predicate's docstring —
+  a disjunct with no cell behind it is a disjunct nothing tests. ⚠ **The three exclusions do NOT have equal
+  standing, and the docstring says so:** Case 4's mechanism IS established (it dispatches to the one
+  materializer that does not rebind) and so is Case 5's (it only clears a typed tag), but **Case 6 dispatches
+  to `cow_materialize_alias` — the SAME rebinding materializer as Cases 1 and 2 — so it is excluded on a
+  MEASUREMENT with no mechanism behind it**, and it is named as the one to re-measure first if anyone widens
+  the predicate. An earlier revision of that comment asserted Case 6 was boundary-safe like Case 4; that was
+  Core #14 rot on arrival and was caught by the output review.
   **Shipped, every cell RED-verified against a hash-pinned pre-fix binary:** `spectests/run/cow_scope_carried_sever.gg`
   (15 rows, ggdef-adjudicated, **12 wrong / 3 straight-line twins CORRECT pre-fix** — the twins are the
   load-bearing negative controls) · `cow_scope_carried_sever_out_of_subset.gg` (15 rows, all 15 wrong pre-fix)
@@ -102,8 +108,9 @@
   predicate must stay in sync with, and — because row 1 provably **cannot** see it — the `lower_block_scoped`
   CALL sites at 2. That third row exists for a named trap: `emit_on_error_cleanups` uses `lower_block`, so
   `on error` has no boundary and needs no hook; **switching it to `lower_block_scoped` does not move the
-  19-count, because that `save_locals` lives INSIDE `lower_block_scoped`.** All three rows demonstrated RED on
-  deliberately broken variants anchored **by line**, and row 2 was broken with the real trap.
+  19-count, because that `save_locals` lives INSIDE `lower_block_scoped`.** All FOUR assertions (across those
+  three conceptual rows) demonstrated RED on deliberately broken variants anchored **by line**, and the
+  `lower_block_scoped` row was broken with the real trap rather than a synthetic one.
   ⛔ **THE LANDING BOUNDARY WAS SCOPED AT "SIX CONSTANTS, TWO CRATES, THREE TEST TARGETS" AND IS ACTUALLY
   FIFTEEN DECLARATIONS ACROSS SIX FILES AND FOUR TARGETS.** The six were right as far as they went —
   `MIN_FIXTURES`/`C_MATCH_FLOOR`/`LLVM_MATCH_FLOOR`/`SELFHOST_MATCH_FLOOR` 243/243/243/242 → 244 (the first
