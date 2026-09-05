@@ -82,7 +82,46 @@ corrections were to filed TEXT only and are **applied at `36e9f57eb`; ⛔ MERGE 
 predates this branch's `TODO.md` figure-spelling fix. The executor proved it by reverting to the pristine
 parent and getting the identical failure. **It goes green at merge because `TODO.md` comes from THIS side —
 verify that after merging rather than assuming it.**
-**→ R50:** W + S-a3 (merged, brief measured against source three times) · U1 · U2 · S-a1 · S-b · T2.
+### 🎯 R50's HEADLINE IS THE **CRITICAL MEMORY-SAFETY SET** (owner-directed 2026-09-05)
+⛔ **FIVE CRITICAL items are open, EVERY ONE memory-safety, EVERY ONE reachable from SAFE, SPEC-DOCUMENTED
+SYNTAX THAT `gg check` PASSES CLEAN.** This outranks the guard-hygiene cluster R49 produced — that is fill-in
+work, not a headline.
+- **`t1077`** — reading through a nested `Box[Box[T]]`: **SIGSEGV on C, SILENT WRONG ANSWER on LLVM**, `gg
+  check` clean, both lanes at HEAD. *(found 2026-09-04 by R49 Track M1 while writing a refusal message)*
+- **`t1067`** — a closure that **CAPTURES ANOTHER CLOSURE** reads freed memory: **rc 0 with SILENTLY WRONG
+  OUTPUT**, heap-use-after-free under `--sanitize`. *(found by R49 Track L's pass-2 review)*
+- **`t0011`** — `Box[T](struct.field)` takes a **SHALLOW** clone when the field transitively owns `Box`es →
+  **DOUBLE FREE**, both backends.
+- **`t0045`** — `for x in &coll` + assigning to the loop binding **DOUBLE FREES**. ⚠ **The item's own warning:
+  THE `&` IS NOT THE DISCRIMINATOR** — the same proxy-vs-mechanism trap that turned R49 Track T1's comment fix
+  into a reproducible defect. **Do not scope this one by the sigil.**
+- **`t0036`** — `unwrap()` from a plain READ of safe syntax, both backends. ⚠ **Its axis was CORRECTED by a
+  second pass; the first filing was measurably too narrow** — re-read the correction before scoping.
+⊕ **`t1303`** (HIGH, R49-found) belongs with them: a closure literal at `unwrap_or_else` over a `Callable`
+payload — **Rust gg builds, runs, prints rc 0 AND is a stack-buffer-overflow; the self-host is caught by
+`cc`.** ⭐ **Both write sites are already localized:** Rust at the **call-result slot typing** (do NOT touch
+the closure signature), self-host at the **signature**, one layer earlier.
+
+⚠ **THE ENUMERATION IS TOTAL, VERIFIED — not a field selection.** `severity = "CRITICAL"` yields exactly these
+five, AND no item states CRITICAL in prose while leaving the field empty (295 of 887 items have an empty
+severity field, so that check was necessary). Regenerate BOTH halves:
+`for f in todo/*.md; do sev=$(grep -m1 '^severity' "$f" | cut -d'"' -f2); [ "$sev" = CRITICAL ] && echo "$f";
+done` and the same loop inverted, grepping prose for `CRITICAL` where the field is empty.
+
+⭐ **TWO OF THE FIVE WERE FOUND BY R49 ITSELF** — by a pass-2 brief-review and by a track writing an error
+message. **The review discipline is generating CRITICALs faster than rounds are closing them**, which is the
+argument for making them the headline rather than fitting them around other work.
+⭐ **`t1077` AND `t1303` SHARE A SHAPE: THE TWO LANES ARE BROKEN *DIFFERENTLY*.** "Both backends agree" would
+have hidden both; only a lane-divergence instrument or ASan sees them. Core #8, twice.
+✅ **The previous CRITICAL trio is CLOSED** — `t0763`, `t0770`, `t0771` and `t0772` are all in `DONE.md`.
+
+**⚖ FORCING FUNCTION — `t0953`:** two of the owner's R49 admissions RETIRE when it lands, and a third
+new-inflow fixture would be a THIRD owner ask. Fixing it discharges both and closes the class.
+**CARRIED, unscouted:** W + S-a3 (merged, brief measured against source three times) · U1 · U2 · S-a1 · S-b ·
+T2. **DEMOTED to fill-in:** `t1302` (pins regenerated from the artifact they pin) · `t1304` (46 unwired
+top-level fixtures) · `t1295` · `t1301` · `t1300` · `t1296`.
+⛔ **STANDING CONSTRAINT: the non-MATCH ceiling and the ggdef floor are at ZERO SLACK — any R50 track adding a
+non-MATCH fixture reds immediately.**
 
 ✅ **NO OWNER ASK IS OPEN — RULED 2026-09-04, see the ⚖⚖ block below.** (Historical: the ask was to admit
 `vector_hof_result_element_sizing` (`__gorget_closure_env_alloc*5`, cite
