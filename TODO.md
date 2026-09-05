@@ -1315,6 +1315,62 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
 
+### ⭐⭐⭐ TRACK H — MY HYPOTHESIS WAS WRONG ABOUT THE SITE, AND THE DEFECT IS **UNBOUNDED**, NOT 2 BYTES
+
+⛔ **NOT a loop-head clone missing drop registration. THE PRODUCER IS CORRECT.** The `for ch in s` element is a
+**view**, and it IS registered for drop. **The leak is at the `.put()` CONSUMING-POSITION clone, and the
+CONSUMER drops ownership on the DUPLICATE-KEY path.** ⭐ **One-line proof, over the three hit branches:**
+`val_drop` appears **6** times, `key_drop` **0**. ⇒ ***the VALUE has a drop discipline; the KEY has none.***
+On a miss the memcpy transfers the key; **on a hit nobody owns it.**
+
+🚨 **UNBOUNDED, NOT 2 BYTES — and the mechanism gives the scaling law:** 5 identical keys → 4 duplicate puts →
+**exactly 4 leaked allocations.** 200k-put benchmark: **`total_frees` 60 → 200034 · `live_bytes` 399948 → 0 ·
+peak RSS 7480 → 1240 kB (6×)**, with `string_clone` **identical** (no extra clones).
+⭐⭐ **AND THE COST IS NEGATIVE: 0.0074 s → 0.0065 s.** The only added work is one `free()` per *duplicate* put.
+
+⭐ **A CLASS AT A SINGLE CHOKEPOINT, WITH INDEPENDENT WITNESSES** (the runtime registry and the builtin tables,
+**not the scout's own list**): every surface — `.put/.set/.add/.insert`, `d[k]=v`, literals, comprehensions,
+`__get_or_put` — funnels into two functions in one file.
+⚠⚠ **AND THE SCOUT CAUGHT ITS OWN ENUMERATION AS A SELECTION:** a `head -40` truncated it, so it first concluded
+`put_cloned`'s hit path was unreachable. **It is not — 23 call sites**; `Dict/HashMap.update` and `Set.union`
+reach it, where the pre-fix code **RE-CLONES THE ALREADY-OWNED STORED KEY AND LEAKS THE OLD BUFFER.** *"That half
+is load-bearing, not defensive."*
+
+⛔⛔ **WHY ONLY ONE CELL RED-LINED — TWO MEASURED REASONS, AND THE SECOND IS A FINDING IN ITS OWN RIGHT:**
+1. `tests/sanitize/CORPUS_MANIFEST.txt` carries **`robustness_map OUT`** — the sweep **never builds those 1011
+   cells**.
+2. 🚨 **THE MAP'S ASan BASELINE ALREADY PINS FIVE SIBLINGS OF THIS EXACT CLASS AS `SANITIZE-FAIL`** — all
+   pre-dating this round, **all measured RED pre-fix and GREEN post-fix.** ⇒ ***the map's ASan lane is
+   UNDER-REPORTING: five pinned instances of a live bug.***
+
+⭐ **SIX-Q #6 LEFT OPEN AND SAID SO.** *Why* `ex_char_frequency` was green before is **NOT established** — the
+scout formed a hypothesis, **falsified it itself from the emitted C**, and **invented no mechanism.**
+
+⭐ **THE SWEEP WAS RUN BOTH WAYS — the attribution is load-bearing and it was done properly.** leaks **301 →
+293**; **8 retirements and 12 new tightenings, ALL the fix's** (pristine reported **zero** retirements); **0
+flaky, 0 class-drift, 0 new classes.** ⚠ **Executor obligation: those counters are `assert_eq!`, so deleting the
+8 rows moves four constants — and they are FIGURES-DB COVERED. Cite the regen, never the value.**
+
+⭐ **LANES — ONE EDIT COVERS EVERYTHING.** Stdout byte-identical ⇒ implementation-internal runtime hygiene, **no
+conformance fixture owed**. C via `include_str!`; **LLVM shares the embedded runtime and was MEASURED**;
+**self-host inherits via `embed_file` with ZERO `.gg` changes** (rebuild required — the `include_str!` staleness
+trap); ggdef structurally blind (Core #13). ⚠ **Standing hazard recorded: the self-host hand-copies a sibling
+emitter's stub STRINGS, so a future fix touching those WOULD owe a port. This one does not.**
+
+### 🚨🚨 AND A **MORE SEVERE** DEFECT FOUND ALONG THE WAY — FILED `t1407`, CRITICAL
+
+**`Vector[String].fill(3, mk("ab","cd"))` → ASan `attempting double-free`, on PRISTINE HEAD.**
+`gorget_array_fill` **memcpys ONE source into N slots with no per-slot clone**, so every slot aliases one
+payload. **Witness:** `grep -n "elem_materialize(" src/backend/c/runtime/runtime_array.c` → **2 hits, both in
+`gorget_array_push`**; **`set`, `insert`, `fill` and `gorget_shared_array_set` have NONE** (⚠ only `fill`
+measured live).
+⭐ **WHY IT WAS NEVER SEEN: every existing `.fill` fixture uses POD elements (`bool`)** — *a fixture set that
+samples one value of a typed axis (Core #12); the droppable-element cell was never covered.*
+⛔ **AND IT FALSIFIES THE SAME `devbook/11` SENTENCE A SECOND TIME** — the *"every consuming runtime function
+obeys the same three-step shape"* contract, which **nothing enforces**. **SIX-Q #4: the case has NO SUBJECT, so
+no widening reaches it — it needs a second clause AND a guard.** ⊕ **By the severity ranking this OUTRANKS
+`t1387`.**
+
 ### ⭐⭐⭐ FIXING THE **ENUMERATION AXIS** PAID FOR ITSELF TWICE — A HIGH MEMORY-SAFETY BUG AND A DEAD FLAG
 
 **`fa4a76d92`.** Re-presenting four `DropStrategy` values as **six `(CopySemantics, DropStrategy)` pairs** was
@@ -3850,6 +3906,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t1197`](todo/t1197.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG VALUE on C, llc BUILD FAILURE on LLVM, gg check clean; found 2026-09-04 by R49 Track M1's output…
 - [`t1083`](todo/t1083.md) **HIGH** — 🆕🐛 [HIGH — a program the compiler ACCEPTS emits C that a C compiler REFUSES: error: redefinition of 'Box__Robot__drop'.…
 - [`t1359`](todo/t1359.md) **CRITICAL** — 🆕🔥 [CRITICAL -- DOUBLE-FREE REACHABLE FROM ORDINARY SAFE SYNTAX, gg check clean; found 2026-09-05 by the R50 CoW design…
+- [`t1407`](todo/t1407.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — MEMORY-UNSAFE FROM ORDINARY SAFE SYNTAX, both backends, gg check clean; found 2026-09-05 by R50 Track H'…
 ### Medium
 - [`t0474`](todo/t0474.md) **MED** — 🆕🔧 [MED — prerequisite for retiring the last indirect-call shape heuristic; filed 2026-08-19 by R43 Track C] Tag LARGE n…
 - [`t0475`](todo/t0475.md) **LOW** — 🧹 [LOW — Layering rule 3, one source of truth per axis; found 2026-08-19 by R43 Track C] src/backend/c_lir/helpers.rs ca…
