@@ -16,7 +16,7 @@
 | **D0′** | ⏸ ruling PAUSED. **v3 pass 1: 5 BLOCKING + 6 errata — the LAYER IS RIGHT and the prototype WORKS, but the SAFETY ARGUMENT IS FALSIFIED.** Streak 0/3, fold → `v4`. ⭐ **It found a CRITICAL: `t1393`.** | `t1394`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| **G** | **`7f68508b0`** — blocking + 4 errata folded; 🔵 **CONFIRMING PASS on the delta.** ⭐⭐ **The executor CORRECTED MY PRESCRIPTION — I had the `Recursive` disposition BACKWARDS.** | `t1384`–`t1392` |
+| ✅ **G** | **`7f68508b0` SIGNED OFF (0 blocking, 5 errata).** 🟢 executor folding errata, then integrate. ⭐ **My `Recursive` correction verified by MECHANISM, not just measurement.** | `t1384`–`t1392` |
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
@@ -1314,6 +1314,40 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ✅ G SIGNED OFF — AND THE FOLD THAT FIXED A FALSE ENUMERATION MADE A **FINER FALSE ENUMERATION ON THE SAME AXIS**
+
+⭐ **MY `Recursive` ERROR IS CONFIRMED BY MECHANISM, NOT ONLY BY MEASUREMENT.** `--emit-gir`: none of the seven
+payloads is `Recursive` (all `Trivial(@…_free)`); a `Recursive` struct bare-binds to a **Ptr alias** — *a genuine
+second live place, NOT accidentally green*; the custom-`Drop` contrast rejects. ⭐⭐ **And the WHY:
+`is_drop_tainted` is seeded EXACTLY from `equip T with Drop` plus a transitive field-graph fixpoint, and the
+reject reads THAT TYPED FLAG AND NEVER CONSULTS `CopySemantics`.** ⇒ *"specific to a custom `Drop`" is right for
+the right reason* — **which is exactly what I could not have known by reading, because the two are set one line
+apart inside a single `if needs_upgrade`.**
+
+⛔⛔ **ERRATUM 2 IS THIRD-ORDER AND IT IS THE ONE TO INTERNALISE: THE ROWS ARE ENUMERATED OVER `DropStrategy` BUT
+ARGUED FROM `CopySemantics`, AND THE TWO AXES DO NOT ALIGN.** The independent witness (`src/ir/types.rs`) shows
+**SIX legal `(CopySemantics, DropStrategy)` pairs**. The `Trivial` row covers only `(Resource, Trivial)` —
+**`(Trivial, Trivial)` (`Shared`/`Weak`/`Channel`) is UNNAMED.** And ⛔ **the `None` row's REASON is false for
+half of what it covers**: it argues *"a Copy bind DUPLICATES the storage ⇒ no subject"*, but `None` also covers
+**`(Resource, None)` — `Thread[T]`/`Process` — where a bind does NOT duplicate storage.** **Measured:
+`Process c = proc` checks clean, rc 0** ⇒ **a second live place demonstrably exists**, and the enumeration has
+**no row for that third disposition.**
+⇒ ⭐⭐⭐ ***THE FOLD THAT FIXED A FALSE ENUMERATION PRODUCED A FINER FALSE ENUMERATION ON THE AXIS IT WAS
+REWRITING.*** **Fix: present the SIX PAIRS with a disposition per row.** *Enumerate over the product, not over
+one factor — the round's recurring lesson, now at its third depth.*
+
+⊕ **ERRATUM 1 — THE GUARD ADDED TO ANSWER SIX-Q #2 FAILS SIX-Q #2.** The new control-row lint is coupled to the
+generator by a **hand-copied literal nothing cross-checks** (4 hits in `tests/lints.rs`, **0 in the generator**;
+the cell name is a literal independent of the `CONTROL_*` triple that derives its source). ⇒ **re-point and
+regenerate ⇒ `--check` green, `DECLARED_CONTROLS` green, and the guard silently asserts the OLD row.**
+**One-line close: the control row's `note` column already carries the true source name — assert it.**
+
+⊕ **ERRATUM 4 IS MINE:** I wrote *"the same two lines set `Custom` and `CopySemantics::Resource`"* — **it is the
+line ABOVE**, and **the grep I cited returns THREE lines, not two** (one is a read), so **it does not regenerate
+its own claim without a filter.** *Core #15(a), in a sentence I wrote to enforce Core #15(a).*
+⊕ **ERRATUM 3:** the 13-SANITIZE-FAIL census **does not name its lane** (it is the asan lane's 21 of 63 writes)
+**and is topic-11 ONLY — topics 07/10/13 were never seeded, so 13 is a LOWER BOUND on the triage.**
 
 ### 🔎 ARCHAEOLOGY (owner-requested) — THE GENERIC `[]` WAS **NEVER DISCUSSED. IT WAS IMPLEMENTED.**
 
