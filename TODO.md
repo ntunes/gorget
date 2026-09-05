@@ -4,6 +4,21 @@
 ### 🚀 ROUND L (R50) IS OPEN — 2026-09-05. HEADLINE: **THE CRITICAL MEMORY-SAFETY SET + R49's DEFERRED HALVES.**
 **Owner-directed.** Safety debt first; the optimality pivot follows it, not beside it.
 
+### ✅ CLOSURE-RECORD AUDIT — **24 COMPLETIONS ALL IN `DONE.md`; 2 WITHDRAWALS CORRECTLY ABSENT**
+
+All 26 range-walk closures checked. **24 are completions and every one is in `DONE.md`.** The two that are
+not are **WITHDRAWALS, and belong nowhere near it** — putting a withdrawn item in `DONE.md` would record it as
+an accomplishment. Both reasons re-verified here, not taken from their commit messages:
+- **`t1287`** — withdrawn as duplicating `t1290` *and naming the wrong value*. `t1290` is live and its
+  mechanism is the more precise one (a String **INDEX** read materialising through
+  `gorget_string_clone_to_owned` into a value nothing registers for drop).
+- **`t1444`** — dropped; its whole mechanism is *"the census exits 1 at pristine HEAD"*, and `t0121` is closed
+  with the census rc 0.
+⚠ **MY AUDIT INSTRUMENT OVER-FLAGGED — the SECOND time this round.** *"Is the id in `DONE.md`?"* cannot tell a
+completion from a withdrawal, so it reported 2 defects where there are 0. Same shape as the revert audit
+below, which reported 0 for two tracks that fully complied in different words. ⇒ **when a cheap textual audit
+flags something, READ THE ITEM before believing it** — in both directions.
+
 ### ✅ REVERT-RULE AUDIT — **ALL TEN TRACKS PASS** (audited 2026-09-05, so R51 need not redo it)
 
 *"A fixture set is complete only when EVERY PARTIAL REVERT turns a row RED"* checked against all ten
