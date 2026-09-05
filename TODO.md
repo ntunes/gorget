@@ -20,9 +20,9 @@
 | ✅✅ **H** | **`t1387` INTEGRATED** 2026-09-05 (`8573b12ca`+`0c137cbe0`). Output-review SIGNED OFF; 3 errata fixed at `6b4c8a544`. ⭐ **Its executor found FOUR defects in my brief; the review found a fifth in ITS filing.** | `t1409`–`t1417` |
 | ✅✅ **K** | **`t1385` INTEGRATED** 2026-09-05 (`b5c5eaabc`+`1c2513e45`); errata `9d7e9f71b`. Output-review **SIGNED OFF**. ⭐ **93 cell-lanes now gated; both allowlists ratchet BOTH ways.** | `t1434`–`t1437` |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
-| **L** | **`t1410`** — wrapping ops lower to UB on C. ✅ **DESIGN SIGNED, 5 PASSES, SHAPE UNCHANGED → 🟢 EXECUTOR LAUNCHED.** ⛔ Two of my filed items **contradicted each other on `Neg`** — fixed. | `t1444`–`t1447` |
-| **J** | **`t1407`** — committed `0214de358`, but ⛔⛔ **THE BOOTSTRAP IS RED: converged at STAGE-3 against a TIGHTEN-ONLY ceiling of 2.** Its own scout's prototype converged at **stage-2** ⇒ **the delta shipped beyond the prototype costs a generation.** **NOT integrating until compared at HEAD.** | `t1422`–`t1427` |
-| **E** | **`t0953`** — ✅✅ **EXECUTOR COMMITTED** (`119d03fc2`+`8ae5f6fd4`), sweep **rc 0**, `leaks: 251` → 🔵 **output-review.** ⭐ It **closed `t0121`** and proved the census gate was **already red at my base — Track H's, not its.** | `t1352`–`t1358` |
+| **L** | **`t1410`** — ✅ committed `b64fed58e` → 🔵 **output-review.** ⭐ **It REFUSED a prescribed repro shape it measured green-on-arrival AND ratchet-growing** — and my brief was wrong. | `t1445`–`t1447` |
+| **J** | **`t1407`** — ✅ **bootstrap RESOLVED: stage-2 rc 0.** The red was a **mid-run edit to an `embed_file` input**, not code. → 🔵 **output-review.** | `t1422`–`t1427` |
+| ✅✅ **E** | **`t0953` INTEGRATED** 2026-09-05 (`ef25a8ab7`-era cherry-picks); output-review **SIGNED OFF** after re-running the matrix by line AND the full 25-min sweep itself (rc 0). Errata `4611ef045`. | `t1352`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
@@ -46,6 +46,40 @@ claims folded into this handover long ago. **Everything else stayed.**
 `target_v3` compilers E's executor is RED-verifying against), `gg_fuzz_lint_target` (5.3 GB — a live
 `CARGO_TARGET_DIR` for a lint; deleting it forces a full rebuild on every `cargo test --test lints`),
 `execE_01db12fc`, and `rev2_a2e446ab`. **None of them is prunable until its track integrates.**
+
+### ✅✅ E INTEGRATED (7th) · J's RED RESOLVED · L REFUSED A BRIEFED SHAPE AND WAS RIGHT
+
+- ⭐ **THREE SEPARATE EXECUTORS INDEPENDENTLY FOUND THE CENSUS RED — E, J AND L — AND ALL THREE FROZE BEFORE THE
+  FIX.** ⇒ **it was visible to everyone but me, for six integrations**, because the only instrument that sees it
+  is a script no `cargo` target reaches. ✅ **`known_gaps_census.sh --check` is now `rc 0` at the merged tree**
+  (E closed `t0121`), read off the BARE command after the shell's own exit code proved uninformative.
+  ⛔ **L filed `t1444` for that same red from a frozen base — it files a RESOLVED problem, and the reviewer is
+  adjudicating whether to drop it.**
+- ⭐⭐ **L's EXECUTOR REFUSED THE REPRO SHAPE MY ADDENDUM PRESCRIBED, AND MEASURED WHY.** The ordered test —
+  assert `runtime error:` present plus the current value — is **GREEN ON ARRIVAL** (Core #12: *not coverage*),
+  **and being green it enters the census PASS set, forcing a row into an EXACT SHRINK-ONLY ratchet whose own
+  header says a row is "NEVER a place to park a graduation you did not do."** ⇒ **it shipped a test asserting
+  only that the emitted C is NOT UNDEFINED — true under BOTH candidate rulings of the open `Neg` question, RED
+  at HEAD, pinning no value and growing no ratchet.** **My brief was wrong; the executor was right.**
+- ⭐⭐ **AND IT INVERTED THE TRACK'S OWN JUSTIFICATION BY MEASUREMENT: `uint64_t` IS NOT HARDENING.** The
+  same-width fix would have left `u16 *%` UB **and made `i16 *%` NEWLY UB** — **while passing the entire runtime
+  battery, 24/24 byte-identical in both directions.** ⇒ **stdout and UBSan are BOTH blind; the emitted-shape
+  guard is the only instrument that sees it (24 sites, 18 violations).**
+- ⛔ **AND ONE HANDED-DOWN FIGURE DID NOT REGENERATE** — a review record's *"`uint8_t` accessor → −511"*
+  measures **256**. **Claim survives, number did not**; the fixture now carries the measured value **plus the
+  change that regenerates it.**
+- ✅ **J's BOOTSTRAP RED WAS NEVER THE CODE.** base **stage-2 rc 0** · its commit **stage-3 rc 101** · **the SAME
+  commit re-run stage-2 rc 0.** ⇒ **nothing to bisect.** ⭐ **Cause: a ONE-WORD COMMENT edit to a runtime `.c`
+  while the first run was in flight** — `driver.gg` bakes all 62 runtime sources via `embed_file`, so two
+  generations embedded different bytes and **convergence slipped exactly one generation.**
+  ⛔ **AND IT CORRECTED MY FRAMING:** *"convergence stage is deterministic, so load cannot move it"* is **true
+  about LOAD and FALSE AS A LICENCE — determinism holds only if the INPUTS hold still.** Now a rule in
+  `AGENTS.md`. *(Had it blamed load it would have buried a real-looking signal; had I not insisted on the HEAD
+  comparison it might have "fixed" a non-existent lane asymmetry.)*
+- ⭐ **`t1448`'s PRODUCING SITE IS IDENTIFIED — AND THE GUESS I REFUSED TO MAKE WOULD HAVE BEEN WRONG.** The
+  bare paths come from the **CALLER** handing `env::temp_dir()` to the helper; the helper's own `work_dir`
+  really is process-unique. ⊕ **The finder asked that its case NOT inflate the item** (only one bootstrap was
+  running — **verified, not assumed**), and it is recorded that way.
 
 ### ⛔⛔ J's BOOTSTRAP IS **RED — AND IT IS NOT THE TIMEOUT I BRIEFED FOR**
 
