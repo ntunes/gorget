@@ -1315,6 +1315,37 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
 
+### 🔎 ARCHAEOLOGY (owner-requested) — THE GENERIC `[]` WAS **NEVER DISCUSSED. IT WAS IMPLEMENTED.**
+
+⭐⭐ **BORN 2026-02-09 IN A CODEGEN COMMIT**, `31fead734` *"Phase 8: generics codegen & monomorphization"* —
+whose own message says *"…**with backtracking to disambiguate from indexing**."* **The tie-break it wrote is
+still running today**, verbatim in the comment it added:
+> *"If the next token after `]` is `(`, it's a generic call. Otherwise, restore and parse as index."*
+⇒ ⛔ **THE CURRENT RULE IS A PURELY SYNTACTIC BIAS TOWARD THE GENERIC READING, CHOSEN SO MONOMORPHIZATION COULD
+SHIP.** That is why `d[k]` indexes and `d[k](v)` does not: **the `(` flips it.**
+
+**WHAT THE RECORD CONTAINS — regenerated:**
+- **ZERO D-numbered entries decide generic bracket syntax.** `grep -ciE '^- 20[0-9-]+ — .*generic'
+  docs/define-gorget/decisions.md` → **0**; the word appears **10** times in the whole ledger, all incidental.
+- `docs/language-design.md` §4.3 states it as a **FACT, NOT A RATIONALE**: *"Square brackets `[]` for type
+  parameters."* **One sentence; the collision with subscripting is never mentioned.**
+- The ledger's own **SYNTAX-BUDGET directive (added 2026-07-18)** — any syntax-adding decision must state
+  **(a)** the full sigil inventory, **(b)** the newcomer cost, **(c)** collisions/near-collisions — **postdates
+  the generic `[]` by five months. It never got one.**
+
+⭐⭐⭐ **AND THE SHARP PART: D38/D39 APPLIED A STRICT AMBIGUITY STANDARD TO `[]` ON *VALUES* AND NEVER LOOKED AT
+`[]` ACROSS *KINDS*.** D38 rejected `s[i]` **on ambiguity grounds**; D39 re-affirmed it, ratified
+***"`[]` takes the collection's lookup key"***, recorded that ***"the ambiguity is the durable objection"***, and
+rejected a coherent `[]`/`{}` split on **syntax-budget** grounds. ⇒ ***the ledger refused a second meaning for
+`[]` on values while `expr[...]` had carried two meanings across KINDS since February — unruled, unbudgeted, and
+invisible to the very decisions policing that operator.***
+
+⇒ ⭐ **CONSEQUENCE FOR THE OPEN QUESTION: there is NO prior ruling to reconcile with — only an IMPLEMENTATION
+DEFAULT to ratify or replace.** ⛔ **And by the ledger's own 2026-07-18 directive, deciding it now OWES A
+SYNTAX-BUDGET SECTION** — the inventory, the newcomer cost, and the collision list. **That is the document that
+was never written, and it is the deliverable that should accompany the ruling.**
+⊕ *Incidental: the project was called **Vyper** as late as Phase 2 (`f13ca0d61`).*
+
 ### ⛔⛔⛔ D0′ v3 PASS 1 — **THE FACT I GAVE THE OWNER TO JUSTIFY THE RULING IS FALSE AS STATED**
 
 ⭐⭐⭐ **I TOLD THE OWNER: *"across all 4762 ambiguous sites, NO HEAD IS EVER A VALUE"* — AND OFFERED IT AS THE
