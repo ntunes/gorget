@@ -16,7 +16,7 @@
 | **D0′** | ⛔ **RE-SPLIT 2026-09-05** — the `elem_drop`/`elem_clone` half **+ the Deque precondition**. Self-contained. Needs re-brief. | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| **G** | passes 1–4 BLOCKED → 4 folds → 🔵 pass 5. **Streak 0/3.** ⭐ **Every remaining item now has a MEASURED prototype.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
+| **G** | passes 1–5 BLOCKED → 5 folds → 🔵 pass 6. **Streak 0/3.** ⚠ **The DESIGN is signed off; what keeps failing is MY PRESCRIPTIONS.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
 | ✅ **F1r** | **3 passes, design signed off, 🟢 EXECUTOR LAUNCHED 2026-09-05.** `t1362`+`t0750` as ONE fix. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
@@ -450,6 +450,39 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ⛔ G's FIFTH FOLD: A GUARD THAT WOULD BE SATISFIED BY THE BRANCH IT POLICES
+
+⛔ **D13's *"one flag, both problems"* is FALSE as a class claim.** Measured with the patch applied:
+`--accept --topic "11 closures"` **silently wrote 21 LEGACY rows** while printing
+**`baseline updated (0 progress rows folded)`** — twenty-one changed, zero reported. **The patch has NO topic
+guard** (verified: zero occurrences) ⇒ **`--topic` is a RUN-SCOPING flag standing in for a BRANCH GUARD.**
+⛔⛔ **And that is what makes it blocking: precondition 1's lint — *"every row measured on a lane has a
+non-empty baseline"* — would be SATISFIED BY THE VERY BRANCH IT EXISTS TO POLICE. SIX-Q #2.**
+⊕ **Rider (b) is the same defect in a second branch, and my answer there was again "scope it with `--topic`"** —
+**two instances of one class, answered twice with the instance fix.**
+⭐ **THE FIX IS PASS 3's OWN ERRATUM, WHICH I DISCARDED: an explicit `--seed-new` flag on both widening
+branches, with `N rows SEEDED` printed.**
+
+⛔⛔ **AND THE DURABLE DISCLOSURE STRING IS WRONG UNDER MY OWN LATER FOLD.** A3 ratified
+`… (9 sources, 1 direction)`; **A3's D11 then decided to SHIP the mirror slice and A4 confirmed it** ⇒ **the
+corpus ships TWO directions and the string would say "1".** ⚠ ***That is verbatim D11's own standard — "a WRONG
+durable disclosure is worse than an incomplete one" — reproduced by the fold chain.***
+⚠ **And I had the exempt-list mechanism BACKWARDS:** topic 30 is **not** among the 33 (verified), so the list
+does not rot that way — **it rots the OPPOSITE way: renaming any of the 33 silently drops it and makes its
+drift FATAL, reddening the map for drift nobody caused.**
+
+⭐ **FOUR ERRATA CHANGE GENERATED OUTPUT — the most valuable one SAVES work:** **SIX-Q #6 on the FORWARD
+direction is answered NO, measured over 198 cells** (view-only and both-observed verdicts agree on all 198)
+⇒ ⛔ **DO NOT widen the forward observation — doing so would invalidate D3's 60/45/15 and the 210 baseline FOR
+NOTHING.** ⊕ **And D12's rule had no subject for 6 of 9 sources (SIX-Q #4)** — the source observation is a
+place **expression**, not a name ⇒ **restate over PLACES: *"a mutation through one place is observable through
+that place only; every other place reads the value it had before."*** ⊕ **Multi-line output joins with `" / "`,
+not a newline — unsaid, EVERY mirror cell baselines WRONG for a reason unrelated to the compiler.**
+
+⚠⚠ **PASS 6 IS BRIEFED WITH A WARNING I SHOULD HEED TOO: this track is at risk of being REVIEWED rather than
+SHIPPED. The DESIGN has been signed off four times over; what keeps failing is MY PRESCRIPTIONS. Hold the bar,
+do not manufacture work — if the two one-line fixes are right, LET IT LAUNCH.**
 
 ### ⛔⛔ D01 IS RE-SPLIT — THE MERGED COMMIT SHIPS A MEMORY-CORRUPTION REGRESSION, AND HALF OF IT DECIDES AN OPEN OWNER QUESTION
 
