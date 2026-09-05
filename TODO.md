@@ -67,9 +67,35 @@ if it is the same one, the track FIXES it (Core #4).
 ⚠ **A stale-instrument trap the scout hit: the cached `/tmp/*_sh_driver` binaries are STALE** — self-host
 source moved after them. **Rebuild the driver before believing any SH result.**
 
-### ✅ THE LEDGER SELF-CONTRADICTION IS FIXED (owner-directed 2026-09-05: *"Fix the ledger according to language-design"*)
+### ⛔ THE LEDGER EDIT WAS REVERTED — MY REPORT TO THE OWNER CONTAINED TWO FALSIFIED MEASUREMENTS
 
-⛔ **`docs/define-gorget/decisions.md` IS OWNER-EDIT-ONLY — this edit was made ON EXPLICIT OWNER INSTRUCTION and is the ONLY reason an agent touched it. The standing rule is unchanged.** The closure-capture entry now carries the §3.5-derived three-way answer, with the superseded 2026-09-04 text retained inline for the record. **`todo/t1067` carried the same false premise in three bullets and has been corrected too.**
+The owner authorized a ledger correction (*"Fix the ledger according to language-design"*) **on the strength of
+an orchestrator report that Track B's brief-review pass 1 then FALSIFIED at the same HEAD.** The edit is
+**reverted**; `decisions.md:1605` stands as written. `todo/t1067`'s body **STANDS — act on it.**
+
+| I reported | pass 1 measured |
+|---|---|
+| live-`Callable` `.clone()` then capture → rc 0, correct, both backends | ⛔ **heap-use-after-free, ASan rc 1, garbage on BOTH backends.** The clone gets its own env, but **the CAPTURE still copies the handle bitwise and the clone is still dropped at block exit** — cloning the *source* cannot fix a defect whose mechanism is the *capture*. |
+| "capturing `h.f` is already rejected today" | ⛔ **MISATTRIBUTED** — that probe rejected at a **bare-assign** site, then captured a bare identifier. **The direct capture is ACCEPTED.** ⇒ `:1605`'s *"reject cannot be spelled"* is **CONFIRMED, not refuted.** |
+
+⭐ **AND I INVERTED LEDGER PRECEDENCE.** `:1605` is **2026-09-04** and is its own ruling's **exception clause**;
+D31 Addendum-2 at `:1516` is **2026-07-20** and **general**. **Later + specific does not lose to earlier +
+general**, and `docs/language-design.md` ranks **BELOW** `decisions.md` — a §3.5 derivation by an agent cannot
+retire a ratified owner exception naming this exact cell.
+
+⚖ **WHAT REMAINS A GENUINE OWNER ASK (one claim, not three):** does *"move breaches it under D31"* survive?
+The DEAD-cell argument is sound and pass 1 confirmed it independently — live ranges do not intersect, so §3.5
+finds **no conflict**, and reader-vs-writer does not gate that row. **But that is a SEMANTICS question for the
+owner, not something a measurement settles.**
+
+⛔ **LESSON, AND IT IS THE ROUND'S THIRD OF THIS SHAPE:** I put a scout's unverified measurements in front of
+the owner as grounds for editing the RATIFIED LEDGER. **A scout measurement has not been through the gauntlet.
+Nothing reaches the ledger — or the owner as a basis for ratification — before a fresh pass has tried to
+falsify it.**
+⊕ **A SECOND, INDEPENDENT INSTANCE THE SAME DAY (Track D scout):** *"the callee position is a borrow position"*
+is cited by `t1225`, `devbook/11` and three lane comments — **and is NOT in the ledger at all.** Exhaustive
+search of 3365 lines: no entry. **All occurrences were written by R49 Track S-a2, citing each other.** ⚖ Also
+an owner ask.
 
 `decisions.md:1605` makes **three** claims about a closure capturing a `Callable`/`Box`/`Owned`/`Task`/`Guard`:
 *"clone breaches the carve-out, **move breaches it under D31**, and **reject cannot be spelled until D7's
