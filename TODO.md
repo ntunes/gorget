@@ -20,12 +20,43 @@
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED. ⭐ **BOTH GATES NOW CLEAR** — F1r INTEGRATED, and **R1 IS RULED (Line A, signature-only, 'for now')**. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** ⏸ **QUEUED BEHIND THE SAFETY SET** per the owner's fixed order, not blocked. | `t1362`–`t1371` |
 | ✅ **H** | **`t1387`** — the map's KEY has no drop discipline. **SIGNED OFF 3/3, 🟢 EXECUTOR LAUNCHED 2026-09-05.** | `t1409`–`t1417` |
-| **K** | **`t1385`** — the SEED HALF. 🔵 **pass 2** on the re-cut brief. **Streak 0/3.** ⭐ **H + K ARE THE ONLY TWO THINGS BETWEEN HERE AND A GREEN `--lanes all`.** ⛔ **SPLIT at pass 1 — my ggdef-first scope decision was INVERTED by measurement.** | `t1432`–`t1437` |
+| **K** | **`t1385`** — the SEED HALF. ✅ **pass 2 SIGNED OFF the design** → 🔵 **pass 3**. **Streak 1/3.** ⭐ **H + K ARE THE ONLY TWO THINGS BETWEEN HERE AND A GREEN `--lanes all`.** | `t1432`–`t1437` |
 | **J** | **`t1407`** — `Vector.fill`, **TWO defects**. 🔵 **RE-SCOUT (J2) measuring the HYBRID.** **Streak 0/3.** ⛔ **Pass 1 killed `v2b`: its snapshot is the `save/restore` READ-SITE shape, and its `memset` has NO possible RED row.** | `t1421`–`t1427` (`t1420` spent) |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**. 🔵 **SCOUT LAUNCHED 2026-09-05.** ⭐ **K's triage handed it a TOTAL enumeration for free: 21 of 22 sanitizer rows are exactly this frame**, + 13 already-baselined siblings. **93 of 301 allowlist rows carry `closure_env_alloc`; only 17 cite the item.** | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ✅ K's PASS 2 SIGNED OFF — AND PROVED SIX-Q #3 **STRUCTURALLY**, WHERE PASS 1 HAD ONLY MEASURED IT
+
+**Streak 1/3.** No blocking findings; seven folds, all scope-growth inside a sound design.
+- ⭐⭐ **THE CLINCHER IS EXACT, VERIFIED FOUR WAYS** — the `good` derivation; the 3 rows' `expected` (none
+  starts with `REJECTED` ⇒ third-quadrant DRIFT); that **both target topics genuinely carry uncoded rows K2 must
+  fold anyway** (all six `ggdef=REJECTED` rows in topics 07 and 11 were RUN, not assumed, and all six are
+  uncoded); and that **the ggdef wall is confined to a topic K never runs** (of six expected-`REJECTED` rows
+  corpus-wide, **five are CODED** and untouched by K2).
+- ⭐⭐ **THE HIDDEN-SHAPE ABSENCE IS NOW STRUCTURAL, NOT MEASURED.** Pass 1 rested on the observed selfhost
+  bucket; pass 2 proved it for **every possible** bucket: only `selfhost` can create a divergence;
+  `BUILD-FAIL`/`REJECTED` collapse to bucket-only so keys match whatever selfhost measures; the two already-
+  `DIVERGENT` rows are pinned forever; a `WORKS` key carries `actual == expected`, identical across lanes —
+  **except** under a `loud failure` expectation, of which **21 exist corpus-wide and none is `hof_*`**.
+- ⛔ **THE DANGEROUS REVERT HAS NO CARGO-TEST PIN AT ALL.** `{¬seed ∧ ¬allowlist-delete}` is **GREEN** under
+  `cargo test`; it is pinned **only** by the four `--lanes all --topic` runs going rc 1 → rc 0. **That must be
+  said in the commit, or the next reader thinks the suite covers it.**
+- ⛔ **THE BROKEN HINT IS AT *TWO* SITES, AND I HAD NAMED ONE.** The const's **own doc comment** prescribes the
+  refuted command three lines above the list — and still says the rows *"predate those lanes"* (refuted) and
+  *"The 31 named exemptions"* (false once emptied).
+- ⛔⛔ **AND A NAIVE Core #4 SWEEP WOULD BREAK THE ONE PATH THAT WORKS.** The same five-lane command is
+  **CORRECT** in three other places, because topic 30's rows are born with **every** value lane empty so
+  `first_seen` is True. ⇒ **the correction is a PRECONDITION, not a lane count.** *(A textbook SIX-Q #4: the
+  rule's subject does not cover those sites at all.)*
+- ⭐ **THE SCRIPT ITSELF IS THE SOURCE OF THE UNIT SLIP** — `seeded.append` sits inside `for lane in lanes:`
+  while the message prints `"rows SEEDED"`. **The script calls cell-lanes rows**, and every reader inherits it.
+- ⚠ **A SHAPE NOBODY HAD NAMED: a FLAKY LANE measured under load and seeded at `good` becomes a permanent
+  REGRESSION that NO flag can fold** — both `--accept` and `--accept-drift` refuse while `regressions` is
+  non-empty. The confirmation runs are the mitigation; **say that is what they are for**, and set both timeouts.
+- **Errata:** the K2 sizing figure is **55** `Halt::IllFormed` sites, not 62; the base carry-forward touches
+  **eight** `todo/*.md`, not three (**the load-bearing half — no `src/`, `scripts/`, `tests/` — holds**).
 
 ### ⚖⚖⚖ TWO OWNER ASKS ARE OPEN — BOTH ISOLATED BY A REVIEWER, BOTH RATIFIED-TAXONOMY QUESTIONS
 
