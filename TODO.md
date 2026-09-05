@@ -22,7 +22,7 @@
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
 | **L** | **`t1410`** — wrapping ops lower to UB on C. ✅ **DESIGN SIGNED, 5 PASSES, SHAPE UNCHANGED → 🟢 EXECUTOR LAUNCHED.** ⛔ Two of my filed items **contradicted each other on `Neg`** — fixed. | `t1444`–`t1447` |
 | **J** | **`t1407`** — `Vector.fill`. ✅✅✅ **3/3 SIGNED OFF, 🟢 EXECUTOR LAUNCHED.** ⛔ **Pass 3 RETRACTED my Addendum 4 §1 — it had retracted a TRUE claim from a superseded artifact.** | `t1422`–`t1427` |
-| **E** | **`t0953`** — ✅✅✅✅ **DESIGN SIGNED FOUR TIMES, 🟢 EXECUTOR LAUNCHED.** ⛔ **`#[must_use]` measured by rustc NOT to catch its class; the safety premise is FALSE for the sort family.** | `t1351`–`t1358` |
+| **E** | **`t0953`** — ✅✅ **EXECUTOR COMMITTED** (`119d03fc2`+`8ae5f6fd4`), sweep **rc 0**, `leaks: 251` → 🔵 **output-review.** ⭐ It **closed `t0121`** and proved the census gate was **already red at my base — Track H's, not its.** | `t1352`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
@@ -46,6 +46,22 @@ claims folded into this handover long ago. **Everything else stayed.**
 `target_v3` compilers E's executor is RED-verifying against), `gg_fuzz_lint_target` (5.3 GB — a live
 `CARGO_TARGET_DIR` for a lint; deleting it forces a full rebuild on every `cargo test --test lints`),
 `execE_01db12fc`, and `rev2_a2e446ab`. **None of them is prunable until its track integrates.**
+
+### ⛔⛔ A ROUND-CLOSE GATE HAS BEEN **RED AT MY HEAD SINCE TRACK H INTEGRATED**, AND NOTHING NOTICED
+
+**Measured this heartbeat, rc off the bare command: `scripts/known_gaps_census.sh --check` → `CENSUS_RC=1`.**
+E's executor found it first, proved it was **not its own** (reverting all three of its `src/` files leaves both
+rows clean), adjudicated all four witnesses the item names — **two of them RECONSTRUCTED from the item's prose**
+— graduated both rows, **closed `todo/t0121`**, and attributed the fix to **Track H's `8573b12ca`.**
+⇒ ⛔⛔ **THE PROCESS DEFECT IS MINE.** `AGENTS.md` names the census as one of *"the two SCRIPT gates no `cargo`
+target reaches"*. **H's output-review re-ran an extensive `cargo` gate set — and `cargo` cannot reach this one.**
+I integrated H, ran `--lib` and `--test lints` at the merged tree, and **never ran the script gates**, so the
+branch has been red for six integrations without a single red signal.
+⇒ ⭐ **RULE, EFFECTIVE NOW: THE TWO SCRIPT GATES RUN AT EVERY INTEGRATION, NOT ONLY AT ROUND CLOSE** —
+`known_gaps_census.sh --check` and `GG_STAGING_MOVE_GUARD=fatal staging_move_burndown.sh --check`. **A gate no
+`cargo` target reaches is a gate nothing schedules; "the suite is green" is not evidence about it.**
+⊕ **It goes green again when E integrates** — but that is luck, not process: **it was H's fix that silently
+graduated two rows, and H's own review had no instrument that could see it.**
 
 ### ⚠ J's EXECUTOR STOPPED **UNCOMMITTED** MID-BOOTSTRAP — AND ITS REPORT CAUGHT A FALSE FACT ONE STEP FROM THE PERMANENT RECORD
 
