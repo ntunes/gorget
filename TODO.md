@@ -10,7 +10,7 @@
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
-| **C1** | **`v5` — `R`'s subject from the RATIFIED BOUNDARY SET (ctor · method-call · RETURNS).** 🔵 pass 1. Streak 0/3. ⛔ **NO CLEAN SPLIT EXISTS — checked.** | `t1331`–`t1333` |
+| **C1** | ⛔⛔ **BLOCKED A FOURTH TIME — `R`'s SUBJECT IS A SELECTION ON A THIRD AXIS. RECOMMEND CLOSE FOR R50: `R` NEEDS ITS OWN SCOUT.** Spine survives and measures STRONGER each pass. | `t1332`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ⚖⚖ **OWNER ASK — RULING 3 IS NOT IMPLEMENTABLE AS WRITTEN; `t1408` MUST LAND FIRST.** ⛔ And as designed the track would ship an **accept→MEMORY-UNSAFETY** change. Streak 0/3. | `t1394`–`t1402` |
@@ -1316,6 +1316,53 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ⛔⛔⛔ C1 IS BLOCKED A **FOURTH** TIME — AND THE SPINE SURVIVES EVERY TIME. **`R` NEEDS ITS OWN SCOUT.**
+
+⭐ **THE PATTERN IS THE FINDING.** v2 blocked on DESIGN · v3 on ARITHMETIC (two changes named, three needed) ·
+v4 on SCOPE (position axis) · **v5 on the POSITION AXIS AGAIN, plus two false premises.** ***Every block is
+`R`'s SUBJECT; the spine — `U`+`C`+`R`, one commit, `R` with or before `C` — survives each pass and measures
+STRONGER.*** ⇒ ⭐ **`R`'s subject is a RESEARCH problem (which ARMS at which POSITIONS without over-refusing),
+and nobody has measured the ARM × POSITION matrix. That is a SCOUT deliverable, not a brief deliverable.**
+⇒ ⚖ **RECOMMEND: CLOSE C1 FOR R50 alongside D0′. It has produced THREE new CRITICAL/HIGH filings — more value
+than most tracks that shipped.**
+
+🚨 **B1 — THE THIRD UNENFORCED POSITION IS *CLOSURE CAPTURES*, AND IT IS SILENT WRONG OUTPUT. FILED `t1331`.**
+`Callable[void()] f = (): print((*b))` over a `Box[String]` prints **`0`** while **the identical deref outside
+the closure prints correctly**, `gg check` rc 0, ASan **CLEAN**. ⊕ **Negative control: a plain `String` capture
+prints correctly twice** ⇒ **the discriminator is the SINGLE-OWNER TYPE at the boundary, not closures.**
+⛔⛔ **AND IT IS EXCLUDED FROM `t1067` BY CONSTRUCTION, not by judgement:** that item's set is
+`FnPtr ∪ Mutex ∪ RWLock`, and **`Box__X` is minted `CopySemantics::Resource` at all four sites**, so
+`lacks_materialization_path(Box)` is **false**. *The gate that legitimately parks that class cannot park this.*
+⇒ ⭐⭐ **v5's OWN NOMINATED WITNESS YIELDED *TWO* OMITTED POSITIONS — returns AND captures — AND I TOOK ONE.**
+
+⛔ **B2 — `R` AT THE RETURN POSITION WOULD RED A COMMITTED GREEN TOP-LEVEL FIXTURE.** The helper's
+whole-`Expr::Identifier` arm rejects **unconditionally, liveness-independent** (measured: a DEAD local still
+rc 1). ⇒ wiring it at returns rejects `return f` — **and
+`tests/fixtures/closure_escape_capture_axis_param_named.gg` is committed, green, top-level, non-`#[ignore]`d,
+and its header asserts *"INTENDED: prints `hello`, rc 0, both backends"*.** ⇒ **the brief must name WHICH ARMS
+run at the return position — the design consistent with `t1329` is the SUB-PLACE arms ONLY, never the
+whole-Identifier arm.** ⚠ ***My brief warned that "no half may ship an un-refusal" and was blind to the
+OVER-refusal in the other direction.***
+
+⛔ **B3 — THE METHOD-CALL PREMISE IS FALSE, IN THE SAME SHAPE AS THE ERRATUM I RETRACT ONE SECTION LATER.**
+`require_explicit_move_for_single_owner_init(` has **SEVEN** call sites, and **TWO are inside the
+`Expr::MethodCall` arm** ⇒ **the arm ALREADY CALLS THE HELPER TWICE.** `Box.new` needs **one more GATE**, not a
+missing caller. **KEEP the conclusion, DELETE the reason** — acting on it either routes every method call into
+the ctor path or duplicates a call beside an existing one (Core #4 drift).
+⊕ **AND A FRAMING SLIP THAT LET B1 THROUGH: `Box.new` is NOT a third POSITION — it is the CONSTRUCTOR position
+under a SECOND SPELLING.** `R`'s real position count is **two** (constructor, return); **the boundary set's
+third unenforced row is CAPTURES.**
+
+⭐ **VERIFIED, AND ONE LEG MEASURES STRONGER THAN I CLAIMED:** `t1329` and `t1330` **both reproduce exactly** ·
+the `clone_fn_for_ptr` correction is **load-bearing, not cosmetic** (`lower_return` uses it at three sites and
+never touches `ptr_materialization_kind`) · ⚠ **BUT all three gate on `place.projections.is_empty()`, so
+`return h.b` — WITH a projection — does NOT reach them: `C` alone does NOT make `t1329`'s cell clone** ·
+and **leg 1 of "no clean split" is stronger than stated: with the box OBSERVED, the `Box.new` nested shape at
+HEAD is rc 0, correct output, ASan CLEAN** ⇒ ***`U` alone converts a CLEAN, CORRECT program into a compiler
+panic.***
+⊕ **E5 — my *"ONLY ggdef abstains"* is OVER-BROAD:** `Ty` has a **`Callable` variant with `param_ownerships`**,
+so `R`'s `Callable`-payload cells **ARE ggdef-adjudicable.** *Do not let the `t1227` cite excuse the whole lane.*
 
 ### ⭐⭐⭐ H PASS 2 RAN THE CONTROL PASS 1 NEVER RAN — AND THE FIGURE CAME BACK TO WHERE IT STARTED
 
@@ -3561,6 +3608,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t1404`](todo/t1404.md) **HIGH** — 🆕📐 [HIGH — SILENT LOST WRITE FROM A RATIFIED SPELLING, both backends, gg check clean; ⚖ R2's RATIFIED PREREQUISITE (owne…
 - [`t1364`](todo/t1364.md) **HIGH** — 🆕🚨 [HIGH — A RUN THAT NEVER ERRORS TRAPS T_UnwrapNone. Both Rust backends; the SELF-HOST LANE IS CORRECT, so the oracle…
 - [`t1388`](todo/t1388.md) **HIGH** — 🆕🚨 [HIGH — A BARE LOCAL BIND OF A REFCOUNT HANDLE CORRUPTS THE SOURCE AND FABRICATES THE DESTINATION. No call, no contai…
+- [`t1331`](todo/t1331.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT FROM ORDINARY SAFE SYNTAX; gg check rc 0, build rc 0, run rc 0, ASan CLEAN; found 2026-09…
 ### Medium
 
 - [`t0115`](todo/t0115.md) **MED** — 🆕🐛 [MED — COMMENT MISATTRIBUTION, PRE-EXISTING on both lanes; found 2026-08-19 by the R43 Track G output review, executo…
