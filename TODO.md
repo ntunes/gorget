@@ -1368,6 +1368,40 @@ refuses to build at all is **definitionally new**.
 ⭐ **VERIFIED: the killer sentence is LIVE**, the `.clone()` C is **byte-identical (3906 lines each)**, all five
 of my other errata land, and **the four `is_box: true` sites are LINT-PINNED** — a real readiness-row-2 witness.
 
+### ⭐ THE `Callable`/`Owned` GAP IS NOT A CAVEAT — IT IS A **SECOND SOURCE OF TRUTH**, FILED AS `t1408`
+
+⚠ **I RAISED IT AS A FLAG AND THE OWNER CORRECTLY ASKED WHETHER I WAS ASKING OR PROPOSING.** *A fact without a
+recommendation is the "unfinished scout wearing a ballot" pattern again.* **Proposal below.**
+
+⛔ **THERE ARE TWO INDEPENDENT ANSWERS TO *"IS THIS NAME A TYPE?"*:** a **hardcoded string list**
+(`BUILTIN_GENERIC_TYPES`, 16 names) seeding the ScopeTable's type namespace, **and a separate `matches!` on
+string literals** for `Callable`/`MutCallable`/`ConsumeCallable`. **`Owned` is in NEITHER.**
+⇒ **Layering rule 3 (one source of truth per axis) with a Core #2 name-match inside the second mechanism.**
+
+**MEASURED, at HEAD — the asymmetry is real:**
+`Box[int] Box = …` → **noticed** (unused-variable warning names `Box`) · `Callable[int(int)] Callable = …` →
+**`gg check` CLEAN, nothing notices.**
+
+⭐⭐ **THE REFERENCE-GRADE SOLUTION KEYS THE CHECK ON THE THING THE RULING ALREADY NAMES AND DELETES THE
+QUESTION: reject a value binding whose NAME RESOLVES TO A TYPE-KIND DEF — read `DefKind` from the resolver, not
+from any list.** ***That IS "resolve by kind", applied one layer over: it needs no name set, so it CANNOT be
+incomplete, and it is Core #2-clean by construction.***
+⇒ **Then `Callable`/`Owned` stop being a hole in the CHECK and become a separate registration defect. Close
+`t1408` and the check picks them up WITH ZERO CHANGE — one fix, and the other stops needing a special case,
+which is the test for whether a fix sits at the right layer.**
+⛔⛔ **WHAT NOT TO DO, STATED EXPLICITLY: do NOT add `"Callable"`/`"Owned"` to a list inside the shadow-check —
+that replicates the exact defect in the code written to fix it.**
+⚠ **HONEST RESIDUAL: until `t1408` lands, a kind-keyed check still misses `Callable`. Ship the check keyed on
+`DefKind`, and state the gap in the check's own doc comment rather than papering it with two string literals.**
+⊕ **And `t1408` flags a design question before its own fix: the callable family may need distinct TREATMENT
+(it parses as a function-type form) — so the fix is one source of truth for MEMBERSHIP, not necessarily one code
+path for BEHAVIOUR.**
+
+⊕ **A FALSE ALARM I CAUGHT BEFORE RAISING IT:** a first grep appeared to show `"A"` and `"B"` inside the builtin
+TYPE list — which would have meant `int A = 5` becoming an error under the ruling. **They came from a DOC
+COMMENT about `Pair[A, B]` generic params; the list is 16 genuine type names.** ⚠ ***A grep window one line too
+wide invented a catastrophic consequence. Read the match, not the count.***
+
 ### ✅✅ RULED 2026-09-05 — **READING (a): THE SHADOWING DECLARATION FAILS.** *"`Vector` is a type, must not be used as identifier."*
 
 ⚠ **AND A CLARIFICATION THE OWNER HAD TO PULL OUT OF ME:** `Vector[int] v = [1,2,3]` is **NEVER AFFECTED** — the
@@ -4104,6 +4138,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t1265`](todo/t1265.md) **MED** — 🆕⚖ [MED — AN UNRULED CELL THE RATIFIED TEXT CLAIMS NOT TO HAVE: == on the D53 single-owner HANDLE family (Shared / Weak…
 - [`t1068`](todo/t1068.md) **MED** — 🆕⛔ [OVER-REJECTION — a correct program is refused, and the refusal's stated premise is false; found R49 Track L while wi…
 - [`t1405`](todo/t1405.md) **MED** — 🆕📐 [MED — CAMPAIGN, owner-ratified 2026-09-05: D27's ^ MIGRATION EXTENDS EVERYWHERE, superseding the earlier src/tests/l…
+- [`t1408`](todo/t1408.md) **MED** — 🆕🧹 [MED — LAYERING RULE 3 + CORE #2: TWO SOURCES OF TRUTH FOR "IS THIS NAME A TYPE", ONE OF THEM A STRING MATCH; surface…
 ### Low
 
 - [`t0452`](todo/t0452.md) **LOW** — 🆕 [LOW — diagnostic ergonomics follow-up from Round XXIX Track A close 2026-08-03] E_NotIndexable message text should na…
