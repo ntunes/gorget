@@ -9,7 +9,7 @@
 |---|---|---|
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
-| **B** | ✅ SCOUTED → 🔵 brief-review **pass 1 LAUNCHED** 2026-09-05, brief `/tmp/brief_B_v1.md`. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
+| **B** | ⚖⚖ **HELD — OWNER ASK (the capture cell). Pass 1: NOT SIGN OFF, 5 BLOCKING.** The brief was STALE BY CONSTRUCTION (my revert landed 3 min after it) and **overrode a ratified `decisions.md` clause with an agent's derivation.** Streak 0/3. Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⛔⛔ **BLOCKED A FOURTH TIME — `R`'s SUBJECT IS A SELECTION ON A THIRD AXIS. RECOMMEND CLOSE FOR R50: `R` NEEDS ITS OWN SCOUT.** Spine survives and measures STRONGER each pass. | `t1332`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
@@ -20,12 +20,77 @@
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | ✅ **H** | **`t1387`** — the map's KEY has no drop discipline. **SIGNED OFF 3/3, 🟢 EXECUTOR LAUNCHED 2026-09-05.** | `t1409`–`t1417` |
-| **K** | **`t1385`** — the bucket triage. ✅ SCOUTED → 🔵 **brief-review pass 1**, brief `/tmp/brief_K_v1.md`. **Streak 0/3.** ⭐ **H + K ARE THE ONLY TWO THINGS BETWEEN HERE AND A GREEN `--lanes all`** — measured whole-corpus. Scope GREW to the ggdef classifier fix (Core #8). | `t1432`–`t1437` (`t1428`–`t1431` spent) |
-| **J** | **`t1407`** — `Vector.fill` DOUBLE-FREES at pristine HEAD (CRITICAL, owner-approved 2026-09-05). ✅ SCOUTED → 🔵 **brief-review pass 1**, brief `/tmp/brief_J_v1.md`. **Streak 0/3.** ⭐ **TWO defects, not one**; scout FALSIFIED 3 of my claims and filed `t1418`+`t1419`. | `t1420`–`t1427` (`t1418`/`t1419` spent) |
+| **K** | **`t1385`** — the SEED HALF. 🔵 **pass 2** on the re-cut brief. **Streak 0/3.** ⭐ **H + K ARE THE ONLY TWO THINGS BETWEEN HERE AND A GREEN `--lanes all`.** ⛔ **SPLIT at pass 1 — my ggdef-first scope decision was INVERTED by measurement.** | `t1432`–`t1437` |
+| **J** | **`t1407`** — `Vector.fill`, **TWO defects**. 🔵 **RE-SCOUT (J2) measuring the HYBRID.** **Streak 0/3.** ⛔ **Pass 1 killed `v2b`: its snapshot is the `save/restore` READ-SITE shape, and its `memset` has NO possible RED row.** | `t1421`–`t1427` (`t1420` spent) |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### ⚖⚖⚖ TWO OWNER ASKS ARE OPEN — BOTH ISOLATED BY A REVIEWER, BOTH RATIFIED-TAXONOMY QUESTIONS
+
+**Round-lifecycle 7(ii). Neither is derivable from the docs below the ledger; both were nearly derived anyway.**
+
+**ASK 1 — TRACK B, the CAPTURE cell.** `decisions.md:1605` says of a closure capturing a
+`Callable`/`Box`/`Owned`/`Task`/`Guard`: *"clone breaches the carve-out, **move breaches it under D31**, and
+reject cannot be spelled until D7's capture list exists."* But **D31 full-strict says non-`!` consuming
+positions still AUTO-MOVE-WHEN-DEAD (CoW, not contract).** ⇒ **Does the DEAD-source move retire `:1605`'s
+"move breaches it"?** Both cannot hold for a capture whose source is provably dead.
+⛔ **B's brief answered this ITSELF from `language-design.md` §3.5 — a doc ranked BELOW the ledger — and I
+folded it. That is the precedence order inverted, on this same cell, for the second time.**
+
+**ASK 2 — TRACK K2, the ggdef VERDICT taxonomy.** `run_ggdef` scores an uncoded `Outcome::IllFormed` as
+**`REJECTED`**, i.e. *"the definition rejects this program"* — a claim ggdef never made, on **40 baselined
+rows**. Both available fixes fight ratified ground: a reject code contradicts a **RED-pinned** invariant
+(*"eval-internal IllFormed carries no ratified code"*), and an out-of-subset marker needs a distinction the
+**owner-ratified, FIRM** exit-code scheme deliberately collapses (*"`1` static rejection (parse OR semantic OR
+may-move IllFormed — **ONE class**)"*). ⇒ **Does the exit-1 "ONE class" grow an out-of-subset distinction?**
+
+### ⛔⛔ PASS 1 INVERTED MY OWN SCOPE DECISION ON K — AND THE CLINCHER WAS A MEASUREMENT
+
+I grew K to *"fix ggdef FIRST, then seed"* and marked it **NOT OPTIONAL**. Pass 1 refuted it:
+- **My cost model was FALSE.** `good` is not always `WORKS` (`good = "REJECTED" if expected.startswith(...)`),
+  so one row is a **REGRESSION, not a drift** — and a regression **refuses the whole write**, blocking 7 other
+  rows in its topic. **The executor would have hit a wall my brief said could not exist.**
+- **My Core #2 call was directionally right with the WRONG DISCRIMINATOR**: `run_ggdef` **already** matches
+  three stderr substrings, so *"a fourth is name-matching"* condemns the three already there.
+- ⭐ **THE CLINCHER: seeding FIRST costs the ggdef track ZERO.** The 3 rows' `expected` values don't start with
+  `REJECTED`, so after the classifier lands they are **DRIFT**, folded by two topics K2 must already run.
+  Withholding the seed keeps **93 cell-lanes ungated AND CI red** — strictly worse on every axis.
+- ⛔ **AND THE DANGEROUS PARTIAL REVERT WAS ONE I NEVER ENUMERATED**: `{seed lands, the 31 allowlist entries
+  STAY}` is **GREEN** — the lint `continue`s on listed names *before* the empty-lane check. A list documented
+  *"SHRINK-ONLY"* with **nothing enforcing the shrink** (Core #6, both directions). K now lands the reverse assert.
+- ⛔ **`error: unresolved local \`Direction\`` (7 of the 40) is a ggdef DEFECT, not a subset boundary.
+  Flipping it to `NO-VERDICT` LAUNDERS A BUG INTO A DECLINE.** K2 owes a **three-way** classification.
+- ⭐ **SIX-Q #6, and it is the same cell as the wall:** `doc_b03_match_nonexhaustive_neg` claims to test
+  *"REJECTED: non-exhaustive match"* and ggdef scores it `REJECTED` because **it cannot resolve the enum** —
+  it never adjudicated exhaustiveness at all. **Green for a reason unrelated to what it tests.**
+
+### ⛔⛔ J's PASS 1 KILLED `v2b` — THE SNAPSHOT IS THE READ-SITE SHAPE, AND THE `memset` HAS NO RED ROW
+
+It first **reproduced thirteen** of the brief's claims, including the LSan-root one (`HEAD 140 B/8` ·
+`no-memset **105 B/6** — two allocations silently suppressed` · `v2b 140 B/8`). Then:
+- ⛔ **THE PREMISE WAS ASSERTED, NOT VERIFIED.** *"`fill` is deliberately NOT a consuming position"* rests on
+  `fill` being **ABSENT FROM A NAME-MATCH LIST**. Nothing says deliberately; **`AGENTS.md` says the opposite** —
+  *"the POSITION is the rule"*. *(SIX-Q #1 answered the wrong way round: an unexplained absence read as ratified.)*
+- ⛔ **AND THE EMITTED C SHOWS THE WRITER**: the call site hands the runtime `gorget_array_get_at(...)` — **a raw
+  pointer INTO the receiver's own buffer** — where `push` two lines up hands `&__s8`, **an owned temp.**
+- ⛔ **v2b's snapshot is LITERALLY the `save/restore` shape Core #1 names as a read-site patch**, and it
+  contradicts the ratified 2026-04-11 runtime contract: *"no internal deep-clone. **Compiler owns independence
+  at the call site.**"*
+- ⛔ **The `memset` can have NO RED ROW** — dropping it makes the suite **MORE GREEN** (105 B/6 vs 140 B/8).
+  SIX-Q #2. The reviewer **measured an automatic (stack) buffer instead** — `use_stacks=0` already disables it
+  as a root — `140 B/8, 3/3`, no memset needed. **That is the fallback; `v2b` is dead either way.**
+- ⭐ **THE HYBRID (now being measured by J2): make `fill`'s element a CONSUMING POSITION.** Clone-if-live /
+  move-if-dead once at the call site + runtime clones n−1 ⇒ **both defects close at the WRITE site**, no
+  snapshot, no static root, and **n allocations instead of n+1** — a charter question under the optimality pivot.
+  ⭐⭐ **AND ggdef ALREADY HAS THIS SHAPE**: `repeat_n` **consumes** its argument and clones n−1.
+- ⛔ **v2b is UNSOUND when `elem_drop != NULL && elem_clone == NULL`** — a configuration the file documents as
+  legitimate: N aliases survive **and** the `n == 0` arm frees the caller's payload from a never-cloned
+  snapshot, **a NEW double-free introduced by the fix.**
+- ⛔ **The registry is NOT a total witness** — `gorget_shared_array_set` is string-emitted from
+  `src/backend/c_lir/helpers.rs` and has **no registry row**. Wider witness: loop-invariant `memcpy` across
+  `src/backend/c/runtime/*.c`.
 
 ### ✅✅ TRACK K SCOUTED — **A GREEN `--lanes all` IS TWO THINGS AWAY, AND THE GUARD'S OWN INSTRUCTIONS DON'T WORK**
 
@@ -4980,6 +5045,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t1301`](todo/t1301.md) **LOW** — 🆕🛡 [LOW — A GUARD NARROWER THAN THE CLASS IT NAMES; found 2026-09-04 by R49 Track S-a2's fixup pass, which narrowed the…
 - [`t1296`](todo/t1296.md) **LOW** — 🆕🐛 [LOW — a CLASS KEY that stopped discriminating, latent rather than live; found 2026-09-04 by R49's sanitize re-seed]…
 - [`t1308`](todo/t1308.md) **LOW** — 🆕🧹 [LOW — A GENERATOR THAT CANNOT REACH ONE OF ITS OWN ERROR STATES; found 2026-09-05 by the orchestrator re-grading t13…
+- [`t1420`](todo/t1420.md) **LOW** — 🆕 [LOW — HYGIENE. A REGISTRY ROW POINTING AT NOTHING, BACKING A PROTOCOL NO PROGRAM CAN NAME. Found by R50 Track J's sco…
 ## Concurrency
 
 ### High
