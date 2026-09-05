@@ -20,12 +20,45 @@
 | ✅✅ **H** | **`t1387` INTEGRATED** 2026-09-05 (`8573b12ca`+`0c137cbe0`). Output-review SIGNED OFF; 3 errata fixed at `6b4c8a544`. ⭐ **Its executor found FOUR defects in my brief; the review found a fifth in ITS filing.** | `t1409`–`t1417` |
 | ✅✅ **K** | **`t1385` INTEGRATED** 2026-09-05 (`b5c5eaabc`+`1c2513e45`); errata `9d7e9f71b`. Output-review **SIGNED OFF**. ⭐ **93 cell-lanes now gated; both allowlists ratchet BOTH ways.** | `t1434`–`t1437` |
 | **K2** | **`t1432`** — the ggdef VERDICT taxonomy, split out of `t1385` at its pass-1 review. ⚖⚖ **HELD — OWNER ASK 2.** 40 baselined rows record a claim ggdef never made; **both available fixes fight ratified ground**, and the 40 need a **THREE-way** split (out-of-subset · genuine rejection · **ggdef defect**). | `t1432` |
-| **L** | **`t1410`** — wrapping ops lower to UB on C. 🔵 **pass 3. Streak 0/3.** ⛔ **My prescribed RED-verification is IMPOSSIBLE — both instruments are blind.** ⛔ **The SELF-HOST has the identical defect** (filed `t1442`; its `IShl` is **worse** than Rust's). Scope narrowed to **2 cells.** | `t1443`–`t1447` |
-| **J** | **`t1407`** — `Vector.fill`. ✅✅ **passes 1 AND 2 SIGNED OFF** (*"I could not break it at the boundary it turns on"*) → 🔵 **pass 3. Streak 2/3.** ⛔ **Rows 3/4/5 still gate the launch.** | `t1422`–`t1427` |
-| **E** | **`t0953`** — ✅✅✅ **DESIGN SIGNED THREE TIMES** → 🔵 **pass 4 confirming.** ⛔ **Rows 3/4 still fail: a cited pin is `#[ignore]`d, and the changed set covers 3 of 28 `HofOp` variants.** | `t1351`–`t1358` |
+| **L** | **`t1410`** — wrapping ops lower to UB on C. 🔵 **pass 4.** ⛔⛔ **THE SCOUT'S SAME-WIDTH FIX IS A NET REGRESSION — `I16 × Mul` is DEFINED at HEAD and it makes it UB** — and HEAD has a **7th** UB cell. True count **9 of 26**, 8 UBSan-visible. | `t1443`–`t1447` |
+| **J** | **`t1407`** — `Vector.fill`. ✅✅✅ **3/3 SIGNED OFF, 🟢 EXECUTOR LAUNCHED.** ⛔ **Pass 3 RETRACTED my Addendum 4 §1 — it had retracted a TRUE claim from a superseded artifact.** | `t1422`–`t1427` |
+| **E** | **`t0953`** — ✅✅✅✅ **DESIGN SIGNED FOUR TIMES, 🟢 EXECUTOR LAUNCHED.** ⛔ **`#[must_use]` measured by rustc NOT to catch its class; the safety premise is FALSE for the sort family.** | `t1351`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
 ⊕ **`t1303`** (HIGH, same class as A: the working lane is the unsafe one) rides with A or B once their scouts report — **both write sites are already localized**, so it is a fold, not a track.
 ⊕ **`t1308`** (owner-directed) folds into whichever track first re-grades an item.
+
+### 🟢🟢 J AND E BOTH LAUNCHED — **AND EACH LAUNCH BRIEF HAD TO RETRACT ONE OF MY OWN RETRACTIONS**
+
+- ⛔⛔ **J's PASS 3 RETRACTED MY ADDENDUM 4 §1: IT HAD RETRACTED A *TRUE* CLAIM.** Pass 2 read a **superseded**
+  artifact (12:49, 19 rows) instead of the final one (13:40, **24 rows**), and I folded the timestamp without
+  checking it. **Pass 3 re-ran all five cells itself: "LLVM identical to C, 23/23" was CORRECT.** *(Fourth
+  retraction-scope error of the round — this one mine for folding a timestamp I never verified.)*
+  ⭐ **TWO SUB-FINDINGS SURVIVE:** the LLVM lane's verdict is **stdout + rc only, NO sanitizer** ⇒ *"identical to
+  C"* is true **on stdout** and **the lane is BLIND to the leak class**; and at HEAD the heap-view cells print
+  **garbage on LLVM** where C recorded blanks.
+- ⛔⛔ **J: TOP-LEVEL IS THE *ONLY* AUTOMATIC LSan GATE — AND TOP-LEVEL IS EXACTLY WHAT BOOKS PARITY INFLOW.**
+  Every first-level fixture directory is `OUT`. **My "move at-risk cells to a subdirectory" fallback would have
+  REMOVED THE ONLY INSTRUMENT PINNING TWO REVERTS. Two readiness rows would have died silently.**
+- ⛔⛔ **E: `#[must_use]` DOES NOT CATCH ITS CLASS — MEASURED WITH rustc.** `let t = mint();` produces **NO
+  WARNING**, and **every call site binds**; rustc even suggests `let _ =` as the way to *silence* it. **I had
+  credited it as the guard. SIX-Q #2.** ⊕ **And the call-site-parity lint was killed for the WRONG reason —
+  the fourth site is a deliberate `drop(...)`, so 3 + 1 == 4 is EXACT.**
+- ⛔⛔ **E: THE SAFETY PREMISE IS FALSE FOR THE SORT FAMILY.** `SortBy`/`SortedBy`/`SortByKey`/`SortedByKey` do
+  **NOT** expand to an inlined loop — they synthesize a `sort_impl` and emit **a real call passing the closure**.
+  **A callee EXISTS**, and **the patch ships *"the loop is inlined"* as a code comment at all three sites.**
+  ⭐ **The conclusion survives with a STRONGER statement** (the only callee is a synthesized comparator that
+  calls and never stores) — ⭐⭐ **and this upgrades `attack_60` from a bonus cell to the NECESSARY pin, since it
+  is the only routed shape where "a callee could retain" is a live question.**
+- ⛔ **E: `attack_60` IS GREEN TODAY BECAUSE ITS HELPER RUNS `detect_leaks=0`.** SIX-Q #6 again — **the fix is a
+  one-line helper flip.**
+- ⛔⛔ **L: THE SCOUT'S SAME-WIDTH FIX IS A NET REGRESSION.** `I16 × Mul` is **DEFINED at HEAD** and casting
+  through `uint16_t` **makes it UB** — and `U16 × Mul` was **already UB at HEAD**, so *"exactly 6 UB cells"* and
+  *"every unsigned cell is C-defined"* were **wrong about HEAD, not just about the fix.** **True count: 9 of 26,
+  of which 8 are UBSan-visible and exactly one is not.** ⇒ **widening is not hardening; it is REQUIRED to avoid
+  shipping a new defect of the class the track exists to close.**
+- ⛔ **L: `todo/t1442` WAS REPORTED MISSING — AND THAT ONE IS MINE.** It exists (`c584e1f71`) but **POSTDATES
+  the reviewer's frozen base, because I wrote the brief citing it BEFORE filing it.** ⛔ **My own loop rule —
+  *"file first, THEN brief"* — broken by me.**
 
 ### ⛔ A2's PASS 1 — **THE FIX'S DESIGN SIGNS OFF; MY *DISPOSITION* WAS A FALSE BINARY**
 
