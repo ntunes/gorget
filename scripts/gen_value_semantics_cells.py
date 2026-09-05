@@ -134,12 +134,23 @@ nothing is fixed yet.
 BASELINE, AND WHY IT IS NOT `WORKS`
 ======================================================================
 
-This topic is BASELINED AT THE MEASURED BUCKET. Roughly 210 forward cells and 27
-mirror cells land WRONG on the C and LLVM lanes on arrival -- the defect this
+This topic is BASELINED AT THE MEASURED BUCKET, not at `WORKS`. A large minority
+of cells land WRONG on the C, LLVM and asan lanes on arrival -- the defect this
 corpus exists to pin is live, so a green corpus would have been the surprising
 outcome. The numbers going UP before they go down is the intended shape
 (`todo/t0956`); a later WRONG -> WORKS flip is PROGRESS and folds through a
-reviewed `--accept`.
+reviewed `--accept`. Read the split off the manifest rather than from here:
+
+    awk -F'\\t' 'NR>1 && $1 ~ /^30 / && $3 != "CONTROL" \\
+      {d = ($2 ~ /^vsm_mir_/) ? "mirror" : "forward"; n[d"/"$3]++} \\
+      END {for (k in n) print k, n[k]}' \\
+      tests/fixtures/robustness_map/MANIFEST.tsv | sort
+
+⭐ The `selfhost` column is WORKS on every cell of this corpus, which is why
+every DIVERGENT row here is C/LLVM against the self-host rather than the other
+way round. That is not a claim inherited from `todo/t1362` -- it was measured
+across the whole corpus with a driver built from source, and it is the strongest
+evidence in the tree for the succession plan's premise.
 
 Seeding a non-good baseline needs `--seed-new`, in ONE five-lane run:
 
