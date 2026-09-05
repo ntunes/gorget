@@ -16,7 +16,7 @@
 | **D0′** | ⭐ **SCOUT DELIVERED — HYPOTHESIS HALF RIGHT; the fix is REAL but it is NOT a parser fix and the ORDER REVERSES.** Streak 0/3, brief `v3` next. ⚖ one PRECISE ratification question. | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| **G** | **`831d5b37e`** — OUTPUT-REVIEW: everything substantive VERIFIED (several to the cell); **1 BLOCKING (doc-only) + 4 errata.** 🟢 executor resumed. ⭐ **The review ANSWERED the question the executor could not: the red battery IS clearable this round.** | `t1384`–`t1392` |
+| **G** | **`7f68508b0`** — blocking + 4 errata folded; 🔵 **CONFIRMING PASS on the delta.** ⭐⭐ **The executor CORRECTED MY PRESCRIPTION — I had the `Recursive` disposition BACKWARDS.** | `t1384`–`t1392` |
 | ✅✅ **F1r** | **`t1362`+`t0750` INTEGRATED** (2 commits, errata folded). ⭐ Its executor caught **my** mirror list SHORT BY FOUR. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
@@ -1314,6 +1314,42 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ⛔⛔ MY FOLD PRESCRIBED THE **OPPOSITE DISPOSITION** — AND THE EXECUTOR MEASURED IT RATHER THAN OBEYING
+
+**`7f68508b0`.** I told it to write that the seven payloads cover *"`Trivial` and `Recursive`"*. ⛔ **MEASURED,
+NEITHER HALF HOLDS:** no payload is `Recursive` (all seven are collections/`String`), **and — the part I had
+exactly backwards — `Recursive` IS BARE-BINDABLE.** `Store t = s` for `struct Store: Vector[int] f` checks
+**clean, rc 0**, *even though the upgrade scan sets `CopySemantics::Resource` right beside
+`DropStrategy::Recursive`*.
+⇒ ⭐⭐ **THE REJECTION IS SPECIFIC TO A CUSTOM `Drop`, NOT TO `Resource` IN GENERAL** ⇒ **`Recursive` is a REAL
+WIDENING TARGET, not a no-subject cell — THE OPPOSITE DISPOSITION FROM WHAT I PRESCRIBED.**
+⭐ **And the docstring now carries a *"MEASURED, NOT DEDUCED"* warning, because the natural SOURCE-READ gets that
+row backwards** — which is exactly how I got it wrong: **I reasoned from `Resource` implying single-owner and
+never built it.** *The fold rule I landed this morning — a fold may only assert what a command in that same fold
+regenerates — broken by its own author, again, on a durable disclosure.*
+
+### 🚨🚨 THE `t1385` "QUICK CLEAR" WOULD HAVE RATCHETED **THIRTEEN MEMORY-SAFETY FINDINGS** INTO THE BASELINE
+
+⭐⭐⭐ **THE SINGLE MOST CONSEQUENTIAL MEASUREMENT OF THE ROUND.** The executor reproduced the clearing command
+**and reverted byte-identically — nothing landed.** The 21 rows that command rewrites propose:
+**13 `SANITIZE-FAIL` · 6 `BUILD-FAIL` · 1 `REJECTED` · 1 `WORKS`.**
+⇒ ⛔ **RUNNING IT UNREVIEWED WOULD PIN THIRTEEN MEMORY-SAFETY FINDINGS IN ONE KEYSTROKE — the exact failure
+`--accept-drift` EXISTS TO PREVENT.**
+⚠⚠ **I DESCRIBED THIS LAST HEARTBEAT AS *"clears by command + a bucket review"*. THAT ORDERING WAS WRONG: THE
+BUCKET REVIEW IS NOT A FOLLOW-UP, IT IS THE ENTIRE WORK, AND THE COMMAND IS THE DANGEROUS PART.** `t1385` now
+carries the census as the reason.
+⇒ ⛔ **ROUND-CLOSE CONSEQUENCE: the five-lane gate does NOT get cleared by a command this round.** Either the 13
+buckets are triaged (a real track), or the legacy rows go into the sanctioned `LEGACY_UNBASELINED` mechanism —
+**declared, not hidden.** ⚖ **That is a design call and it is NOT mine to make silently.**
+
+⊕ **E2 quantified and it indicts an earlier check of MINE:** **489 legacy rows moved** by the sort — and the
+executor's earlier *"0 pre-existing rows changed"* was **KEYED BY CELL NAME AND THEREFORE ORDER-BLIND.**
+**Content was never at risk** (`comm` on full rows proved 0 removed), **but the instrument could not see the
+axis it was asked about.** *Third instance this round of an instrument that cannot see its own class.*
+⊕ **E3/E4 both RED-verified by the executor:** the control lint now asserts all five lane columns of its source
+row read `WORKS`; `DECLARED_CONTROLS` is an **EXACT SET, not a floor**, so a row can no longer exempt itself by
+writing `CONTROL` into column 3.
 
 ### ⛔⛔ THE ROUND-CLOSE BATTERY WAS **FALSE IN ITS OWN TEXT**, AND THE LINT THAT POLICES IT IS BLIND BY CONSTRUCTION
 
