@@ -10,7 +10,7 @@
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
-| **C1** | ✅ **OWNER-AGREED re-cut: `clone_fn` + `t0682`'s CHECK-TIME REJECT as ONE change.** `v3` written, 🔵 pass 1. Streak 0/3. ⭐ **`t0682` CLOSES.** | `t1329`–`t1333` |
+| **C1** | ⛔ **v3 pass 1: 4 BLOCKING — *"half"* names THREE changes, and `clone_fn` ALONE re-enters v2's blocked defect through ORDERING.** Fold → `v4`. Streak 0/3. | `t1329`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ⚖ **NEW OWNER ASK — the shadow-reject's TRIGGER SITE is unspecified, and the two readings are DIFFERENT SEMANTICS.** v4 pass 1: 5 BLOCKING. Streak 0/3. | `t1394`–`t1402` |
@@ -1314,6 +1314,59 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ⛔⛔ C1 v3 PASS 1 — **THE COUPLING IS REAL, BUT MY DESIGN NAMES TWO CHANGES AND THE TRACK NEEDS THREE**
+
+⛔ **B1 — *"HALF"* DENOTES THREE DIFFERENT CHANGES.** The design says *"ship BOTH halves"* = `clone_fn` + reject.
+The fold says *"**C1** alone takes `t0011`'s repro to rc 0"* and orders a matrix over *"half × program"*.
+⭐ **BUT `C1` IS NEITHER HALF — it is a THIRD change** (the `Box.new` → ctor unification, `methods.rs` only).
+⇒ **the executor gets the round's central obligation with its own AXIS UNDEFINED, pointed at a patch containing
+a change the design never names.**
+
+⛔⛔ **B2 — THE CHANGE THAT CLOSES `t0011` IS NOT IN THE DESIGN, YET THE BRIEF PROMISES `t0011` GRADUATES.**
+Measured, pristine HEAD: **C1-only → `t0011`'s repro rc 0, ASan-CLEAN**; **clone_fn-only → ASan
+`attempting double-free`.** ⭐ **And the reason is structural: `t0011`'s repro payload is a `String` — NOT a
+carve-out — so `needs_explicit_move` never applies and THE REJECT CANNOT TOUCH IT.** ⇒ ***as written the brief
+CANNOT DELIVER ITS OWN HEADLINE ITEM.*** **The design is three changes: the unification (closes `t0011`) +
+`clone_fn` + the reject.**
+
+⛔⛔⛔ **B3 — `clone_fn` LANDED ALONE SILENTLY UN-REFUSES THE PROGRAM `t0682` RULES MUST BE REJECTED.** Measured:
+HEAD **rc 101** with the loud *"lower-or-reject (Core #10) … stopgap for `todo/t0682`"*; **clone_fn-only →
+`Built:`, runs, leaks 32 B.** **Mechanism:** setting `clone_fn` at all four `is_box: true` sites makes
+`clone_fn_for_ptr` return `Some`, which flips `ptr_materialization_kind` — *"the ONE policy"*, 4 call sites —
+from `PassThrough` to **`Clone` EVERYWHERE.**
+⇒ ⭐⭐ ***THIS IS THE DEFECT v2 WAS BLOCKED FOR, RE-ENTERING THROUGH ORDERING.*** **v3 states NO ordering
+constraint, NO one-commit requirement, and NO guard** — while Core #14 says that comment needs one.
+⇒ **v4 must require the reject lands WITH OR BEFORE `clone_fn` in ONE commit, plus an ENUMERATION of every
+position `ptr_materialization_kind` reaches versus the reject's coverage** — **the reject-coverage set is
+currently a SELECTION with no witness (SIX-Q #3).**
+
+⛔ **B4 — THE SELF-HOST IS *NOT* EXCUSED BY `t1311`, AND MY *"cite it, or measure it"* INVITED THE DODGE.**
+`t1311` is a **C-EMIT** defect; **an accept→reject conformance fixture is a CHECK-TIME rejection and never
+reaches C-emit.** ⊕ **And the self-host ALREADY MIRRORS THE CARVE-OUT INCLUDING `Box`** — its
+`is_single_owner_type` lists it, and it carries the FieldIndex message verbatim. ⇒ **honest Core #9 disposition:
+Rust C + LLVM + SELF-HOST all pin the final state; ONLY ggdef abstains.**
+
+⭐⭐ **AND THE REVIEW HANDED ME A FAR BETTER DEMONSTRATION THAN MY HYPOTHETICAL — E-b.** `t0682` **row 3
+(`Box[String] taken = h.b`) IS ALREADY REJECTED AT HEAD** with `E_MoveWithoutOperator`, whose own text says
+*"copy the sub-place with `h.b.clone()`"* — **and writing that fix-it ICEs** (`Tier 2a consume-site violation —
+untracked source consumed`). **Under `clone_fn`-only the ICE becomes `Built:`.**
+⇒ ***THE COUPLING IS DEMONSTRABLE TODAY, ON A SHIPPED DIAGNOSTIC, WITH A MEASURED BEFORE/AFTER.*** ⊕ **And the
+Tier-2a validator is a THIRD CODE REGION my scope never named.**
+
+⊕ **E-c — `t0682`'s ROW TABLE HAS MOVED AND I DID NOT KNOW: row 3 is NOW REJECTED** (R49 Track S-a2 landed it).
+⇒ **the reject work is rows 2 and 4, BOTH CONSTRUCTOR positions** — and **`t0682` closes only if row 3's fix-it
+ICE closes too.** ⊕ **E-d names the write site I left vague:** `is_constructor` matches `Variant | Newtype` only,
+with an in-source comment reading *"A POSITION WITH NO SUBJECT … stays open under `todo/t0682`"* — **SIX-Q #4,
+already written down.** ⊕ **And I conflated a PARAMETER source with a FIELD one** in the fixture re-point.
+⊕ **E-e — THE LLVM LANE IS WORK, NOT A MEASUREMENT:** the LLVM backend forward-declares `Box__<inner>__drop`
+with **no clone counterpart**, and the prototype adds the emitter **only to the C-LIR path.**
+⊕ **E-a — *"the only recourse"* is an OVERCLAIM:** `Box[String]((*h.b))` builds and runs at HEAD. **The Core #10
+breach stands — the DIAGNOSTIC'S OWN fix-it is broken — but say that.**
+⊕ **E-f — the residual leaks are the FIX'S OWN unregistered births (Core #3), NOT `t1309`** — 32 B where HEAD
+refuses to build at all is **definitionally new**.
+⭐ **VERIFIED: the killer sentence is LIVE**, the `.clone()` C is **byte-identical (3906 lines each)**, all five
+of my other errata land, and **the four `is_box: true` sites are LINT-PINNED** — a real readiness-row-2 witness.
 
 ### ⚖⚖ OWNER ASK — **WHERE DOES THE SHADOW-REJECT FIRE?** THE TWO READINGS ARE DIFFERENT SEMANTICS
 
