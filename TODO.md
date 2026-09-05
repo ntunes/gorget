@@ -16,7 +16,7 @@
 | **D0′** | 🔵 brief-review pass 1. **Streak 0/3.** The `elem_drop`/`elem_clone` half **+ the Deque precondition**. | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| **G** | passes 1–5 BLOCKED → 5 folds → 🔵 pass 6. **Streak 0/3.** ⚠ **The DESIGN is signed off; what keeps failing is MY PRESCRIPTIONS.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
+| ✅ **G** | **6 passes, DESIGN SIGNED OFF, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⚖ owner-ratified. **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
 | ✅ **F1r** | **3 passes, design signed off, 🟢 EXECUTOR LAUNCHED 2026-09-05.** `t1362`+`t0750` as ONE fix. | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
@@ -450,6 +450,39 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### 🟢 G's EXECUTOR IS LAUNCHED — AND PASS 6 CAUGHT A SELECTION **INSIDE THE ERRATUM ABOUT SELECTIONS**
+
+⭐⭐ **My E-c measured 198 cells — TWO of the seven shipping payloads — and generalised to 693. That was
+SIX-Q #3 INSIDE THE ERRATUM THAT ANSWERS SIX-Q #6.** Pass 6 ran the other five payloads (**990 builds**):
+**0 cells where the source reads its pre-mutation value, 0 verdict disagreements over 495 comparable cells** ⇒
+**E-c now holds over the WHOLE forward corpus.** ⊕ **And D15 was sharper than I stated: 2 of the 21 leaked rows
+are `REJECTED` — ggdef rejecting a program the map says should print a value, ratcheted in with zero review.**
+
+⛔ **FIVE MORE OF MY OWN, AND TWO ARE OPPOSITE ERRORS IN ONE FOLD:**
+- ⛔ **I OVER-GENERALISED (D19):** I called the drift branch *"the SAME defect"* and gated both behind one flag.
+  **They are different: the seed branch leaks WITHIN the topic (needs a branch guard); the drift branch leaks
+  ACROSS topics, where `--topic` genuinely DOES fix it.** ⇒ **`--seed-new` over a drift row is a LIE, does not
+  fix the rider, breaks a measured rc 0 — and coupling two unrelated widenings behind one flag IS THE VERY
+  CLASS DEFECT D15 DIAGNOSES.**
+- ⛔ **I UNDER-GENERALISED (D21):** my replacement topic string fixed the **direction** half and **broke the
+  SOURCE half** — *"9 sources"* reads as *"there ARE 9"*, not D8's *"9 of N"*, **and D5's entire point is that
+  four source kinds are unprobed.** ⚠ ***My own standard — "a WRONG durable disclosure is worse than an
+  incomplete one" — broken in the fold that repaired the other half.***
+- ⛔ **THE PROMOTION HAD TWO MUTUALLY EXCLUSIVE POLARITIES.** D9 decided an **exempt list**; D14 mandated a
+  patch implementing a **fatal allowlist** — the opposite — and **nothing retracted the rider.** ⚠ **Under the
+  measured polarity the rot INVERTS: rename the topic and the prefix matches ZERO rows, so the promotion
+  SILENTLY GOES INERT.** ⇒ **fatal-prefix `"30 "`, D9's rider RETRACTED, and ONE lint running BOTH directions.**
+- ⛔ **The control cell would be RED ON ARRIVAL on 30% of naive picks** — on the 21 broken rows the compiler
+  **already prints the mutated value**, so the control MATCHES and fires *"CONTROL PASSED — harness is blind"*.
+  ⚠ **Worse than red: it SILENTLY INVERTS MEANING.**
+- ⛔ **And my *"the landing command stays correct"* was FALSE under my own fix** — with `--seed-new` it writes
+  nothing and exits **rc 0**, a silent no-op.
+
+⭐ **THE MEASURED ANSWER TO "IS THE MIRROR SLICE REDUNDANT?" — IT IS NOT.** The two directions differ on
+**exactly one cell of the SOURCE axis**: `getvia` is **1/7 payloads broken forward** but **7/7 in the mirror**;
+all eight other sources are identical. ⇒ **the mirror finds six payload-cells the forward direction
+STRUCTURALLY CANNOT.**
 
 ### ⛔ G's FIFTH FOLD: A GUARD THAT WOULD BE SATISFIED BY THE BRANCH IT POLICES
 
