@@ -11,7 +11,7 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| ✅ **C2** | **`t0045`** — code SIGNED OFF; doc blocker closed by **`a1e57be97`** (docs-only). 🔵 **fresh CONFIRMING pass on the delta, then integrate the 2-commit stack.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| **C2** | **`t0045`** — code SIGNED OFF. ⛔ **CONFIRMING PASS: 2 BLOCKING + 5 errata — BOTH BLOCKERS ARE THE ORIGINAL DEFECT REPRODUCED.** 🟢 executor resumed. ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ⛔⛔ **REBUILT TWICE. Streak 0/3, 🔵 SCOUT on `v3`.** Read-site route dead (5 corrupting cells); **write-site route ALSO dead** (1 corrupting cell; its "zero corruption" table was the **no-op column** — byte-identical C to HEAD on all 11 cells). ⭐ **v3 = PARSER FIRST:** make `d[k](v)` parse ⇒ the 8 `httpserver` BINDS migrate to the ratified **callee borrow** ⇒ the bind reject gains a recourse ⇒ `elem_drop` is safe on every provenance. **No owner ruling needed — `t1225`'s directive is honoured, not overridden.** | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
@@ -486,6 +486,39 @@ path does not exist.** Filed from the spare block.
 double-free, which is fixed in `7785c1221` and **not yet on this branch**. ⚠ **The blocker CHANGES (to `t1404`'s
 lost write), it does not VANISH.** ⇒ **correct it AT integration, or a true statement is deleted early** — the
 retraction rule, one heartbeat old, applied prospectively for once.
+
+### ⛔⛔ C2's DOC FIX REPRODUCED ITS OWN ROOT CAUSE **TWICE** — A SELECTION, AND A SELF-CONTRADICTION
+
+⭐⭐ **THE LESSON OF THE ROUND, IN ONE SENTENCE: THE FIX FOR A SELECTION WAS ITSELF SCOPED, AND SO WAS A
+SELECTION.** The commit's own message says the replacement grep ran *"across `docs/`"* — **and the single
+surviving instance of the retired label in the entire repository is `README.md:120`**, the project's front door:
+`grep -rn "borrows each element read-only" . --include='*.md'` → **exactly one hit.** ⇒ ⛔ **SIX-Q #3
+REPRODUCED ONE DIRECTORY OUT.** *Scoping an enumeration to a directory is how you re-make the mistake you are
+fixing.*
+
+⛔ **AND THE SECOND BLOCKER IS THE FIRST BLOCKER'S SHAPE, INSIDE ONE FILE.** The new §9.6 sentence says *"only
+a mutation **through** the element lands"* — **measured FALSE for `String`** — and its own cross-reference
+target, **written by the same commit**, says *"a `String` element additionally loses a mutation-through"*.
+⇒ **the tree contradicts itself in the SAME FILE, one section apart — exactly the defect that spawned this
+commit.** ⚠ **The executor had MEASURED this correctly (that is why §9.1 is right); it was lost the moment a
+sentence GENERALISED OVER ELEMENT TYPES.**
+
+⊕ **`t1335` cites a file with ZERO hits** (`grep -c "borrow_view_fn: Some" src/ir/types.rs` → **0**; the only
+one is `src/ir/lowering/types.rs:139`) **and its "regenerating" grep returns ~50 lines, not the 3 consumers it
+claims** — Core #15(a) inside a fresh filing. ⊕ **4 further doc sites are in NEITHER disposition list** — all
+TRUE, so **no rot escaped**, but *"dispositions the whole set"* is not sustained. ⊕ **One NO-CHANGE row is the
+right outcome for the WRONG reason:** the bullet it waves through was **FALSE for the String cell pre-fix** and
+**the fix made it true.**
+
+⭐ **WHAT THE CONFIRMING PASS ALSO DID — INDEPENDENTLY CONFIRM A CLAIM I HAD PRAISED.** The executor's decision
+to leave the `e.push('!')` claim standing was re-measured at BOTH compilers: **correct.** ⇒ **praise verified,
+not inherited.**
+
+⚠ **OBSERVED, NOT ACTED ON — `README.md` teaches `!` for move while D27 ratified `^`.** Both are still accepted
+(`grep -n "Token::Bang) || self.check(&Token::Caret" src/parser/mod.rs`), so this is a stale SPELLING, not
+broken code. ⊕ **But the tree is overwhelmingly UNMIGRATED: `lib/` carries ~120 `!`-move spellings against 2
+`^`.** ⇒ **a RATIFIED rule with a phased in-repo scope, and the scope is an OWNER question — not a track's, not
+mine.** Executor told to REPORT and change no sigil.
 
 ### ⛔⛔ C2 AND F1r COLLIDE ON THE CORPUS PINS — **BOTH CORRECT ALONE, RED TOGETHER, AND NEITHER COULD SEE IT**
 
