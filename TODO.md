@@ -13,7 +13,7 @@
 | **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
 | ✅ **C2** | **`t0045`** — **7 passes, executor RETURNED `7785c1221` (30 files, +836/−99), 🔵 OUTPUT-REVIEW RUNNING.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
-| **D0′** | ⛔ **REBUILT as `v2` 2026-09-05 — THE ROUTE CHANGED, NOT THE MEASUREMENTS. Streak 0/3, 🔵 pass 1 on v2.** The read-site `elem_drop` route is **WITHDRAWN**; the track is the **WRITE SITE**. `t1225` + the read-site fallback are **OUT of scope, sequenced behind the owner-gated callee-borrow ruling.** | `t1393`–`t1402` |
+| **D0′** | ⛔⛔ **REBUILT TWICE. Streak 0/3, 🔵 SCOUT on `v3`.** Read-site route dead (5 corrupting cells); **write-site route ALSO dead** (1 corrupting cell; its "zero corruption" table was the **no-op column** — byte-identical C to HEAD on all 11 cells). ⭐ **v3 = PARSER FIRST:** make `d[k](v)` parse ⇒ the 8 `httpserver` BINDS migrate to the ratified **callee borrow** ⇒ the bind reject gains a recourse ⇒ `elem_drop` is safe on every provenance. **No owner ruling needed — `t1225`'s directive is honoured, not overridden.** | `t1393`–`t1402` |
 | **D1** | ⚖ **HELD — SECOND OWNER ASK.** `t1225`'s own text says *"do not widen the reject ahead of"* a ruling that is **NOT in the ledger.** | `t1339`–`t1348` |
 | ~~D1~~ | ⛔ **MERGED INTO D01.** **`t1225`** — the index widening. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
 | ✅ **G** | **6 passes, DESIGN SIGNED OFF, 🟢 EXECUTOR LAUNCHED 2026-09-05.** ⚖ owner-ratified. **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
@@ -450,6 +450,77 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ⛔⛔⛔ D0′ REBUILD #1 IS ALSO DEAD — THE WRITE SITE DOUBLE-FREES, AND ITS "ZERO CORRUPTION" WAS THE **NO-OP COLUMN**
+
+⭐⭐⭐ **THE SINGLE SHARPEST MEASUREMENT OF THIS ROUND:** `diff c_HEAD_<s>.c c_WS_<s>.c | grep -c '^[<>]'` is
+**0 on ALL ELEVEN matrix cells.** **The write-site prototype emits BYTE-IDENTICAL C to HEAD on every row of the
+table that certified it "corruption-free".** ⇒ ***I CERTIFIED A FIX ON THE ONE AXIS WHERE IT DOES NOTHING.***
+The matrix varied container × read-shape while holding **provenance fixed** at `Vector[…]()` + `^`-push — the
+one provenance `gg_ws` never touches. ⛔ **SIX-Q #6 AT THE LEVEL OF A WHOLE CERTIFICATION TABLE, AND SIX-Q #3
+FOR THE FOURTH PASS RUNNING.**
+
+**Run as a PRODUCT instead, the `[]`-literal + bare index cell — seven lines of ordinary safe syntax:**
+`Vector[Callable[int(int)]] fs = []` · two pushes · **`Callable[int(int)] f = fs[0]`** · `print(f(1))`
+⇒ HEAD 16 B leak / prints `41`; **`gg_ws` rc 134 DOUBLE-FREE on C *and* LLVM.** From the emitted C, **the pair
+IS wired** (`gorget_closure_free` at elem_drop, `gorget_closure_clone_inplace` at elem_clone) **and the read
+still emits NO `clone_to_owned`** ⇒ ⛔ **answer (a) is TRUE AND INSUFFICIENT: the pair invariant governs
+CONTAINER CLONE and says nothing about the ELEMENT READ.** My own brief said that under LANES and then offered
+(a) as a live answer two sections earlier.
+
+⇒ ⭐ **THE DISCRIMINATOR WAS NEVER WRITE-SITE-VS-READ-SITE. It is `elem_drop` INSTALLED AT ALL, FROM ANY SITE,
+on a container whose element can be read through a bare subscript place.** `gg_d0` fires on the
+`Callable__GorgetClosure` spelling (5 corrupting cells); `gg_ws` fires on `GorgetClosure` (1 corrupting cell +
+4 genuine heals). **The write site is not SAFER than the read site — it is NARROWER.**
+⛔ **AND MY SCOPE DIRECTIVE WOULD HAVE RESTORED THE REST:** *"close the provenance axis — THIS IS YOUR SCOPE"*
+means installing `elem_drop` for BOTH spellings and for struct fields ⇒ **the union of the two prototypes'
+corruptions**, including `httpserver.gg`'s 8 route sites. **My own mitigation note called that "luck, not a
+guarantee" — and the directive spent the luck.**
+
+### ⭐⭐ BUT THE KNOT UNTIES: IT IS A **PARSER** DEFECT WEARING AN OWNERSHIP COSTUME
+
+**Three facts, each regenerated, that together settle it WITHOUT an owner ruling:**
+1. **`AGENTS.md`'s own carve-out already decides the bind** (`grep -n 'single-owner-by-design' -A 6 AGENTS.md`):
+   `Callable[T]` is single-owner-by-design, **`E_MoveWithoutOperator` at bare-assign sites**, user writes
+   `^source` or `.clone()` — **and *"at a plain function / method call these types are simply borrowed"*.**
+   ⇒ **`Callable f = fs[0]` MUST reject; `fs[0](1)` MUST borrow.** `gg_full` does exactly the first.
+2. **ALL EIGHT `httpserver.gg` dispatch sites are BINDS, not callee positions**
+   (`grep -n '_routes\[\|middlewares\[' lib/xtd/httpserver.gg` → `Callable[…] h = self.exact_routes[key]`).
+   **So the reject hits all 8 — and the zero-cost recourse is the CALLEE spelling.**
+3. ⛔ **AND THAT RECOURSE DOES NOT PARSE — FOR A REASON THAT HAS NOTHING TO DO WITH OWNERSHIP.**
+   `src/parser/expr.rs:1123-1141` resolves `expr[...](` **UNCONDITIONALLY** in favour of a generic call when the
+   brackets parse as type args, so a bare identifier index becomes a TYPE NAME:
+   `d[k](v)` → `Call{callee: d, generic_args: [k]}` → `E_NotAFunction`. **`d["a"](5)` and `v[0](5)` parse, check,
+   build and RUN today; only the VARIABLE-index forms reject.**
+
+⇒ ⭐ **THE ORDER IS PARSER FIRST.** Fix the ambiguity → the 8 sites migrate bind → callee (**a borrow, zero
+clones, no charter breach**) → the bind reject becomes ratified-AND-with-recourse → **`elem_drop` is then safe on
+every provenance, because no bind can silently mint a second owner.** ⊕ **And `t1225`'s directive is HONOURED,
+not overridden: we never widen the reject to the callee position — we make the callee position WRITABLE.**
+⚠ **THE ZERO-CLONE YIELD IS A CLAIM, NOT YET A MEASUREMENT — the scout prototypes and measures it end-to-end
+before any brief asserts it.**
+
+⊕ **NOTE THE SHAPE C1 SHARES:** *a reject with no legal spelling*. **The parser fix IS the recourse here.**
+
+### ⛔ AND THE REVIEW CAUGHT MY BRIEF STRIKING A **TRUE** CLAIM — THE RETRACTION RULE, ONE HOUR OLD, BROKEN AGAIN
+I told the executor `t0873(a)`'s *"rc 139 SEGV"* was wrong and to overwrite it with *"heap-buffer-overflow"*.
+**Measured unsanitized: rc 139. Under ASan the SAME defect reports heap-buffer-overflow.** ⇒ **the item is
+correct as filed and I was about to overwrite a RED-verified symptom with an INSTRUMENT ARTIFACT.** ⛔ **DELETE
+THAT CORRECTION.** ⚠ *This is Core #13 inverted: I picked the instrument that could see the class, then quoted
+its reading as if it were the symptom.*
+
+⊕ **ERRATA that make the brief's own regeneration path a dead letter:** `plainrun.sh`/`llvmrun.sh`/`dirdiff.sh`
+hardcode **PRUNED** worktrees and swallow the failure (`2>/dev/null`) ⇒ every row returns `BUILD_FAIL`;
+`llvmrun.sh` loops `gg_head gg_d0` only and **cannot measure `gg_ws` at all**, so the brief's LLVM claim for the
+write site is **not regenerable by the command it names**; and *"sources for every cell are in `mx2/`"* is 8 of
+10. ⊕ `retire_fatal`'s *"shrinks OR vanishes"* reach holds **only when `COVERAGE_FLOOR > 0`**.
+⇒ ⚠ **THE ORACLE SET MUST BE PRESERVED WHOLE, NOT JUST `gg_ws`** — `gg_head`/`gg_d0`/`gg_full` are each other's
+controls and MA-6 prunes them at round close.
+
+**Readiness: 0 of 5.** ⛔ **SIX-Q #2 IN ITS PUREST FORM: the full sanitize sweep, the 20-fixture set AND the
+10-cell matrix ALL PASS `gg_ws` while it double-frees.** The prescribed guard set green-lights the class it
+exists to retire — and *"the 20-fixture corpus contains no `[]`-literal + bare-index cell"* is **coverage luck,
+not safety.**
 
 ### ⭐ THREE FOLD RULES LANDED IN `AGENTS.md` — THEY WERE LIVING ONLY IN A HARNESS PROMPT
 
