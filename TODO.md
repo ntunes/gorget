@@ -10,7 +10,7 @@
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
-| **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
+| **C1** | ⛔ **THE OWNER REJECTED ALL THREE OF MY OPTIONS 2026-09-05 — THE ASK IS WITHDRAWN, THE TRACK IS RE-AIMED AT *MAKE IT WORK*.** 🔵 reference-grade SCOUT running. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
 | **C2** | **`t0045`** — code SIGNED OFF. ⛔ **CONFIRMING PASS: 2 BLOCKING + 5 errata — BOTH BLOCKERS ARE THE ORIGINAL DEFECT REPRODUCED.** 🟢 executor resumed. ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ⛔⛔ **REBUILT TWICE. Streak 0/3, 🔵 SCOUT on `v3`.** Read-site route dead (5 corrupting cells); **write-site route ALSO dead** (1 corrupting cell; its "zero corruption" table was the **no-op column** — byte-identical C to HEAD on all 11 cells). ⭐ **v3 = PARSER FIRST:** make `d[k](v)` parse ⇒ the 8 `httpserver` BINDS migrate to the ratified **callee borrow** ⇒ the bind reject gains a recourse ⇒ `elem_drop` is safe on every provenance. **No owner ruling needed — `t1225`'s directive is honoured, not overridden.** | `t1393`–`t1402` |
@@ -1274,6 +1274,43 @@ TOP LEVEL** (measured MATCH, zero non-MATCH inflow); memory-safety rows and the 
 fix **moves the String cell OUT of memory-unsafety INTO an already-filed class**; and **String was the LAST
 broken cell of ratified consequence (a)** — nested Vector, struct and dict-value already bare-rebind as
 non-crashing private copies. ⇒ **the fix COMPLETES the ratified rule.**
+
+### ✅ C1's OWNER ASK IS **WITHDRAWN** — THE OWNER REJECTED THE QUESTION, NOT THE ANSWER (2026-09-05)
+
+> *"I think the reference grade option would be to understand why under C1: gg build rc 101. It should work,
+> shouldn't it?"*
+
+⛔⛔ **RETRACTION, AND IT QUOTES ITS OWN SCOPE.** What I retract is exactly this: the block below offers
+**"(a) SHIP IT / (b) SHIP IT + a CHECK-TIME DIAGNOSTIC / (c) NARROW C1"** and calls the choice *"genuinely the
+owner's"*. ⇒ **ALL THREE PRESUPPOSE THE PROGRAM STOPS COMPILING. I COSTED THREE WAYS OF ACCEPTING A FAILURE
+WITHOUT ASKING WHY IT FAILS.** ⭐ **The MEASUREMENTS below all stand** — the `rc 101`, the three closed
+recourses, the `139`-was-false correction, the second parameter cell. **Only the FRAMING is withdrawn.**
+
+⭐ **AND THE RATIFIED TEXT SAYS THE OWNER IS RIGHT TO PUSH.** `AGENTS.md`'s carve-out
+(`grep -n 'single-owner-by-design' -A 6 AGENTS.md`) makes `Box[T]` single-owner with no implicit-copy path and
+fires `E_MoveWithoutOperator` **at constructor sites** — so rejecting the BARE form is ratified-CORRECT. ⛔ **But
+the SAME SENTENCE promises two recourses — *"require the user to write `^source` or `source.clone()`"* — AND
+BOTH ARE UNAVAILABLE:** `^h.b` → `E_PartialMove` (a partial move out of a live struct, correctly rejected) and
+**`Box[T]` has NO `clone_fn`.** ⇒ ⭐⭐ **THE HOLE IS NOT THE REJECT. IT IS THAT THE RECOURSE THE RATIFIED RULE
+NAMES DOES NOT EXIST** — which makes this a LANGUAGE hole, not a property of the program.
+
+⭐ **THE QUESTION THAT DECIDES THE TRACK, AND IT IS SIX-Q #6:** at HEAD cell 1 **prints `hi`, rc 0, ASan
+silent**. **Does HEAD DEEP-COPY the `Box`, or ALIAS `h.b`'s pointee?**
+- **Deep-copies** ⇒ **the capability EXISTS and C1 REMOVES it** ⇒ the fix keeps the copy while delegating.
+- **Aliases** ⇒ two owners of one allocation ⇒ **the cell is ACCIDENTALLY CORRECT** and HEAD is not worth
+  preserving as-is; the question becomes what it SHOULD do.
+⛔ **Settled from the EMITTED C, not from reading the lowering.** Scout launched with Q1–Q5 and one hard
+constraint: ***"there is no recourse" is not a reference-grade answer — if the program should be rejected, SHOW
+THE LEGAL SPELLING, COMPILED AND RUN.***
+
+⊕ **LIKELY LANDING: `Box[T]` GETS A `clone_fn`** (deep clone the pointee). Then `Box.new(h.b.clone())` compiles,
+the reject becomes correct-WITH-recourse, and the spelling is the one **an expert would hand-write** — which is
+what the optimality pivot asks for. ⚠ **Cost stated honestly: a real allocation the aliasing path never paid.**
+
+⚠⚠ **THE PROCESS LESSON IS MINE.** *An owner ask is for a DESIGN DECISION or an UNRATIFIED SEMANTICS QUESTION.
+"Which of three bad outcomes do you accept" is NEITHER — it is an unfinished scout wearing a ballot.* **Round
+lifecycle #7 says stop for (i) a genuine design decision and (ii) an unratified semantics question. This was a
+third thing: a question I had not finished investigating.**
 
 ### ⚖⚖ OWNER ASK — TRACK C1 MAKES A **WORKING** PROGRAM STOP COMPILING, AND THERE IS NO WAY TO WRITE IT INSTEAD
 
