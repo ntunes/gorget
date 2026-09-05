@@ -15,8 +15,8 @@
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0** | 🔵 SCOUTING. **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1 (owner-named). | `t1393`–`t1402` |
 | **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
-| **G** | passes 1+2 BLOCKED → 2 folds → 🔵 pass 3. **Streak 0/3.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
-| **F1r** | pass 1 BLOCKED (6, all brief-completeness) → folded → 🔵 pass 2. **Streak 0/3.** | `t1363`–`t1372` |
+| **G** | passes 1–3 BLOCKED → 3 folds → 🔵 pass 4. **Streak 0/3.** **NO NEW INSTRUMENT — a ~693-cell TOPIC in `robustness_map`.** ⚖ OWNER-RATIFIED. Core #6 for the compiler's most-repeated class. | `t1383`–`t1392` |
+| **F1r** | passes 1+2 BLOCKED → 2 folds → 🔵 pass 3. **Streak 0/3.** ⭐ **Design re-measured end-to-end TWICE; 207 `cow_*` fixtures PRE vs POST all SAME.** | `t1363`–`t1372` |
 | **F2/F3** | ✅ SCOUTED, **GATED**: F2 on F1, F3 on the R1 ruling. **`D40`+`D52` — THE OPTIMALITY CAMPAIGN, owner-opened 2026-09-05.** Both RATIFIED, both **UNBUILT**. Its SECOND deliverable is the **R1 decision material**. | `t1362`–`t1371` |
 | **E** | **`t0953`** — the FORCING FUNCTION: **two owner admissions retire on it**, and a third new-inflow fixture would be a third owner ask. Discharges both and closes the class. | `t1349`–`t1358` |
 ⊕ **`t0036`** (the fifth CRITICAL) is **held for a later track** — its axis was CORRECTED by a second pass and the first filing was measurably too narrow, so it needs its own scout rather than being bolted onto C.
@@ -449,6 +449,51 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ⛔⛔ G's D6 WAS WRONG TWICE, AND THE SECOND WAY MEANT THE CORPUS COULD **NEVER** BE BASELINED
+
+**Both blockers are in the decision the brief itself flags as determining whether the track lands.**
+1. ⛔ **D6's RED-VERIFY RECIPE CANNOT GO RED.** Measured in exactly D6's direction: **`WRONG → CRASH` scores as
+   DRIFT, which the report says in its own words is *"report-only, does not gate"* — `BARE_RC=0`.** ⇒ **seeding
+   moves the 210 cells from INVISIBLE to REPORT-ONLY, not to GATED. SIX-Q #2 still answers NO for the exact
+   transition D6 named, on the exact 30% D6 named. D6 refuted its own justification.**
+   ⭐ **Fix: seeding PLUS promoting DRIFT to fatal FOR THE NEW TOPIC.** The drift branch carries its own staging
+   (*"report → measure → burn down → THEN promote"*), and **a brand-new fully-seeded topic satisfies that
+   staging ON DAY ONE BY CONSTRUCTION — day-one drift is 0 — so it can be BORN AT STAGE 3** while the legacy
+   1242 stay at stage 1. ⊕ **An exempt-topic list seeded with the 33 existing topics makes the NEXT new topic
+   fatal by default (Core #4).**
+2. ⛔⛔ **D6's "ONE CONDITION" CHANGES NOTHING — `new_div` DEADLOCKS THE WRITE FOREVER.** Pass 3 applied my
+   prescription **verbatim** and measured the row still empty, `--accept refused … 1 NEW DIVERGENCE(S)`,
+   `BARE_RC=1`. **Mechanism:** an all-empty row is not "divergent", `--accept` can only CLEAR the divergence
+   column never SET it, and the write is refused **wholesale** on any `new_div`. ⚠ **And `t0750` records the
+   self-host is CORRECT on this family while C/LLVM are wrong ⇒ ~210 NEW DIVERGENCES on the first full-lane
+   run, EVERY RUN, FOREVER. THE CORPUS COULD NEVER HAVE BEEN BASELINED.**
+   ⭐ **Measured two-condition patch shipped: `/tmp/revG3_a219d1a6/recover_a219d1a6_seed_fix.patch`.**
+   ⛔ **AND A PARTIAL SEED RE-DEADLOCKS — SEED IN ONE `--lanes all --accept` RUN, NEVER LANE-BY-LANE.**
+
+⛔ **AND MY D8 SHIPPED A FALSE SYMMETRY CLAIM INTO WHAT WAS MEANT TO BE THE DURABLE DISCLOSURE.** I wrote
+*"(`local`/`alias2` are symmetric; the rest are not)"* — **refuted by the very item I cited.** `t0750`: *"both
+directions break … (A) mutation THROUGH THE ALIAS loses every write … (B) mutation THROUGH THE ROOT never
+severs the alias"*, **different symptoms**, and *"whether A and B are one mechanism or two is OPEN."*
+⇒ **DIRECTION is unprobed for 9 of 9 sources, not 7 of 9.** ⚠ ***A WRONG durable disclosure is worse than an
+incomplete one*** — and the durable disclosure is D5's entire purpose.
+⭐ **And my *"DIRECTION has NO WITNESS"* was also wrong, in the track's favour: `t0750` + `cow_transitive_alias.gg`
+ARE the witness — a MEASURED BEHAVIOURAL one, stronger than the other axes' enumerations.**
+⭐ **DECIDED: SHIP THE MIRROR SLICE** at the one discriminating site pair — **126 cells, +18% not +100%.**
+
+### ⭐ F1r's PASS 2 — AN ALARM I RAISED WAS UNMEASURED, AND MEASURED IT RESOLVES **SAFE**
+
+⛔ **I warned that graduating `t0750` adds a row to the ZERO-SLACK runtime-diff denominator. Pass 2 MEASURED
+the thing I only warned about:** the graduating fixture **and** a 12-cell probe are **byte-identical to
+POST-fix C and LLVM ⇒ MATCH.** ⇒ ⭐ **`non_match` does NOT grow; the ceiling is untouched; the real duty is
+raising the MATCH FLOOR.** ⚠ ***An unresolved alarm stalls an executor as effectively as a wrong one.***
+⊕ **And `MIN_FIXTURES` is `const_assert`ed ⇒ raising it alone breaks the TEST TARGET'S BUILD, not just a test.**
+⛔ **My call-site count was 6; it is 13** — and **the comprehension surface is 5 of the 8 loop-hook sites with a
+FIRE COUNT OF ZERO.** ⛔ **And `on error` has NO ORACLE** (ggdef rejects it outright), so *"correct PRE and
+POST"* rests on **C/LLVM agreement alone — Core #8's exact trap** — while a mutation-inside-`on error` shape
+**traps on both lanes at PRE and POST.**
+⊕ **The design itself was re-measured end-to-end a SECOND time and holds: all 207 `cow_*` fixtures PRE vs POST
+— 207 SAME, 0 CHANGED**, and the guard fixture POST is correct on **four lanes including self-host.**
 
 ### ⭐⭐ C2's DESIGN IS SIGNED OFF — AND PASS 6 FOUND ggdef IS A **LIVE ORACLE**, WHICH I DENIED FOUR TIMES
 
