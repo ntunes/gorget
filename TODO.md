@@ -11,7 +11,7 @@
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
 | **C1** | ⚖ **HELD FOR AN OWNER DECISION** — pass 1 measured that C1 makes a WORKING program stop compiling, with no recourse. **Streak 0/3.** **`t0011`** — proto `/tmp/recover_scoutC_proto1_boxnew_unify.patch`. | `t1329`–`t1333` |
-| **C2** | 5 folds → 🔵 **pass 6 (CONFIRMING)**. ⭐ **Patch defect-free on a 6th reproduction; pass 5 was the FIRST fold of mine that HELD.** ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
+| **C2** | ✅ **DESIGN SIGNED OFF (7th reproduction).** 6 folds → 🔵 **narrow pass 7** on the ONE new deliverable only. ⭐ **The PATCH has been reproduced 4× and nobody has found a defect in it — every blocker has been in the BRIEF.** ⛔ **RE-SCOPED: it does NOT discharge R2's prerequisite** — that is `t1404`. **`t0045`** — proto `/tmp/recover_scoutC_proto2c_full_t0045.patch`. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0** | 🔵 SCOUTING. **THE COLLECTION-`Callable` `elem_drop` CLASS FIX (array **AND** map paths) + retire 2 allowlist rows.** Gates D1 (owner-named). | `t1393`–`t1402` |
 | **D1** | **`t1225`** — the index widening, **GATED on D0**. pass 1 BLOCKED (3). **Streak 0/3.** — Track S-a2's deferred half, **owner-named**. Memory-unsafe from ordinary safe syntax; `gg check` AND `gg build` both rc 0. | `t1339`–`t1348` |
@@ -449,6 +449,50 @@ is discharged. `t0045`'s *"ggdef prints the ratified answer while Rust gg SIGABR
 invisible and `--test lints` stayed **231/0**. **Core #6 widening owed.**
 🆕 **`Box.new(1, 2)` BUILDS at HEAD, silently discarding argument 2** — a live **Core #10** violation found
 incidentally. Reference-grade is a **check-time arity diagnostic**, not the `cc` failure C1 would otherwise ship.
+
+### ⭐⭐ C2's DESIGN IS SIGNED OFF — AND PASS 6 FOUND ggdef IS A **LIVE ORACLE**, WHICH I DENIED FOUR TIMES
+
+⛔ **I ASSERTED "ggdef ABSTAINS" IN THE BODY AND THREE ADDENDA, MEASURED AT THE WRONG LAYER.** I grepped
+`Stmt::` in `spec/ggdef/src/eval.rs` — **which interprets the CORE IR, not the surface AST.** The surface `for`
+is desugared one layer earlier (`grep -n "ast::Stmt::For" -A 2 spec/ggdef/src/elaborate/mod.rs`).
+**Orchestrator-measured:**
+
+| cell | ggdef | Rust gg HEAD |
+|---|---|---|
+| **bare** `for s in v: s = "zz"` | ⭐ **rc 0 → `aa` / `bb`** | **SIGABRT double free** |
+| **`&`** form | *"`for &`/`for !` iteration is Increment B2"* | SIGABRT double free |
+
+⭐⭐ **THIS MAKES THE TRACK BETTER, NOT LONGER — THREE CONSEQUENCES:**
+1. **Core #9's escape clause does NOT apply to the bare cell** — there is no subset gap to file. **Ship the
+   FOUR-LANE conformance pin Core #9 actually wants**, at the cost of five constant bumps in one commit
+   (`MIN_FIXTURES` is an **EXACT** pin with `const_assert`s; `GGDEF_MATCH_FLOOR` lives in a **different file**).
+   **Zero parity-corpus inflow.**
+2. ⭐ **THE CORE #8 ARGUMENT IS UPGRADED FROM ITS WEAKEST FORM TO ITS STRONGEST.** Not *"all three lanes agree
+   on the wrong answer, ships on the severity ladder"* — **that is true only of the `&` cell.** For the bare
+   cell: ***the definitional interpreter prints `aa/bb`, and the fix makes Rust gg MATCH THE DEFINITION.***
+3. ⛔ **I MARKED A TRUE CLAIM FALSE.** The body ⛔-flags `t0045`'s *"ggdef already prints the ratified answer
+   while Rust gg SIGABRTs — a live Core #8 event"* as **decayed**. **It is TRUE for the bare form.** `t0045`
+   was wrong only about the **CELL**.
+
+⛔ **AND MY ENUMERATION MISSED A SECOND `#[ignore]`d TEST AND A SECOND FILED ITEM FOR THE SAME DEFECT** —
+`sound_loop_string_elem_assign_double_free` and `todo/t0403`, **zero mentions across six layers.** It is row
+(ii)'s self-append shape under `&`, **SIGABRT at HEAD**, and ⛔ **its un-ignore trigger LITERALLY FIRES under
+the fix while its assertion would still FAIL** — the same trap flagged for `attack_99`, on a test nobody
+enumerated. ⊕ **`t0403`'s own header carries an INDEPENDENT four-cell element-type table — a better
+readiness-row-(2) witness than my five samples.**
+⛔ **AND D24's CHECKLIST — BUILT TO STOP PRESCRIPTIONS BEING DROPPED — HAD ITSELF DROPPED THE MOST-WORKED ITEM
+IN THE BRIEF:** no row carried the Core #8 per-cell disposition that four folds produced. ⚠ **The output-review
+reads the DIFF, not the brief — so it must travel with the diff.**
+
+⭐ **D23's NON-MONOTONICITY NOW HAS ITS MECHANISM, so nobody re-measures it:**
+`is_borrow = !drops.is_registered(local) || … || is_cow_borrow(local)`. HEAD and the two-atom revert → not
+registered → borrow → clone → green; the **subset** → registered **and** `Untracked` → no clone → rc 101; FULL
+→ registered **but tagged** → clone → green. ⇒ ***a superset restores HEAD; the subset creates a config that
+never existed.***
+
+⇒ ⭐ **PASS 7 IS DELIBERATELY NARROW: the ONE new deliverable (the spectest + five constant bumps against exact
+pins) and the checklist's completeness. Nothing else is in scope** — the design has been signed off and
+re-reviewing it costs a pass for nothing.
 
 ### ⭐ C2's PASS 5 — THE FIRST FOLD OF MINE THIS ROUND THAT HELD, AND IT FOUND A DEEPER RULE
 
