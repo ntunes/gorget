@@ -10,7 +10,7 @@
 | ✅ **A1** | **`t1077`** — **INTEGRATED 2026-09-05** at `14c624a7f`. 4 passes + output-review, all 3 gates. | `t1309`–`t1318` (`t1312` released; free `t1314`–`t1318`) |
 | **A2** | **`s06`** — the excised half. **NEEDS ITS OWN SCOUT** (its prescribed guard was measured false, its added site unmeasured, its class short by a reproducing site). | `t1373`–`t1382` | **ONE LINE in GIR lowering**; blast radius **1 program in 2594**. | `t1309`–`t1318` (4 spent) |
 | **B** | ✅ SCOUTED → 🔵 brief-review pass 1. **Streak 0/3.** Scope GREW to **`t1067`+`t0948`+`t1210`**, one class-fix. **`t1067`** — a closure CAPTURING ANOTHER CLOSURE reads freed memory: **rc 0 with silently wrong output**, ASan UAF. R49-found. | `t1319`–`t1328` |
-| **C1** | **`v4` written — THREE named changes `{U, C, R}`, ONE commit, `R` WITH-OR-BEFORE `C`.** 🔵 pass 1. Streak 0/3. | `t1329`–`t1333` |
+| **C1** | **`v5` — `R`'s subject from the RATIFIED BOUNDARY SET (ctor · method-call · RETURNS).** 🔵 pass 1. Streak 0/3. ⛔ **NO CLEAN SPLIT EXISTS — checked.** | `t1331`–`t1333` |
 | ✅✅ **C2** | **`t0045`+`t0403` INTEGRATED** (4 commits). Construct-scoped instrument; 2 sites beyond what I reported. | `t1334`–`t1338` |
 | ~~C~~ | ⛔ SPLIT 2026-09-05 — **TWO classes, proven two-directionally.** **`t0011` + `t0045`** — the double-free pair from safe, spec-documented syntax. ⚠ **Scout whether they are ONE class before splitting** (Core #4). ⚠ **`t0045` warns THE `&` IS NOT THE DISCRIMINATOR** — do not scope it by the sigil. | `t1329`–`t1338` |
 | **D0′** | ⚖⚖ **OWNER ASK — RULING 3 IS NOT IMPLEMENTABLE AS WRITTEN; `t1408` MUST LAND FIRST.** ⛔ And as designed the track would ship an **accept→MEMORY-UNSAFETY** change. Streak 0/3. | `t1394`–`t1402` |
@@ -1314,6 +1314,49 @@ WHICH CODE PATH a case takes.** ⇒ its fix is the cheapest possible guard: the 
 **distinguishes ESTABLISHED-MECHANISM exclusions from MEASURED-ONLY ones**, and Case 6 is explicitly marked
 *"measured correct, reason not established"* with a warning that the structural argument covering Case 4 does
 **not** cover it. **No mechanism invented.**
+
+### ⛔⛔ C1 v4 PASS 1 — SPINE CONFIRMED, **SCOPE WRONG**, AND IT FOUND TWO CRITICALS AT PRISTINE HEAD
+
+⭐ **THE SPINE IS NOW MEASURED, NOT ARGUED:** `U` alone takes `t0011` rc 134 → **rc 0 ASan-CLEAN** (`--lib`
+1187/0) · `R` **cannot** touch `t0011` (payload is a `String`) · `C` alone **un-refuses** row 4 · the four
+`t0682` rows are **exactly** as v4 stated · row 3's fix-it **ICEs** · the self-host mirrors the carve-out
+**including `Box`** · ggdef abstains.
+
+⛔ **BUT `R`'s SUBJECT WAS A SELECTION ON THE POSITION AXIS.** v4 derived it from `t0682`'s four historical rows.
+**Derived instead from `AGENTS.md`'s RATIFIED BOUNDARY SET, it is three positions:**
+1. **constructor** (rows 2/4) · 2. ⛔ **the METHOD-CALL spelling** — `Box.new(…)` is an `Expr::MethodCall`, and
+`require_explicit_move_for_single_owner_init` runs **only** from `Expr::Call` / `Expr::DotShorthand`
+⇒ ***under `U` the BOOK'S OWN SPELLING becomes a compiler PANIC with `gg check` rc 0*** — **a second "POSITION
+WITH NO SUBJECT"** · 3. 🚨 **RETURNS.**
+
+🚨🚨 **TWO CRITICALS FILED, BOTH MEASURED AT PRISTINE HEAD, BOTH FOUND BY A *BRIEF REVIEW*:**
+- **`t1329`** — `Box[String] take(H &h): return h.b` → **`gg check` rc 0, then ASan HEAP-USE-AFTER-FREE.**
+  ⭐ **The same sub-place read is REJECTED at bare-assign, container literal, `push`, `Some(…)` and `d.put(…)`.
+  RETURN IS THE ONE THAT GETS THROUGH, AND IT IS THE MEMORY-UNSAFE ONE.** ⭐⭐ **And the INDEPENDENT WITNESS was
+  a contradiction already in the tree: `AGENTS.md`'s boundary set NAMES returns while `needs_explicit_move`'s
+  own doc-comment OMITS them.** *Documented on one side, invisible on the other.*
+- **`t1330`** — a struct clone of a `Box[String]` field **DOUBLE-FREES at pristine HEAD.** ⛔ **I had written
+  *"build one, OR file it as unmeasured-by-reading"*; the reviewer BUILT it in ONE COMMAND, and it is a
+  double-free rather than the "shared buffer" I described.** ⇒ ***the disjunction would have licensed an
+  UNMEASURED PREMISE into `todo/`. That branch is struck.***
+
+⛔⛔ **AND MY MANDATED ENUMERATION NAMED THE WRONG ACCESSOR.** `C` acts through **`clone_fn_for_ptr` (38 sites)**,
+of which `ptr_materialization_kind` (4) is **one consumer** — plus `clone_fn_name_for_def`, feeding the IR
+validator, **which no walk of `ptr_materialization_kind` reaches.** ⭐ **PROOF IT MATTERS: `t1329`'s return cell
+reaches `C` through a plain `clone_fn_for_ptr` site — AN EXECUTOR OBEYING v4 LITERALLY WOULD NOT HAVE FOUND THE
+UAF.** ⇒ ***SIX-Q #2 applied to the INSTRUCTION rather than the guard.***
+⊕ **And readiness row 2's nominated witness DISCLAIMS ITSELF** — the registration-count lint's own doc says it is
+*"bookkeeping, not a class-retiring guard"* and *"says nothing about whether the four agree on the OTHER
+metadata fields"*. ⭐ **The reference-grade fix is one function away: route the four Box sites through the SINGLE
+WRITER, as `ensure_shared_type_def` already does — disagreement becomes IMPOSSIBLE BY CONSTRUCTION, and it
+dissolves the "exclusion list is a SELECTION" leg by removing the need for a list.**
+⊕ ⛔ **MY LLVM REASON WAS FALSE:** `generate_llvm_wrappers` **IS** `generate_c_inner_impl(…, wrappers_only=true)`
+and calls the same wrapper emitter ⇒ **the c_lir emitter IS the LLVM lane's.** **Keep *"measure LLVM"*; DELETE
+the reason — acting on it adds a SECOND emitter and the duplicate-symbol link collision the code documents.**
+
+⭐ **`v5` DERIVES `R` FROM THE BOUNDARY SET AND STATES THAT NO CLEAN SPLIT EXISTS — checked, not assumed:**
+`U` alone panics, `C` alone un-refuses, `R` without returns leaves a CRITICAL open. ⇒ **one commit, `R` with or
+before `C`.**
 
 ### ⭐ C1 `v4` — THE THREE CHANGES ARE NAMED, AND THE ORDERING IS THE SAFETY ARGUMENT
 
