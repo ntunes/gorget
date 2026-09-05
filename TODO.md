@@ -25,6 +25,28 @@ ROUND** (Core #9) — raising the ceiling for your own inflow is forbidden.
 is the long pole because its latency is not ours. ⚖ **Owner granted a ONE-OFF Fable spawn for it
 (2026-09-05); the default remains the harness model.**
 
+⭐⭐ **OWNER DIRECTION 2026-09-05 — THE SCOUT OWES A *UNIFIED MODEL*, not three answers side by side:**
+*"propose a unified model that encompasses the stored borrows alternative solution, transient-views and
+cow-cost. All three aim at performant, simple and safe gorget user code. And lazy in the case of the iterator,
+which makes all the difference."*
+⛔ **THE 2026-07-28 LEGALITY/COST SCOPE SPLIT IS NOW A HYPOTHESIS, NOT A CONSTRAINT.** The owner is asking
+whether that seam is in the right place; the scout may reject it if a unified model is better.
+⭐ **THE LOAD-BEARING CLAIM TO TEST: LAZINESS IS THE FORCING FUNCTION, NOT AN INCIDENTAL.** An EAGER iterator
+materialises and has **no borrow to store** — no legality problem, and the cost is the copy. The LAZY one
+walks the bucket array in place, which is **exactly why it is fast (cost)** and **exactly why it must hold
+something across `next()` (legality)**. ⇒ **Laziness cuts ACROSS both notes, which would mean the current seam
+runs through the middle of the phenomenon rather than around it.** **So the real question may be `eager vs
+lazy`, with legality and cost falling out differently on each side** — and if so the unified model is SIMPLER
+than either note alone, which is the finding.
+⊕ **It generalises past iterators** — a builtin's returned view, a closure capturing a collection, a Vector
+HOF's element pointer. `D40` (return-view lazy materialization) is already in that territory.
+⊕ **The owner's three words are the ACCEPTANCE CRITERIA: PERFORMANT · SIMPLE · SAFE.** A model that is safe
+and fast but makes users reason about compiler internals fails *simple* — the exact objection that killed
+`Ref[T]`-by-default.
+⚠ **The measured baseline still comes FIRST.** *"Whatever we replace it with must be equally fast"* is a hard
+gate on any model, so a model that cannot be measured against the current fast path is a proposal, not an
+answer.
+
 ### 🟢 R49 IS CLOSED (2026-09-05).
 **R49's full record is in `DONE.md`** — seven tracks, two integration tracks, both owner rulings, and the
 complete battery. **Nothing about R49 belongs in this block any more.** This handover was 5550 lines of
