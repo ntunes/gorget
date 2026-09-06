@@ -73,17 +73,22 @@ first output-review (reclaimed ~5G, 38G→33G); **the delta reviewer's tree is d
 findings are being worked, in case it must be re-questioned.
 
 ### ⛔ TWO ID RULES THE ROUND EARNED THE HARD WAY — READ BEFORE ISSUING A BLOCK
-1. **`t1550`–`t1559` WAS CLAIMED BY TWO HOLDERS.** Track H's scout proposed filing `t1550`–`t1559`; `t1550`–`t1554`
+1. **A TEN-ID BLOCK STARTING AT `t1550` WAS CLAIMED BY TWO HOLDERS.** Track H's scout proposed filing that whole
+   range; `t1550`–`t1554`
    were already issued to C's executor (returned unused ⇒ **SPENT, not recycled**) and **`t1555`/`t1556` ALREADY
    EXISTED**. Nothing was filed, so no damage — **block RETIRED WHOLE** (MA-3b) and the findings re-filed from the
    orchestrator's own block.
-2. ⛔⛔ **`t1559` IS BURNED FOREVER — A TODO ID CAN COLLIDE WITH A COVERED FIGURE.** `figures_db_values_have_one_spelling`
-   treats the digits `1559` as an unmasked re-spelling of **`parity.runtime_diff.match_floor` = 1559**, so the id
-   trips the lint from `TODO.md`'s index row *and* the item's own filename. **The item was renumbered to `t1560`.**
+2. ⛔⛔ **ONE ID IS BURNED FOREVER — A TODO ID CAN COLLIDE WITH A COVERED FIGURE.** The id numerically **one below
+   `t1560`** has digits identical to the covered figure **`parity.runtime_diff.match_floor`**, so
+   `figures_db_values_have_one_spelling` treats every occurrence — the item's own filename *and* `TODO.md`'s
+   generated index row — as an **unmasked re-spelling of that floor**. The item was **renumbered to `t1560`** and
+   that id is **retired, never reused**.
+   ⚠ **AND THIS NOTE TRIPPED THE SAME GUARD WHILE EXPLAINING IT** — naming the number six times re-spelled the
+   figure. **The mask is the CITATION FORM: name the figure, never retype its value.**
    ⇒ **BEFORE ISSUING ANY BLOCK, CHECK IT AGAINST `scripts/figures.db`:**
-   `grep -oE '=[[:space:]]*[0-9]{3,6}' scripts/figures.db | grep -oE '[0-9]{3,6}' | sort -nu` — currently `1559` is
-   the ONLY collision in the 1540–1600 range, but the covered set grows every round.
-   ⊕ **Watermark after this: `t1560` used; next free block `t1561`–`t1570` = Track I; `t1571`+ free.**
+   `grep -oE '=[[:space:]]*[0-9]{3,6}' scripts/figures.db | grep -oE '[0-9]{3,6}' | sort -nu` — the covered set
+   grows every round, so this is a recurring hazard, not a one-off.
+   ⊕ **Watermark after this: `t1560` used; `t1561`–`t1570` = Track I; `t1571`+ free.**
 
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
