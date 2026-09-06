@@ -122,7 +122,7 @@ never a new integer.** ⚠ A `/tmp` generator dies at round close, so the item m
 | track | item | why it is not a duplicate of H |
 |---|---|---|
 | **J** | **`[[t1360]]`** | the leak sweep treats *"did not run"* as *"did not leak"*. **H is NOT gated on it** (only CITED rows block; H deletes its one cited row) — but without it the other **nine** `t0952` rows are retired **on faith**. ⛔ **AND A SECOND GATE IS FATAL *AND NOT* CITED-SCOPED (`new_class`), with all ten allowlist fixtures inside H's 23-changed set.** |
-| **K** | **`[[t1558]]`** | `Ref[T]` **struct-field INIT** still deep-clones after H (`live_bytes` 1564→782). **Different WRITE SITE — no widening of H's declared-param accessor reaches it** (SIX-Q #4). **D10(b) Add. 3** names `field_ref_flags` as metadata to READ, so the fix is a read, not a new derivation. |
+| **K** | **`[[t1558]]`** ⛔ **RE-CUT TWICE** — now the **FIELD-POSITION REJECT** (brief `/tmp/briefK51_executor.md`, review 1/3 running). The migration and the bind-guard were both **measured and refuted**. |
 
 ### ⛔ THE HANDOVER HAD **TWO IDENTICAL COPIES** OF ITS OWN TRACK-STATE TABLE — deduped 2026-09-06
 Sections at lines 252 and 558 were **byte-identical, 23 lines each**. Deleted the second **after asserting identity in
