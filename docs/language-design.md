@@ -575,7 +575,7 @@ custom-`Drop` `R`) is a compile error (`E_MoveWithoutOperator`) — write
 A fresh temporary (`R b = R(1)`) is not a live place and moves without an
 operator. **D53:** `Mutex[T]` / `RWLock[T]` are unique locks, not a second
 `Shared` — the same reject fires at consuming positions (`push`/`put`/`set`/
-`insert`/`send`/`v[i] = x`); share a lock with `Shared[Mutex[T]]`. The
+`insert`/`send`/`v[i] = x`); share a lock with `Shared[Mutex[T]]`. **D57:** an explicitly-spelled `Mutex[T]`/`RWLock[T]` does **not** implicitly unwrap to `T` at an argument position — that would *acquire a lock* outside the closed set over which `shared`'s deadlock-freedom is structurally guaranteed, and there is no runtime deadlock check — so the author writes the acquisition. Transparency is a property of the **declaration form**: a `shared T` binding is transparent both to `T` and to its wrapper; an explicitly-spelled lock is transparent neither way. The
 refcounted/handle types (`Shared[T]`, `Weak[T]`, `Channel[T]`) are the
 sanctioned multi-owner escape hatch and are not drop-tainted by their payload.
 
