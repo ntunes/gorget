@@ -656,6 +656,38 @@ artifact; ⚠ **`awk '$2=="IN"' tests/sanitize/CORPUS_MANIFEST.txt` returns NOTH
 level leaves the population SILENTLY**) · **`[[t1583]]`** (the `FNR==NR` empty-allowlist degenerate, pre-existing and
 made SAFER by this fix). One line added to `[[t0956]]`.
 
+### ✅ H's OUTPUT-REVIEW: **SIGN OFF on design and fix**, one cited reservation (one line, measured)
+**The question I set it — is the CRITICAL genuinely pinned? — answered honestly: YES, but STRUCTURALLY (unit test +
+lint), not behaviourally, and the executor said so everywhere it matters.** The `known_gaps` repro pins the **LEAK, not
+the miscompile** — proven decisively (pre-fix prints `6` under `detect_leaks=0`; the empty stdout under `exitcode=99`
+was ASan's `_exit` skipping the stdio flush) — **and the executor's own test comment already says exactly that.**
+⭐ **Readiness item 4 verified INDEPENDENTLY, not inherited:** every partial revert RED-verified by line, incl. the pair
+that matters — **the consult half alone AND the accessor half alone EACH red the ASan repro** at 10062 bytes / 78
+allocations. The executor's reordering of test 3 is **load-bearing and non-inert**.
+⭐ **A BOUNDARY CONTROL NOBODY HAD RUN:** three fixtures **OUTSIDE** the 23, incl. the two most `Ref[T]`-dense in the
+tree → **fix_diff = 0, lines identical** ⇒ **the 23 is a real boundary, not a filter artifact.** ⊕ 7 of 10 allowlist
+rows re-measured, each matching its committed disposition cell-for-cell. ⊕ ERRATUM A1 verbatim and correctly scoped.
+⊕ **My ggdef correction independently re-derived and CONFIRMED** — `ast::Type::Ref` is the D35 sigil, *"NOT in param
+parsing"* — so H's Core #9 disposition survives on the narrower reasoning.
+
+⛔ **THE RESERVATION — the widened lint window is blind INSIDE ITS OWN JOB.** The widening was necessary (two-line REDs
+where one-line is GREEN; **29 at pristine parent, cell-for-cell**) — **but it was applied to the EXCUSE clause as well
+as the detection clause, and the excuse leaks:** a *real* violation whose next line holds an unrelated routed call is
+**GREEN under the shipped two-line form** and RED under the one-line form. ⇒ **complementary blind spots, neither
+window dominates** — and by **addendum 4's own standard** (*"a guard whose one blind spot lies inside the family it
+solely protects is not a guard"*) this is inside its stated job: **site 35 written next to a correct site passes green.**
+**Repair measured in all four cells: narrow ONLY the excuse to the binding's own line.** Returned to the executor.
+
+⛔ **`t1604` FILED — the omission that would have died with the round.** `[[t0952]]`'s leak axis was **never measured on
+the SELF-HOST lane.** `[[t1571]]` covers the declared-**parameter** shape, which `cc` rejects — **but `t0952`'s actual
+mechanism is a `Ref[T]` STRUCT-FIELD read flowing to a `Ref[T]`-declared EXTERN param, and `t1571`'s own positive
+control proves the self-host handles THAT path correctly today.** ⇒ **the SH lane CAN reach the leak shape; whether it
+leaks is unmeasured** — and **an unmeasured axis reads exactly like a clean one.**
+⊕ **Two record corrections:** the *"15 rotted `cites` edges across 13 items"* figure measures **12 edges across 11
+lines** (the repoint itself is correct and the established spelling); and **`roundish_headlines` is a FIFTH provisional
+pin the commit did not flag** — now a live three-way collision (H **87** · J **87** · me **89**), to be re-measured from
+the merged tree with the db's own instrument.
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
@@ -1880,6 +1912,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t1429`](todo/t1429.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT ON THE SELF-HOST LANE, rc 0 AND gg check CLEAN. Found by R50 Track K's scout.] Option[Str…
 - [`t1442`](todo/t1442.md) **HIGH** — 🆕🚨 [HIGH — THE SAME UNDEFINED BEHAVIOUR, IN THE LANE THAT IS MEANT TO BECOME THE PRIMARY REFERENCE. Found 2026-09-05 by…
 - [`t1537`](todo/t1537.md) **HIGH** — 🆕🚨 [HIGH — A CORE #9 PORT WITH NO CHOKEPOINT TO PORT INTO. Measured 2026-09-06 by R51 Track A's layer probe and re-raise…
+- [`t1604`](todo/t1604.md) **HIGH** — 🆕🚨 [HIGH — A LANE DIVERGENCE THAT WOULD HAVE DIED WITH THE ROUND. Named 2026-09-06 by R51 Track H's output-review, as th…
 ### Medium
 
 - [`t0171`](todo/t0171.md) **MED** — 🆕 [MED — self-host lane gap, Core #9; R40 Track B] The 3 driver-embedded lexer copies lack the \xHH arm + unknown-escape…
