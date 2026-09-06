@@ -1,3 +1,99 @@
+- [2026-09-06] **🏁 ROUND LI (R51) CLOSED — THE OWNER'S OPTIMALITY PIVOT, TAKEN RECURSIVELY. Seven tracks integrated, two stood down, three ledger rulings ratified, full battery green.**
+  **Theme:** the owner's 2026-09-05 pivot from safety to optimality, with the standing directive that
+  *prerequisites are tackled RECURSIVELY* rather than filed and deferred. The round was told at its open that
+  **no successor follows it**, which changed what "defer" means: an unworked item is deferred *indefinitely*,
+  not to next round. That single constraint is why two tracks were stood down rather than shipped thin, and why
+  a CRITICAL that a stood-down track surfaced was picked up by a new track in the same round.
+
+  **Integrated (7):** **A** `t1319`+`t1373` — the receiver-place class, closed as ONE defect, with a POST-SSA
+  two-guard checkpoint the executor *corrected the brief into* (at the home the brief named, the value guard is
+  provably INERT). **B** `t1452` — the battery-vs-CI reconciliation lint, made fail-closed. **C** `t0718` first
+  slice — one typed builtin coercion identity, and a bare figure replaced by its **generator**
+  (`scripts/coercion_identity_matrix.py`). **D** `t1449` — snapshot freshness on the Rust lane plus the
+  `todo_index` rc that described the tree it had just replaced. **G** `t1064`+`t0675` — the `todo/` record's own
+  `repro`/`cites` citations are now guarded, by FOUR lints where one was briefed, one of them a guard the owner
+  had agreed to on 2026-08-23 and nobody had built. **H** `t1505` (CRITICAL) + `t0952` — the `Ref[T]`
+  declared-parameter decision now has ONE accessor, and the leak it was hiding is gone; it turns an OOM-kill
+  into a correct 1.9 MB run. **J** `t1360` — the leak sweep no longer reads *"did not run"* as *"did not leak"*.
+
+  **Stood down (2), and this is the round's most useful result.** **F** (optimality increment 1) ran four brief
+  reviews and was stood down at the standing decision. ⛔ **Its pass-3 prototype was RETRACTED, not banked:** it
+  looked solved (`30`→`3`, `map_clone` 801→0, RSS 6104→1256) and was then measured to **miscompile at N=7** —
+  **N=3 is the one size in ten that is accidentally correct, and every probe in the family used it.** F's harvest
+  created the CRITICAL that became Track H — **which then shipped F's own target.** `t0952` (optimality increment
+  1) is CLOSED: it removed **four `gorget_map_clone` calls per `DictIter.next()`**, the whole map deep-copied once
+  per field read, on the path every `for k, v in d.iter()` takes. Clone multiset on the repro **11 → 7**; the
+  fixture went `rc 1, 10062 bytes leaked` → `rc 0, ASan-clean`. ⚠ **The round's own handover claimed the opposite
+  until the close** — an ask drafted during F's stand-down went stale when H integrated and was folded forward
+  unchecked. Corrected here and withdrawn; what survives is `t1607`: **the tree-wide clone meters read ZERO over
+  this win**, because both measure self-compilation, which never iterates a `Ref[Dict]` field. **K** was refuted at **four successive subjects**, the
+  last witness being the orchestrator's own and **CIRCULAR** — five cells built specifically to contain no field
+  declarations were then offered as evidence that exempting field declarations costs nothing. **A filter over a
+  hand-built corpus, selected by the very predicate under test.** Both stand-downs are harvested into live items
+  (`t1505`, `t1506`, `t1525`, `t1558`), not into a brief that dies at close.
+
+  **⛔ THE ROUND'S DOMINANT DEFECT SOURCE WAS THE FOLD ITSELF — MEASURED FIVE TIMES, ALL THE ORCHESTRATOR'S.**
+  The rule *"a fold may only assert what a command in that same fold regenerates"* already existed and was broken
+  repeatedly **in the act of folding**: a claim re-imported after it had been corrected; *"the sixth instance"*
+  imported as a scope decision when the command returns 11; a correct classification overridden and inherited
+  UNTESTED for two passes; a scout's *"8 rows"* whose true blast radius is 17; and a prescribed fix that
+  **re-created the very item its track existed to close**, routing a no-row entry to `fixed_leak` so the gate
+  printed *"✅ no longer leaking — DELETE these rows"* over a live defect. ⇒ **a fold is not a transcription
+  step; it is the point where unverified claims enter with the authority of a decision.** Three of the five cost
+  2+ passes to unwind.
+
+  **⭐ AND THE ROUND'S BEST STRUCTURAL LESSON: a bare number in a durable item IS the defect.** `t0718`'s
+  `|changed|` went **11 → 14 → 18 → 30**, corrected by four different agents, **none careless** — each picked a
+  factorization and enumerated honestly inside it. The pass that found 30 did so only by generating the
+  **product** mechanically. ⇒ the item now states its **generator**, never a new integer.
+
+  **FIVE LEDGER ACTS THIS ROUND** (each written by the orchestrator on the owner's explicit instruction; the standing rule is owner-edit-only):
+  **D55 — the type and value namespaces are UNIFIED**; a name is a type or a value, never both, which also settles
+  `x[]()` as generic instantiation. Measured before ruling: three answers in three positions, zero name collisions
+  in-tree, zero migration cost. **D41 ADDENDUM 1 — builtin-internal `Ref` fields are permitted on two conditions**,
+  reconciling D41's no-stored-borrows rule with O(1) lazy iteration; the rejected alternative measured **O(n) per
+  adapter stage** and breaks a published promise. **D53 sharpened in place** — the `shared` desugar sentence was
+  true of one case and stated as a universal; ARC is unconditional, the lock is a per-binding Custody-Flow-Analysis
+  strategy (`ArcOnly`/`ArcMutex`/`ArcRwLock`/`ArcAtomic`).
+  **D56 — the CoW cost contract's Phase-A core**, ratified from an ask scoped deliberately so that only the three
+  decisions gating Phase A were put to the owner, plus one cheap ordering. Ruled: build the per-signature ownership
+  summary and make arg-side elision its first consumer; run the recursion fixed point **optimistically for the
+  optimizer and pessimistically for the checker**; specialize a calling convention **on demand**, never by a runtime
+  branch; and ship the specified elision set **before** the knob. ⭐ **The summary is ONE table on purpose** — the
+  elision predicate's `¬returns_view_of[i]` conjunct is what stops a receiver elision handing away a buffer whose
+  returned view is still live (for a method `self` *is* arg 0), and two sidecar tables cannot express that, so they
+  would have shipped the dangle. **Five further items were left unratified on purpose**, recorded as such so a later
+  brief cannot read them as settled.
+  **D57 — an explicitly-spelled `Mutex[T]`/`RWLock[T]` does NOT implicitly unwrap to `T` at an argument position**;
+  reject at check time, the author writes the acquisition. ⭐ **The reason is structural:** an implicit unwrap
+  **acquires a lock** outside the closed set over which `shared`'s deadlock-freedom is guaranteed — and the
+  reference states plainly that there is **no runtime deadlock check** to catch the resulting order. ⛔ **The
+  ledger entry excludes the mirror case BY NAME**, because that one is a lowering defect and a later round must not
+  "close" it by rejecting something.
+
+  **`t1527` was RULED at the close, and the ask shrank to half its size on measurement.** Arm A turned out to need
+  **no ruling at all** — `shared int` already *is* a `Shared[int]`, so the call is an IDENTITY and the emitted C
+  shows lowering passing the **pre-wrap SSA value**: a plain lowering defect, and closing it by "rejecting"
+  anything would have been wrong. Arm B was the real question and the owner **rejected the implicit unwrap**: it
+  **acquires a lock** outside the closed set over which `shared`'s deadlock-freedom is structurally guaranteed, and
+  the reference states plainly there is **no runtime deadlock check**. ⭐ **The coherent symmetry is per DECLARATION
+  FORM, not per direction** — `shared` transparent both ways, an explicitly-spelled `Mutex` transparent neither —
+  which is the axis D53 already draws. Both arms' INTENDED behaviour and the Core #9 lane debt the reject will owe
+  are recorded in the item.
+
+  **Round-close battery: every leg rc 0 off the BARE command.
+  **C sweep** `2833 passed · 0 failed · 264 ignored` (6234 s) and **LLVM sweep** `2833 · 0 · 264` (5065 s) — ⭐ the
+  **identical counts are the parity signal**, so nothing this round touched a backend-specific path.
+  **LLVM-lane security (release)** `223 · 0 · 31` (694 s) — *the leg the handover recorded as passed along
+  **unmeasured for three rounds**; it is measured now.* `--lib` · `-p ggdef` · `--test spec_conformance` ·
+  `--test security` · `--test c_runtime` · `--test lints` (251) all rc 0. Script gates: `known_gaps_census`
+  (roster 242), `staging_move_burndown` (`SAMPLED=2261 TRIPS=2 CLEAN=5`), `box_receiver_burndown`
+  (`SAMPLED=2658 TRIPS=3 CLEAN=14`). **`sanitize_sweep`** rc 0 — scanned 2261, covered 1840 against floor 1743,
+  corruption 1/1 allowlisted, leaks 243 against 245 — and ⭐ **its self-test fired all six detectors**, which is
+  Track J's own work proving itself on the gate that round rebuilt. **`robustness_map --lanes all`** rc 0, with
+  `WRONG → WORKS` progressions on the `vsm_param__while__vec_*` family across **c, llvm and asan****
+
+  **Convergence:** `known_gaps=17 todo_items=992`
 - [2026-09-06] **R51 Track J — `t1360`: the leak sweep no longer reads "did not run" as "did not leak".**
   `adjudicate_leaks` built `fixed_leak` as `for (s in allow) if (!(s in seen))`, and `seen` was set ONLY
   from a `LEAK` verdict — so a fixture that never copied, never built, produced no binary, was killed at
