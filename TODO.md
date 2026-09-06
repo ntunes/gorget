@@ -1,5 +1,22 @@
 # TODO
 
+### ⭐⭐ OWNER RULING 2026-09-06 — **THE OPTIMALITY TRACK PROGRESSES NOW; PREREQUISITES ARE TACKLED RECURSIVELY**
+
+**Owner, verbatim:** *"this optimality track is the long term objective for gorget. Although long term, I think
+it should not be postponed, so I'd like it to progress. If CRITICAL or other items are in the requisites,
+those requisites should be tackled recursively. I want gorget code compilation to be as optimal as hand
+written by an expert developer."*
+
+⛔ **THIS SUPERSEDES THE 2026-09-05 FIXED ORDER** (*"CRITICALs + all R49-deferred FIRST, then the two CoW
+plans"*). ⭐ **The order INVERTS its driver: the optimality goal is now the ROOT, and safety debt is pulled in
+AS A PREREQUISITE OF IT, recursively — not queued ahead of it.** A CRITICAL is worked because the optimality
+chain needs it, and one that is NOT in the chain is not thereby deprioritised — it is simply not this track's
+gate.
+⚠ **THIS RESOLVES THE HOLE THE CRITICAL AUDIT FOUND.** "Safety first, optimality later" is exactly how R50
+integrated ten tracks, went 13-gates green, and advanced its own headline by zero: **postponement has no
+owner.** A recursive prerequisite chain has one at every level.
+⊕ **Compatible with the no-new-round instruction below: this work happens INSIDE R51.**
+
 ### ⛔⛔ OWNER INSTRUCTION 2026-09-06 — **DO NOT OPEN A ROUND AFTER R51.** Autonomy is suspended at R51's
 close. This OVERRIDES the heartbeat loop's standing *"open the next round autonomously"* and Round-lifecycle
 step 7. Close R51, run the battery, write the records, report — **then STOP.**
@@ -113,7 +130,7 @@ discriminator is the forbidden name list in disguise (Core #2). Prerequisite fil
 | **D0′** | Blocked on `t1408`, not on the owner. |
 | **D1** | NOT an ask — sequencing on `t1349`+`t1350`. The named callee-borrow ruling **never existed** (`git log -S` empty). |
 | **K2** | Ask WITHDRAWN — `todo/t0338.md:11` already recorded the ratified pattern; `EXIT_ILLFORMED` 102→1 shows the distinction was deliberately REMOVED. |
-| **F2/F3** | ⏸ The **optimality campaign** (`D40`+`D52`). Owner-fixed order: safety debt first. Both gates now clear. |
+| ⭐ **F (optimality)** | 🔵 **LIVE — owner-ruled 2026-09-06 to progress NOW, prerequisites recursive.** `D40`+`D52`; the two plans are `docs/internals/cow-{transient-view-model,cost-contract}.md`. Scout is mapping the prerequisite DAG backward from the goal. | `t1458`–`t1467` |
 
 ## ⛔ HOLDING A TRACK DOES NOT HOLD ITS FILINGS — the round's sharpest process lesson
 
