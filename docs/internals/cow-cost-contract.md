@@ -5,7 +5,10 @@
 > the specified elision set, or the knob. Do not treat any of this as shipped
 > behavior.
 >
-> **The ratified part is `D42`** (the `implicit_clones` knob — one name, three
+> **`D56` (2026-09-06) ratifies the Phase-A core** — the signature summary, arg-side
+> elision, the two-direction fixed point, on-demand convention specialization, and
+> the §3-before-§4 ordering. It is still **UNBUILT**.
+> **The other ratified part is `D42`** (the `implicit_clones` knob — one name, three
 > scopes, `allow`/`warn`/`deny`, explicit `.clone()` exempt), recorded in
 > [`docs/define-gorget/decisions.md`](../define-gorget/decisions.md). That entry
 > is the ruling; this note elaborates it. The rest of this file is proposed or
@@ -451,10 +454,24 @@ independently valuable and independently shippable.
   with `allow|warn|deny` values, three scopes (attribute / directive / CLI flag),
   explicit `.clone()` exempt. Selected over `@explicit_clones_only` /
   `@no_implicit_clones` / `@clone_budget(N)` / `@zero_copy`.
-- **LEANING (this note, unratified):** the four-layer design; #13 merging into the
-  cost axis while the transient-view model keeps the legality axis;
+- **RATIFIED as `D56` (owner, 2026-09-06)** — the Phase-A core, ruled from a
+  scoped ask that separated what Phase A needs from what only the spec-and-knob
+  phases need: **(1)** build the signature summary (§1) and make arg-side elision
+  (§2) its first consumer, under `materializes_param[i] ∧ is_last_use ∧
+  ¬returns_view_of[i]` — one summary, never two sidecar tables, because the third
+  conjunct is what stops a receiver elision dangling a returned view; **(2)** the
+  fixed point runs **optimistic for the optimizer, pessimistic for the checker**;
+  **(3)** convention specialization is **on demand** — a `$owned` entry point only
+  where both reaching conventions are proven to occur, and **never** a runtime
+  flag-and-branch; **(4)** **§3 before §4** is binding.
+  ⚠ **An obligation rides with (3):** how often a callee is genuinely reached both
+  ways is UNMEASURED. The ruling fixes the shape, not the code-growth budget; the
+  executor owes that census.
+- **STILL LEANING (unratified, and deliberately left so):** whether #13 merges into
+  the cost axis while the transient-view model keeps the legality axis;
   transitive-guarantee / non-transitive-obligation; error-biased checker vs
-  clone-biased optimizer; §3-before-§4 ordering.
+  clone-biased optimizer. Each belongs to the spec or knob phases; deciding them
+  now buys nothing.
 - **ALREADY SHIPPED (Round X, `1c594a4f`, 2026-07-28):**
   `W_RecursiveBareParamMaterialize` — the steering diagnostic for *direct*
   self-recursion, with 7 RED-verified fixtures including a load-bearing
