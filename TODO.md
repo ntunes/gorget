@@ -122,7 +122,7 @@ never a new integer.** ⚠ A `/tmp` generator dies at round close, so the item m
 | track | item | why it is not a duplicate of H |
 |---|---|---|
 | **J** | **`[[t1360]]`** | the leak sweep treats *"did not run"* as *"did not leak"*. **H is NOT gated on it** (only CITED rows block; H deletes its one cited row) — but without it the other **nine** `t0952` rows are retired **on faith**. ⛔ **AND A SECOND GATE IS FATAL *AND NOT* CITED-SCOPED (`new_class`), with all ten allowlist fixtures inside H's 23-changed set.** |
-| **K** | **`[[t1558]]`** ⛔ **RE-CUT TWICE** — now the **FIELD-POSITION REJECT** (brief `/tmp/briefK51_executor.md`, review 1/3 running). The migration and the bind-guard were both **measured and refuted**. |
+| **K** | **`[[t1558]]`** ⛔⛔ **STOOD DOWN 2026-09-06, FULLY HARVESTED** — four subjects tried, four refuted **on measurement**. The successor design is written into `[[t1558]]`. |
 
 ### ⛔ THE HANDOVER HAD **TWO IDENTICAL COPIES** OF ITS OWN TRACK-STATE TABLE — deduped 2026-09-06
 Sections at lines 252 and 558 were **byte-identical, 23 lines each**. Deleted the second **after asserting identity in
@@ -589,6 +589,36 @@ occurrences in its corpus are FIELD or LOCAL-BINDING positions — zero declared
 LIVE Core #9 lane for K (its subject IS field and local positions).** Corrected into K's review mid-flight.
 ⚠ **Treat a fourth formulation with the same suspicion: run the suite and read the fixtures — never infer the lane from
 a grep of the compiler.**
+
+### ⛔⛔ TRACK K IS **STOOD DOWN** — four subjects, four refutations, and the last witness was MINE and CIRCULAR
+**Subjects tried:** fix the five lowering sites · migrate the stdlib fields to owned · a **field-position** reject · a
+user-**spelling** reject. **Each died on measurement, none on argument.** AGENTS.md: *a track that cannot get its design
+signed off is REBUILT, RE-CUT or STOOD DOWN — never reviewed harder.* **It has been re-cut three times; that is enough.**
+
+⛔ **MY UNBLOCK WAS CIRCULAR, AND THAT IS THE PROXIMATE CAUSE.** I argued that exempting bare field declarations costs
+the CRITICAL nothing because *"all five of pass 1's cells have zero field-decl lines"* — **but pass 1 BUILT those five
+cells specifically to contain no field declarations, in order to falsify a field-position subject.** ⇒ **a filter over a
+hand-built corpus selected by the very predicate under test** — readiness item 2's trap verbatim, and **precisely the
+error I charged the brief with on ggdef one heartbeat earlier.**
+⛔ **And it is false on cost, measured:** `tests/fixtures/cow_amp_ref_field_forward.gg` — whose ONLY `Ref` spellings are
+**two bare field declarations** — builds rc 0 and prints `3 4 3 3` where `3 4 4 3` is reference-grade. **Under my design
+that program stays legal and stays wrong.** It is the CRITICAL's committed in-tree witness.
+
+⭐ **THE SUCCESSOR DESIGN IS NAMED, EVIDENCED, AND WRITTEN INTO `[[t1558]]`** — it was never scouted because every brief
+conflated two sub-classes: **(a)** mutate the SOURCE while borrowed (**already rejected** for declared-`Ref` structs,
+**missed** for generic/enum/tuple carriers) and **(b)** mutate THROUGH the borrow then read the source (**accepted and
+wrong even for a declared-`Ref` struct**). **The fix for (a) is at the WRITER (Core #1/#4): widen
+`compute_struct_field_ref_flags` — which reads the AST-declared type and iterates `Item::Struct` ONLY — to enum
+variants, tuple elements and POST-SUBSTITUTION instantiations, so the EXISTING RATIFIED REJECT covers the class.** No new
+rule, no new subject: the guard exists and is simply not being fed.
+
+⚠ **`[[t1558]]` STAYS OPEN AS A CRITICAL AND DOES NOT LAND THIS ROUND.** Saying so plainly is better than a fifth re-cut:
+the owner asked for it, and the honest report is that the right design is now known and unscouted, not that it is done.
+⊕ **Both ggdef pins sit at ZERO SLACK in both directions** (`MATCH_FLOOR 227` / `SKIP_CEILING 18`), so any future
+attempt must land its reject as a typed `static_reject`, never as an `ElabError` — recorded in the item.
+⊕ **New ICE filed from the same pass: `[[t1603]]`** — `auto w = W(d, 0)` with **inferred** generic args ICEs at rc 101,
+while the explicitly-spelled form compiles. **Discriminated from `[[t0933]]` in the item: same panic site, different
+producer.** ⚠ **And the panic is a SECOND defect — GIR validation had already produced a clean diagnostic.**
 
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
@@ -2584,6 +2614,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t1513`](todo/t1513.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT, AND A LAYERING BREACH *INSIDE* A RATIFIED DECISION. Measured 2026-09-06 by R51 Track A's…
 - [`t1526`](todo/t1526.md) **HIGH** — 🆕🚨 [HIGH — HEAP CORRUPTION ON AN AXIS EVERYONE HAD ALREADY ENUMERATED. Measured 2026-09-06 by R51 Track A's brief-review…
 - [`t1557`](todo/t1557.md) **HIGH** — 🆕🐛 [HIGH — AN INSTRUMENT-CORRUPTING DEFECT, FOUND BECAUSE A TRACK VERIFIED ITS INSTRUMENT BEFORE TRUSTING IT. Measured 2…
+- [`t1603`](todo/t1603.md) **HIGH** — 🆕💥 [HIGH — AN ICE FROM ORDINARY SAFE SYNTAX. Found 2026-09-06 by R51 Track K's brief-review pass 2, incidentally, while…
 ### Medium
 - [`t0474`](todo/t0474.md) **MED** — 🆕🔧 [MED — prerequisite for retiring the last indirect-call shape heuristic; filed 2026-08-19 by R43 Track C] Tag LARGE n…
 - [`t0475`](todo/t0475.md) **LOW** — 🧹 [LOW — Layering rule 3, one source of truth per axis; found 2026-08-19 by R43 Track C] src/backend/c_lir/helpers.rs ca…
