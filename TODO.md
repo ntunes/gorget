@@ -716,6 +716,38 @@ already fail closed (rc 2, seven failures) before any corpus verdict.** The guar
 vs ~25 min, an accurate diagnosis, the only cover on `RUN_SELFTEST=0`) — **but a false claim in a permanent record is
 worse than a missing one.** All three returned to J's executor.
 
+### ⭐ J FIXED THE SIBLING IN-TRACK `9df113361` — and found **WHY** it survived one list over
+Reproduced **through real runs, not offline re-derivation**: an allowlisted fixture that **does not build** went
+**rc 0 with `✅ no longer corrupting — DELETE these rows`** → **rc 1, `❌ … NEVER MEASURED`, no delete advice**; a
+no-verdict row → `absent_corrupt`; **reverse control — a clean, measured row is STILL RETIRED**; and FIXLIST at floor 0
+goes from *"rc 0 + bogus DELETE"* to **rc 0 and silent**.
+⭐⭐ **THE STRUCTURAL FINDING, which is worth more than the fix: `run_selftest` CANNOT REACH ANY OF IT — the corruption
+list is adjudicated by INLINE `comm`, not by a function.** *"That asymmetry is WHY the defect survived one list over."*
+⇒ the four new `tests/lints.rs` needles are its **only** coverage, each RED-verified by line-anchored revert, **and the
+executor filed the asymmetry itself** (`[[t1582]]`: extract `adjudicate_corruption()`) plus the coverage limit as
+`[[t1581]]` cell (e). **A defect that hides because its site is not a function is a Core #6 shape, not a one-off.**
+
+⊕ **AND IT MEASURED MY FINDING C RATHER THAN ACCEPTING IT — I WAS HALF RIGHT.** Default mode (`RUN_SELFTEST=1`): the
+pre-existing positive controls **do** fail closed (rc 2, seven failures, **zero** delete advice) — my finding stands.
+⛔ **BUT at `RUN_SELFTEST=0` the sweep genuinely DOES print `✅ no longer leaking … DELETE them` for a STILL-LEAKING
+fixture.** ⇒ corrected wording in all five places: **the guards are the ONLY cover on the `RUN_SELFTEST=0` path**; in
+default mode their worth is **two seconds and an accurate diagnosis** instead of ~25 minutes ending in *"the instrument
+is broken"*. ⚠ **`312337a48`'s commit message cannot be amended without asking; the `DONE.md` paragraph NAMES and
+SUPERSEDES it** — the durable record is correct even though the commit is not.
+
+⊕ **A SECOND clean uninterrupted full sweep, rc 0**, owed because item A adds a gating path — census **byte-identical**
+across both runs and the pre-change baseline, all buckets zero **including the three new corruption ones**.
+⚠ **One cross-run difference the executor says is not its own:** `count-drift` **1 → 3**, columns 1/2/4/5
+**byte-identical between runs**, only the `COUNT_DRIFT` flag in column 3 moving; adjudicated census-not-gate, rows
+already carrying the `*N+` loose marker, class `[[t0572]]`, **nothing filed**. **The delta review is asked to adjudicate
+that adjudication** — a real nondeterminism waved through on a pre-existing item would look exactly like this.
+
+### 🔄 C INTEGRATION SWEEP RUNNING — as an ATTRIBUTION BASELINE, not the close battery
+Started on the integrated tree with **A–H in and J out**, detached, rc captured off the **bare** command into
+`/tmp/orch_csweep.rc` (never through a pipe). ⭐ **H landed a COMPILER change whose blast radius was measured only in
+H's own worktree** — this is the first full-corpus check of it on the integration branch. **A red now belongs to A–H,
+not to J**, which is the technique that prevented a wrong attribution at the mid-round checkpoint.
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
