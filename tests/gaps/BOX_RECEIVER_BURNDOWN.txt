@@ -72,6 +72,15 @@ CLEAN tests/fixtures/self_host_gaps/box_d36_plain_param_method.gg
 CLEAN tests/fixtures/self_host_gaps/box_d36_amp_param_method.gg
 CLEAN tests/fixtures/self_host_gaps/box_d36_closure_capture_method.gg
 CLEAN tests/fixtures/self_host_gaps/box_d36_field_of_temp_method.gg
+# The payloads that make the same defect FATAL rather than merely wrong — two
+# rc-139 SEGVs and a `true`-for-`false`, all pre-fix. Their tests are C-lane
+# only by declaration (`skip_under_llvm()`), because the LLVM lane cannot BUILD
+# `Box[String].get()` in any state. The guards, however, run on them on every
+# lane: a burn-down row is not gated by which lane the stdout assertion runs on.
+CLEAN tests/fixtures/self_host_gaps/box_receiver_string_field_get.gg
+CLEAN tests/fixtures/self_host_gaps/box_receiver_string_param_get.gg
+CLEAN tests/fixtures/self_host_gaps/box_receiver_string_capture_get.gg
+CLEAN tests/fixtures/self_host_gaps/box_receiver_bool_param_get.gg
 
 # ── CLEAN: pre-existing controls, so the gate is not only about new files ────
 # The owned-local receiver — the cell that was ALWAYS correct, and the one whose

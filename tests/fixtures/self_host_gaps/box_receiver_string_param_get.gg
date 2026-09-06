@@ -1,0 +1,42 @@
+# `todo/t1373` / `todo/t1319`, STRING PAYLOAD — RECEIVER PLACE: PLAIN PARAM.
+#
+# ⭐⭐ THIS IS THE LOUDEST CELL THE RECEIVER-PLACE FIX MOVED, AND IT WAS THE
+# LAST ONE PINNED. Pre-fix it is **rc 139 SEGV**, not wrong output — a whole
+# severity above the garbage cells on the same axis. An enumeration built by
+# comparing STDOUT cannot see it, because a program that dies before printing
+# has no stdout to compare; the same blind spot that made `todo/t1526`'s heap
+# corruption the last member of ITS class to be found.
+#
+# ⚠ AND IT NEARLY SHIPPED UNPINNED. The first pass at this fixture set recorded
+# the cell as unpinnable *"because the harness has no C-lane-only runner"* —
+# which was false: `skip_under_llvm()` has been in `tests/integration.rs` with
+# seven call sites and an established print-the-skip convention. A claim that a
+# cell CANNOT be covered is exactly the claim that deserves a grep.
+#
+# RED-VERIFIED AS WRITTEN against the pre-fix compiler on C: **rc 139**.
+# POST-fix: `hi` at rc 0.
+#
+# ⚠ ONE RECEIVER PLACE PER FILE — `ensure_extern` synthesizes ONE declaration
+# per MANGLED SYMBOL from whichever call site is lowered FIRST, so a file with
+# several places claims several cells in its NAME and pins one.
+#
+# ⛔ C-LANE-ONLY, BY DECLARATION AND NOT BY ACCIDENT. Its test opens with
+# `skip_under_llvm()` and PRINTS the skip. `Box[String].get()` is an `llc` hard
+# error and `Box[bool].get()` through a plain parameter is rc 139 on LLVM — at
+# pristine base AND under the fix — so the LLVM lane has nothing to assert here
+# either way (`todo/t0685`, `todo/t1510`). Skipping a lane that cannot BUILD the
+# program is not the same as excusing a lane that gets it wrong: the C-lane
+# defect this pins is CLOSED, and without this file nothing in the tree holds it.
+#
+# ⚠ LIVES IN `tests/fixtures/self_host_gaps/`, NOT AT TOP LEVEL. Every top-level
+# `tests/fixtures/*.gg` is auto-scanned into `runtime_parity_corpus`; the
+# self-host lane has no `is_by_value_receiver` chokepoint to mirror this fix into
+# (`todo/t1537`), and Core #9 ⊕ forbids raising `RUNTIME_DIFF_NONMATCH_CEILING`
+# for a round's own inflow.
+
+String peek(Box[String] b):
+    return b.get()
+
+void main():
+    Box[String] bb = Box("hi")
+    print(peek(bb))

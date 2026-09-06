@@ -26019,9 +26019,14 @@ fn box_receiver_burndown_shrink_only() {
     /// Sum of the TRIP rows' VALUE fires. `todo/t1513` (1) + `todo/t1526`'s
     /// `&self`-through-field (2) + its `index_elem_place_info` sibling (1).
     const VAL_TOTAL: usize = 4;
-    /// The eight receiver-place cells this round closed, plus two pre-existing
+    /// The twelve receiver-place cells this round closed, plus two pre-existing
     /// controls. Never let this shrink below the cells the fix touched.
-    const CLEAN_FLOOR: usize = 10;
+    ///
+    /// ⚠ FOUR OF THE TWELVE ARE C-LANE-ONLY AT THE STDOUT ASSERTION
+    /// (`skip_under_llvm()`) BUT NOT HERE: the guards run on every lane, so
+    /// their burn-down rows are unconditional. A row is not gated by which
+    /// lane its sibling `run_gg` runs on.
+    const CLEAN_FLOOR: usize = 14;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let path = root.join("tests/gaps/BOX_RECEIVER_BURNDOWN.txt");

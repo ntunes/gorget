@@ -206,12 +206,15 @@ fn build_enum_recv_ptr(
 /// does to the storage, never by what the type family is capable of
 /// (`AGENTS.md` § "Reason about storage and liveness").
 ///
-/// ⊕ TRAIT BOXES ARE NOT EXCLUDED, AND THE EXCLUSION THAT USED TO STAND HERE
-/// WAS MEASURED INERT: instrumented across all 141 Box-mentioning fixtures it
-/// was live in 13 programs / 322 hits, and removing it changed neither stdout
-/// nor the ASan verdict in any of them. Excluding them would have cost a
-/// `format!("{inner}_TraitObj")` probe on this hot path — the seventh instance
-/// of the name construction `todo/t0027` exists to retire.
+/// ⊕ TRAIT BOXES ARE NOT EXCLUDED, AND THE EXCLUSION WAS CONSIDERED AND
+/// REJECTED ON A MEASUREMENT — it never stood in this file, only in the
+/// prototype (regenerate: `git log -S'TraitObj' -- src/ir/lowering/exprs/methods.rs`).
+/// Instrumented across every Box-mentioning fixture it was LIVE — 13 programs,
+/// 168 hits, 154 of them in three serialization fixtures — and removing it
+/// changed neither stdout nor the ASan verdict in any of them, while the
+/// emitted C genuinely differed. Keeping it would have cost a
+/// `format!("{inner}_TraitObj")` probe on this hot path: another instance of
+/// the name construction `todo/t0027` exists to retire.
 ///
 /// A no-op unless the receiver is a bare local holding a pointer to a
 /// by-value handle, so non-handle borrows (`&Vector`, `&`-params of user

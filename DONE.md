@@ -14,20 +14,32 @@
   declaration's own write site; and two guards moved off the C backend to the LIR validator.
 
   **⭐ THE MEASUREMENT WORTH KEEPING: THE COMMITTED CORPUS CONTAINED NO FIXTURE THAT READ A BOX THROUGH
-  ANYTHING BUT AN OWNED LOCAL.** 2652 fixtures swept, 22 emit a Box wrapper at all, and the guard fired on
-  ZERO of them at base while firing on every probe. The class did not survive because the instruments were
-  blind — it survived because the fixture set sampled ONE value of the receiver axis. And the "owned local
-  is correct" control that every enumeration rested on is itself order-dependent: one declaration is
-  synthesized per mangled symbol from whichever call site is LOWERED first, so putting a broken place in
-  front of the control makes the control print garbage too. That is why the eight new fixtures are one
-  receiver place per file: five places in one file emit exactly ONE `Box__int64_t__get` and pin ONE of them.
+  ANYTHING BUT AN OWNED LOCAL.** Measured on the BASE tree (`HEAD~1`, before this round's own inflow):
+  **2642 fixtures, 11 emitting a Box wrapper at all, 2 fires — and both fires are `known_gaps` reproducers
+  for `t1083` that do not even link.** Across the LIVE top-level corpus: **2 subject-bearing, ZERO fires**,
+  while the same binary fires on every probe. (Tip is 2656 / 26 / 3; quoting the tip figures for a claim
+  about what the corpus contained BEFORE would count this round's own 12 new Box-bearing fixtures as
+  evidence that it lacked them.) The class did not survive because the instruments were blind — it survived
+  because the fixture set sampled ONE value of the receiver axis. And the "owned local is correct" control
+  that every enumeration rested on is itself order-dependent: one declaration is synthesized per mangled
+  symbol from whichever call site is LOWERED first, so putting a broken place in front of the control makes
+  the control print garbage too. That is why the twelve new fixtures are one receiver place per file: five
+  places in one file emit exactly ONE `Box__int64_t__get` and pin ONE of them.
 
   **Pinned set, derived mechanically** (stdout diff, pre-fix vs shipping binary, both lanes): 13 cells
-  changed on C, 4 on LLVM. Eight ship as fixtures in `tests/fixtures/self_host_gaps/` (the sanctioned hatch
-  — the self-host has no chokepoint to mirror the fix into, `t1537`, and the parity ceiling is NOT raised).
-  Four are named, unpinnable and filed as `t1540`: `Box[String]`/`Box[bool]` payloads cannot run on the
-  LLVM lane in EITHER state. One — `t1513` — changes garbage-to-garbage and is pinned by the value guard,
-  not by stdout. `t1373`'s `#[ignore]`d repro GRADUATES to a live assertion.
+  changed on C, 4 on LLVM. **Twelve ship as fixtures** in `tests/fixtures/self_host_gaps/` (the sanctioned
+  hatch — the self-host has no chokepoint to mirror the fix into, `t1537`, and the parity ceiling is NOT
+  raised). The thirteenth — `t1513` — changes garbage-to-garbage and is pinned by the value guard, not by
+  stdout. `t1373`'s `#[ignore]`d repro GRADUATES to a live assertion.
+
+  ⛔ **FOUR OF THE TWELVE WERE NEARLY FILED AS "UNPINNABLE" ON A FALSE REASON, and they are the loudest
+  cells the fix moved** — two rc-139 SEGVs, a garbage-bytes read and a `true`-for-`false`. The filing said
+  the harness had no C-lane-only runner; `skip_under_llvm()` has been at `tests/integration.rs:82` with
+  seven call sites and a print-the-skip convention. The round would have closed an rc-139 SEGV class with
+  nothing in the tree holding it, and the filing would have made that look deliberate. **A claim that a
+  cell CANNOT be covered is the claim that most deserves a grep** — a named omission is only honest if the
+  naming is true. `t1540` is re-scoped to what actually remains: the LLVM lane cannot BUILD
+  `Box[String].get()` in any state (`t0685`, `t1510`).
 
   **Guards, wired as four artifacts** (`scripts/box_receiver_burndown.sh` + `tests/gaps/BOX_RECEIVER_BURNDOWN.txt`
   + a live CI step + the lint asserting the step is live + an `EXPECT_KEYS` row and its `AGENTS.md` battery
@@ -39,11 +51,29 @@
   `print(41)` now reds the gate with "no longer EXERCISES the mechanism".
 
   **Gates (rc off the BARE command):** `cargo build` 0 · `--lib` 1187/0 · `--test lints` 246/0 (+2 new;
-  `no_growth_in_name_prefix_routing` at exactly 204) · `--test integration box` 69/0 · `closure` 156/0 ·
+  `no_growth_in_name_prefix_routing` at exactly 204) · `--test integration box` 73/0 on C **and** 73/0
+  under `GG_BACKEND=llvm` (the four C-lane-only cells print their skip there) · `closure` 156/0 ·
   `trait` 92/0 · `serializ` 3/0 · `drop_raii` 1/0 · `box_receiver_burndown.sh --check` 0
-  (SAMPLED=2652 TRIPS=3 CLEAN=10, ~95 s) · ASan delta 0 over 12 programs.
+  (SAMPLED=2656 TRIPS=3 CLEAN=14, ~95 s) · `staging_move_burndown.sh --check` 0 · ASan delta 0 over 12
+  programs.
   **NOT run, and named:** the self-host lane (`t1537`), the full C and LLVM sweeps (the parent's), `float32`,
   `t1514`'s struct layout.
+
+  **Filed:** `t1538` (two guard arms outside the LIR iteration domain) · `t1539` (why the declaration guard
+  cannot reach `fatal`) · `t1540`, re-scoped to the LLVM lane's inability to build these cells at all ·
+  `t1541` (⚠ **THE `subject=` CENSUS IS AN AGGREGATE, so it is accidentally correct for the VALUE guard:
+  10 of 14 CLEAN rows emit no `get_ptr` extern, and that guard's only positive controls can be removed one
+  at a time with every gate staying green — the THIRD vacuous-gate variant in this class, and it is inside
+  the fix for the first two**) · `t1542` (`no_growth_in_name_prefix_routing` counts PROSE about the
+  anti-pattern as an instance of it: one comment line takes it 204 → 205, taxing exactly the migration
+  write-ups `t0690`/`t0027` ask for). Durable repros landed for `t1513` and both of `t1526`'s cells.
+
+  ⚠ **THREE STALE-CITE SITES, TWO FOUND BY THE OUTPUT-REVIEW AND THE THIRD BY RUNNING ITS GREP IN
+  INSTRUCTION FORM.** A doc comment in `methods.rs` asserted an exclusion "used to stand here" that never
+  did (`git log -S'TraitObj'` returns only this round's commit — the exact Core #14 class the headline fix
+  deleted); a sibling doc comment in `integration.rs` still called `n.0.get()` broken; and the deleted
+  test's own doc comment was left ORPHANED above its replacement, still in the present tense. **Fixing the
+  region you edited is not the same as grepping the correction.**
 
 - [2026-09-06] **🏁 ROUND L (R50) CLOSED — THE CRITICAL MEMORY-SAFETY SET + R49's DEFERRED HALVES. Ten tracks integrated, full battery green.**
   **Integrated:** A1 (`t1077` nested `Box[Box[T]]` read one deref too many) · C2 (`t0045`+`t0403`) · F1r

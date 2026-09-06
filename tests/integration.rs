@@ -2656,9 +2656,14 @@ fn enum_variant_payload_registered_unit() {
 /// reached parity with its struct twin. An affirmative claim with no reddening
 /// row is precisely the Core #12 gap the fixture-coverage gate exists to catch.
 ///
-/// ⚠ The `*`-deref read shape is load-bearing; `n.0.get()` is a DIFFERENT cell
-/// that still prints garbage on C (`todo/t1373`, pinned by its own struct
-/// control). See the fixture header for the four-cell table.
+/// ⚠ The `*`-deref read shape is load-bearing, but NOT because the other one is
+/// broken any more: `todo/t1373` is CLOSED (R51 Track A enrolled `Box` in the
+/// by-value receiver chokepoint), so `n.0.get()` now reads `9` on both lanes
+/// too. This fixture keeps `*(n.0)` because that is the shape whose PRE row is
+/// `rc 1` — the one that pins THIS fix rather than the receiver-place one. The
+/// live receiver-place cell is
+/// `self_host_gaps/box_receiver_struct_field_get.gg`. See the fixture header
+/// for the four-cell table.
 #[test]
 fn newtype_box_payload_reads_back() {
     run_gg("known_gaps/newtype_box_payload_reads_back.gg", "9");
@@ -53028,15 +53033,6 @@ done",
     );
 }
 
-/// KNOWN GAP (`todo/t1373`) — `Box[T].get()` through a STRUCT-FIELD receiver is
-/// handed the field's ADDRESS where the by-value `__get` expects the value, so
-/// C prints garbage and LLVM prints `9`. rc 0 both ways, `gg check` clean,
-/// ASan silent.
-///
-/// ⚠ THE RECEIVER PLACE IS THE DISCRIMINATING AXIS, not the payload type —
-/// which INVERTS `todo/t0685`'s measurement that this cell is green on both
-/// backends (true for a LOCAL receiver only).
-///
 // ══════════════════════════════════════════════════════════════
 // R51 Track A — THE RECEIVER-PLACE CLASS (`todo/t1319` + `todo/t1373`,
 // closed as ONE defect).
@@ -53059,6 +53055,10 @@ done",
 // blind; it survived because the fixture set sampled ONE value of the receiver
 // axis. That is why these are one cell per file: five places in one file emit
 // exactly ONE mangled symbol and pin ONE of them.
+//
+// ⚠ AND IT INVERTS `todo/t0685`'s MEASUREMENT that `Box[int].get()` is green on
+// both backends — true for a LOCAL receiver only. `t0685` enumerates the
+// PAYLOAD type; the axis that actually discriminated was the RECEIVER PLACE.
 //
 // The declaration guard (`validate_box_wrapper_abi`) and the value guard
 // (`validate_box_get_ptr_result_consumed`) are burned down by
@@ -53094,6 +53094,91 @@ fn box_receiver_amp_param_get() {
 #[test]
 fn box_receiver_closure_capture_get() {
     run_gg("self_host_gaps/box_receiver_closure_capture_get.gg", "41");
+}
+
+// ── The same axis, with the payloads that make the defect FATAL rather than
+// merely wrong. C-lane only BY DECLARATION: `Box[String].get()` is an `llc`
+// hard error and `Box[bool].get()` through a plain parameter is rc 139 on
+// LLVM — at pristine base AND under the fix — so the LLVM lane cannot even
+// build the assertion (`todo/t0685`, `todo/t1510`).
+//
+// ⚠ SKIPPING A LANE THAT CANNOT BUILD THE PROGRAM IS NOT EXCUSING A LANE THAT
+// GETS IT WRONG. These four were nearly shipped as "unpinnable" on the claim
+// that the harness had no C-lane-only runner — which was false:
+// `skip_under_llvm()` has been at `tests/integration.rs:82` with seven call
+// sites. A claim that a cell CANNOT be covered is the claim that deserves a
+// grep. Without them the round would have closed an rc-139 SEGV class with
+// nothing in the tree holding it.
+
+/// RECEIVER PLACE: struct field, STRING payload. Pre-fix: raw heap bytes.
+#[test]
+fn box_receiver_string_field_get() {
+    if skip_under_llvm() {
+        eprintln!(
+            "NOTE [box_receiver_string_field_get]: skipped under GG_BACKEND=llvm — \
+             `Box[String].get()` is an `llc` hard error on that lane in EVERY state \
+             (todo/t0685), so there is no assertion to make there. This cell pins the \
+             C-lane defect R51 Track A closed."
+        );
+        return;
+    }
+    run_gg("self_host_gaps/box_receiver_string_field_get.gg", "hi");
+}
+
+/// RECEIVER PLACE: plain parameter, STRING payload.
+///
+/// ⭐ THE LOUDEST CELL THE FIX MOVED: **rc 139 SEGV** pre-fix, not wrong
+/// output. An enumeration built by comparing stdout cannot see it — a program
+/// that dies before printing has no stdout to compare — which is the same blind
+/// spot that made `todo/t1526`'s heap corruption the last member of its class
+/// to be found.
+#[test]
+fn box_receiver_string_param_get() {
+    if skip_under_llvm() {
+        eprintln!(
+            "NOTE [box_receiver_string_param_get]: skipped under GG_BACKEND=llvm — \
+             `Box[String].get()` is an `llc` hard error on that lane in EVERY state \
+             (todo/t0685); this cell pins the C-lane rc-139 SEGV R51 Track A closed."
+        );
+        return;
+    }
+    run_gg("self_host_gaps/box_receiver_string_param_get.gg", "hi");
+}
+
+/// RECEIVER PLACE: closure capture, STRING payload — `todo/t1319`'s filed
+/// program with the payload that makes it fatal. **rc 139 SEGV** pre-fix.
+#[test]
+fn box_receiver_string_capture_get() {
+    if skip_under_llvm() {
+        eprintln!(
+            "NOTE [box_receiver_string_capture_get]: skipped under GG_BACKEND=llvm — \
+             `Box[String].get()` is an `llc` hard error on that lane in EVERY state \
+             (todo/t0685); this cell pins the C-lane rc-139 SEGV R51 Track A closed."
+        );
+        return;
+    }
+    run_gg("self_host_gaps/box_receiver_string_capture_get.gg", "hi");
+}
+
+/// RECEIVER PLACE: plain parameter, BOOL payload — `false`, deliberately.
+///
+/// ⚠ `Box[bool](true)` IS UNPINNABLE AND `Box[bool](false)` IS NOT (SIX-Q #6):
+/// the garbage pointer bits read as a `bool` are nonzero, so the `true` variant
+/// prints the right answer for entirely the wrong reason. The row was written
+/// off once on the strength of that variant. A row is not unpinnable because
+/// one of its VALUES is blind.
+#[test]
+fn box_receiver_bool_param_get() {
+    if skip_under_llvm() {
+        eprintln!(
+            "NOTE [box_receiver_bool_param_get]: skipped under GG_BACKEND=llvm — \
+             `Box[bool].get()` through a plain parameter is rc 139 on that lane at \
+             pristine base AND under the fix (todo/t1510); this cell pins the C-lane \
+             `true` -> `false` correction."
+        );
+        return;
+    }
+    run_gg("self_host_gaps/box_receiver_bool_param_get.gg", "false");
 }
 
 /// READ SHAPE: D36 §9.4 auto-deref through a plain parameter.

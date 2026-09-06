@@ -1,0 +1,41 @@
+# `todo/t1373` / `todo/t1319`, BOOL PAYLOAD — RECEIVER PLACE: PLAIN PARAM.
+#
+# ⚠ THE CELL WHOSE *VALUE* IS ACCIDENTALLY CORRECT UNLESS YOU PICK THE RIGHT
+# ONE (SIX-Q #6). `Box[bool](true)` is UNPINNABLE: the garbage pointer bits read
+# as a `bool` are nonzero, and so is `true`, so it prints the right answer for
+# entirely the wrong reason and can never RED-verify. `Box[bool](false)` prints
+# **`true`** pre-fix. The row was written off once on the strength of the
+# `true` variant — a row is not unpinnable because one of its VALUES is blind.
+#
+# ⛔ THE STRUCT-FIELD SIBLING IS DELIBERATELY NOT HERE: `Box[bool]` through a
+# field prints `0` — an integer, not a bool — post-fix as well as pre-fix. That
+# is `todo/t1510`'s read-shape defect, and pinning it would wire in known-wrong
+# expected output.
+#
+# RED-VERIFIED AS WRITTEN against the pre-fix compiler on C: prints `true`.
+# POST-fix: `false`.
+#
+# ⚠ ONE RECEIVER PLACE PER FILE — `ensure_extern` synthesizes ONE declaration
+# per MANGLED SYMBOL from whichever call site is lowered FIRST, so a file with
+# several places claims several cells in its NAME and pins one.
+#
+# ⛔ C-LANE-ONLY, BY DECLARATION AND NOT BY ACCIDENT. Its test opens with
+# `skip_under_llvm()` and PRINTS the skip. `Box[String].get()` is an `llc` hard
+# error and `Box[bool].get()` through a plain parameter is rc 139 on LLVM — at
+# pristine base AND under the fix — so the LLVM lane has nothing to assert here
+# either way (`todo/t0685`, `todo/t1510`). Skipping a lane that cannot BUILD the
+# program is not the same as excusing a lane that gets it wrong: the C-lane
+# defect this pins is CLOSED, and without this file nothing in the tree holds it.
+#
+# ⚠ LIVES IN `tests/fixtures/self_host_gaps/`, NOT AT TOP LEVEL. Every top-level
+# `tests/fixtures/*.gg` is auto-scanned into `runtime_parity_corpus`; the
+# self-host lane has no `is_by_value_receiver` chokepoint to mirror this fix into
+# (`todo/t1537`), and Core #9 ⊕ forbids raising `RUNTIME_DIFF_NONMATCH_CEILING`
+# for a round's own inflow.
+
+bool peek(Box[bool] b):
+    return b.get()
+
+void main():
+    Box[bool] bb = Box(false)
+    print(peek(bb))
