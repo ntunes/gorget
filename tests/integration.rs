@@ -67841,6 +67841,45 @@ fn coercion_identity_builtin_rwlock_import_still_coerces() {
 /// CONTROL — the axes disagree. `Weak` and `Mutex` share a
 /// `DerefWrapperKind`, and only `Mutex` coerces. Deriving axis 3 from axis 1
 /// turns this row green.
+/// ACCEPT — `unify`'s SECOND coercion arm, the mirror direction (the wrapper is
+/// SUPPLIED where something else is expected). Every other accept row in this
+/// directory takes arm A.
+///
+/// ⛔ MEASURED, and it is why this row exists: setting `is_shared_wrapper =
+/// false` at arm B ALONE leaves all 17 other rows and the whole `--lib` suite
+/// GREEN, while the same edit at arm A reds four rows. Across all 5424 `.gg`
+/// under `tests/fixtures/`, arm B reached the accepting branch ZERO times — so
+/// a change that merely NARROWS arm B (rather than reverting it, which the
+/// `*_struct_ret` rows do catch) was invisible. This program is the first to
+/// reach it.
+#[test]
+fn coercion_identity_builtin_mutex_ret_still_coerces() {
+    check_gg_ok("coercion_identity/builtin_mutex_ret_coerces.gg");
+}
+
+/// THE ELEVENTH CHANGED CELL — a MESSAGE cell, not a verdict cell, and the only
+/// one of the eleven that an exit-code sweep is structurally blind to.
+///
+/// `Mutex(5)` with a generic `struct Mutex[T]` in scope cannot infer `T` — a
+/// pre-existing, name-independent gap, so rc 1 on both sides. What moved is the
+/// BLAME: pre-fix the coercion arm answered `true` on the USER's `Mutex` and
+/// unwrapped the annotation before reporting, giving ``expected `int` `` — a
+/// type the author never wrote. Post-fix it names the annotation and matches
+/// the name-neutral `struct Wrap[T]` control exactly.
+///
+/// The forbidden string is the pre-fix spelling. ⚠ An earlier probe dismissed
+/// this cell as "not a cell at all"; that probe declared no `struct Mutex[T]`
+/// and so measured the BUILTIN path (rc 0 on both sides) against a control that
+/// DID declare its struct.
+#[test]
+fn coercion_identity_user_mutex_ctor_blames_the_annotation() {
+    check_gg_fails_exclusive(
+        "coercion_identity/user_mutex_ctor_message.gg",
+        "expected `Mutex[int]`, found `Mutex`",
+        "expected `int`, found `Mutex`",
+    );
+}
+
 #[test]
 fn coercion_identity_weak_is_not_coercion_transparent() {
     check_gg_fails(

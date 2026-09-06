@@ -1,0 +1,33 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# ⛔ THIS ROW IS THE ONLY THING IN THE TREE THAT REACHES `unify`'s SECOND ARM'S
+# ACCEPTING BRANCH. The two coercion arms are identically spelled and separately
+# guarded: arm A fires when the WRAPPER is expected and something else supplied,
+# arm B when the wrapper is SUPPLIED where something else is expected. Every
+# other accept row in this directory takes arm A.
+#
+# MEASURED, and this is why the row exists: before this file existed, setting
+# `is_shared_wrapper = false` at arm B ALONE left EVERY other row in this
+# directory and the whole `--lib` suite GREEN, while the same edit at arm A
+# reddened four. Across the whole fixture corpus, arm B reached the accepting
+# branch ZERO times — so a change that merely NARROWS arm B, rather than
+# reverting it, was invisible. This program is the first in the tree to reach it
+# (`armB name=Mutex val=true`), and the two arms now red disjoint row sets.
+#
+# It is the same lesson as the four seed-seam accept rows, one level down: a
+# reject row cannot tell "the guard answers correctly" from "the guard never
+# answers at all", and neither can a revert that removes the whole arm.
+#
+# ⚠ `check`-ONLY, for the same reason as its sibling accept rows: the builtin
+# coercion is accepted and then MISCOMPILES at runtime (`todo/t1527`). Promote
+# to `run_gg` the round that lands.
+#
+# Asserted by `coercion_identity_builtin_mutex_ret_still_coerces`.
+
+int take_int(int x):
+    return x + 1
+
+void main():
+    Mutex[int] m = Mutex[int](7)
+    print(take_int(m))
