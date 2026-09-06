@@ -191,6 +191,42 @@ be right, or every future count is wrong *with authority*.
 `proc_guard.run`, **not allowlisted**. ⭐ **Visible ONLY because the rc was read off the BARE command — `--test lints`
 returned 101 while the piped tail showed a passing test. THIRD firing of that trap this round.**
 
+### ⭐⭐ H PASS 2 REFUTED THE NARROWING PROPOSAL **BY MEASUREMENT** — and retracted an orchestrator instruction
+**"Would narrowing H to the extern positions still close `[[t0952]]`?" — NO.** Sorted C multisets on the leak fixture:
+**HEAD 11 clones · S1-alone 11 (0 diff) · S2-alone 11 (0 diff) · S3 7 (332 diff).** The leak path runs through the
+**generic** externs whose monomorphised `fn_sigs` entry is written at the **immutable** `substitute_and_map` sites, not
+the already-correct `*_mut` ones; at HEAD that entry is `UNIT`, so the consult cannot fire. ⇒ **an "extern-only" H must
+route those very sites — it is NOT narrower — and would leave the CRITICAL live.** The routing is **not dead code under
+a D41 reject: the sanctioned extern half depends on it.** ⇒ **my "H and I are ORTHOGONAL" conclusion HOLDS**, refined:
+orthogonal in MECHANISM, coupled only in FIXTURE CHOICE.
+⛔ **AND MY `ParamABI` REFILE INSTRUCTION IS RETRACTED.** I told H to close `t1505` on the miscompile and refile the
+`ParamABI` axis *"citing `[[t1378]]` for why it is latent"*. **Both halves wrong:** `t1378` is scoped to
+`module.fn_param_abis` in `src/ir/validate.rs`, a **different map copy** — `ctx.fn_param_abis` is read **live during
+lowering** (`grep -rn 'fn_param_abis' src/ | grep -v insert` → `exprs/calls.rs`, `methods.rs` ×2, `spawn.rs`). **And the
+refile's SUBJECT is probably not a defect:** a `Ptr(T)` param passed **`ByValue` passes the pointer — that IS the
+convention**; flipping to `ByPtr` adds the indirection `t1505` itself measured as `3`→`30` and **retracted** (shape X).
+⇒ **file NOTHING about an "unshipped `ParamABI` half"** — at most a guard that a `Ptr`/`MutPtr` param KEEPS `ByValue`.
+⚠ **A RETRACTION IS A CLAIM AND CARRIES THE SAME BURDEN** — pass 3 is verifying the retraction itself, because if it is
+wrong a CRITICAL gets closed over a real defect.
+
+### ⛔ THE HEADLINE CRITICAL WILL SHIP WITH **NO RUNTIME REGRESSION FIXTURE** — recorded, not hidden
+The un-ignored `known_gaps` repro asserts `6` + ASan-clean, and `[[t0952]]` records it printing `6` **at HEAD** — **it
+pins the LEAK, not the miscompile.** Every shape exhibiting the miscompile (free fn `0`, equip `100`, `MutRef` `0`,
+trait default `100`) is a **Gorget-bodied `Ref[T]` param** — the shape D41 would reject. ⇒ coverage is the **`--lib`
+unit test + the lint**. ⚠ **CONDITIONED ON THE OWNER ASK: if the owner rules AGAINST the reject, those accept rows
+become the RIGHT pin and someone must add them.**
+⊕ *"Unpinnable by construction"* is **false**; **"unpinnable by any D41-LEGAL shape"** is true — a **trait default body**
+IS a live discriminator (HEAD `100` → S1 `107`), surviving through a hole in the reject's subject (`Item::Trait`
+signatures unwalked).
+
+### ⚖ TWO REVIEWERS DISAGREE ON THE `ggdef` LANE — UNRECONCILED, PASS 3 ARBITRATING
+H's pass 2: `grep -rn 'MutRef|"Ref"' spec/ggdef/src/` → **0** ⇒ *cannot adjudicate*. I's pass 1:
+`cargo test -p ggdef --test spec_conformance_ggdef` → **MATCH `borrow_field_basic.gg` + `borrow_field_nongeneric.gg`,
+total=245 MATCH=227 MISMATCH=0 SKIP=18** ⇒ *already adjudicates*. ⚠ **BOTH MAY BE TRUE** — ggdef can MATCH a fixture
+whose source spells `Ref[` without carrying a typed `Ref`. **AGENTS.md sends a two-agent disagreement to fresh
+arbitration; pass 3 has it.** ⛔ **Whatever is concluded must land in a COMMIT — the fact currently lives only in Track
+I's brief and DIES with it at round close.**
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
