@@ -311,10 +311,23 @@ mkdir -p "$OUT/logs" "$OUT/tmp" "$OUT/w"
 #                                                                → marker YES, report NO
 # LeakSanitizer reads `detect_leaks` from LSAN_OPTIONS TOO, and lets it win — so
 # an assertion over ASANOPT alone is green over half its own class. Under either
-# spelling EVERY fixture reads MEASURED, every allowlisted row reads as no longer
-# leaking, and this gate prints mass DELETE advice for live defects. Both
-# variables are caller-overridable above, and nothing assigns them after this
-# point, so this is where the window closes. Core #6: a guard, not a comment.
+# spelling every fixture reads MEASURED and every allowlisted row reads as no
+# longer leaking. Both variables are caller-overridable above, and nothing
+# assigns them after this point, so this is where the window closes.
+#
+# ⚠ WHAT THIS GUARD IS AND IS NOT, MEASURED WITH ALL FOUR CASES DELETED — because
+# an overstated failure mode in a permanent record is worse than a missing one:
+#   RUN_SELFTEST=1 (the default): the PRE-EXISTING positive leak controls already
+#     fail closed. Both spellings give rc 2 and SEVEN run_selftest failures
+#     ("selftest_leak column 2 = 'CLEAN', expected 'LEAK'"), before any corpus
+#     verdict and with ZERO delete advice printed. This guard does not save that
+#     run from a wrong answer; it turns ~25 minutes ending in "the instrument is
+#     broken" into two seconds naming the exact option.
+#   RUN_SELFTEST=0: nothing else covers it. Measured — a still-leaking
+#     allowlisted fixture reads CLEAN and MEASURED, and the sweep prints
+#     "✅ no longer leaking … DELETE them" at rc 0. THAT is the failure this
+#     guard is the only thing standing in front of.
+# Core #6: a guard, not a comment.
 #
 # ⚠ THE LSANOPT HALF IS DELIBERATELY NEGATIVE. An EMPTY LSANOPT is a supported
 # mode — it selects the default root set, which is how the paired-instrument
@@ -324,7 +337,9 @@ case "$ASANOPT" in
   *detect_leaks=0*)
     echo "❌ ASANOPT ($ASANOPT) disables the leak check with detect_leaks=0."
     echo "   Every fixture would read MEASURED and every allowlisted row would read"
-    echo "   as fixed, and this gate would print delete advice for live leaks."
+    echo "   as fixed. With the self-test on you would get seven control failures"
+    echo "   and no verdict; with RUN_SELFTEST=0 you would get delete advice for"
+    echo "   live leaks at rc 0, which nothing else catches."
     exit 2;;
 esac
 case "$ASANOPT" in
@@ -345,7 +360,9 @@ case "$LSANOPT" in
   *detect_leaks=0*)
     echo "❌ LSANOPT ($LSANOPT) disables the leak check with detect_leaks=0, and"
     echo "   LSAN_OPTIONS WINS over ASAN_OPTIONS for that setting. The at-exit"
-    echo "   marker would still print, so every row would falsely read MEASURED."
+    echo "   marker would still print, so every row would falsely read MEASURED —"
+    echo "   identical failure mode to the ASANOPT spelling above, through the"
+    echo "   variable that most directly controls LeakSanitizer."
     exit 2;;
 esac
 ASAN_EXITCODE=$(printf '%s' "$ASANOPT" | sed -n 's/.*exitcode=\([0-9]*\).*/\1/p')
@@ -870,6 +887,13 @@ awk -F'\t' '$2 ~ /(^|,)EXIT:/          {print $1}' "$OUT/verdicts.tsv" | sort -u
 awk -F'\t' '$3 ~ /FLAKY/             {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_flaky"
 awk -F'\t' '$3 ~ /CLASS_UNSTABLE/    {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_class_unstable"
 awk -F'\t' '$3 ~ /COUNT_DRIFT/       {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_count_drift"
+# COLUMN 5, AS A SET. `adjudicate_leaks` reads it per row; the corruption list is
+# adjudicated inline with `comm`, so it needs the same fact as a sorted file.
+# `got_present` is EVERY stem this run produced a line for, at all -- the
+# population, which is a different question from "did the check run" and from
+# `covered`.
+awk -F'\t' '$5 == "MEASURED"          {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_measured"
+cut -f1 "$OUT/verdicts.tsv"                                            | sort -u > "$OUT/got_present"
 # "covered" = produced a RUN verdict at all. Everything else left the gate's
 # population without the gate noticing, which is the coverage hole this floor
 # exists to catch.
@@ -877,7 +901,24 @@ awk -F'\t' '$2 !~ /^(SKIP_COPY|NO_BINARY|RUNNER_FAIL|BUILD_FAIL_SANITIZE_ONLY|BU
   "$OUT/verdicts.tsv" | sort -u > "$OUT/covered"
 
 new_corrupt=$(comm -23 "$OUT/got_corrupt" "$OUT/allow_corrupt")
-fixed_corrupt=$(comm -13 "$OUT/got_corrupt" "$OUT/allow_corrupt")
+# ⛔ THIS RETIREMENT IS `todo/t1360` SPELLED WITH `comm`, AND IT NEEDS THE SAME
+# THREE STATES. `comm -13 got_corrupt allow_corrupt` is `for (s in allow) if
+# (!(s in seen))` in another notation: `got_corrupt` is set ONLY from an `ASAN_`
+# verdict, so an allowlisted fixture that never copied, never built, produced no
+# binary, was killed at the timeout, or died before the sanitizer could report
+# is INDISTINGUISHABLE from one that ran and came back clean -- and gets a
+# "delete this row" instruction attached to an admitted use-after-free.
+# ⭐ THE OPERAND IS THE ONE COLUMN 5 ALREADY CARRIES, and it is conservative in
+# the right direction: a fixture that is genuinely still corrupting dies inside
+# ASan, so its marker is ABSENT and it is caught by `got_corrupt` first; only a
+# row with NO finding reaches this test, and only then does "was it looked at"
+# decide between retire-advice and a fatal.
+comm -13 "$OUT/got_corrupt" "$OUT/allow_corrupt" > "$OUT/corrupt_no_finding"
+comm -12 "$OUT/corrupt_no_finding" "$OUT/got_measured" > "$OUT/fixed_corrupt"
+comm -23 "$OUT/corrupt_no_finding" "$OUT/got_present" > "$OUT/absent_corrupt"
+comm -23 "$OUT/corrupt_no_finding" "$OUT/got_measured" > "$OUT/corrupt_not_measured"
+comm -12 "$OUT/corrupt_not_measured" "$OUT/got_present" > "$OUT/unmeasured_corrupt"
+fixed_corrupt=$(cat "$OUT/fixed_corrupt")
 adjudicate_leaks "$LEAK_LIST" "$OUT/verdicts.tsv" "$OUT"
 
 n_covered=$(wc -l < "$OUT/covered")
@@ -1050,7 +1091,31 @@ if [ "$COVERAGE_FLOOR" -gt 0 ] && [ -s "$OUT/absent" ]; then
   echo "    known live defect must not leave the measured set in silence."
   rc=1
 fi
-[ -n "$fixed_corrupt" ] && { echo; echo "✅ no longer corrupting — DELETE these rows from $CORRUPT_LIST:"; echo "$fixed_corrupt" | sed 's/^/    /'; }
+if [ -s "$OUT/unmeasured_corrupt" ]; then
+  echo; echo "❌ CORRUPTION-ALLOWLISTED ROW(S) WHOSE FIXTURE WAS NEVER MEASURED:"
+  sed 's/^/    /' "$OUT/unmeasured_corrupt"
+  echo "    These rows admit a MEMORY-CORRUPTION defect, and this run did not look."
+  echo "    The fixture did not build, produced no binary, was killed at the timeout,"
+  echo "    or died before the sanitizer reported. Silence from a process that never"
+  echo "    ran is not evidence a use-after-free is fixed, so no delete advice is"
+  echo "    printed for it. Memory safety is this language's entire claim; a row here"
+  echo "    is not retired on the absence of a report."
+  rc=1
+fi
+# Guarded exactly like its leak-list twin: over the whole corpus an allowlisted
+# fixture with no verdict line is a real finding, and on a FIXLIST demonstration
+# it is every row but the ones being re-measured.
+if [ "$COVERAGE_FLOOR" -gt 0 ] && [ -s "$OUT/absent_corrupt" ]; then
+  echo; echo "❌ CORRUPTION-ALLOWLISTED ROW(S) WITH NO VERDICT LINE AT ALL:"
+  sed 's/^/    /' "$OUT/absent_corrupt"
+  echo "    Same three causes as the leak-list block above — the .gg was deleted, it"
+  echo "    left the swept population, or a worker died before printing its row. For"
+  echo "    a DELETED fixture, delete the row from $CORRUPT_LIST"
+  echo "    AND lower CORRUPTION_CEILING in tests/lints.rs; for the other two, the"
+  echo "    admitted corruption is simply no longer being measured."
+  rc=1
+fi
+[ -n "$fixed_corrupt" ] && { echo; echo "✅ no longer corrupting — DELETE these rows from $CORRUPT_LIST:"; echo "$fixed_corrupt" | sed 's/^/    /'; echo "    ⚠ MEASURED, not proven: this run reported no ASan finding AND reached the"; echo "      at-exit path, so the fixture really did execute. A row is never retired"; echo "      here on a fixture that was not looked at — see the ❌ blocks above."; }
 # ⚠ THE TWO LEAK ADVISORIES BELOW SAY WHAT WAS MEASURED — "this class no longer
 # appears" — and NOT "the defect is fixed", because this instrument cannot tell
 # those apart. A class key is a stack FRAME NAME, so extracting a `static inline`

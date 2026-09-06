@@ -11887,8 +11887,50 @@ fn sanitize_sweep_selftest_is_wired() {
             "LSAN_OPTIONS WINS over ASAN_OPTIONS",
             "the LSANOPT half of that assertion. LeakSanitizer reads `detect_leaks` \
              from LSAN_OPTIONS and lets it win, so an ASAN_OPTIONS-only check is \
-             green over half its own class: the at-exit marker still prints, every \
-             fixture reads MEASURED, and the sweep prints mass delete advice",
+             green over half its own class: the at-exit marker still prints and \
+             every fixture reads MEASURED",
+        ),
+        // ⚠ The two `detect_leaks` cases were added WITHOUT needles and were
+        // measured completely silent on their own revert — deleting both left
+        // `--selftest` at rc 0 and this suite at rc 0. Readiness item 4 is not
+        // satisfied by covering the other half of the same edit.
+        (
+            "ASANOPT ($ASANOPT) disables the leak check",
+            "the assertion that ASAN_OPTIONS does not carry `detect_leaks=0`. With \
+             the self-test on, the pre-existing leak controls fail closed anyway; \
+             with RUN_SELFTEST=0 nothing else catches it and the sweep prints \
+             delete advice for a still-leaking row at rc 0",
+        ),
+        (
+            "does not enable detect_leaks=1",
+            "the assertion that ASAN_OPTIONS enables `detect_leaks=1` at all. This \
+             sweep IS the leak measurement; an option string without it measures \
+             nothing while every row still reads MEASURED",
+        ),
+        // The corruption list is adjudicated inline with `comm`, not through
+        // `adjudicate_leaks`, so `run_selftest` cannot reach ANY of it. Its
+        // three-state split is pinned here or nowhere.
+        (
+            r#"comm -12 "$OUT/corrupt_no_finding" "$OUT/got_measured""#,
+            "the intersection that stops the CORRUPTION list retiring a row on a \
+             fixture nobody ran. `comm -13 got_corrupt allow_corrupt` is \
+             `for (s in allow) if (!(s in seen))` in another notation — the same \
+             defect todo/t1360 named, one list over, on admitted use-after-frees",
+        ),
+        (
+            r#"comm -23 "$OUT/corrupt_no_finding" "$OUT/got_present""#,
+            "the population half of that split: a corruption-allowlisted fixture \
+             with no verdict line at all is not evidence the corruption is gone",
+        ),
+        (
+            r#"[ -s "$OUT/unmeasured_corrupt" ]"#,
+            "the gate block that reports it. Without the block the bucket is \
+             computed and never printed",
+        ),
+        (
+            r#"[ -s "$OUT/absent_corrupt" ]"#,
+            "the gate block for the population half, COVERAGE_FLOOR-guarded so a \
+             FIXLIST demonstration does not red on every row it did not sweep",
         ),
     ] {
         assert!(
