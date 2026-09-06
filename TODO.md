@@ -108,7 +108,7 @@ the TREE, never from the previous round's line.**
 | C sweep (run 2) | **0** | 2789 passed · 0 failed · 6054s — **the owed clean single-run green, delivered** |
 | LLVM sweep | **0** | 2789 passed · 0 failed · 5020s · clean single run |
 | 8 fast gates | **0** | lib · lints · c_runtime · spec_conformance · security · ggdef · census · staging |
-| **`GG_BACKEND=llvm cargo test --test security --release`** | ⏸ | 🚨 **NEVER RUN — see `t1452`; the lint EXEMPTS it on a false premise** |
+| **`GG_BACKEND=llvm cargo test --test security --release`** | **0** | ✅ **GREEN ON ITS FIRST-EVER RUN** — 223 ok · 31 ignored · 0 failed · **0 never-executed**, all 254 accounted for. Found only because `t1452` showed the lint exempted it. |
 | `sanitize_sweep.sh` · `robustness_map.py --lanes all` + `--lanes c,llvm` | ⏸ | after C run 2 |
 
 ✅ **THE OWED SECOND C RUN IS DONE AND GREEN** — 2789 passed / 0 failed / rc 0, matching the LLVM sweep's
@@ -116,6 +116,18 @@ the TREE, never from the previous round's line.**
 per-test re-verify never was.
 ⊕ **The A2-class is DISCHARGED for this round by construction:** the sweep IS the detector for
 stale-snapshot-after-fixture-edit, it ran over all 1376, and it found exactly one. No separate audit needed.
+
+⛔ **RUN LONG GATES IN THE FOREGROUND — MA-9 SAYS SO AND I VIOLATED IT THREE TIMES.** Three BACKGROUND
+attempts at the LLVM security gate were killed by the **HARNESS's low-memory watchdog**; `oom_kill` in
+`/sys/fs/cgroup/memory.events` **did not move** (24 before, 24 after), so the kernel never OOM-killed
+anything and `free`'s 9.4 GB free was honest. **30+ FOREGROUND invocations, zero kills.**
+⚠ **READ `oom_kill` AS A DELTA, NEVER A LEVEL** — its non-zero absolute value is what made a harness
+watchdog look like a kernel OOM.
+⭐ **AND IF YOU SLICE A GATE, PROVE THE SLICES EXECUTE THE WHOLE.** Chunking by name prefix left **16 tests
+uncovered** — including `sanitizer_gate_is_real_on_both_backends`, the verify-the-verifier cell. Filter
+coverage is not execution coverage: five filters matched a test that was `#[ignore]`d and reported
+`0 passed`. The accounting that settles it parses `^test <name> ... (ok|ignored)` out of every chunk log and
+asserts **ran + ignored == declared**, 223 + 31 == 254.
 
 **BATTERY ORDER (C and LLVM never simultaneously — owner):** C sweep → LLVM sweep → `self_host_bootstrap_fixed_point`
 (**mandatory this round**: J changed `src/backend/c/runtime/runtime_array.c`, an `embed_file` input, and L
