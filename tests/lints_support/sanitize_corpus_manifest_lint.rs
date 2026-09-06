@@ -348,7 +348,7 @@ fn sanitize_corpus_manifest_is_declared() {
         .expect("no sanitize_selftest row in the corpus manifest");
     assert_eq!(
         selftest.disposition, "OUT",
-        "sanitize_selftest/ is IN. Those four fixtures are the sweep's own \
+        "sanitize_selftest/ is IN. Those five fixtures are the sweep's own \
          positive controls — one LEAKS BY DESIGN and one ALTERNATES BY DESIGN. \
          Ingesting them makes the gate report its own controls as findings and \
          removes the self-test that has to fire before any corpus verdict is \

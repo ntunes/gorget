@@ -1,6 +1,6 @@
 # `sanitize_selftest/` — the sanitize gate's positive and negative controls
 
-`scripts/sanitize_sweep.sh` runs these four fixtures before it reports anything
+`scripts/sanitize_sweep.sh` runs these five fixtures before it reports anything
 about the corpus, and asserts that each of its detectors behaves. A guard that
 has never been seen to fail is not evidence
 (`docs/devbook/25-structural-guards.md`), and this gate's whole subject is
@@ -13,6 +13,7 @@ rather than on a demonstration someone ran once.
 | `selftest_leak.gg` | the leak detector fires, with exactly ONE leak class at ONE record |
 | `selftest_leak_twice.gg` | the SAME class at TWO records — and that the class check fires when a row tolerates only one |
 | `selftest_alternating_leak.gg` | the flake detector fires on a row whose verdict is not unanimous |
+| `selftest_build_fail.gg` | a fixture that never built reads `UNMEASURED`, and produces no delete advice |
 
 **They live in a subdirectory on purpose.** The corpus walk is
 `find tests/fixtures -maxdepth 1`, so a control committed beside the corpus
@@ -43,6 +44,18 @@ gate, and leaves nothing for a future round to re-point. The lesson stands for
 any control written from here on: an instrument built on a bug is a hostage of
 that bug, and the gate cannot produce a corpus verdict at all while its own
 self-test is failing.
+
+**`selftest_build_fail.gg` is the one control that must NOT build.** The other
+four prove a detector fires on something that ran. This one pins the difference
+between *"ran and came back clean"* and *"was never measured at all"* — the
+question column 5 of `verdicts.tsv` answers. LeakSanitizer prints nothing when
+it finds nothing, so a silent log is equally consistent with a clean fixture and
+with a process that died before the at-exit check; the sweep resolves that by
+running under `atexit=1` and reading the `AddressSanitizer exit stats:` line as
+positive proof the check was reached. A fixture that fails to build never
+reaches it, so its row must say so rather than joining the fixtures reported as
+no longer leaking. It rejects at CHECK time, not at parse time, and identically
+with and without `--sanitize`, which is what makes it `BUILD_FAIL_BOTH`.
 
 **`selftest_leak_twice.gg` needs two distinct call SITES, not a loop.**
 LeakSanitizer groups records by allocation stack, so two allocations from one

@@ -11093,7 +11093,12 @@ fn sanitize_allowlists_shrink_only() {
     // enumeration. The re-census enumerated instead: every allowlisted fixture
     // calling `.map(` / `.flat_map(` / `.extend(`, each re-measured with the
     // sweep's own `leak_classes` extraction, its `use_stacks=0` /
-    // `detect_leaks=1:exitcode=0` options and its REPS=3 per-class MAX.
+    // `detect_leaks=1:exitcode=0:atexit=1` options and its REPS=3 per-class
+    // MAX. (`atexit=1` only forces the at-exit stats line the sweep reads as
+    // its "the leak check RAN" marker — column 5 of verdicts.tsv. It perturbs
+    // no leak class, so this census reproduces byte-identically with it and
+    // without it; the option is quoted here because the claim is about the
+    // SWEEP'S OWN string, not about a hand reproduction.)
     // Thirteen more had shed classes, every one stable across all three reps.
     //
     // INFLOW: +1 row, +1 pair, +5 records — `vector_hof_result_element_sizing`,
@@ -11802,6 +11807,11 @@ fn sanitize_sweep_selftest_is_wired() {
         ("selftest_leak.gg", "the leak detector fires, one class at one record"),
         ("selftest_leak_twice.gg", "the same class at two records — the class check's own class"),
         ("selftest_alternating_leak.gg", "the flake detector fires on a non-unanimous row"),
+        // The only control that must NOT build. It proves the sweep can tell
+        // "ran and came back clean" apart from "was never measured", which is
+        // the whole of column 5 in verdicts.tsv; without it a fixture that
+        // stopped building was reported as one whose leak was FIXED.
+        ("selftest_build_fail.gg", "a fixture that never built reads UNMEASURED, not fixed"),
     ];
     for (name, why) in CONTROLS {
         let p = root.join("tests/fixtures/sanitize_selftest").join(name);
@@ -11844,6 +11854,48 @@ fn sanitize_sweep_selftest_is_wired() {
              a guard), and the BASE corpus must stay the top level — a directory \
              joins it only through an `IN` row in \
              tests/sanitize/CORPUS_MANIFEST.txt."
+        );
+    }
+
+    // ⛔ THE `todo/t1360` WIRING: "did not run" must not read as "did not leak".
+    // These four needles pin the parts of that fix the sweep's own self-test
+    // structurally cannot reach — two gate blocks, which only print, and a
+    // startup assertion, which runs before anything is measured. Every OTHER
+    // part of the fix is watched firing by `run_selftest` on every invocation
+    // (column 5 in both polarities, and both non-measured adjudicator routes);
+    // these are the residue, and without them a partial revert is silent.
+    for (needle, why) in [
+        (
+            r#"[ -s "$OUT/unmeasured" ]"#,
+            "the gate block that reports an allowlisted fixture the run could not \
+             measure. Without it the bucket is computed and never printed, and the \
+             sweep passes over a row whose leak nothing looked for",
+        ),
+        (
+            r#"[ -s "$OUT/absent" ]"#,
+            "the gate block that reports an allowlisted fixture with no verdict \
+             line at all — deleted, moved out of the swept population, or a worker \
+             that died before printing its row",
+        ),
+        (
+            "is missing atexit=1",
+            "the startup assertion that ASAN_OPTIONS still carries `atexit=1`. \
+             That option is what makes \"the leak check ran\" a POSITIVE fact; \
+             without it every row reads UNMEASURED",
+        ),
+        (
+            "LSAN_OPTIONS WINS over ASAN_OPTIONS",
+            "the LSANOPT half of that assertion. LeakSanitizer reads `detect_leaks` \
+             from LSAN_OPTIONS and lets it win, so an ASAN_OPTIONS-only check is \
+             green over half its own class: the at-exit marker still prints, every \
+             fixture reads MEASURED, and the sweep prints mass delete advice",
+        ),
+    ] {
+        assert!(
+            sweep.contains(needle),
+            "scripts/sanitize_sweep.sh no longer contains {needle:?} — {why}.\n\
+             See todo/t1360: this gate used to report a fixture it never ran as \
+             one whose leak was FIXED, with a delete-this-row instruction attached."
         );
     }
 }

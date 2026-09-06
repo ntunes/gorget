@@ -662,7 +662,7 @@ done_md.round_close.anchor_age_matched.mirror = none
 done_md.round_close.anchor_age_matched.note = when this moves WITH roundish, a close landed in the shape the predicate sees — confirm the anchors were re-seeded, then re-pin both
 
 row = done_md.round_close.roundish_headlines
-done_md.round_close.roundish_headlines.value = 86
+done_md.round_close.roundish_headlines.value = 87
 done_md.round_close.roundish_headlines.unit = DONE.md entries whose headline begins ROUND / Round / Rn
 done_md.round_close.roundish_headlines.polarity = exact-pin
 done_md.round_close.roundish_headlines.provenance = measured
@@ -678,7 +678,7 @@ done_md.round_close.roundish_headlines.caveat = a SUPERSET, not an enumeration �
 done_md.round_close.roundish_headlines.cost_secs = 60
 done_md.round_close.roundish_headlines.input = none
 done_md.round_close.roundish_headlines.mirror = none
-done_md.round_close.roundish_headlines.note = when this moves and anchor_age_matched does NOT, adjudicate: a round close in an unseeable shape (re-seed the anchors AND revisit the predicate), or a mid-round round-ish entry (bump this pin only); 2026-09-06 R51 Track G: 84 -> 85, ADJUDICATED as a mid-round entry (`R51 Track G — t1064 + t0675`), anchor_age_matched UNCHANGED at 5 ⇒ not a close. ⚠ PROVISIONAL AT INTEGRATION: R51 runs several tracks in parallel and each lands its own DONE.md entry, so the integrating parent RE-MEASURES this row from the merged tree with the regen command rather than adding to it
+done_md.round_close.roundish_headlines.note = when this moves and anchor_age_matched does NOT, adjudicate: a round close in an unseeable shape (re-seed the anchors AND revisit the predicate), or a mid-round round-ish entry (bump this pin only); 2026-09-06 R51 Track G: 84 -> 85, ADJUDICATED as a mid-round entry (`R51 Track G — t1064 + t0675`), anchor_age_matched UNCHANGED at 5 ⇒ not a close. ⚠ PROVISIONAL AT INTEGRATION: R51 runs several tracks in parallel and each lands its own DONE.md entry, so the integrating parent RE-MEASURES this row from the merged tree with the regen command rather than adding to it; 2026-09-06 R51 Track J: 86 -> 87, RE-MEASURED with the regen command (not incremented), ADJUDICATED as a mid-round entry (`R51 Track J — t1360`), anchor_age_matched UNCHANGED at 5 ⇒ not a close — and PROVISIONAL for the same reason
 
 # ═══════════════════════════════════════════════════════════════════════════
 # THE ROUND-CLOSE GATES (R48 Track T-a2)
