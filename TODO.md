@@ -41,6 +41,13 @@ All four **rc 0** at that commit. ⚠ **AND A BACKGROUNDED GATE'S TASK-NOTIFICAT
 ⛔⛔ **AND TWO BINDING RULES COLLIDE, resolved silently until now:** `(*h.b).v` is **GREEN IN EVERY STATE** because the deref read never routes through the wrapper — while **`[[t0685]]`'s BINDING LLVM constraint pushes the fixture set toward exactly that shape.** ⇒ **pinning the field place through `(*b)` pins it with a shape that DOES NOT EXERCISE THE MECHANISM. The executor must CHOOSE explicitly and name the omission.**
 ⛔ **THREE SEVERITIES ON ONE AXIS, FOUND IN ASCENDING ORDER OF LOUDNESS:** garbage (`[[t1513]]`) → SEGV (`[[t1514]]`) → **heap corruption, rc 134 `free(): invalid pointer`** (`[[t1526]]`). ⚠ **An enumeration built by comparing STDOUT finds them loudest-last — the opposite of triage order. Enumerate by MECHANISM.**
 
+### ⛔⛔ OWNER INSTRUCTION 2026-09-06 — **"I would like to see `t1505` fixed this round."**
+**LIVE, and it outranks the roster, the brief and this file's other guidance.** ⇒ **Track H's terminal options are now FIX IT, or an OWNER ASK BACKED BY THE MEASUREMENT THAT BLOCKS IT.** *"Fixture only"* and *"don't"* are **no longer landing places**.
+⚠ **THIS RAISES THE BAR, IT DOES NOT LOWER IT.** This defect has already consumed a four-pass track that stood down, and **two prototypes that looked clean were MEASURED TO MISCOMPILE — one of them blessed in a brief and cited in `t1505` itself as proof.** **A wrong fix here ships a silent miscompile into the compiler. The directive is why rigour matters more, not less.**
+⇒ ⭐ **The SEVERABILITY prototype is now the headline: make the caller's and callee's views AGREE WITHOUT flipping `ByValue` → `ByPtr`, and measure that the miscompile is gone while behaviour is otherwise BYTE-IDENTICAL.** If that holds it is a far safer landing than the optimality increment **and it un-gates the campaign.**
+⊕ **The fixture is now a REQUIREMENT of the fix, not an alternative to it** — the corpus is blind to the class, so **the fix cannot be RED-verified without it** (`[[t1506]]`).
+⊕ **If the work splits cleanly, the cut gets its own track rather than letting scope sink the fix.**
+
 ### 🆕 TRACK H OPENED ON `[[t1505]]` — the round created a CRITICAL and was about to leave it unworked
 ⛔ **`t1505` is a LATENT MISCOMPILE THAT ARMS ITSELF THE MOMENT THE ABI IS FIXED**, and the ABI fix is exactly what the optimality campaign needs. **Today it is masked by the very defect `[[t0952]]` exists to remove** — so the tree is safe **by accident**.
 ⚠ **The round OPENED with 9 CRITICALs and closes with 10; the tenth is the one it created itself** — as knowledge, not as a defect. **Track F found it and then could not ship the fix**, which is a defensible outcome for F and a bad place for the ROUND to stop.
