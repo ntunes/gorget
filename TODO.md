@@ -159,19 +159,45 @@ control B **contradict**; and `Option[Ref[int]] got = v.get(1)` (correct, **alre
 third user-source spelling with **no subject at all** (SIX-Q #4). ⇒ **the stated discriminator
 `Extern|Declaration` vs `Block|Expression` is FALSE.** Fix the FACTORIZATION before recounting cells.
 
-### ⚖⚖ OWNER ASK — **D41's ENFORCEMENT SCOPE.** Genuine, unratified, and it re-scopes two tracks.
-**`[[t1307]]` carries a live owner directive on exactly this** (*"although possibly illegal, it is working **very**
-well… let's design this right. We need to find a solution."*), and it is graded **LOW/documentation** by the owner.
-**The question:** does D41's enforcement reject a **Gorget-bodied `Ref[T]` parameter**, and separately, do the stdlib's
-**four stored `Ref[T]` fields** go away?
-⛔ **A TRACK MUST NOT SETTLE THIS BY SHIPPING FIXTURES.** ACCEPT rows on the field position would **ratify it by
-omission**; the reject would **make the shipped stdlib illegal**. Both pre-empt the owner.
-⇒ **HELD: Track I's reject half + its field-position ACCEPT rows. PROCEEDING: the `extern`-parameter ACCEPT rows,
-which `[[t1307]]` explicitly blesses** (*"PERMITTED — `extern` PARAMETERS (10 sites) … Leave these alone."*).
-⊕ **AND IT RE-SCOPES TRACK H:** if Gorget-bodied `Ref[T]` params are rejected, H's fix for those positions is **dead
-code** and H should scope to the extern positions — which is what `[[t0952]]`/`[[t1307]]` actually need. **H's review
-pass 2 has been asked to rule whether narrowing still closes `t0952`.** ⚠ **My earlier "H and I are ORTHOGONAL"
-conclusion is now CONTESTED — do not carry it forward unverified.**
+### ✅⛔ THE D41 OWNER ASK IS **WITHDRAWN — THE RECORD ANSWERS IT.** (orchestrator, 2026-09-06, on owner instruction to check docs+history)
+
+**`docs/internals/cow-transient-view-model.md:150-153`** — the design note D41's own ledger entry names as *"the design
+note elaborates it"* — states the rule verbatim:
+> **`Ref[T]` is allowed in RETURN and PARAMETER position and FORBIDDEN in BINDING, FIELD, CAPTURE, and
+> COLLECTION-ELEMENT position.**
+
+⭐ **AND IT IS EXPLICITLY TRANSITIVE:** *"the restriction applies to any type CONTAINING `Ref` at any depth… a type that
+mentions `Ref` anywhere is a **transit-only kind** — legal in return/param/transient-expression position, illegal in any
+resting position — and it **materializes (the inner `Ref`s become owned) the moment it crosses a storage boundary**."*
+
+⇒ **BOTH HALVES OF THE ASK ARE ALREADY SETTLED:**
+1. **`Ref[T]` in PARAMETER position is PERMITTED** — a transit position by the model's own words. `[[t1307]]`'s
+   *"PERMITTED — `extern` PARAMETERS … Leave these alone"* is the same answer. ⚠ D41's separate **spellability** rule
+   (*"`Ref` never appears in user source"*) still governs whether a **user** may write it — but that is the **UNBUILT**
+   enforcement already recorded, **not a new decision**, and its rejected alternative (1) is a user-visible **RETURN
+   type**, not a parameter.
+2. **`Ref[T]` in FIELD position is FORBIDDEN** — a resting position. **The stdlib's four stored `Ref[T]` fields are
+   illegal under the model**, exactly as `[[t1307]]` says (*"a stored `Ref` is a use-after-free"* — D41 verbatim).
+
+### ⭐⭐ AND THIS ROUND ANSWERED THE NOTE'S OWN **OPEN AUDIT**, WITHOUT KNOWING IT EXISTED
+The note asks: *"**Open audit: does binding `Option[Ref[T]]` occur in the current tree today?** If so, the unstorable
+rule is a behavior change that needs a migration."*
+⇒ **ANSWERED — YES.** Track I's brief-review pass 1 measured `Option[Ref[int]] got = v.get(1)` → **42, CORRECT at HEAD,
+and already committed TWICE in-tree.** ⇒ **the unstorable rule IS a behaviour change and DOES need a migration.** The
+residual owner question is therefore **the migration, not the rule** — and `[[t1307]]` already carries the owner's
+directive on it (*"let's design this right. We need to find a solution."*).
+
+### ⛔⛔ THIS RE-CUTS **BOTH** I AND K — AND ONE OF MY BRIEFS WAS BACKWARDS
+- **TRACK I:** its reject guard, whose subject is *"the param/return type slot of a Gorget-bodied fn"*, **targets the two
+  positions the model PERMITS** and **misses the four it FORBIDS**. ⇒ **the subject inverts to the RESTING positions:
+  binding · field · capture · collection-element, transitively.** ⭐ **That also dissolves pass 1's R3** — the
+  `Callable`+lambda and `Option[Ref[int]]` cells it measured as *"user-source spellings with no subject"* are: the lambda
+  **param** = legal (no subject needed), the `Option[Ref[int]]` **binding** = illegal and **is** the new subject.
+- **TRACK K:** `[[t1558]]`'s `Ref[T]` **struct field** is a FORBIDDEN resting position, and the model says such a
+  position **materializes to owned**. ⇒ **the reference-grade fix is NOT "make the field alias correctly" — it is
+  `[[t1307]]`'s candidate shape: hold `Dict`/`Set` OWNED and pass `&self.source`.** ⚠ K's measured silent-wrong-output
+  and dangling-on-fix findings **stand and are the evidence for the migration** — a field that must materialize is
+  today aliasing a clone, which is why it reads a frozen snapshot.
 
 ### ✅ THE GENERATOR LANDED — `scripts/coercion_identity_matrix.py` (Track C, `13e81863c`)
 `todo/t0718` **no longer carries a changed-cell figure.** It carries the generator, the factorization as a product, and
