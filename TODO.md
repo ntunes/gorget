@@ -424,6 +424,312 @@ integrated ten tracks, went 13-gates green, and advanced its own headline by zer
 owner.** A recursive prerequisite chain has one at every level.
 ⊕ **Compatible with the no-new-round instruction below: this work happens INSIDE R51.**
 
+### ✅⛔ OWNER ASK #5 IS **WITHDRAWN — IT WAS WRONG.** THE OPTIMALITY INCREMENT *IS* LANDING THIS ROUND
+
+**Retracted at its own scope, 2026-09-06.** Ask #5 said *"R51 will not ship the optimality increment; F cannot
+resume because it has no working fix."* The first clause is **FALSE**; the second is **true but irrelevant**, and
+I wrote it BEFORE Track H's scout returned.
+
+⭐ **F's OBJECTIVE IS `[[t0952]]`, AND TRACK H's FIX CLOSES IT.** `t0952`'s own mechanism reads: *"auto_clone_if_ptr
+materializes a `Ref[T]`-typed argument by deep clone **without consulting the callee's declared `Ref[T]`
+parameter**"* — which is **precisely the call-site consult H's fix adds**. Its recorded repro figure and H's
+measurement match **byte for byte**: `10062 bytes in 78 allocations` at HEAD → **rc 0, ASan CLEAN**, prints `6`.
+⇒ **F does NOT need a new scout, a new design, or a different model.** The prerequisite turned out to BE the thing:
+one root cause — the `Ref[T]` param decision re-derived at 34 sites — produces **both** the silent miscompile
+**and** the excess clones. That is the owner's recursive-prerequisite ruling working exactly as written.
+
+**What F's stand-down actually was:** F attacked `t0952` at the *wrong layer* (a 5-site list holding a dead site,
+mislabelled, omitting five live ones) and its pass-3 patch miscompiled at N=7. **The stand-down was correct.** H
+attacks the same defect at the producer, with an independent witness for the site set.
+
+⇒ ⛔ **DO NOT re-open F as a track.** Its increment lands as part of H. Track F stays stood down and HARVESTED.
+
+### ⚖ WHAT REMAINS FOR OPTIMALITY TO LAND *COMPLETE* — two items, neither a hard gate on H
+1. **`[[t1360]]` — a QUALITY dependency, not a blocker.** `t0952` says its **ten downstream allowlist rows must be
+   retired WITH the fix, not after**, and that retiring them depends on `t1360`: `adjudicate_leaks` treats
+   **`did not run` as `did not leak`**, so the sweep cannot tell "no longer leaks" from "never ran". ⊕ **Only CITED
+   rows are a blocking gate** — H's brief already deletes the one cited row (`LEAK_ALLOWLIST.txt:643`), so **H is
+   not gated**. Without `t1360` the ~9 uncited rows can only be retired on faith.
+2. **`[[t1558]]` — the NEXT increment, not a dependency.** `Ref[T]` **struct-field INIT** still deep-clones after
+   H's fix (`live_bytes` 1564→782; `borrow_field_lazy_dict_iter` 5376→384). Same class, **different write site**;
+   no widening of the declared-param accessor reaches it (SIX-Q #4). Ratified ground: **D10(b) Addendum 3** names
+   the existing typed metadata to read (`field_ref_flags`), so it is a READ, not a new derivation.
+
+### ⛔⛔ OWNER INSTRUCTION 2026-09-06 — **"I would like to see `t1505` fixed this round."**
+**LIVE, and it outranks the roster, the brief and this file's other guidance.** ⇒ **Track H's terminal options are now FIX IT, or an OWNER ASK BACKED BY THE MEASUREMENT THAT BLOCKS IT.** *"Fixture only"* and *"don't"* are **no longer landing places**.
+⚠ **THIS RAISES THE BAR, IT DOES NOT LOWER IT.** This defect has already consumed a four-pass track that stood down, and **two prototypes that looked clean were MEASURED TO MISCOMPILE — one of them blessed in a brief and cited in `t1505` itself as proof.** **A wrong fix here ships a silent miscompile into the compiler. The directive is why rigour matters more, not less.**
+⇒ ⭐ **The SEVERABILITY prototype is now the headline: make the caller's and callee's views AGREE WITHOUT flipping `ByValue` → `ByPtr`, and measure that the miscompile is gone while behaviour is otherwise BYTE-IDENTICAL.** If that holds it is a far safer landing than the optimality increment **and it un-gates the campaign.**
+⊕ **The fixture is now a REQUIREMENT of the fix, not an alternative to it** — the corpus is blind to the class, so **the fix cannot be RED-verified without it** (`[[t1506]]`).
+⊕ **If the work splits cleanly, the cut gets its own track rather than letting scope sink the fix.**
+
+### 🆕 TRACK H OPENED ON `[[t1505]]` — the round created a CRITICAL and was about to leave it unworked
+⛔ **`t1505` is a LATENT MISCOMPILE THAT ARMS ITSELF THE MOMENT THE ABI IS FIXED**, and the ABI fix is exactly what the optimality campaign needs. **Today it is masked by the very defect `[[t0952]]` exists to remove** — so the tree is safe **by accident**.
+⚠ **The round OPENED with 9 CRITICALs and closes with 10; the tenth is the one it created itself** — as knowledge, not as a defect. **Track F found it and then could not ship the fix**, which is a defensible outcome for F and a bad place for the ROUND to stop.
+⇒ **H is scoped at `t1505` DIRECTLY, not at the increment** — a better-posed problem, because **the defect is a caller/callee DISAGREEMENT and fixing that need not flip any ABI.** The scout is told to prototype exactly that, and that **"file the fixture and stop" is an acceptable answer.**
+⭐ **It starts from what F's four passes measured, not from scratch:** the canonical accessors **cannot carry the fact** (`try_map_ast_type` erases it before either is called — SIX-Q #4) · **four hand enumerations were all selections**, and `[[t1525]]`'s census falsified every one · **two prototypes that looked clean miscompiled**, one of them blessed in a brief · **a prototype green on 365 of 366 fixtures was still wrong** · `MutRef[T]` is symmetric, so that axis is closed.
+
+### ⭐⭐ ALL THREE FORECAST SHARED-PIN COLLISIONS FIRED AT THE MERGE — and one had to be REFUSED, not re-measured
+- **`roundish_headlines`: G set 85, A set 85, each having measured base+itself. THE MERGED TREE MEASURES 86.** Set from the measured output. **The AGENTS.md forecast was exactly right.**
+- ⛔⛔ **`todo_cites_paths_resolve`: 34 against a pin of 28 — and I REFUSED to re-measure it.** Track A closes `t1319`/`t1373`; **six surviving items cited them.** A defect **neither executor could see**, existing only in the merged tree. ⚠ **Raising the pin to 34 would have BLESSED SIX DEAD CITATIONS on the round whose theme is guards that cannot see their own class — and Track G's entire subject is that a dead citation IS the defect.** ⇒ **the six `cites` entries were dropped from the MACHINE-READ field; the prose references stay, which `[[t1516]]` already records as unguarded.** ⭐ **MA-5 says the parent RE-MEASURES a corpus pin — but a pin that moved because the round CREATED the defect it counts must be REFUSED, not re-measured.**
+- ✅ **`EXPECT_KEYS`: A bumps 13 → 14, G added no CI step, so 14 holds.**
+
+### ⚠ AGENTS.md HEADROOM IS NOW THE TIGHTEST IT HAS BEEN — **841 BYTES, and Track A still owes 74**
+Regenerate: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`. ⇒ **~767 after Track A merges.** **The next rule this round earns must RETIRE one** (the FIVE readiness rows are already capped that way).
+⛔ **AND A CORRECTION TO MY OWN COMMIT `f18babe4d`: its message says *"headroom 1241 → 1013"*. THE MEASURED VALUE IS 841.** I estimated the cost of my own edit instead of measuring it after writing it — **in a commit whose subject is that corrections must reach as far as the thing they correct.** The commit stands (amending is an owner ask); **the figure of record is 841.**
+
+### ⛔⛔ PRECEDENCE KILLS A DESIGN BUT NOT ITS POINTER — a failure mode the fold rules do not name
+Track C's body said *"apply `/tmp/scoutC51_proto.patch`"*. Three addenda replaced that design; **none struck the line.** Measured: the patch is **13 × `coercion_transparent`, ZERO × `BuiltinTypeKind`** — **it IS the rejected design** — and the fold rule *"a fold that prescribes a WRITE SITE cites the reviewer's MEASURED PROTOTYPE"* makes the pointer **load-bearing**. ⇒ **an executor obeying precedence for the prose and line 8 for the code rebuilds exactly what four passes rejected.**
+⭐ **THE GENERAL LESSON: an addendum that replaces a DESIGN must strike its ARTIFACT POINTERS BY NAME. Precedence orders CLAIMS; it does not retract CITATIONS.**
+⊕ **And the adopted design has NEVER BEEN COMPILED** — every structural claim about it is a source-read, on code where source-reads have been wrong **five** times this round.
+
+### ⛔ AND NEITHER PRESCRIBED GUARD CATCHES THE CLASS — measured, with a positive control
+A2 prescribed a **pure-function** parity assertion; A3 **REPLACED** it with a **`DefId`-reading** one. ⭐ **Each catches exactly what the other misses.** The seed break is invisible to the first; **the accessor-content break — adding `|| name == "Box"`, the one-word edit D51 calls *"not an acceptable fix"* — is invisible to ALL 5405 `gg check` outcomes AND the entire `--lib` suite**, while the seed break yields 1 in the same instrument. ⇒ **ship BOTH, as a conjunction, plus a `Box` row.** ⚠ **A replacement that looks like a strict improvement can be a strict LOSS on the other axis.**
+
+### ⭐ THE FIFTH ACCIDENTALLY-CORRECT CELL — **the census that kills vacuous gates is itself vacuous for one of its two guards**
+Track A's `subject=` census counts externs with **any** of the four `box_wrapper_arm` values, but the **value** guard early-returns when there is no `GetPtr` extern. **Measured: 6 of the 10 CLEAN rows have ZERO `get_ptr` externs — exactly the vacuous "0 fires" the census was invented to kill, reported as `subject>0`.** ⭐ **Constructive proof: rewriting one fixture removes the value guard's ONLY positive control among the CLEAN set, and both the gate and the test stay GREEN.** ⇒ **print `decl_subj=` and `val_subj=` separately, reconcile each row against the guard it is held for.** ⚠ **This class has shipped a vacuous gate TWICE already; this is the third variant.**
+⊕ **AND `no_growth_in_name_prefix_routing` COUNTS PROSE ABOUT THE ANTI-PATTERN AS AN INSTANCE OF IT** — confirmed by inserting one comment line and watching it report 205. **Unfiled; it lives only in a code comment.**
+
+### ⭐⭐ D51's SECOND CLAUSE IS DISPOSED OF — **BY A COUNT, NOT A READING**
+D51's own next sentence settles it: *"**So `unify`'s name match is an UNMIGRATED SIBLING SITE (Core #4), not a missing mechanism.**"* — the clause's subject is **the mechanism**, not the enum, and D51 prescribes the identity **by name three paragraphs later.** ⭐ **And the argument nobody had written down: count the registration-time name-match fns — today 2 in `src/semantic/` (3 in `src/`); the REJECTED three-flag design 3 (4); the IDENTITY 1 (2). It is the ONLY proposal that makes the count go DOWN.** ⛔ **My *"already false at two, and this makes it three"* described the REJECTED design.**
+
+### ⛔ FOUR MORE OF MY PRESCRIPTIONS MEASURED WRONG — all written through into `[[t0718]]` (`3abc3ad32`)
+⛔ ***"Merging REMOVES that hardcode"* SHIPS A REGRESSION:** deleting the prelude seed makes `Some(1) == Some(1)` **REJECT**, and **`--lib` stays 1187/0 GREEN.** ⇒ **RE-POINT, never delete.**
+⛔ **My accessor-parity guard CANNOT CATCH ITS OWN CLASS** — a pure-function assertion is **GREEN through three separate seed breaks** while probes flip. ⭐ **The silencing edit is exactly *"break a seed site and leave the predicate alone"* — the item's OWN CITED PRECEDENT.**
+⛔ **`.is_some()` is a TRAP** — true for **all 16** builtins under the identity ⇒ transcribing it widens a D46 diagnostic **8 → 16** and closes `[[t1265]]`'s open cell, with **ZERO rows pinning today's behaviour.**
+⛔ **MY ATOMICS CLAIM WAS FALSE.** They live in `lib/std/sync.gg`, and `std.sync` **IS a builtin module — the same position as `RWLock`.** ⚠ **I grepped `src/semantic/` for the LITERAL; the seed site is NAME-AGNOSTIC BY CONSTRUCTION.** ⇒ ⭐⭐ **A CLASS OF REGISTRATION IS INVISIBLE TO A GREP FOR ITS MEMBERS.**
+⊕ **AND A FAILED PREDICTION ADDED A DIRECTION NOBODY HAD:** `Mutex[int] m = Mutex(5)` **REJECTS** at HEAD — **the defect also produces FALSE REJECTS**, which no row set mentions.
+
+### ✅ THE IDENTITY SURVIVES — verified AT SOURCE, and the seam is smaller than I feared
+All three predicates are **pure functions of the name**; **the two seed sites ALREADY COINCIDE** and merging **removes** a prelude hardcode that already agrees; **the two inherits COLLAPSE** (two dummy-span defs of one name cannot disagree); **the `Weak` exclusion survives**; and **`RWLock`'s single-pin row survives the redesign.**
+⭐⭐ **AND THE ARGUMENT THAT SETTLES IT APPEARED IN NO DRAFT OF MINE: the identity is the ONLY shape satisfying BOTH D51 clauses at once** — reusing `DerefWrapperKind` violates *"do not simply reuse"*, a third parallel flag violates *"the same seeded fact"*.
+⛔⛔ **BUT D51 HAS A SECOND BOLD CLAUSE I STILL HAVE NOT DISPOSED OF: *"THE TYPED MECHANISM ALREADY EXISTS — DO NOT BUILD A NEW ONE (owner asked 2026-08-28)."*** On its face it reads **against** the very field this track now builds. **Pass 3 is told to read D51 in full and adjudicate it — a partial quote has already killed one design here.**
+⛔ **AND THE GATE SET WAS SIZED FOR THE DESIGN I DELETED: 91 tests on the rewritten axes sit OUTSIDE the filters** — 19 `box*.gg` fixtures and both `Weak`-exclusion fixtures caught by **ZERO** of them. ⚠⚠ **My own cited reason for adopting the identity was a patch that *"claimed parity without measuring it"* — this brief would have repeated it verbatim.**
+⛔ **AND THE LOAD-BEARING CONSTRAINT WAS LEFT TO INFERENCE:** the accessor **must keep returning `Option<DerefWrapperKind>`**, because `MethodResolution.auto_deref` is consumed in `ir/lowering` — **propagate the new type there and the track lands in the stood-down wall.** Now written into `[[t0718]]`.
+
+### ⛔⛔ I TRUNCATED THE RATIFIED TEXT, AND THE DROPPED CLAUSE WAS THE WHOLE DESIGN
+**D51 at `decisions.md:3235` reads *"one registration producing a builtin-wrapper IDENTITY, with separate per-axis accessors reading FROM IT — both off THE SAME SEEDED FACT."*** **I quoted it without *"identity"* and without *"the same seeded fact"*** — and the design I then blessed seeds **THREE independent facts from THREE independent literal lists**, each with its own inherit. ⇒ **three parallel tables, not one identity with three accessors.**
+⛔ **AND MY REBUTTAL ARGUED AGAINST A PROPOSAL NOBODY MADE:** *"merging membership destroys information"* is true of the fold I had just corrected and **irrelevant to the identity**, which preserves every per-axis difference — **including the `Weak` exclusion I cited as decisive** — with **one** name-match.
+⛔⛔ **AND THE DRIFT HAS HAPPENED ONCE ALREADY IN THIS EXACT PATTERN:** `deref_wrapper_kind` needed a **SECOND** seed site, *"and the patch claimed parity without measuring it."* **My design added a THIRD un-guarded copy of that triple** — beside a comment still asserting there is *"the ONE allowed registration-time name-match"*, **already false at two.**
+⇒ ⚖ **DECIDED: adopt the IDENTITY.** One `builtin_kind`, three accessor matches, ≈25 touch points — **it kills the triple inherit outright.**
+⚠ **TWICE NOW I HAVE CORRECTED THIS TRACK'S FRAMING AND LANDED ON A NEW WRONG ONE** — first *"merge the tables"* (destroys information), then *"three separate flags"* (fights the ratified text in the other direction). **The ledger said the answer both times; I paraphrased it both times.**
+
+### ⛔⛔ MY OWN HARVEST RECORDED A PHANTOM — and the re-cut's scout caught it
+**`builtin_type_kind_for_name` DOES NOT EXIST AT HEAD** (`grep -rn 'builtin_type_kind' src/ tests/ docs/` → **0**). I harvested it from the stood-down track's `/tmp` brief, where it was an artifact of that track's **own uncommitted patch**. **A brief repeating it sends an executor at nothing.** ⚠ **A HARVEST IS A FOLD: harvesting a dead track's brief does NOT exempt its figures from *"a fold may only assert what a command in that same fold regenerates."*** Three more harvested numbers were also wrong (35 names not 15 · TWO flags not three · 156 literals not 146). **`[[t1408]]` carries the corrections.**
+⛔ **AND MY HARVESTED DESIGN FRAMING WAS WRONG:** *"folding the tables into the identity seed is smaller than adding a fourth"* — **no.** They are **per-axis accessors with deliberate, documented differences**, and `HEAP_INDIRECT_TYPES` (35) is a **fifth axis**. **Merging membership DESTROYS information.** D51 says *one registration, SEPARATE per-axis accessors* — **and they already exist. The missing piece is the THIRD one.**
+⭐⭐ **THE RE-CUT CLOSES A MEMORY-UNSAFETY CELL:** a user `struct Mutex[T]` passed to `take_int` **checks OK at HEAD and prints a raw heap pointer**; the mirror direction is an **ASan `stack-buffer-overflow`, READ of size 8.**
+⛔⛔ **AND IT CARRIES A HARD ORDERING CONSTRAINT — `[[t1548]]`, WHICH NEEDS TO REACH THE OWNER.** All three flipping rows declare `struct Mutex[T]`, so **the ratified no-shadowing ruling makes them illegal**. Measured: **no surviving route** (module scope is a shadow too; `as` resolves to the original; a generic param never reaches the arm). ⇒ **post-ruling the fix is UNPINNABLE; pre-ruling it is pinnable by 7 rows. Landing the ruling first makes a live memory-unsafety defect permanently unfixable-with-evidence.**
+⊕ **AND THE RULING DELETES THE PIN FOR A LANDED FIX:** exactly **4** corpus fixtures declare a user type with a builtin registry name, and **two are the live pin for the landed `deref_wrapper_kind` flag** (their header says so verbatim), a third a filed known-gap. **A user-shadow fixture is the ONLY instrument that observes whether a decision keys on the RESOLVED DEFINITION or the SPELLING.** The replacement is compiler-internal: **a `DefInfo.name` newtype without `PartialEq<&str>`, so a name-keyed decision DOES NOT COMPILE — witness: rustc itself.**
+
+### ⚖ THE DECISION NINE FOLDS NEVER MADE — TRACK A's SELF-HOST PARITY CEILING
+⛔ **`grep -i "ceiling\|RUNTIME_DIFF\|parity"` over Track A's whole brief returned TWO hits, both a DIFFERENT ledger — and ZERO in every ORCHESTRATOR DECISIONS block from addendum 3 through 8.** `RUNTIME_DIFF_NONMATCH_CEILING` is **shrink-only and the branch sits on it with ZERO SLACK**, while the pinned set needs a fixture per receiver place ⇒ **≥2 new top-level fixtures would land non-MATCH and RED AT ROUND CLOSE** — invisible to the executor, because **the gate no-ops in the debug profile people actually run** (`t0924`).
+⚖ **DECIDED — ROUTE 2:** the fixtures land in **`tests/fixtures/self_host_gaps/`** (sanctioned, **10 residents**, *"NOT at top level, and separate"* from the auto-scanned corpus), each with a cited Core #9 ⊕ reason. ⛔ **THE CEILING IS NOT RAISED** — the owner forbids raising it for a round's own inflow, and this hatch **avoids the corpus rather than widening it**. ⛔ **Route 1 rejected as a doubling: the self-host has NO `is_by_value_receiver` chokepoint at all**, so a "port" is *build the chokepoint, then widen it* — filed **`[[t1537]]`**, which also records that the lanes' cell distributions differ (SH breaks at field+capture only, and **SEGV** not garbage), so the Rust fixtures do **not** map one-to-one.
+
+### ⭐ TRACK G — **3/3, EXECUTOR RUNNING.** Pass 3 falsified a premise BOTH prior passes inherited — and it is written into a LINT COMMENT.
+⛔⛔ **`t0591`'s repro was NOT *"never committed"*.** It was added at **`4de74d79a`** and **GRADUATED at `2edb9c06b`** (a pure rename), and it exists today at `tests/fixtures/set_index_ggdef_divergence.gg`. **The false sentence is in `todo/t0591.md` AND in `tests/lints.rs:16913-16918`** — so Core #14 obliges correcting the lint comment the track is already editing. ⭐ **The DISPOSITION survives; only the TEXT changes.**
+⛔ **AND MY OWN B4 PREDICATE WAS WRONG IN BOTH DIRECTIONS.** *"A file, or a directory containing a `.gg`"* **ACCEPTS** `tests/fixtures` and `tests/fixtures/known_gaps` — **the exact two containers I called *"resolve and evidence nothing"*** — and **falsely REDS `manifest_malformed`**, whose `.gg` live in subdirectories. Corrected: **a file, or a directory that is NOT a corpus root and contains a `.gg` RECURSIVELY.** ⚠ **I stated it with a `⇒` as settled and no command in that fold had exercised a container or a nested unit.**
+⛔ **AND I ORDERED THE ESCAPE-SENTENCE CORRECTED WITHOUT SUPPLYING THE REPLACEMENT** — the exact defect I had charged the previous addendum with, one generation later.
+⊕ **SIX-Q #1 came back INVERTED:** I said *"cite the commit is not enough, quote the ratified text."* **The text is already quoted; what is missing is the COMMIT.**
+
+### (superseded) TRACK G — design SIGNED OFF twice; brief-review pass 3 running. `t1064` + `t0675`, not `t1511`.
+⛔⛔ **MY BRIEF WOULD HAVE TAUGHT THE GUARD ITS OWN BYPASS, ON ITS HEADLINE ROW.** I prescribed `repro = []` for `t0311` — which is **`t1064`'s OWN named-omission escape**, and measured, it leaves **both** the new lint **and** `todo_index_is_current` **GREEN**. ⇒ **the guard's first act would have been to demonstrate its own bypass.** ⭐ **`[[t0901]]` had already adjudicated that exact row on 2026-08-30** — *"Repoint the field to the live test. That is the actual bug: a prose correction that never reached the front matter"* — and it `cites` `t0311` and `t0387` **by name**. **My brief cited neither.** ⚠ **A PROSE GREP MISSED IT THROUGH A WHOLE SCOUT AND A WHOLE BRIEF; the `cites`-OVERLAP CHECK FOUND IT.**
+⛔ **AND MY BRIEF ORDERED TWO CONTRADICTORY THINGS** — *"apply the patch, do not retype"* **and** *"adjudicate per row; bulk-repointing asserts a verification nobody did"* — while **the patch bulk-repoints all seven.** An executor could not obey both. **Split: lint hunk verbatim, burn-down rows by hand.**
+⛔ ***"One walk, two fields, same predicate, same population"* is MEASURABLY FALSE** — `cites` reds on **110 rows / 73 items** (mine said 106/263): **65 `:LINE` suffixes** (`t0675`'s own text claims these were stripped — **false at HEAD**), **11 DIRECTORIES** (`is_file()` is the wrong predicate), ~31 dead. ⇒ **`cites` needs its OWN env-gate and resolver — which `t0675` itself prescribes, with a reason-per-row allowlist that CONTRADICTS the `repro` arm's "zero exemption surface".**
+⚠ **`t0675`'s RATIFICATION IS UNDISCOVERABLE FROM THE TREE** — owner-agreed 2026-08-23, landed in `TODO.md`, **which has since been rewritten**; `decisions.md` has nothing. **Cite `git show eff582caa`.**
+⛔⛔ **`t1511` WAS MY DUPLICATE OF `t1064` — filed this morning, not citing it, and MY OWN RULE PREDICTED IT.** *"A duplicate born of one source report is invisible to a symptom grep — only the `cites` overlap shows it."* **They overlap on `tests/lints.rs`. I wrote the check and did not run it.** Folded into `t1064` and deleted (`c5607bd19`).
+⭐ **THE SCOUT SAID *BUILD A DIFFERENT THING*, AND THAT WAS THE RIGHT ANSWER.** The wide ratchet is **measurably unbuildable**: no discriminator clears 80 %, and the two best signals are an **EMOJI** and an **ADJECTIVE VOCABULARY** — both under the filer's control (SIX-Q #2). The live class is **~160 items**, not burnable down. ⭐ **`[[t0875]]` had already measured this conclusion for substring censuses.**
+⭐⭐ **AND A DISTINCTION THE CARDINAL RULE COLLAPSES, worth an owner ruling later:** a class **as large as** the `.gg`-owing one is **real and reproducible but its durable form is a LINT or a CENSUS ROW.** *"Non-reproducible items are exempt"* conflates *not reproducible* with **not reproducible AS A `.gg` PROGRAM**.
+⇒ **BUILDABLE INSTEAD: does the `repro` path resolve — and the `cites` entry, in the same walk (`t0675`, owner-ratified 2026-08-23, never landed).** Zero exemption surface. **16 broken rows / 14 items**, and `[[t1064]]`'s own filed split was WRONG — **8 of its 9 "missing" rows have evidence at a different path** because the fixture graduated and the item was not followed.
+
+### (superseded) TRACK G's ORIGINAL FRAMING — **`t1511`: the cardinal repro rule has no guard.**
+`known_gaps_census.sh` works from the **fixtures** side and never asks the inverse — *does this filed item have the reproducer it owes?* ⇒ `t1403` sat with `repro = []` and **zero** `grep -rn "t1403" tests/` hits while its mechanism still reproduces (`gg check` rc 0, then **rc 137 SIGKILL @ ~9.8 s**).
+⛔ **THE SCOPING FACT, MEASURED BEFORE THE SCOUT WAS BRIEFED, AND IT MAY KILL THE TRACK: `grep -c '^repro = \[\]' todo/*.md | grep -c ':1'` → **722** of **960** items — 75 % of the backlog.** A naive assert is dead on arrival, and so is any design needing 722 triaged before it can go fatal.
+⚠ **THE EXEMPTION IS THE WHOLE PROBLEM** — non-reproducible items are legitimately exempt, and **a filter that cannot express its exemption gets silenced by widening it**, the fail-open shape that has defeated three guards this round. **The scout is told outright that "DON'T BUILD IT" is a good outcome** if the live class is small enough to just fix, or if no discriminator survives widening.
+
+### ⛔ TRACK F STOOD DOWN 2026-09-06 — the standing decision fired, and the harvest is the deliverable
+**Pass 4 blocked DESIGN-INVALIDATING and the track closed as pre-declared.** ⭐ **The reviewer was told standing down was acceptable and that it must not soften a finding to avoid it — and it did not.** Nothing is lost: `[[t1505]]` · `[[t1506]]` · `[[t1525]]` carry every measurement.
+⛔⛔ **THE CORRECTION THAT MATTERED MOST: `t1505` (CRITICAL) CITED SHAPE X AS MEASURED PROOF, AND SHAPE X ITSELF SILENTLY MISCOMPILES** — `probe_equip_ref7` prints **`1`** where pristine prints **`7`**, rc 0, three independent builds. The table that blessed it had three rows and never ran that cell. **An executor would have built from it.**
+⛔ **The canonical accessors CANNOT carry the fact (SIX-Q #4):** `try_map_ast_type` returns `None` for `Ref`/`MutRef` **before either accessor is called**, and both take `(TypeId, Ownership)` — the fact has no subject in that signature. Widening one is **inert on the headline and creates two fresh miscompiles**.
+⭐⭐ **AND THE HOTTEST SITE IN THE TREE — 544 of 1196 fires, absent from all four enumerations — ALREADY CALLS THAT ACCESSOR AND ALREADY ANSWERS WRONG.** ⇒ **the accessor being present is not evidence the fact survives; it is WHERE THE FACT DIES.**
+✅ **`MutRef[T]` is symmetric across five cells — the one axis flagged as possibly design-invalidating was not.**
+
+### ⚖ TRACK F's STANDING DECISION (FIRED) — **PASS 4 WAS THE LAST RE-CUT**
+Three passes, three design invalidations — **but converging, not thrashing**: pass 2 found the miscompile, pass 3 **solved it**. ⛔ **If pass 4 blocks on DESIGN, F STANDS DOWN and lands as items** — `[[t1505]]` (CRITICAL) carries the corrected mechanism **and cites the measured prototype**, so nothing is lost. ⚠ **The reviewer is told this explicitly and told NOT to soften a finding to avoid it** — a design-invalidating finding mislabelled as scope growth would ship a defect; scope growth mislabelled as design-invalidating would end a track that should ship. **Both errors are available and they point opposite ways.**
+
+### 📊 R51 TRACK STATE (orchestrator-maintained; the round does NOT open a successor — owner 2026-09-06)
+| Track | Stage | Streak | In flight | Last finding |
+|---|---|---|---|---|
+| **A** receiver-place (`t1319`+`t1373`) | ✅✅ **INTEGRATED `3161f781f`** — worktree pruned | **3/3 ✅** | — | Merged-tree, all rc 0 bare: `--lib` **1187/0**, `--test lints` **250/0**, index **970/970**, headroom **767**. ⭐ Executor **corrected my checkpoint** (must be POST-SSA — at the home I named the value guard is INERT) and shipped a **subject census** so gutting a CLEAN fixture to `print(41)` **reds the gate**. ⭐ **Better than parity: at full revert the four D36 cells were RED on LLVM too.** **`t1319` + `t1373` CLOSED.** | ⛔ **The round closed a C-lane rc-139 SEGV class and NOTHING HOLDS IT.** `t1540` skipped four fixtures on the ground *"there is no C-lane-only runner"* — **false: `skip_under_llvm()` is at `tests/integration.rs:82` with SEVEN uses.** All **four** cells are pinnable. ⭐ Gates 1+3 PASS; the design called **reference-grade**; and **the fix is BETTER THAN PARITY — at full revert the four D36 cells were RED on LLVM too.** | ⭐⭐ **THE CONTROL IS ACCIDENTALLY CORRECT.** The defect is **per-TU and ORDER-DEPENDENT** — `operands.rs` synthesises one extern decl per symbol from whichever call site lowers FIRST — so `c1_owned_local`, the control this brief's axis table rested on since §0.1, **prints garbage when a broken place lowers first in the same file.** ⇒ **a fixture that puts its control read first is GREEN ON ARRIVAL and pins nothing.** ⭐ The value guard survived **11 program-shape silencers** and both guards' fire patterns held after every other in-scope edit. ⛔ But neither guard is **wired to anything that runs**, the 141-row false-positive scan is **vacuous** (135 never emit the instruction), and the pinned cross-product **misses 6 of 10 changed cells**. | ⭐ **LAYER CLOSED** — option 1 reproduced by THREE passes; no further pass re-opens it. ⛔ **The GUARD's design is invalidated:** applying the Core #14 fix *this brief scopes* turns the guard GREEN while the cell still prints garbage at rc 0 — its subject reaches the DECLARATION, the defect lives in the VALUE. Pinned set now derived from the guard's **fire-delta** (hand-counting gave 5, 11, 13). |
+| **B** battery-vs-CI lint | ✅✅ **INTEGRATED `5164c8ce6`** — worktree pruned | 7 passes ✅ | — | Merged-tree gates all rc 0 off bare commands: `--lib` **1187/0**, `--test lints` **244/0**, `todo_index --check` OK (956, `t1452` removed). **Obligation 2 discharged: `round_close_battery_covers_ci_steps` and `agents_md_heading_inventory_is_pinned` both PASS at the merged tree** — the fail-closed boundary did not trip on the merge. **Headroom regenerated: 1241.** ⊕ The executor **refused my suggested wording** — my replacement clause was itself unverifiable, and swapping one unverified universal for another *inside this doc comment* would have repeated the defect. It was right. | ⛔ The brief prescribed copying a **1.67 MB whole-file snapshot of `tests/lints.rs`** while Track D's executor writes that same file — a silent revert with no conflict. Replaced by two diffs that FAIL on drift. Composed state measures **242/0**. ⊕ A folded-scalar (`run: >`) attack nobody designed goes RED — the fail-closed inversion generalises. |
+| **C** → **`t0718` first slice** | 5 items landed `64f80cd57` → **DELTA-3 OUTPUT-REVIEW RUNNING** | **3/3 ✅** | yes | ⛔⛔ **The brief still pointed at the REJECTED design** — body line 8 cited a patch that is **13 × the deleted flag and ZERO × the adopted one**. Precedence killed the design and **left the POINTER**. ⛔ **NO prototype of the adopted design exists — it has never been compiled.** ⛔ **And NEITHER prescribed guard catches the class:** adding `\|\| name == "Box"` — the edit D51 calls *"not an acceptable fix"* — is **invisible to all 5405 `gg check` outcomes AND the whole `--lib` suite.** | Measurements landed in `[[t1408]]` (it is **FOUR** name tables, not two, disagreeing by 5 names; and the reference-grade fold is **already half-built** at `resolve.rs:159-173`, making it SMALLER than the status quo) and `[[t0718]]` (the literal-counting ratchet **cannot catch its own class** — a reviewer's "realistic regrowth" probe was a copy of a defect already live at `typecheck.rs:1291`/`:1308`, guard green). |
+| **I** → **`t1506` COVERAGE NET** ⭐ **OWNER-DIRECTED 2026-09-06** | ✅ scout returned · **H ANSWERED: tracks are ORTHOGONAL, stay SPLIT** · brief owed | — | no | Opened because the owner asked for the blind spot closed this round. **ZERO Gorget-bodied fns take a `Ref[T]`/`MutRef[T]` param** — all 13 declarations are `extern`; a silently-miscompiling prototype is **green on 365/366 fixtures**. ⛔ **Two affected site-pairs fire 0× across 2637 fixtures**, so readiness (1) is UNSATISFIABLE for them from committed fixtures — only this track's cells will ever reach them. |
+| **D** snapshot freshness + `todo_index` rc | ✅✅ **INTEGRATED `6d8380f9a`** — worktree pruned | 3/3 ✅ | — | At the MERGED tree: `--lib` **1187/0**, `--test lints` **244/0** (was 242 — D adds two), `snapshot_` **3 passed / 1376 checked / 0 disagreements**, all rc 0 **off bare commands**. **MA-5 discharged: `ls …/*.out \| wc -l` → 1376 == the pin, MEASURED not arithmetic.** ⊕ It also closed a hole its own review had explicitly declined to ask for: a fixture failing consistently with a VARYING signal (SIGSEGV then SIGABRT) was downgraded RED→Report by `v1 != v2`; now 13 synthetic cells, RED-verified. **`t1508` filed; `DONE.md` line still owed.** | Ships 3 guards + a 1376-row corpus net (**+47 s per C sweep**). ⛔ **It measured a BRIEFED PREMISE FALSE:** `.stdin(Stdio::null())` is a mirror, not the enforcement — `proc_guard` nulls stdin itself, overriding the caller, so hatch R3 is **unpinnable**, not env-dependent. ⊕ Corrects the plain-runner count to **9 CALL SITES across 7 nets** (three passes said 8, counting *nets*). **`t1449` CLOSED (`git rm`); `t1451` narrowed, still open.** |
+| **G** repro/`cites` path guard (`t1064`+`t0675`) | ✅✅ **INTEGRATED `a73dfe1e1`** — worktrees pruned | 3/3 ✅ | — | Merged-tree, all rc 0 off bare commands: `--lib` **1187/0**, `--test lints` **248/0**, `todo_index` **967/967**. **`repro` 16 broken rows → 0; `cites` 34/33 → 30/29.** ⭐ **FOUR lints where one was briefed** — one of them **`t0675`'s owner-agreed guard, UNBUILT since 2026-08-23** — and one written to pin the escape its own output-review found. | Shipped **THREE** lints, not the one briefed — **244 → 247** — because two predicate halves were **corpus-unpinnable** and it pinned them against the real tree rather than name them omissions. **`repro` 16 broken rows → 0; `cites` 34/33 → 30/29.** Reached **5 REPOINT / 2 CLOSE** independently (third agent to land there) and verified no `cites` field names either closed item, so the closure **manufactured none of the dangling-citation defect the track exists to catch.** |
+| **H** `t1505` — the CRITICAL F surfaced | 🆕 **SCOUT RUNNING** | — | yes | Opened because **F stood down leaving its own CRITICAL unworked**, and the owner's standing directive is that optimality progresses with **prerequisites tackled RECURSIVELY**. ⛔ **No round follows R51**, so unworked now means deferred indefinitely. Scout is told **FIXTURE-ONLY or DON'T is an acceptable answer.** |
+| **F** optimality increment 1 (`t0952`) | ⛔ **STOOD DOWN** after 4 passes · ✅ **HARVESTED `aad202677`** | — | — | ✅ **Pass 3 SOLVED the miscompile** — `/tmp/revF51p3_shapeX.patch`: `30`→`3` with the full win (`map_clone` 801→**0**, RSS 6104→**1256**). Core #10 reject NOT needed. ⛔ But my five-site list held one **DEAD** site (invoked 173×, always empty), **MISLABELLED** (`register_method_instance_sigs`, not `register_equip_sigs`), while omitting **five live** ones. ⛔ **A 3-entry fixture — the size every probe in this family used — SITS GREEN over a live miscompile; 7 entries prints `1`.** ⇒ size fixtures to DISTINGUISH. ⛔ **`MutRef[T]` unmeasured in all three passes.** | Root cause + layer CONFIRMED, headline reproduces (**OOM-kill → 1.9 MB correct run**). Reset because the fix **fights Core #4** (1 of 4 callers) and fires **SIX-Q #6 on its own mechanism** (`:1890` ByValue half unfixed; works only because `calls.rs` short-circuits first). |
+
+⚠ **THE RESET ON F IS AN OVERRULE OF THE REVIEWER'S OWN CLASSIFICATION.** Pass 1 called all four findings scope growth; two of them name *a Core invariant fought*, which the rule says resets. **A reviewer's severity label is evidence, not a verdict.**
+
+⛔⛔ **THE ROUND'S DOMINANT DEFECT SOURCE IS THE FOLD ITSELF — MEASURED FOUR TIMES, AND THE RULE THAT FORBIDS IT ALREADY EXISTED.** *"A FOLD MAY ONLY ASSERT WHAT A COMMAND IN THAT SAME FOLD REGENERATES"* was broken by the orchestrator, repeatedly, in the act of folding:
+- Track A: A1's B3 re-imported a claim `t1083` had **already corrected**; A3 struck it three passes later.
+- Track A: A3 imported *"the sixth instance"* as a load-bearing scope decision; the command returns **11**, heterogeneous.
+- Track B: **A5 overrode A4's correct classification of attack J and A6 inherited the override UNTESTED** — measured GREEN with a control two passes later.
+- Track F: the scout's *"8 rows"* was a grep written for another purpose; the true blast radius is **17**.
+⇒ ⚠ **A FOLD IS NOT A TRANSCRIPTION STEP — IT IS THE POINT WHERE UNVERIFIED CLAIMS ENTER WITH THE AUTHORITY OF A DECISION.** When an addendum OVERRIDES an earlier pass's classification, that override needs its own measurement, or the later pass inherits a confident error. **Three of the four above cost 2+ passes to unwind.**
+
+⛔ **AND THE DUPLICATE-FILING NEAR-MISS IS NOW A RULE.** I filed `t1470` for a finding already filed as `t1469` — same probe, four hours apart. **A duplicate born of one source report is INVISIBLE to a grep of the SYMPTOM, because both filings use the source's own words. Grep the CITED SOURCE FILES.**
+
+### ⭐⭐ TRACK F SCOUT — **THE DAG HAS A THIRD AXIS NEITHER PLAN DOC OWNS, AND IT IS EXACTLY WHAT "RECURSIVELY" REACHES**
+
+```
+ROOT  G — "compilation as optimal as hand-written by an expert"
+      ├── G-COST   don't emit a clone an expert wouldn't write     (cow-cost-contract.md · t0538)
+      ├── G-LEGAL  the language must be able to EXPRESS that       (cow-transient-view-model.md · D41)
+      └── G-SOUND  ⭐ the clone/materialize op must ITSELF be correct, and borrow-vs-owned
+                   provenance must SURVIVE to every ownership boundary.
+                   ← NEITHER PLAN DOC OWNS THIS. It is the recursive prerequisite.
+```
+**L0 (G-SOUND) → L1 (first increment) → L2 (Phase A summary+arg elision) → L3 (`warn`) → L4 (B: guaranteed-elision set) → L5 (C: knob) → L6 (D: #13/D40 + D52).** `B→C` is non-negotiable per `t0538`.
+
+### 🚨 **6 OF THE 9 CRITICALs ARE GENUINELY IN THE CHAIN — and all nine still reproduce**
+**Kind 1 — they FALSIFY THE SUMMARY'S INPUT FACTS** (borrow-vs-owned provenance failing to survive a boundary — exactly what `materializes_param[i]`/`returns_view_of[i]` encode): **`t1329`** (sharpest — it sits *at the return boundary*: `Box[String] take(H &h): return h.b` **checks rc 0**, ASan shows the UAF; a summary reading that signature computes `returns_view_of[0]=false` and elision then moves at the caller's last use ⇒ **the exact dangling-view UAF the design exists to prevent**) · **`t0011`** · **`t0036`**.
+**Kind 2 — they make the design's SAFE FALLBACK UNSOUND**, and this is the one that should worry us: the whole cost design rests on *"a summary that cannot prove deadness CLONES."* **`t1330`** (struct clone of a `Box[String]` field → rc 134 double-free) · **`t1359`** · **`t1418`**. ⛔ **If "just clone it" is memory-unsafe for those families, THE CONSERVATIVE BRANCH IS NOT CONSERVATIVE — and a clone-counting benchmark is counting broken operations, so the measurement oracle dies with it.**
+**NOT in the chain:** `t1067` (D7-gated; `lacks_materialization_path` returns the *correct* answer) · `t1310` (self-host lane; succession-plan concern) · `t1393` (ownership facts intact — it corrupts the **monomorphized call graph the summary is computed over**, a graph-integrity gate, not a per-signature-fact one).
+⛔ **TWO FILED MECHANISMS ARE MEASURABLY FALSE — a fixture built to either filed shape would sit GREEN FOREVER.** `t1359`: clone-of-clone is *clean*; the real path is `gorget_map_put_cloned` via `filter`/`map`/`update`. `t1418`: **not a double-free today — a 338 B LEAK**; the second free is emitted but masked by `gorget_shared_drop` skipping `gorget_array_free`, so **fixing the Shared drop CONVERTS the leak into the filed double-free.**
+
+### ⭐⭐ FIRST SHIPPABLE INCREMENT — **`t0952`, ~35 lines, and it turns an OOM-KILL into a correct run**
+Root cause one layer above where the item points (Core #1): `GenericCollector` maps a declared `Ref[T]` param through the immutable mapper, which refuses `Ref`, so the param degrades to `Unit`/`ByValue` and the call site **deep-clones**. **Nothing gates it — it REMOVES clones rather than relying on them being correct.**
+| probe | pristine HEAD | + prototype |
+|---|---|---|
+| `Dict[int,int]` **N=20 000** | ⛔ **rc 137 — SIGKILL, OOM-killed** | ✅ **rc 0, correct, RSS 1 912 KB** |
+| `Dict[int,int]` N=200 | `map_clone=`**801**, leaked **4 921 344 B**, RSS 6 088 KB | **0 / 0 / 1 252 KB** |
+| `LEAK_ALLOWLIST` rows (ASan) | ⛔ **the "8 rows / 59 196 B" figures are STRUCK** (pass 1: the 8 came from `t1307`'s grep, written for another purpose — a SELECTION; and the before-figure measured **62 310 B**, not 59 196) | ⭐ **17 rows move — 8 fully clean + 9 shrink; ~274 of 1978 leak records, ~14 % of the backlog. BIGGER than briefed.** Regenerate by sweeping all 23 `map_clone`/`set_clone` rows at HEAD. |
+Gates: `--lib` 1187/0 · `iter` 144/0 · `dict` 104/0 · `cow` 225/0 · `clone` 36/0 · ⭐ **the fix does not move the self-compile clone meter — MEASURED TRUE, both stages byte-identical pristine vs prototype.** ⛔ **But "no re-pin" is FALSE:** all four lines print `action=RE-PIN` **at pristine HEAD** — **pre-existing drift, not this fix's**; attribute it that way or an executor blames their own change. ⚠ Stage-1 `array_clone` sits at 0.681 % of a ~1 % band — **0.32 % headroom.** ⚠ **Filter trap: `self_host_clone_ceiling` matches only ONE of the two tests — use `clone_ceiling`.** Patch `git apply --check` clean at HEAD.
+⭐ ***A program correct in the language, in ordinary safe syntax, `gg check` clean, that DIES ON INPUT SIZE — and it costs 35 lines.*** ⛔ *"Dissolves `t1307`"* **overstates** — what dissolves is the *"must be equally fast"* objection; **D41's in-tree casualty remains** (4 stored-borrow fields), so *"D41 does not need to bend"* also overstates. ⛔ **AND THE CORE #4 SIBLINGS ARE NOT `t0949`/`t0951`** — those items **explicitly discriminate themselves from `t0952`** in their own bodies (*"different write site, different file, and neither fix touches the other"*). The real sets: `grep -n 'substitute_and_map(mapper' src/ir/lowering/generics/mod.rs` (5 sites) and `grep -rn 'ctx.auto_clone_if_ptr(' src/` (**4 callers, 1 guarded, no arm-count lint**) — filed as **`t1476`**, which also records that **RATCHET C cannot catch this class**: its predicate counts `emit_clone(`/`call_clone(`, and a clone-**suppression** adds neither.
+
+### ⛔ THREE CORRECTIONS TO WHAT I BRIEFED — one is mine before it is the owner's
+- ⛔ **"scalar `&` write-through has NO WORKING PRECEDENT" is FALSE at that scope.** Measured: `void bump(int &n): n = n+1` prints **2** on both backends; scalar-`&` params are used across the corpus (regenerate the count -- `grep -rlE '\b(int|bool|float|byte) &' tests/fixtures lib | wc -l` measured ~140 files / 207 occurrences; the previously-quoted 240 counted ALL `&` params and is WITHDRAWN); **the self-host itself depends on `bool &` write-through.** ⇒ **`t1404`'s claim is TRUE AT ITS OWN SCOPE** — the `for x in &coll` *whole-binding loop-element rebind* has no precedent. **Retract at the retracted claim's scope, not wider.**
+- ⛔ **"row 4 unsound at HEAD" is STALE** — true for one morning (`1eb15dcd0` 04:25 → `237c19ff2` 08:01 closing `t1362`). **Row 4's mechanism is measured SOUND at HEAD.**
+- ⛔⛔ **THE 12-ROW DECISION TABLE WAS NEVER COMMITTED ANYWHERE.** It lived only in the lost `/tmp` scout report (`grep -rn 't1362' docs/` → 0). ⇒ **R1's ruling CANNOT BE IMPLEMENTED AS RECORDED**: the disposition covers rows 1–3, 5–9, 10, 12, 4 = **11 of 12 — ROW 11 IS UNACCOUNTED FOR**, and nobody can check because the table does not exist. **This is my problem before it is the owner's.**
+⊕ **`cow-transient-view-model.md`'s header is stale in BOTH directions:** Rule 1 base **BUILT**, Rule 1 extension **UNBUILT** (`g.at(0).n = 99` accepted, **write silently lost**), Rule 2 **PARTIAL** (all 12 `returns_view: true` decls are String slice/trim; **`get`/`first`/`last` are `false`**, name whitelist still live), Rule 3 **UNBUILT**. **Re-tagging the getters IS the real Rule-2 build and what makes `returns_view_of[i]` trustworthy** — but it changes two readers ⇒ Core #9, all lanes.
+
+### ⚖ OWNER-ASK-CLASS NODES IN THE DAG
+`t0538`'s cost contract needs a **RATIFICATION pass, not an executor** (askable inside R51) · **R2** reject-vs-materialize (measurement cannot settle it; filed as `t1403` with `repro = []` and **zero test hits** — against the cardinal rule) · ⛔ **`t0544`: the RATIFIED ledger instructs the WRONG INSTRUMENT** — `decisions.md:3283` says re-derive with `scripts/clone_attribution.sh`, which by its own header sees **~3.5 %** of clone volume; changing a ratified entry is an owner ask · **A36 vs D42** — `--warn=all` bounded by `since` **requires a language-version field in `gorget.toml`** that does not exist.
+⚠ **PRIOR ART CUTS AGAINST THE DIRECTION and must be measured against the EAGER baseline, not only against itself:** Lean measured **2× peak memory** from deferring; Koka declined to ship this; Morphic measured **6.4 %** of in-place mutations *forced* to clone.
+
+### ✅✅ ASK 2 IS RULED — 2026-09-06. **TYPES MAY NOT BE SHADOWED. REJECT OUTRIGHT.**
+
+**Owner, verbatim:** *"I think we should reject it outright. I think types should not be shadowed. Why would we
+want that to work? What would we gain from that? We do support type aliasing with the `type` keyword."*
+
+⭐ **THE CHALLENGE LANDS AND MY OPTION (ii) HAD NO ANSWER.** I offered *"make it work"* as the eventual
+reference-grade end state **without ever asking what it buys.** It buys nothing: if you want your own type you
+write `struct MyVector`; if you want a shorter name for a builtin you write `type V = Vector[int]`. **Shadowing
+adds no expressiveness and costs every reader.** ⇒ **(i) is not a stepping stone to (ii) — (ii) was never
+worth reaching.**
+
+**VERIFIED, NOT ASSUMED (measured 2026-09-06):**
+- ✅ **The escape hatch is real and generic.** `type` is a keyword (`src/lexer/token.rs:447,531`) with
+  generic aliases documented at `docs/language-reference.md:968-969` (`type Callback = int(int, int)`,
+  `type StringMap[V] = Dict[String, V]`). Probe: `type Vec2[T] = MyVec[T]` → **checks, builds, prints 7.**
+- ⛔⛔ **AND THE REJECT MUST COVER `type`, OR THE HOLE STAYS OPEN THROUGH IT.** `type Vector[T] = MyVec[T]` —
+  an ALIAS shadowing the builtin — **checks, builds and prints `7` today.** ⇒ **the alias path handles the
+  shadow CORRECTLY where the `struct` path miscompiles to `0`.** A rule spelled only over `struct` leaves a
+  second door. **The rule's subject is "a declaration that introduces a TYPE NAME" — `struct`, `enum`,
+  `newtype` AND `type`.**
+⊕ **That asymmetry is also the proof the miscompile is not intrinsic:** shadowing works fine through the alias
+path, so `struct Vector[T]` printing `0` is a **defect**, not a consequence of shadowing being hard.
+
+**SCOPE OF THE RULE (both asks together):** ⑴ a **VALUE** may not take a type's name (Ask 1 — already true for
+primitives, now total); ⑵ a **TYPE** may not take an existing type's name (Ask 2 — all four introducing forms).
+⇒ **type names are a single flat namespace with no shadowing, and values are disjoint from it.**
+⭐ **`x[k](v)` is then decidable with no use-site reject at all** — which was Ask 1's whole argument.
+
+⊕ **THIS RESCUES TRACK C** (stood down above): its six Core #8 miscompile cells become **rejects**, and the
+`t1408` re-cut no longer has to make `struct Vector[T]` *work* — only reject it.
+
+### ✅✅ ASK 1 IS RULED — 2026-09-06. **REJECT AT THE DECLARATION (reading (a)) — AND THE REASON IS BETTER THAN MINE**
+
+**Owner, verbatim:** *"`Vector[int] Vector = [1, 2, 3]` this should fail statically at declaration. The naming
+a variable "Vector" should not be allowed because Vector is a type. If we disallow naming variables using type
+names, that unblocks the `x[]()` conflict because we can always tell if what is inside the `[]` is: 1 - a type
+(meaning this is a generic instantiation), or 2 - a variable containing a value, in which case `[]` is a
+subscript."*
+
+⭐ **THIS SUPERSEDES MY RECOMMENDATION OF (b), AND IT IS STRICTLY STRONGER.** I argued (b) because *a
+declaration is not ambiguous*. **The owner's point is that (a) does not merely CHOOSE a reject site — it BUYS
+the disambiguation, making a use-site reject UNNECESSARY.** With variable names and type names disjoint,
+**every identifier in bracket position resolves to exactly one of {type, value}**, so `x[k](v)` is decidable
+with no use-site reject at all. ⇒ **the two readings were never symmetric: (a) is a PRECONDITION, (b) is a
+PATCH.**
+
+**PRECONDITION VERIFIED, NOT ASSUMED (Core #5, measured 2026-09-06):**
+- ⭐ **THE RULE ALREADY EXISTS FOR PRIMITIVES.** A variable named after the primitive `int` is **already
+  rejected** — *"reserved keyword and cannot be used as a [name]"*. ⇒ *"a variable may not take a type's
+  name"* is **already true and enforced** for the primitive set. **This ruling COMPLETES an existing rule
+  rather than adding a new one** — which is also the honest way to explain it to a user.
+- **Type arguments are TYPES ONLY** — no const generics, no value-in-bracket position (`grep -rnE
+  'const generic|ConstGeneric' src/parser/ docs/language-design.md` → **0**; `Vector[3] v` and a `meta`-bound
+  `Vector[N] v` both fail to parse as types). ⇒ **nothing legitimate puts a VALUE in the deciding position**,
+  so the disjointness test is TOTAL.
+- **Cost is smaller than feared:** generic type parameters are **struct-scoped and do not leak** — `struct
+  Pair[A, B]` with a file-scope `int A = 5` checks **rc 0** today. Affected namespace = the builtin generics
+  plus **237 distinct user type names** across `tests/fixtures/*.gg`.
+
+⛔ **ASK 2 IS NOT ANSWERED BY THIS.** A *variable* taking a type's name is now ruled. A **TYPE** taking a
+type's name (`struct Vector[T]`) is a different question and remains OPEN — and it is the one that today
+**silently prints `0` instead of `7`**, while `struct Callable[T]` rejects and `struct Box[T]` LIR-panics.
+
+### ⛔ TRACK C IS STOOD DOWN — and the reference-grade cut is NAMED, not lost
+
+**Five passes, five different breakages, one root cause.** The gated variant *does* produce its claimed
+**0 changed cells over 624** — **and it produces them BY BEING THE DEFECT THE TRACK EXISTS TO RETIRE.** D51
+verbatim: *"seeded ONCE at registration … **a `DefId`-keyed flag is immune to an import changing what a name
+resolves to; a string compare never can be**."* The gate makes the accessor a **READ-TIME string compare**,
+and `t1408`'s own text forbids exactly that: *"DO NOT add `"Callable"` to a list inside the check: that
+replicates the defect in the code written to fix it."*
+⛔ **AND NOTHING PINS IT.** Deleting the typed-flag read changes **0 of 624 cells**, `--lib` 1187, `lints` 243
+— **the flag is DEAD, and structurally so**: it is only seeded for names the gate short-circuits on, so the
+read is unreachable-as-`Some` by construction. Readiness (4) cannot be met by any fixture.
+⊕ **The ungated cut is not the escape either** — measured, it moves `Callable` **out of the only family member
+that is currently CORRECT** (`struct Callable[T]` rejects) **into the family that is currently BROKEN**
+(`struct Vector[T]` prints `0`; `struct Box[T]` LIR-panics). **Core #8's "consistency achieved by regressing
+to the defect."**
+
+⭐ **`t0718` IS NOT A SIBLING OF `t1408` — IT IS ITS ONLY LIVE CONSUMER, WHICH IS *WHY* THE FLAG IS DEAD.**
+`typecheck.rs:1291` and `:1308` **already hold a `DefId`** (`grep -n 'is_shared_wrapper' src/semantic/typecheck.rs`).
+The scope-out's justification — *"those sites read a mangled GIR string, not a DefId"* — is **true of
+`src/ir/lowering/` and FALSE of these two.** ⇒ **`t1408` is the PRODUCER half and `t0718` the CONSUMER half of
+ONE mechanism. Shipping the producer with a gate guaranteeing no consumer can read it, and recording it as
+done, is the worst of the three orderings.**
+✅ **THE REFERENCE-GRADE CUT, for whenever this resumes:** fold `t1408`'s table into the **existing three-flag
+identity seed at `resolve.rs:159-173`**, and migrate `typecheck.rs:1291/1308` to a per-axis accessor reading
+it. **D51's prescribed shape verbatim**, needs **NO lowering migration**, and closes `t0718`'s first slice.
+⚠ **It wants a SCOUT, not another addendum** — and with rounds suspended after R51 it has no home unless the
+optimality DAG pulls it in as a prerequisite. **Track F's scout is being asked exactly that.**
+
+### ⚖ A NEW OWNER ASK FROM THIS PASS — genuinely unratified semantics, and CHEAP if answered
+**Does a shadow-reject cover a TYPE taking a builtin type's name (`struct Callable[T]`), or only a VALUE taking
+one (`int Vector = 5`)?** `t1408` records the ruling as being about a **value**. ⭐ **If a TYPE-shadow reject is
+also ratified, the ungated cut is RESCUED CHEAPLY — its six miscompile cells become rejects.** That single
+ruling converts a stood-down track into a shippable one.
+
+### ⭐⭐ OWNER RULING 2026-09-06 — **THE OPTIMALITY TRACK PROGRESSES NOW; PREREQUISITES ARE TACKLED RECURSIVELY**
+
+**Owner, verbatim:** *"this optimality track is the long term objective for gorget. Although long term, I think
+it should not be postponed, so I'd like it to progress. If CRITICAL or other items are in the requisites,
+those requisites should be tackled recursively. I want gorget code compilation to be as optimal as hand
+written by an expert developer."*
+
+⛔ **THIS SUPERSEDES THE 2026-09-05 FIXED ORDER** (*"CRITICALs + all R49-deferred FIRST, then the two CoW
+plans"*). ⭐ **The order INVERTS its driver: the optimality goal is now the ROOT, and safety debt is pulled in
+AS A PREREQUISITE OF IT, recursively — not queued ahead of it.** A CRITICAL is worked because the optimality
+chain needs it, and one that is NOT in the chain is not thereby deprioritised — it is simply not this track's
+gate.
+⚠ **THIS RESOLVES THE HOLE THE CRITICAL AUDIT FOUND.** "Safety first, optimality later" is exactly how R50
+integrated ten tracks, went 13-gates green, and advanced its own headline by zero: **postponement has no
+owner.** A recursive prerequisite chain has one at every level.
+⊕ **Compatible with the no-new-round instruction below: this work happens INSIDE R51.**
+
 ### ⚖ OWNER ASK #5, FOR THE CLOSE — **R51 WILL NOT SHIP THE OPTIMALITY INCREMENT, AND THE OWNER SHOULD HEAR IT FROM THE CLOSE, NOT INFER IT**
 
 The owner's 2026-09-06 ruling makes optimality the ROOT and pulls prerequisites in recursively. **That chain IS
