@@ -8451,6 +8451,527 @@ fn self_host_cited_fixture_paths_resolve() {
     );
 }
 
+/// `todo/` REPRO-FIELD INTEGRITY (Core #6; Task Continuity's cardinal rule).
+///
+/// Task Continuity: *"Every filed reproducible bug/gap ships a DURABLE
+/// `known_gaps` repro ... cited from the item's `repro`."* The FIXTURE side of
+/// that contract is instrumented — `scripts/known_gaps_census.sh` runs every
+/// `#[ignore]`d test citing a `known_gaps/` fixture and reds on drift against
+/// `tests/gaps/PASSING_ALLOWLIST.txt`. The ITEM side is not: nothing reads an
+/// item's `repro` array, so a path that resolves to nothing reads as evidence.
+///
+/// This guard asks the one question about `repro` that needs no judgement:
+/// DOES THE PATH NAME A FILE THAT EXISTS? It deliberately does NOT ask whether
+/// an item OUGHT to have a repro — that question has no mechanical answer (a
+/// design track, a process item and a doc write-through are all legitimately
+/// exempt, and no front-matter field separates them from a live defect), and a
+/// guard that has to read intent out of prose is silenced by rewording rather
+/// than by fixing. What IS mechanical is that a CLAIM must be TRUE.
+///
+/// ⚠ QUALIFYING "ZERO EXEMPTION SURFACE", because the unqualified form was
+/// measured MISLEADING. It is true about EXEMPTIONS — no allowlist, no
+/// tolerance band, `broken.is_empty()`. It said NOTHING about the PARSE, and
+/// that is where the first hole was: matching the field by literal prefix let
+/// ONE LEADING SPACE silence this guard entirely while `scripts/todo_index.py`
+/// went on machine-reading the dead path. **An unexemptable guard that can be
+/// made BLIND is not the same thing as one that always fires.** Both halves now
+/// hold, and the parse half is pinned by
+/// `todo_front_matter_key_reads_what_the_index_reads` — no corpus row can pin
+/// it, so that cell test is the only thing standing between this claim and a
+/// silent revert.
+///
+/// ⚠ THE `repro` FIELD IS MACHINE-READ METADATA, so it takes ONE spelling:
+/// repo-relative from the repo root (`tests/fixtures/known_gaps/x.gg`). Prose
+/// comments keep the two-spelling tolerance of
+/// `self_host_cited_fixture_paths_resolve` — a sentence may say
+/// `known_gaps/x.gg` — but a FIELD a tool joins on may not, because tolerating
+/// both is what let two different defects read as one number (`todo/t1064`).
+///
+/// ⚠ A REPRO IS A FIXTURE UNIT, WHICH IS NOT ALWAYS A FILE. A multi-file gap
+/// ships a DIRECTORY (`known_gaps/snag58_private_int_import/`,
+/// `known_gaps/manifest_malformed/`, whose `.gg` sources live one level down in
+/// `app/` and `greeter/`), so the predicate is `repro_path_resolves`: a FILE, or
+/// a DIRECTORY that is not a corpus ROOT and holds a `.gg` RECURSIVELY. Both
+/// halves are load-bearing and were measured in both directions:
+///   * plain `is_file()` reds every legitimate directory repro;
+///   * plain `exists()` ACCEPTS `tests/fixtures` and `tests/fixtures/known_gaps`
+///     — containers that resolve and evidence nothing;
+///   * "a directory with a DIRECT `.gg`" fixes the containers and breaks
+///     `manifest_malformed`, whose sources are nested.
+///
+/// ⚠ THREE PATH PREDICATES COEXIST IN THIS FILE, AND THAT IS NOT A LAYERING
+/// RULE-3 BREACH — they answer three different questions, one source of truth
+/// each: `self_host_cited_fixture_paths_resolve` reads PROSE, so it is lenient
+/// about the two spellings a sentence may use; this guard reads a MACHINE-READ
+/// FIELD naming a fixture UNIT, so it is strict about spelling and unit-aware
+/// about directories; `todo_cites_paths_resolve` reads a machine-read field
+/// naming ANY repo artifact with an optional `:LINE` coordinate, so it strips
+/// the coordinate and accepts a directory. Collapsing them into one predicate
+/// would make each wrong about the other two's population.
+///
+/// ⚠ COUPLING, RECORDED: `scripts/todo_index.py` parses ONE line per key, so a
+/// `repro` array split over several lines parses SILENTLY TRUNCATED. This walk
+/// therefore rejects a `repro = [` line that does not close on its own line
+/// rather than leaning on `todo_index_is_current` staying fatal on the orphaned
+/// continuation line — the coupling was real and is now removed.
+#[test]
+fn todo_repro_paths_resolve() {
+    let root = std::path::Path::new(".");
+    let mut checked = 0usize;
+    let mut items_seen = 0usize;
+    let mut broken: Vec<String> = Vec::new();
+
+    let mut files: Vec<PathBuf> = fs::read_dir("todo")
+        .expect("todo/ dir")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+        .collect();
+    files.sort();
+
+    for path in files {
+        let text = fs::read_to_string(&path).expect("read todo item");
+        // Front matter only: everything before the `+++` fence.
+        let fm = text.split("\n+++\n").next().unwrap_or("");
+        items_seen += 1;
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        let Some(line) = fm.lines().find(|l| front_matter_key(l) == Some("repro")) else {
+            continue;
+        };
+        // The index parser reads ONE line per key; an array that wraps is
+        // truncated SILENTLY. Refuse the shape rather than resolve a prefix of
+        // it — a guard that reads half a field reports on half a claim.
+        let Some(inner) = front_matter_array_body(line) else {
+            broken.push(format!(
+                "todo/{stem}.md: `repro` is not an array opening AND closing on its \
+                 own line — `scripts/todo_index.py` parses one line per key and would \
+                 truncate it silently; keep the array on ONE line"
+            ));
+            continue;
+        };
+        for raw in inner.split(',') {
+            let cited = raw.trim().trim_matches('"');
+            if cited.is_empty() {
+                continue;
+            }
+            checked += 1;
+            if !repro_path_resolves(&root.join(cited)) {
+                let hint = if repro_path_resolves(&root.join("tests/fixtures").join(cited)) {
+                    " (exists under tests/fixtures/ — the field omits the prefix)"
+                } else if root.join(cited).is_dir() {
+                    " (names a CONTAINER, not a fixture unit)"
+                } else {
+                    ""
+                };
+                broken.push(format!("todo/{stem}.md: repro `{cited}`{hint}"));
+            }
+        }
+    }
+
+    // SELF-CHECK (Core #13): a path guard that silently matches nothing is the
+    // failure mode it exists to retire, and the front-matter parse above is
+    // exactly the kind of thing that breaks quietly when the format shifts.
+    assert!(
+        items_seen > 100,
+        "todo_repro_paths_resolve walked {items_seen} item files — the todo/ scan broke, \
+         not the tree."
+    );
+    assert!(
+        checked > 0,
+        "todo_repro_paths_resolve parsed ZERO repro citations from {items_seen} item files \
+         — the front-matter parse broke, not the tree. A guard that cannot fire is not \
+         evidence (Core #13)."
+    );
+
+    let items_broken = broken
+        .iter()
+        .filter_map(|r| r.split(':').next())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    assert!(
+        broken.is_empty(),
+        "{} broken `repro` row(s) across {} todo/ item(s) — the path does not resolve:\n  \
+         {}\n\n\
+         An item whose evidence does not resolve reads as evidenced and is not. Four \
+         things produce this, and they are NOT the same debt:\n  \
+         (a) the fixture GRADUATED out of known_gaps/ and the item was not followed \
+         — REPOINT the field at where it lives now, and ADJUDICATE the item: a graduated \
+         fixture is prima-facie evidence the gap is FIXED, so repointing in bulk asserts \
+         a verification nobody did;\n  \
+         (b) the path omits the `tests/fixtures/` prefix — SPELL IT IN FULL, the field is \
+         machine-read;\n  \
+         (c) the repro was never committed — COMMIT it, or drop the CLAIM by re-grading \
+         the item's body to say its evidence is gone. ⛔ Emptying `repro` is NOT a \
+         disposition: measured, it silences THIS guard and `todo_index_is_current` both, \
+         turning visible dead evidence into invisible absent evidence;\n  \
+         (d) the path names a CONTAINER (`tests/fixtures`, `tests/fixtures/known_gaps`) \
+         rather than a fixture unit — name the unit.\n\
+         Re-derive the split before acting on any row.",
+        broken.len(),
+        items_broken,
+        broken.join("\n  "),
+    );
+}
+
+/// FRONT-MATTER KEY, read the way the tool that JOINS on the field reads it.
+///
+/// ⛔ MEASURED HOLE, and the reason this is a function rather than a literal
+/// prefix match: matching `line.starts_with("repro = [")` let **ONE LEADING
+/// SPACE** silence `todo_repro_paths_resolve` completely — dead path RED,
+/// same line indented by one space GREEN with rc 0 — while
+/// `scripts/todo_index.py::parse_toml_line` (`line.partition(' = ')` then
+/// `k.strip()`) went on machine-reading the dead path with ZERO index errors.
+/// `repro  = [` (padded before the `=`) is the same hole. **That is strictly
+/// worse than an empty field: an empty `repro` honestly says "no evidence",
+/// while an indented one keeps ASSERTING dead evidence to every tool that
+/// joins on it.**
+///
+/// This split is deliberately WIDER than the index's own tolerance — it also
+/// reads `repro=[...]`, which `parse_toml_line` REJECTS. Wider is the safe
+/// direction for a guard, and it means this lint depends on no other lint to
+/// see a spelling (measured: the no-space form raises
+/// `unparseable front-matter line`, so `todo_index_is_current` catches that one
+/// — but a guard that needs a sibling to cover a spelling is a coupling, and
+/// this track already removed one of those).
+fn front_matter_key(line: &str) -> Option<&str> {
+    let (k, _) = line.split_once('=')?;
+    let k = k.trim();
+    if k.is_empty() {
+        None
+    } else {
+        Some(k)
+    }
+}
+
+/// The array VALUE of a front-matter line, or `None` when it does not open and
+/// close on this one line. Paired with `front_matter_key` so the two never
+/// disagree about where the key ends.
+fn front_matter_array_body(line: &str) -> Option<&str> {
+    let (_, v) = line.split_once('=')?;
+    let v = v.trim();
+    if v.starts_with('[') && v.ends_with(']') && v.len() >= 2 {
+        Some(&v[1..v.len() - 1])
+    } else {
+        None
+    }
+}
+
+/// THE INDENT HOLE, PINNED (Core #12/#13 — a guard that cannot see its own
+/// class). ⛔ No CORPUS row can pin this: every front-matter line in `todo/` is
+/// written flush-left today, so the two citation guards stay GREEN whether they
+/// match the key by literal prefix or by the index's own tolerance. Measured on
+/// a scratch item: a dead `repro` path RED; the same line indented by ONE SPACE
+/// GREEN with rc 0, while `scripts/todo_index.py` still returned the dead path
+/// with ZERO errors. These cells make the two spellings a RED row.
+///
+/// ⚠ The last cell is the BOUNDARY, and it is why the split is deliberately
+/// wider than `parse_toml_line`: `repro=[...]` (no spaces) is NOT read by the
+/// index — it raises `unparseable front-matter line`, so `todo_index_is_current`
+/// sees it — but this guard reads it anyway rather than depend on a sibling
+/// lint for a spelling.
+#[test]
+fn todo_front_matter_key_reads_what_the_index_reads() {
+    let cells: &[(&str, Option<&str>, &str)] = &[
+        ("repro = [\"x.gg\"]", Some("repro"), "the canonical spelling"),
+        (" repro = [\"x.gg\"]", Some("repro"), "ONE leading space — the measured hole"),
+        ("   repro = [\"x.gg\"]", Some("repro"), "deeper indent, same hole"),
+        ("\trepro = [\"x.gg\"]", Some("repro"), "tab indent, same hole"),
+        ("repro  = [\"x.gg\"]", Some("repro"), "padded before `=` — the sibling spelling"),
+        ("repro=[\"x.gg\"]", Some("repro"), "no spaces: WIDER than the index on purpose"),
+        (" cites = [\"a\"]", Some("cites"), "the same hole on the sibling arm"),
+        ("mechanism = \"a repro = [b] mention\"", Some("mechanism"),
+         "a VALUE that mentions another key is not that key"),
+        ("- **a body bullet**", None, "not a front-matter line"),
+        ("+++", None, "the fence"),
+        ("", None, "blank"),
+    ];
+    for (line, want, why) in cells {
+        assert_eq!(
+            front_matter_key(line),
+            *want,
+            "front_matter_key({line:?}) should be {want:?} — {why}. \
+             Reverting this to a literal `starts_with(\"repro = [\")` match is \
+             MEASURED to silence `todo_repro_paths_resolve` entirely on an \
+             indented line while `scripts/todo_index.py` keeps machine-reading \
+             the dead path — strictly worse than an empty field, which at least \
+             says the item has no evidence."
+        );
+    }
+
+    // The VALUE reader must agree with the key reader about where the key ends,
+    // or an indented line would be recognised and then mis-parsed.
+    assert_eq!(front_matter_array_body(" repro = [\"x.gg\"]"), Some("\"x.gg\""));
+    assert_eq!(front_matter_array_body("repro  = []"), Some(""));
+    assert_eq!(
+        front_matter_array_body("repro = ["),
+        None,
+        "an array that does not close on its own line must be REFUSED, not truncated"
+    );
+    assert_eq!(front_matter_array_body("severity = \"MED\""), None);
+}
+
+/// CORPUS ROOTS — containers, not fixture units. Both exist and both hold
+/// thousands of `.gg` files, so a `repro` naming one RESOLVES and EVIDENCES
+/// NOTHING. Measured: an `exists()`-shaped predicate accepts both.
+const FIXTURE_CORPUS_ROOTS: &[&str] = &["tests/fixtures", "tests/fixtures/known_gaps"];
+
+/// Does this directory hold a `.gg` ANYWHERE below it? Recursive, because a
+/// legitimate multi-package repro keeps its sources one level down
+/// (`known_gaps/manifest_malformed/{app,greeter}/*.gg`) and a direct-children
+/// test reds on it. `DirEntry::file_type` does not follow symlinks, so a
+/// symlinked directory cannot send this walk round a cycle.
+fn dir_holds_gg(p: &Path) -> bool {
+    let Ok(rd) = fs::read_dir(p) else { return false };
+    for e in rd.flatten() {
+        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if is_dir {
+            if dir_holds_gg(&e.path()) {
+                return true;
+            }
+        } else if e.path().extension().and_then(|x| x.to_str()) == Some("gg") {
+            return true;
+        }
+    }
+    false
+}
+
+/// The `repro`-field predicate: a FILE, or a DIRECTORY that is not a corpus
+/// ROOT and holds a `.gg` recursively. See `todo_repro_paths_resolve`'s header
+/// for why neither `is_file()` nor `exists()` is correct on its own.
+fn repro_path_resolves(p: &Path) -> bool {
+    let norm = p
+        .to_string_lossy()
+        .trim_start_matches("./")
+        .trim_end_matches('/')
+        .to_string();
+    if FIXTURE_CORPUS_ROOTS.contains(&norm.as_str()) {
+        return false;
+    }
+    if p.is_file() {
+        return true;
+    }
+    p.is_dir() && dir_holds_gg(p)
+}
+
+/// THE PREDICATE'S OWN CELLS (Core #12/readiness-(4)). `todo_repro_paths_resolve`
+/// reds on the CORPUS, and the corpus pins only ONE of the predicate's three
+/// decisions — directory acceptance, via `todo/t0419`'s two multi-file repros.
+/// Measured: deleting the corpus-ROOT exclusion, or the RECURSION, changes no
+/// row count and reds nothing. These cells pin both, against the real tree.
+///
+/// ⚠ Every cell is a REAL path, deliberately: a TempDir would exercise the
+/// recursion but not the corpus-root exclusion, which compares the repo-relative
+/// SPELLING and so cannot be reproduced under a temporary prefix.
+#[test]
+fn todo_repro_predicate_cells() {
+    let root = std::path::Path::new(".");
+    let cells: &[(&str, bool, &str)] = &[
+        // A CONTAINER resolves and evidences nothing — `exists()` accepts both
+        // of these, which is why the predicate is not `exists()`.
+        ("tests/fixtures", false, "corpus root, not a fixture unit"),
+        ("tests/fixtures/known_gaps", false, "corpus root, not a fixture unit"),
+        // A multi-package repro keeps its sources one level down, so a
+        // direct-children test reds on it. This cell pins the RECURSION.
+        (
+            "tests/fixtures/known_gaps/manifest_malformed",
+            true,
+            "multi-package repro: zero DIRECT .gg, sources in app/ and greeter/",
+        ),
+        // A directory repro with direct `.gg` — the shape `todo/t0419` cites.
+        ("tests/fixtures/known_gaps/snag52b", true, "directory repro, direct .gg"),
+        // Plain files, the overwhelming majority of the field.
+        (
+            "tests/fixtures/known_gaps/snag52b/codes.gg",
+            true,
+            "a file resolves",
+        ),
+        // A real directory holding no `.gg` is not a repro.
+        ("src/lexer", false, "a directory with no .gg is not a fixture unit"),
+        // And a path that is simply absent.
+        (
+            "tests/fixtures/known_gaps/definitely_not_a_fixture.gg",
+            false,
+            "absent",
+        ),
+    ];
+    for (path, want, why) in cells {
+        assert_eq!(
+            repro_path_resolves(&root.join(path)),
+            *want,
+            "repro_path_resolves(`{path}`) should be {want} — {why}. \
+             This cell exists because the CORPUS cannot pin it: reverting the \
+             corpus-root exclusion or the recursive `.gg` search changes no row \
+             count in `todo_repro_paths_resolve` (measured)."
+        );
+    }
+    // The manifest cell is only meaningful while that fixture really has no
+    // direct `.gg` — assert the premise, don't inherit it.
+    assert!(
+        fs::read_dir("tests/fixtures/known_gaps/manifest_malformed")
+            .expect("manifest_malformed")
+            .flatten()
+            .all(|e| e.path().extension().and_then(|x| x.to_str()) != Some("gg")),
+        "manifest_malformed grew a DIRECT .gg — the recursion cell above no longer \
+         pins the recursion. Point it at another nested-only fixture."
+    );
+}
+
+/// Strip a trailing `:LINE` / `:LINE-LINE` coordinate from a citation, leaving
+/// the path. `cites` values name FILES deliberately (`todo/t0675`: a line-keyed
+/// entry rots on every edit above it), but the migration that populated the
+/// field left coordinates on some rows, and a coordinate is not a resolution
+/// failure.
+fn strip_cite_line_suffix(c: &str) -> &str {
+    let Some((head, tail)) = c.rsplit_once(':') else { return c };
+    if !tail.is_empty()
+        && tail.starts_with(|ch: char| ch.is_ascii_digit())
+        && tail.chars().all(|ch| ch.is_ascii_digit() || ch == '-')
+    {
+        head
+    } else {
+        c
+    }
+}
+
+/// `todo/` CITES-FIELD RESOLUTION — the second of the two lints the `todo/`
+/// split was ratified to make possible (`todo/t0675`, `todo/t0676`).
+///
+/// PROVENANCE, because it is not discoverable from the tree: the ratification
+/// is `git show eff582caa` ("Owner-agreed", 2026-08-23). It landed in
+/// `TODO.md`, which has since been rewritten, and `docs/define-gorget/
+/// decisions.md` carries nothing on it — the quoted text survives in `t0675`
+/// and `t0676`, the COMMIT survives nowhere else.
+///
+/// ⛔ THE ASYMMETRY WITH ITS SIBLING IS DELIBERATE — DO NOT FLATTEN IT.
+/// `todo_repro_paths_resolve` has ZERO exemption surface: no allowlist, no
+/// band, `broken.is_empty()`. THIS arm has an allowlist and an env-gate,
+/// because the two fields are not the same question. `repro` names a fixture
+/// UNIT that either exists or does not. `cites` names any repo artifact a
+/// reader should follow, and one legitimate kind of entry names something that
+/// does not exist yet — `DOC_CITATION_ABSENT_BY_DESIGN`'s forward reference to
+/// the ratified-but-unbuilt `lib/std/stablemap.gg`, cited by `t0534`/`t0535`.
+/// A guard whose population contains a legitimate absence cannot be fatal at
+/// zero without an exemption, and pretending otherwise is how allowlists get
+/// bulk-filled.
+///
+/// SHAPE, per `t0675`: env-gate → burn down → fatal. `GG_LINT_TODO_CITES=1`
+/// makes it FATAL AT ZERO. Ungated it is a two-directional PIN on the measured
+/// dead-row count, so the burn-down cannot drift in either direction while it
+/// is in progress — a NEW dead cite reds, and so does a FIXED one that leaves
+/// the pin stale. It is a pin, never a `<=` band: a band greens every step of
+/// its own drift (Core #6).
+#[test]
+fn todo_cites_paths_resolve() {
+    let root = std::path::Path::new(".");
+    let mut checked = 0usize;
+    let mut items_seen = 0usize;
+    let mut broken: Vec<String> = Vec::new();
+
+    let mut files: Vec<PathBuf> = fs::read_dir("todo")
+        .expect("todo/ dir")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+        .collect();
+    files.sort();
+
+    for path in files {
+        let text = fs::read_to_string(&path).expect("read todo item");
+        let fm = text.split("\n+++\n").next().unwrap_or("");
+        items_seen += 1;
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        let Some(line) = fm.lines().find(|l| front_matter_key(l) == Some("cites")) else {
+            continue;
+        };
+        let Some(inner) = front_matter_array_body(line) else {
+            broken.push(format!(
+                "todo/{stem}.md: `cites` is not an array opening AND closing on its \
+                 own line — `scripts/todo_index.py` parses one line per key and would \
+                 truncate it silently; keep the array on ONE line"
+            ));
+            continue;
+        };
+        for raw in inner.split(',') {
+            let cited = raw.trim().trim_matches('"');
+            if cited.is_empty() {
+                continue;
+            }
+            checked += 1;
+            let target = strip_cite_line_suffix(cited);
+            if DOC_CITATION_ABSENT_BY_DESIGN.contains(&target) {
+                continue;
+            }
+            // `exists()`, not `is_file()`: a `cites` entry legitimately names a
+            // directory ("this area of the tree"), unlike a `repro`, which
+            // names one fixture unit.
+            if !root.join(target).exists() {
+                broken.push(format!("todo/{stem}.md: cites `{cited}`"));
+            }
+        }
+    }
+
+    // SELF-CHECKS (Core #13) — a citation guard that silently matches nothing
+    // is the failure mode it exists to retire.
+    assert!(
+        items_seen > 100,
+        "todo_cites_paths_resolve walked {items_seen} item files — the todo/ scan broke, \
+         not the tree."
+    );
+    assert!(
+        checked > 0,
+        "todo_cites_paths_resolve parsed ZERO cites citations from {items_seen} item files \
+         — the front-matter parse broke, not the tree. A guard that cannot fire is not \
+         evidence (Core #13)."
+    );
+
+    if std::env::var("GG_LINT_TODO_CITES").as_deref() == Ok("1") {
+        assert!(
+            broken.is_empty(),
+            "{} todo/ `cites` entr(y/ies) do not resolve:\n  {}\n\n\
+             A dead `cites` entry deletes an edge from the record: it is where a reader \
+             goes for the neighbouring defect. Repoint it, drop it, or — only for a \
+             ratified-but-unbuilt artifact — add it to DOC_CITATION_ABSENT_BY_DESIGN WITH \
+             ITS REASON. Do not bulk-allowlist: an unread row asserts a verification \
+             nobody did (`todo/t0675`).",
+            broken.len(),
+            broken.join("\n  "),
+        );
+        return;
+    }
+
+    // PROVISIONAL AT INTEGRATION: this pin counts rows in a corpus every track
+    // writes to, so the integrating parent re-measures it from the MERGED tree
+    // rather than adding to it (Core #5). Regenerate:
+    //   python3 - <<'PY'
+    //   import os,glob
+    //   def strip(c):
+    //       h,_,t=c.rpartition(':')
+    //       return h if h and t[:1].isdigit() and t.replace('-','').isdigit() else c
+    //   n=0
+    //   for p in sorted(glob.glob('todo/*.md')):
+    //       fm=open(p).read().split('\n+++\n')[0]
+    //       for l in fm.split('\n'):
+    //           if l.startswith('cites = ['):
+    //               for e in l[len('cites = ['):].rstrip().rstrip(']').split(','):
+    //                   e=e.strip().strip('"')
+    //                   if e and not os.path.exists(strip(e)): n+=1
+    //   print(n)
+    //   PY
+    // then subtract the DOC_CITATION_ABSENT_BY_DESIGN rows the walk skips.
+    const TODO_CITES_DEAD_ROWS: usize = 28;
+    assert_eq!(
+        broken.len(),
+        TODO_CITES_DEAD_ROWS,
+        "todo/ `cites` dead-row count moved (pinned {TODO_CITES_DEAD_ROWS}):\n  {}\n\n\
+         UP means a citation rotted — most often because a round CLOSED an item another \
+         item cites, which is the escape `todo/t0675` was ratified to retire. DOWN means \
+         the burn-down advanced: RE-MEASURE and lower the pin, never widen it. Run with \
+         GG_LINT_TODO_CITES=1 for the fatal-at-zero form.",
+        broken.join("\n  "),
+    );
+}
+
+
 /// PRIMITIVE-METHOD-TABLE drift guard (Core #6; the layering doc's own escape
 /// hatch — where two parallel lists must exist, make the build check they
 /// agree).
@@ -16514,6 +17035,17 @@ fn walkdir_md(root: &str) -> Vec<PathBuf> {
 ///       ledger or a design note (D39 Phase B's `stablemap.gg`).
 /// Anything else is a defect. This list is shrink-only: a path that starts
 /// existing must be REMOVED from here, not left to rot.
+///
+/// ⚠ THE TWO KINDS ARE NOT EQUALLY MEANINGFUL TO EVERY CONSUMER. This list is
+/// shared with `todo_cites_paths_resolve`, and kind (a) — a NEGATIVE MENTION,
+/// prose whose whole point is "this file does not exist" — is meaningless for a
+/// machine-read `cites` field: a field entry is an ASSERTION that a reader
+/// should follow the path, never a mention. No `todo/` item cites
+/// `src/semantic/provenance.rs` today, so the exemption is inert rather than
+/// wrong; if one ever does, that is a DEFECT in the item and the row must be
+/// fixed there, not absorbed here. Kind (b), a forward reference to a
+/// ratified-but-unbuilt artifact, IS meaningful for both consumers — it is why
+/// `t0534`/`t0535` citing `lib/std/stablemap.gg` are legitimately exempt.
 const DOC_CITATION_ABSENT_BY_DESIGN: &[&str] = &[
     // (a) negative mentions — "there is no provenance pass"
     "src/semantic/provenance.rs",
@@ -16912,10 +17444,21 @@ fn doc_source_citations_resolve() {
 
     // Shrink-only, and down to its last entry: the six that named artifacts of
     // abandoned plans went with the `docs/internals/` files that cited them.
-    // What remains is a real defect — `decisions.md` cites a `known_gaps`
-    // repro that was never committed, which the "every filed bug ships a
-    // durable repro" rule requires to exist. Commit the repro (or reword the
-    // citation) and this reaches ZERO; lower the budget when it does.
+    //
+    // ⛔ CORRECTED 2026-09-06 (Core #14 — this comment asserted a fact that was
+    // FALSE, and `todo/t0591` carried the same false sentence). It used to read
+    // "`decisions.md` cites a `known_gaps` repro that was never committed". It
+    // WAS committed, at `4de74d79a`, and it GRADUATED at `2edb9c06b` (a pure
+    // rename out of `known_gaps/`); it is live today at
+    // `tests/fixtures/set_index_ggdef_divergence.gg`, wired to a passing test
+    // asserting `error[E_NotIndexable]`. The remaining row is the LEDGER's
+    // citation, still spelled at the pre-graduation path — and its sentence
+    // reads "… graduates with them", i.e. a ratified plan record that was
+    // executed. ⛔ Rewording it is an OWNER ASK: no agent edits
+    // `docs/define-gorget/decisions.md`. When the owner repoints it this
+    // reaches ZERO; lower the budget then. Sole occupancy is MEASURED, not
+    // assumed: set this to 0 and the single row is
+    // `docs/define-gorget/decisions.md:1720`.
     const MISSING_BUDGET: usize = 1;
     assert!(
         missing.len() <= MISSING_BUDGET,
