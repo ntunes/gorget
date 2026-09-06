@@ -12,9 +12,21 @@ times, by four different agents, and the answer went **11 → 14 → 18 → 30**
 ⚠ NOBODY MISCOUNTED. Each answer enumerated honestly *inside a factorization
 somebody had chosen*, and choosing the factorization is the step that fails:
 one reader factors by `name`, the next by `name × route`, the next adds the
-declaration form, the next the arm. A fifth hand count would fail the same way.
-So the load-bearing artifact is this GENERATOR, not a figure (Core #15(a): cite
-the thing that regenerates a claim, never a bare number).
+declaration form, the next the arm. So the load-bearing artifact is this
+GENERATOR, not a figure (Core #15(a): cite the thing that regenerates a claim,
+never a bare number).
+
+⛔ BUT BE PRECISE ABOUT WHAT THAT BUYS, BECAUSE IT IS EXACTLY ONE OF THE TWO
+FAILURES. This script mechanises the CROSS, not the AXIS. Every shape below is
+instantiated for every name, and the factorization printed at the top of a run
+is DERIVED from the iterated structures — so a name or a shape added here cannot
+silently skip a combination, which is the 11 → 14 → 18 failure and it is dead.
+⚠ IT CANNOT PREVENT A MISSING SHAPE, and a missing shape is precisely what
+produced 18 → 30: `inline × enum × armB` was a real changed cell that no hand
+enumeration had a NAME for. Adding a shape is still a human judgement, and this
+file is where that judgement is now recorded and reviewable — which is the whole
+improvement. If you find a shape that is not here, add it; the count is whatever
+the run says afterwards.
 
 THE FACTORIZATION, STATED AS A PRODUCT
 --------------------------------------
@@ -60,9 +72,21 @@ Build a `<gg-before>` by checking out the parent of the migration commit in a
 scratch worktree and `cargo build`; the migration is `src/semantic/{scope,
 resolve,typecheck,types}.rs` only, so reverting those four files is enough.
 
-Exit status is 0 whenever the run completes: this is a MEASUREMENT, not a gate.
-The gate is the fixture set in `tests/fixtures/coercion_identity/`, whose job is
-to hold each cell this script enumerates.
+EXIT STATUS
+-----------
+    0   run completed, controls held        -- the measurement is usable
+    3   run completed but a CONTROL MOVED   -- the run is INVALID, not a finding
+    1   uncaught error (a missing binary, say)
+    2   argparse usage error
+
+`TOTAL CHANGED` is a MEASUREMENT and not a gate — the gate is the fixture set in
+`tests/fixtures/coercion_identity/`, whose job is to hold each cell this script
+enumerates. ⛔ A MOVED CONTROL IS NOT A MEASUREMENT THOUGH: `Wrap` was never on
+the name list and `Weak`/`Box` are deliberately `false` on this axis, so if one
+of them moves, the comparison is measuring something other than the migration
+and every number in the run is void. This repo reads verdicts off the bare exit
+code, so that case gets its own non-zero status rather than a line of stdout
+somebody has to notice.
 """
 
 import argparse
@@ -83,6 +107,12 @@ import proc_guard  # noqa: E402  (path must be set first)
 
 NAMES = ["Mutex", "Shared", "RWLock"]
 CONTROLS = ["Wrap", "Weak", "Box"]
+
+# A name in both lists would be probed twice into one directory AND counted as
+# its own control — the subject silently grading itself. Cheap to assert, and
+# impossible to notice by reading the output.
+assert not (set(NAMES) & set(CONTROLS)), \
+    f"NAMES and CONTROLS overlap: {sorted(set(NAMES) & set(CONTROLS))}"
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -291,10 +321,13 @@ def main():
 
     moved_controls = [r["case"] for r in verdict + message if r["is_control"]]
     if moved_controls:
+        # ⛔ NOT `return 0`. The line above already calls this an invalidation;
+        # a run whose controls moved is measuring something other than the
+        # migration, and a reader who checks only the exit code must see that.
         print(f"⛔ CONTROL MOVED (this invalidates the run): {moved_controls}")
-    else:
-        print(f"controls held: {len(CONTROLS)} names x "
-              f"{len(INLINE_SHAPES) + len(MODULE_SHAPES)} shapes, none changed")
+        return 3
+    print(f"controls held: {len(CONTROLS)} names x "
+          f"{len(INLINE_SHAPES) + len(MODULE_SHAPES)} shapes, none changed")
     return 0
 
 
