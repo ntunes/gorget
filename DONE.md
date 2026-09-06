@@ -1,6 +1,11 @@
 - [2026-09-06] **R51 Track G — `t1064` + `t0675`: the `todo/` record's own citations are now guarded.**
   Two lints in one walk over `todo/*.md` front matter (`tests/lints.rs`): `todo_repro_paths_resolve`
-  (**zero exemption surface** — no allowlist, no band, `broken.is_empty()`) and `todo_cites_paths_resolve`
+  (**zero exemption surface** — no allowlist, no band, `broken.is_empty()`; ⚠ that claim is about
+  EXEMPTIONS and was silent about the PARSE, which is where the output-review found a hole — matching
+  the field by literal prefix let ONE LEADING SPACE silence the guard while `scripts/todo_index.py`
+  kept machine-reading the dead path. Fixed in both arms and pinned by
+  `todo_front_matter_key_reads_what_the_index_reads`; an unexemptable guard that can be made BLIND is
+  not the same thing as one that always fires) and `todo_cites_paths_resolve`
   (`todo/t0675`'s owner-ratified guard, `git show eff582caa`, landed with its own `:LINE`-stripped
   resolver, the existing `DOC_CITATION_ABSENT_BY_DESIGN` allowlist, an env-gate for the fatal form and a
   two-directional pin during burn-down). The asymmetry is deliberate and stated in the source: `cites`
@@ -15,10 +20,16 @@
   **Core #14:** `t0591` and the `MISSING_BUDGET` comment in `tests/lints.rs` both asserted the
   `set_index_ggdef_divergence` repro "was never committed". It was, at `4de74d79a`, and it graduated at
   `2edb9c06b`. Both corrected; the surviving residue is an owner ask to reword `decisions.md:1720`.
-  - `t0124` CLOSED — the 4 comprehension emitters' loop-carried bare-param hoist landed on all seven cells
-    on both lanes (R44); `cow_loop_bare_param_comprehension` + `_matrix` are live and green.
-  - `t0633` CLOSED — `auto`-typed dict/set comprehensions give the intended `10\n3`;
-    `sound_auto_dict_set_comprehension_values` is live and green (R44).
+
+- [2026-09-06] `t0124` — the 4 comprehension emitters' loop-carried bare-param hoist runs on all seven
+  emitter x channel cells on both lanes (landed R44). The item claimed an `#[ignore]`d fixture printing
+  3,2,4; `cow_loop_bare_param_comprehension` is live, un-`#[ignore]`d and asserts `2\n2\n4`, and
+  `cow_loop_bare_param_comprehension_matrix` covers the other six cells. Closed by R51 Track G's per-row
+  adjudication of the graduated-fixture set.
+- [2026-09-06] `t0633` — `auto`-typed DICT and SET comprehensions over a plain `Vector[int]` give the
+  intended values; the accumulator is minted from the materialized result element. The item claimed an
+  `#[ignore]`d fixture printing 3/0; `sound_auto_dict_set_comprehension_values` is live, un-`#[ignore]`d
+  and asserts `10\n3`, on C and LLVM. Closed by R51 Track G's per-row adjudication.
 
 - [2026-09-06] **🏁 ROUND L (R50) CLOSED — THE CRITICAL MEMORY-SAFETY SET + R49's DEFERRED HALVES. Ten tracks integrated, full battery green.**
   **Integrated:** A1 (`t1077` nested `Box[Box[T]]` read one deref too many) · C2 (`t0045`+`t0403`) · F1r

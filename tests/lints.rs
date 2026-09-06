@@ -8468,6 +8468,18 @@ fn self_host_cited_fixture_paths_resolve() {
 /// guard that has to read intent out of prose is silenced by rewording rather
 /// than by fixing. What IS mechanical is that a CLAIM must be TRUE.
 ///
+/// ⚠ QUALIFYING "ZERO EXEMPTION SURFACE", because the unqualified form was
+/// measured MISLEADING. It is true about EXEMPTIONS — no allowlist, no
+/// tolerance band, `broken.is_empty()`. It said NOTHING about the PARSE, and
+/// that is where the first hole was: matching the field by literal prefix let
+/// ONE LEADING SPACE silence this guard entirely while `scripts/todo_index.py`
+/// went on machine-reading the dead path. **An unexemptable guard that can be
+/// made BLIND is not the same thing as one that always fires.** Both halves now
+/// hold, and the parse half is pinned by
+/// `todo_front_matter_key_reads_what_the_index_reads` — no corpus row can pin
+/// it, so that cell test is the only thing standing between this claim and a
+/// silent revert.
+///
 /// ⚠ THE `repro` FIELD IS MACHINE-READ METADATA, so it takes ONE spelling:
 /// repo-relative from the repo root (`tests/fixtures/known_gaps/x.gg`). Prose
 /// comments keep the two-spelling tolerance of
@@ -8523,24 +8535,20 @@ fn todo_repro_paths_resolve() {
         let fm = text.split("\n+++\n").next().unwrap_or("");
         items_seen += 1;
         let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-        let Some(line) = fm.lines().find(|l| l.starts_with("repro = [")) else {
+        let Some(line) = fm.lines().find(|l| front_matter_key(l) == Some("repro")) else {
             continue;
         };
         // The index parser reads ONE line per key; an array that wraps is
         // truncated SILENTLY. Refuse the shape rather than resolve a prefix of
         // it — a guard that reads half a field reports on half a claim.
-        if !line.trim_end().ends_with(']') {
+        let Some(inner) = front_matter_array_body(line) else {
             broken.push(format!(
-                "todo/{stem}.md: `repro` array does not close on its own line \
-                 — `scripts/todo_index.py` parses one line per key and would \
+                "todo/{stem}.md: `repro` is not an array opening AND closing on its \
+                 own line — `scripts/todo_index.py` parses one line per key and would \
                  truncate it silently; keep the array on ONE line"
             ));
             continue;
-        }
-        let inner = line
-            .trim_start_matches("repro = [")
-            .trim_end()
-            .trim_end_matches(']');
+        };
         for raw in inner.split(',') {
             let cited = raw.trim().trim_matches('"');
             if cited.is_empty() {
@@ -8603,6 +8611,103 @@ fn todo_repro_paths_resolve() {
         items_broken,
         broken.join("\n  "),
     );
+}
+
+/// FRONT-MATTER KEY, read the way the tool that JOINS on the field reads it.
+///
+/// ⛔ MEASURED HOLE, and the reason this is a function rather than a literal
+/// prefix match: matching `line.starts_with("repro = [")` let **ONE LEADING
+/// SPACE** silence `todo_repro_paths_resolve` completely — dead path RED,
+/// same line indented by one space GREEN with rc 0 — while
+/// `scripts/todo_index.py::parse_toml_line` (`line.partition(' = ')` then
+/// `k.strip()`) went on machine-reading the dead path with ZERO index errors.
+/// `repro  = [` (padded before the `=`) is the same hole. **That is strictly
+/// worse than an empty field: an empty `repro` honestly says "no evidence",
+/// while an indented one keeps ASSERTING dead evidence to every tool that
+/// joins on it.**
+///
+/// This split is deliberately WIDER than the index's own tolerance — it also
+/// reads `repro=[...]`, which `parse_toml_line` REJECTS. Wider is the safe
+/// direction for a guard, and it means this lint depends on no other lint to
+/// see a spelling (measured: the no-space form raises
+/// `unparseable front-matter line`, so `todo_index_is_current` catches that one
+/// — but a guard that needs a sibling to cover a spelling is a coupling, and
+/// this track already removed one of those).
+fn front_matter_key(line: &str) -> Option<&str> {
+    let (k, _) = line.split_once('=')?;
+    let k = k.trim();
+    if k.is_empty() {
+        None
+    } else {
+        Some(k)
+    }
+}
+
+/// The array VALUE of a front-matter line, or `None` when it does not open and
+/// close on this one line. Paired with `front_matter_key` so the two never
+/// disagree about where the key ends.
+fn front_matter_array_body(line: &str) -> Option<&str> {
+    let (_, v) = line.split_once('=')?;
+    let v = v.trim();
+    if v.starts_with('[') && v.ends_with(']') && v.len() >= 2 {
+        Some(&v[1..v.len() - 1])
+    } else {
+        None
+    }
+}
+
+/// THE INDENT HOLE, PINNED (Core #12/#13 — a guard that cannot see its own
+/// class). ⛔ No CORPUS row can pin this: every front-matter line in `todo/` is
+/// written flush-left today, so the two citation guards stay GREEN whether they
+/// match the key by literal prefix or by the index's own tolerance. Measured on
+/// a scratch item: a dead `repro` path RED; the same line indented by ONE SPACE
+/// GREEN with rc 0, while `scripts/todo_index.py` still returned the dead path
+/// with ZERO errors. These cells make the two spellings a RED row.
+///
+/// ⚠ The last cell is the BOUNDARY, and it is why the split is deliberately
+/// wider than `parse_toml_line`: `repro=[...]` (no spaces) is NOT read by the
+/// index — it raises `unparseable front-matter line`, so `todo_index_is_current`
+/// sees it — but this guard reads it anyway rather than depend on a sibling
+/// lint for a spelling.
+#[test]
+fn todo_front_matter_key_reads_what_the_index_reads() {
+    let cells: &[(&str, Option<&str>, &str)] = &[
+        ("repro = [\"x.gg\"]", Some("repro"), "the canonical spelling"),
+        (" repro = [\"x.gg\"]", Some("repro"), "ONE leading space — the measured hole"),
+        ("   repro = [\"x.gg\"]", Some("repro"), "deeper indent, same hole"),
+        ("\trepro = [\"x.gg\"]", Some("repro"), "tab indent, same hole"),
+        ("repro  = [\"x.gg\"]", Some("repro"), "padded before `=` — the sibling spelling"),
+        ("repro=[\"x.gg\"]", Some("repro"), "no spaces: WIDER than the index on purpose"),
+        (" cites = [\"a\"]", Some("cites"), "the same hole on the sibling arm"),
+        ("mechanism = \"a repro = [b] mention\"", Some("mechanism"),
+         "a VALUE that mentions another key is not that key"),
+        ("- **a body bullet**", None, "not a front-matter line"),
+        ("+++", None, "the fence"),
+        ("", None, "blank"),
+    ];
+    for (line, want, why) in cells {
+        assert_eq!(
+            front_matter_key(line),
+            *want,
+            "front_matter_key({line:?}) should be {want:?} — {why}. \
+             Reverting this to a literal `starts_with(\"repro = [\")` match is \
+             MEASURED to silence `todo_repro_paths_resolve` entirely on an \
+             indented line while `scripts/todo_index.py` keeps machine-reading \
+             the dead path — strictly worse than an empty field, which at least \
+             says the item has no evidence."
+        );
+    }
+
+    // The VALUE reader must agree with the key reader about where the key ends,
+    // or an indented line would be recognised and then mis-parsed.
+    assert_eq!(front_matter_array_body(" repro = [\"x.gg\"]"), Some("\"x.gg\""));
+    assert_eq!(front_matter_array_body("repro  = []"), Some(""));
+    assert_eq!(
+        front_matter_array_body("repro = ["),
+        None,
+        "an array that does not close on its own line must be REFUSED, not truncated"
+    );
+    assert_eq!(front_matter_array_body("severity = \"MED\""), None);
 }
 
 /// CORPUS ROOTS — containers, not fixture units. Both exist and both hold
@@ -8775,21 +8880,17 @@ fn todo_cites_paths_resolve() {
         let fm = text.split("\n+++\n").next().unwrap_or("");
         items_seen += 1;
         let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-        let Some(line) = fm.lines().find(|l| l.starts_with("cites = [")) else {
+        let Some(line) = fm.lines().find(|l| front_matter_key(l) == Some("cites")) else {
             continue;
         };
-        if !line.trim_end().ends_with(']') {
+        let Some(inner) = front_matter_array_body(line) else {
             broken.push(format!(
-                "todo/{stem}.md: `cites` array does not close on its own line \
-                 — `scripts/todo_index.py` parses one line per key and would \
+                "todo/{stem}.md: `cites` is not an array opening AND closing on its \
+                 own line — `scripts/todo_index.py` parses one line per key and would \
                  truncate it silently; keep the array on ONE line"
             ));
             continue;
-        }
-        let inner = line
-            .trim_start_matches("cites = [")
-            .trim_end()
-            .trim_end_matches(']');
+        };
         for raw in inner.split(',') {
             let cited = raw.trim().trim_matches('"');
             if cited.is_empty() {
@@ -16934,6 +17035,17 @@ fn walkdir_md(root: &str) -> Vec<PathBuf> {
 ///       ledger or a design note (D39 Phase B's `stablemap.gg`).
 /// Anything else is a defect. This list is shrink-only: a path that starts
 /// existing must be REMOVED from here, not left to rot.
+///
+/// ⚠ THE TWO KINDS ARE NOT EQUALLY MEANINGFUL TO EVERY CONSUMER. This list is
+/// shared with `todo_cites_paths_resolve`, and kind (a) — a NEGATIVE MENTION,
+/// prose whose whole point is "this file does not exist" — is meaningless for a
+/// machine-read `cites` field: a field entry is an ASSERTION that a reader
+/// should follow the path, never a mention. No `todo/` item cites
+/// `src/semantic/provenance.rs` today, so the exemption is inert rather than
+/// wrong; if one ever does, that is a DEFECT in the item and the row must be
+/// fixed there, not absorbed here. Kind (b), a forward reference to a
+/// ratified-but-unbuilt artifact, IS meaningful for both consumers — it is why
+/// `t0534`/`t0535` citing `lib/std/stablemap.gg` are legitimately exempt.
 const DOC_CITATION_ABSENT_BY_DESIGN: &[&str] = &[
     // (a) negative mentions — "there is no provenance pass"
     "src/semantic/provenance.rs",
