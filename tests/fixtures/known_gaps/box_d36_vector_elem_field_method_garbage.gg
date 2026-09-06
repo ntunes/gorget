@@ -1,0 +1,39 @@
+# DURABLE REPRO for `todo/t1526` (cell `y7_vector_elem_field`) — the DECLARED
+# CORE #4 SIBLING of `todo/t1513`.
+#
+# WRONG TODAY (measured at HEAD and under R51 Track A's receiver-place fix —
+# INVARIANT across it): prints a pointer-shaped integer at rc 0.
+#
+# ⛔ `index_elem_place_info` IS LABELLED A SIBLING OF `field_place_info` BY THE
+# SOURCE ITSELF (`src/ir/lowering/exprs/methods.rs` carries the comment
+# "Sibling of `field_place_info` (Core #4)"), and `todo/t1513` names only the
+# field one. Fixing one and not the other closes half a class the code already
+# labels as a class.
+#
+# ⊕ IT ALSO REFUTES "the `collection_elem` route cannot be written" AT ITS OWN
+# SCOPE. `Vector[Box[int]]` genuinely does not compile (`todo/t1083`,
+# `todo/t1471`) — but `Vector[<struct with a Box field>]` does, so the route IS
+# reachable and `opaque_handle_route_fixtures_exist`'s `collection_elem` cell is
+# writable, just not through the shape that was tried.
+#
+# ⚠ The value guard `validate_box_get_ptr_result_consumed` is RED here; this
+# fixture is a `TRIP` row in `tests/gaps/BOX_RECEIVER_BURNDOWN.txt`.
+#
+# INTENDED (asserted by the `#[ignore]`d test): `11`.
+from std.collections import Vector
+
+struct P:
+    int v
+
+equip P:
+    int val(self):
+        return self.v
+
+struct H:
+    Box[P] b
+
+void main():
+    Box[P] bb = Box(P(11))
+    Vector[H] vs = []
+    vs.push(H(^bb))
+    print(vs[0].b.val())

@@ -1,0 +1,35 @@
+# `todo/t1319` — RECEIVER PLACE: CLOSURE CAPTURE.
+#
+# `closures.rs` registers a resource capture as `Ptr(cap.type_id)`, so reading
+# the box out of the environment produced the same one-indirection-too-many
+# receiver. This is the exact program `todo/t1319` was filed on.
+#
+# ⚠ `closure_capture` IS NOT IN `opaque_handle_route_fixtures_exist`'s ROUTES
+# list either (`todo/t1471`).
+#
+# RED-VERIFIED AS WRITTEN against the pre-fix compiler: garbage on C, `41` on
+# LLVM. POST-fix: `41` on both.
+#
+# ⚠ ONE RECEIVER PLACE PER FILE, AND THAT IS A MEASUREMENT, NOT A STYLE RULE.
+# `ensure_extern` (src/lir/lower/operands.rs) synthesizes ONE declaration per
+# MANGLED SYMBOL from whichever call site is lowered first, so five places
+# sharing one payload emit exactly ONE `Box__int64_t__get` and all five sites
+# marshal against it: the file would claim five cells in its NAME and pin one.
+# Splitting by payload does not rescue it either — `Box[int]` and `Box[int64]`
+# collapse to the SAME symbol. And the order that decides the winner is
+# LOWERING order, not statement order: top-level function bodies lower before
+# `main`, so a file that reads its control first is not thereby safe.
+#
+# ⚠ LIVES IN `tests/fixtures/self_host_gaps/`, NOT AT TOP LEVEL. Every
+# top-level `tests/fixtures/*.gg` is auto-scanned into `runtime_parity_corpus`;
+# the self-host lane has NO `is_by_value_receiver` chokepoint to mirror this
+# fix into (`todo/t1537`), so a top-level landing would push
+# `RUNTIME_DIFF_NONMATCH_CEILING` past a shrink-only pin that sits at zero
+# slack — and Core #9 ⊕ forbids raising it for a round's own inflow. The
+# Rust-lane coverage is unchanged (`run_gg` runs it like any fixture).
+# Graduating these to top level is what closes `todo/t1537`.
+
+void main():
+    Box[int] b = Box(41)
+    Callable[int()] f = (): b.get()
+    print(f())

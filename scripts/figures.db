@@ -662,7 +662,7 @@ done_md.round_close.anchor_age_matched.mirror = none
 done_md.round_close.anchor_age_matched.note = when this moves WITH roundish, a close landed in the shape the predicate sees — confirm the anchors were re-seeded, then re-pin both
 
 row = done_md.round_close.roundish_headlines
-done_md.round_close.roundish_headlines.value = 85
+done_md.round_close.roundish_headlines.value = 86
 done_md.round_close.roundish_headlines.unit = DONE.md entries whose headline begins ROUND / Round / Rn
 done_md.round_close.roundish_headlines.polarity = exact-pin
 done_md.round_close.roundish_headlines.provenance = measured

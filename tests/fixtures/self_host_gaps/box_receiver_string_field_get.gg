@@ -1,0 +1,34 @@
+# `todo/t1373` / `todo/t1319`, STRING PAYLOAD — RECEIVER PLACE: STRUCT FIELD.
+#
+# The `Box[int]` sibling of this cell prints a pointer-shaped integer pre-fix.
+# With a `String` payload the same wrong pointer is handed to the string
+# printer, so the program emits raw heap bytes instead.
+#
+# RED-VERIFIED AS WRITTEN against the pre-fix compiler on C: prints garbage
+# bytes at rc 0. POST-fix: `hi`.
+#
+# ⚠ ONE RECEIVER PLACE PER FILE — `ensure_extern` synthesizes ONE declaration
+# per MANGLED SYMBOL from whichever call site is lowered FIRST, so a file with
+# several places claims several cells in its NAME and pins one.
+#
+# ⛔ C-LANE-ONLY, BY DECLARATION AND NOT BY ACCIDENT. Its test opens with
+# `skip_under_llvm()` and PRINTS the skip. `Box[String].get()` is an `llc` hard
+# error and `Box[bool].get()` through a plain parameter is rc 139 on LLVM — at
+# pristine base AND under the fix — so the LLVM lane has nothing to assert here
+# either way (`todo/t0685`, `todo/t1510`). Skipping a lane that cannot BUILD the
+# program is not the same as excusing a lane that gets it wrong: the C-lane
+# defect this pins is CLOSED, and without this file nothing in the tree holds it.
+#
+# ⚠ LIVES IN `tests/fixtures/self_host_gaps/`, NOT AT TOP LEVEL. Every top-level
+# `tests/fixtures/*.gg` is auto-scanned into `runtime_parity_corpus`; the
+# self-host lane has no `is_by_value_receiver` chokepoint to mirror this fix into
+# (`todo/t1537`), and Core #9 ⊕ forbids raising `RUNTIME_DIFF_NONMATCH_CEILING`
+# for a round's own inflow.
+
+struct SS:
+    Box[String] b
+
+void main():
+    Box[String] bb = Box("hi")
+    SS s = SS(^bb)
+    print(s.b.get())

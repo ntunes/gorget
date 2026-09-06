@@ -49,6 +49,41 @@ use crate::ir::types::{
 use super::types::{StructRegistry, builtin_struct_defs};
 use super::*;
 
+/// Which `emit_box_wrapper` arm DEFINES the extern called `name`, if any.
+///
+/// ⚠ THE ROUTING IS TYPED; ONLY THE SUFFIX SPLIT IS TEXTUAL. The question
+/// *"is the receiver of this call a regular Box?"* is answered by
+/// `StructDef::box_inner_type` / `is_trait_box` — the same typed pair
+/// `validate_box_inner_type` reads — and never by a prefix match on the
+/// mangled `Box__` symbol, which is a ROUTING decision (`todo/t0690`'s
+/// must-move bucket, `todo/t0027`'s prescribed retirement). ⚠ That spelling is
+/// not written out anywhere in this file on purpose: `no_growth_in_name_prefix_routing`
+/// counts the literal TEXTUALLY, so prose quoting it to forbid it would be
+/// counted as a fresh violation. Splitting the C symbol at its
+/// LAST `__` to recover the method suffix is the sanctioned half: at this
+/// boundary the runtime symbol IS the contract
+/// (`docs/devbook/24-layering-discipline.md`). Same division of labour as the
+/// combinator post-pass below, which parses the suffix and then routes on the
+/// typed `enum_kind`.
+///
+/// ⛔ TRAIT BOXES ARE EXCLUDED BY TYPED SHAPE, not by name: a `Box[Trait]` is
+/// a `{data, vtable}` pair, `emit_box_wrapper` does not define its accessors,
+/// and `is_trait_box` says so.
+pub(super) fn box_wrapper_arm_for(
+    name: &str,
+    struct_reg: &StructRegistry,
+    structs: &[StructDef],
+) -> Option<crate::lir::BoxWrapperArm> {
+    let sep = name.rfind("__")?;
+    let (type_part, method) = (&name[..sep], &name[sep + 2..]);
+    let sid = struct_reg.lookup(type_part)?;
+    let sd = structs.get(sid.0 as usize)?;
+    if sd.box_inner_type.is_none() || sd.is_trait_box {
+        return None;
+    }
+    crate::lir::BoxWrapperArm::from_method_suffix(method)
+}
+
 /// Context for lowering a single GIR module to LIR.
 pub struct LoweringContext<'a> {
     /// The GIR module being lowered.
@@ -219,6 +254,8 @@ impl<'a> LoweringContext<'a> {
                     }
                 }
             }
+            let box_wrapper_arm =
+                box_wrapper_arm_for(&ext.name, &self.struct_reg, &self.module.structs);
             self.module.add_extern(LirExtern {
                 name: ext.name.clone(),
                 params: ext.params.iter().map(|t| map_gir_type_with_structs(t, &self.gir.type_registry, Some(&self.struct_reg))).collect(),
@@ -227,6 +264,7 @@ impl<'a> LoweringContext<'a> {
                 param_abis: ext.param_abis.clone(),
                 return_abi: Default::default(),
                 combinator_result_struct_id: None,
+                box_wrapper_arm,
             });
         }
 

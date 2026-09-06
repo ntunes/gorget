@@ -380,6 +380,18 @@ impl<'a> FuncLowering<'a> {
             .copied()
             .unwrap_or_default();
 
+        // ⭐ THE DECLARATION AND THE DEFINITION ARE WRITTEN BY DIFFERENT
+        // HALVES OF THE COMPILER, AND THIS IS THE HALF THAT WRITES THE
+        // DECLARATION. `emit_box_wrapper` (`src/backend/c_lir/helpers.rs`)
+        // DEFINES `Box__T__get` / `__set` / `__get_ptr` / `__drop` taking the
+        // handle BY VALUE; the params below are reconstructed from the CALLER's
+        // argument types, so the two can disagree — and did, silently, for as
+        // long as nothing could ask the question. Recording the arm here, where
+        // the declaration is synthesized, is what lets `validate_box_wrapper_abi`
+        // ask it without a name match (`todo/t0690`, `todo/t0027`).
+        let box_wrapper_arm =
+            super::box_wrapper_arm_for(name, self.struct_reg, self.module_structs);
+
         // For known runtime functions, use canonical signatures + ABI tags.
         if let Some(rsig) = crate::lir::runtime::RuntimeFn::from_c_name(name)
             .map(|f| f.resolve_lir_sig(self.struct_reg))
@@ -396,6 +408,7 @@ impl<'a> FuncLowering<'a> {
                 if existing.param_abis.iter().all(|a| *a == crate::ir::abi::AbiKind::Auto) {
                     existing.param_abis = abis;
                 }
+                existing.box_wrapper_arm = box_wrapper_arm;
             } else {
                 self.pending_externs.push(LirExtern {
                     name: name.to_string(),
@@ -405,6 +418,7 @@ impl<'a> FuncLowering<'a> {
                     param_abis: abis,
                     return_abi: ret_abi,
                     combinator_result_struct_id: None,
+                    box_wrapper_arm,
                 });
             }
             return;
@@ -462,6 +476,7 @@ impl<'a> FuncLowering<'a> {
                     param_abis: abis,
                     return_abi: crate::ir::abi::AbiKind::Auto,
                     combinator_result_struct_id: None,
+                    box_wrapper_arm,
                 });
                 return;
             }
@@ -488,6 +503,7 @@ impl<'a> FuncLowering<'a> {
             if matches!(existing.return_type, LirType::I64 | LirType::I32) && !matches!(actual_ret, LirType::I64 | LirType::I32) {
                 existing.return_type = actual_ret;
             }
+            existing.box_wrapper_arm = box_wrapper_arm;
             return;
         }
         self.pending_externs.push(LirExtern {
@@ -498,6 +514,7 @@ impl<'a> FuncLowering<'a> {
             param_abis: abi_tags,
             return_abi: ret_abi,
             combinator_result_struct_id: None,
+            box_wrapper_arm,
         });
     }
 

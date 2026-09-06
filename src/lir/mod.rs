@@ -1801,6 +1801,60 @@ pub struct LirExtern {
     /// to a different element type (cross-type map). Set by a post-pass in LIR
     /// lowering; None for non-combinator externs and for same-type maps.
     pub combinator_result_struct_id: Option<StructId>,
+    /// Which arm of `emit_box_wrapper` (`src/backend/c_lir/helpers.rs`) DEFINES
+    /// this extern, or `None` when no arm does.
+    ///
+    /// ⚠ THE CARRIER EXISTS SO THE BOX-RECEIVER GUARDS CAN ASK A TYPED
+    /// QUESTION. Their subject is *"the declaration this compiler synthesized
+    /// must agree with the definition the same compiler emits"*, and the only
+    /// way to spell that without this field is a prefix match on the mangled
+    /// `Box__` symbol — a ROUTING decision, which is `todo/t0690`'s must-move
+    /// bucket and exactly the disease this metadata retires (`todo/t0027`). Written at `ensure_extern`'s three construction sites
+    /// in `src/lir/lower/operands.rs` — the same site that synthesizes the
+    /// declaration — from the TYPED `StructDef::box_inner_type` /
+    /// `is_trait_box` metadata, never from a name prefix.
+    pub box_wrapper_arm: Option<BoxWrapperArm>,
+}
+
+/// The four arms of `emit_box_wrapper` (`src/backend/c_lir/helpers.rs`), as a
+/// typed value rather than a method-name string.
+///
+/// ⚠ MEMBERSHIP MIRRORS THE EMITTER, NOT THE GUARDS' SUBJECT. `Drop` is a
+/// member because `emit_box_wrapper` has a `"drop" | "free"` arm; the
+/// declaration guard nonetheless leaves it out, and the reason is recorded at
+/// `validate_box_wrapper_abi` — it is an arm that CAN NEVER FIRE, because the
+/// by-slot `Box__T__drop` producer emits a DEFINITION and the guard's
+/// iteration domain is `module.externs`. An arm that structurally cannot fire
+/// makes a guard LOOK wider than it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxWrapperArm {
+    /// `static inline T Box__T__get(Box__T self)`
+    Get,
+    /// `static inline void Box__T__set(Box__T self, T val)`
+    Set,
+    /// `static inline T* Box__T__get_ptr(Box__T self)` — the D36 auto-deref
+    /// receiver projection.
+    GetPtr,
+    /// `static inline void Box__T__drop(Box__T self)`
+    Drop,
+}
+
+impl BoxWrapperArm {
+    /// Map an `emit_box_wrapper` method suffix to its arm. The suffix comes
+    /// from splitting a C symbol at its last `__`, which is sanctioned AT THIS
+    /// BOUNDARY ONLY (`docs/devbook/24-layering-discipline.md` — the runtime
+    /// symbol IS the contract); the *routing* decision that precedes it reads
+    /// typed `StructDef` metadata. Same division as the combinator post-pass
+    /// in `src/lir/lower/mod.rs`.
+    pub fn from_method_suffix(method: &str) -> Option<Self> {
+        match method {
+            "get" => Some(Self::Get),
+            "set" => Some(Self::Set),
+            "get_ptr" => Some(Self::GetPtr),
+            "drop" | "free" => Some(Self::Drop),
+            _ => None,
+        }
+    }
 }
 
 // ── Module ──────────────────────────────────────────────────────────────────

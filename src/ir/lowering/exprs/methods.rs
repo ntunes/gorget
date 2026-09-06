@@ -185,6 +185,37 @@ fn build_enum_recv_ptr(
 /// `BuiltinMethodDecl`, set once at the source, and this site must never
 /// re-derive it from the type's NAME (`AGENTS.md` § No name matching).
 ///
+/// ⭐ `Box[T]` IS THE SECOND MEMBER OF THE FAMILY, AND IT IS ENROLLED BY A
+/// TYPED PREDICATE, NOT BY A ROW. `Box__T` is a `typedef void*` and every
+/// helper `emit_box_wrapper` defines — `__get`, `__set`, `__get_ptr`,
+/// `__drop` — takes the handle BY VALUE, so a `Ptr(Box__T)` receiver carries
+/// exactly the same extra indirection. It reaches this site through
+/// `TypeRegistry::is_box_name`, i.e. the typed `TypeMetadata::is_box` flag set
+/// once at Box-type registration — the shape `todo/t0027` prescribes.
+///
+/// ⛔ IT IS NOT A `BuiltinTypeProtocol` ROW, AND THAT IS A MEASURED CHOICE,
+/// NOT AN OMISSION. Every member of the protocol table is
+/// `CopySemantics::Trivial` with `drop_fn: None` — the family's contract is
+/// *"the pointer IS the value AND copying it is free"*. `Box` is `Resource`
+/// with a real `free`, so a row routes field receivers into
+/// `field_place_info`'s `assign(tmp, Copy(field_place))` and the resource-move
+/// validator aborts the compile on a shape that builds today. D51's ruling
+/// (*"a Layering rule 2 retirement, not a special case"*, regenerate with
+/// `grep -n "an acceptable fix" docs/define-gorget/decisions.md`) is about the
+/// name LIST; the family membership question is settled by what the position
+/// does to the storage, never by what the type family is capable of
+/// (`AGENTS.md` § "Reason about storage and liveness").
+///
+/// ⊕ TRAIT BOXES ARE NOT EXCLUDED, AND THE EXCLUSION WAS CONSIDERED AND
+/// REJECTED ON A MEASUREMENT — it never stood in this file, only in the
+/// prototype (regenerate: `git log -S'TraitObj' -- src/ir/lowering/exprs/methods.rs`).
+/// Instrumented across every Box-mentioning fixture it was LIVE — 13 programs,
+/// 168 hits, 154 of them in three serialization fixtures — and removing it
+/// changed neither stdout nor the ASan verdict in any of them, while the
+/// emitted C genuinely differed. Keeping it would have cost a
+/// `format!("{inner}_TraitObj")` probe on this hot path: another instance of
+/// the name construction `todo/t0027` exists to retire.
+///
 /// A no-op unless the receiver is a bare local holding a pointer to a
 /// by-value handle, so non-handle borrows (`&Vector`, `&`-params of user
 /// structs, `Guard`'s `MutBorrow` methods) are untouched.
@@ -205,7 +236,9 @@ fn deref_by_value_handle_receiver(
     let Some(handle_name) = ctx.type_name_for_id(handle_ty).map(|n| n.to_string()) else {
         return recv;
     };
-    if !crate::ir::lowering::builtins::is_by_value_receiver(&handle_name) {
+    let is_by_value_handle = crate::ir::lowering::builtins::is_by_value_receiver(&handle_name)
+        || ctx.type_registry.is_box_name(&handle_name);
+    if !is_by_value_handle {
         return recv;
     }
     let loaded = builder.load_ref(place, handle_ty);
@@ -690,7 +723,7 @@ pub(super) fn lower_method_call(
                             .lookup_named(inner_suffix)
                             .unwrap_or(I64_TYPE);
                         // Ensure recv is a place we can pass by value.
-                        let _place = match &recv {
+                        let place = match &recv {
                             Operand::Copy(p) | Operand::Move(p) => p.clone(),
                             _ => {
                                 let box_ty = ctx.type_mapper
@@ -701,14 +734,30 @@ pub(super) fn lower_method_call(
                                 Place::local(tmp)
                             }
                         };
-                        // If recv is currently a pointer-to-Box (`&`/`!` param),
-                        // load the box handle first so the helper sees the
-                        // Box (which is itself `void*`).
+                        // If recv is currently a pointer-to-Box (`&`/`!` param,
+                        // a struct-field load, a capture slot), load the box
+                        // handle first so the helper sees the Box (which is
+                        // itself `void*`).
+                        //
+                        // ⚠ THIS BRANCH USED TO HAVE TWO IDENTICAL ARMS —
+                        // `recv.clone()` either way — under a comment claiming
+                        // the first one dereferenced, next to a `let _place`
+                        // computed and thrown away. It was an
+                        // invariant-asserting comment with nothing enforcing
+                        // it (Core #14), and it cost a whole cell: a D36
+                        // auto-deref through a temporary's field
+                        // (`make().b.val()`) printed garbage at rc 0 and now
+                        // prints its payload. `validate_box_get_ptr_result_consumed`
+                        // is the guard that keeps the claim true.
                         let box_operand = if ctx.pointee_type(recv_type).is_some() {
                             // recv is Ptr(Box) — Box__T__get_ptr expects Box
                             // (a `void*`) by value, so dereference through
                             // the pointer. LIR: load through the ptr local.
-                            recv.clone()
+                            let box_ty = ctx.type_mapper
+                                .lookup_named(&box_name)
+                                .unwrap_or(I64_TYPE);
+                            let loaded = builder.load_ref(place.clone(), box_ty);
+                            Operand::Copy(Place::local(loaded))
                         } else {
                             recv.clone()
                         };

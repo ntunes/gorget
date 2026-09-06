@@ -1,0 +1,46 @@
+# DURABLE REPRO for `todo/t1526` (cell `y1_field_mut`) — a D36 `&self` method
+# reached through a STRUCT FIELD aborts with `free(): invalid pointer`.
+#
+# WRONG TODAY (measured at HEAD and under R51 Track A's receiver-place fix —
+# the cell is INVARIANT across it):
+#     C  → rc 134, `free(): invalid pointer`
+#
+# ⛔ THIS IS THE THIRD AND LOUDEST SEVERITY ON ONE AXIS, AND IT WAS FOUND LAST.
+# The same field-receiver defect produces garbage (`todo/t1513`), SEGV
+# (`todo/t1514`) and heap corruption (here), and they were discovered in exactly
+# that order — because the enumeration was built by COMPARING STDOUT, and a cell
+# that aborts before printing produces no stdout to compare. An enumeration
+# built that way finds its members in ASCENDING order of how loudly they fail,
+# which is the opposite of triage order. Enumerate by MECHANISM.
+#
+# MECHANISM: the same `field_place_info` re-derivation as `todo/t1513` — the
+# D36 block rewrites `recv` to the `Box__P__get_ptr` projection and the
+# struct-field branch re-derives the receiver from `receiver.node` (the AST) and
+# ignores it. With a `&self` method the ignored projection means the WRITE lands
+# through the field's address rather than the payload, and the subsequent free
+# is handed a pointer it never owned.
+#
+# ⚠ THE VALUE GUARD SEES IT: `validate_box_get_ptr_result_consumed`
+# (src/lir/validate.rs) reports TWO dead projections here — one per method call
+# — and this fixture is a `TRIP` row in `tests/gaps/BOX_RECEIVER_BURNDOWN.txt`.
+# The declaration-shaped guard is silent, because the DECLARATION is correct.
+#
+# INTENDED (asserted by the `#[ignore]`d test): `12`.
+struct P:
+    int v
+
+equip P:
+    void bump(&self):
+        self.v = self.v + 1
+
+    int val(self):
+        return self.v
+
+struct H:
+    Box[P] b
+
+void main():
+    Box[P] bb = Box(P(11))
+    H h = H(^bb)
+    h.b.bump()
+    print(h.b.val())

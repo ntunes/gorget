@@ -95,6 +95,18 @@ pub type ValidatorFn = fn(&LirModule) -> Vec<LirError>;
 /// that accidentally propagates the `box_inner_type` field where it
 /// doesn't belong. The forward `validate_box_inner_type` only walks
 /// `Box__*`-named structs, so a non-Box with stray metadata slips through.
+/// The checkpoint the box-receiver guards ride: the `after` tag of the
+/// post-`promote_runtime_calls` validation, which every pipeline passes
+/// through (`--emit-lir`, `--emit-c-lir`, the C build, the LLVM build).
+///
+/// ⚠ IT IS NOT THE FIRST CHECKPOINT, AND THE REASON IS MEASURED. At
+/// `"lir-lowering"` — pre-SSA — the projection's result is still consumed by
+/// the slot store that immediately follows it, so the VALUE guard reads every
+/// cell as live and reports 0 fires on `todo/t1513`'s program. SSA
+/// construction is what makes a dead projection visible as a dead one. This is
+/// the last checkpoint common to all four pipelines that is also post-SSA.
+pub const BOX_RECEIVER_GUARD_CHECKPOINT: &str = "promote-runtime-calls";
+
 const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type, validate_box_inner_type_consistency, validate_drop_completeness, validate_drop_fn_presence, validate_resource_arity, validate_hof_result_array_hooks];
 
 /// Assert that `module` satisfies every registered LIR invariant. Panics with
@@ -110,6 +122,14 @@ const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type, v
 /// See `docs/devbook/14-lir-ssa.md` (validator after every pass).
 #[inline]
 pub fn assert_module_valid(module: &LirModule, after: &str) {
+    // The box-receiver guards ride ONE checkpoint, not every one: they REPORT
+    // a count, and firing them per pass would multiply that count by the length
+    // of the pass list. See `BOX_RECEIVER_GUARD_CHECKPOINT` for which, and why.
+    // Unlike the validators below they are NOT debug-only — they are gated by
+    // their own env var, so a release burn-down run reaches them.
+    if after == BOX_RECEIVER_GUARD_CHECKPOINT {
+        run_box_receiver_guards(module);
+    }
     // The fast path is "debug build, no allocation" — but we still want
     // release builds to be opt-in via env var, so the dispatch is a single
     // cfg!() check + a (cached-by-getenv) env-var probe in release.
@@ -2100,6 +2120,240 @@ pub fn validate_hof_result_array_hooks(module: &LirModule) -> Vec<LirError> {
                             sd.elem_drop_fn,
                             sd.expects_drop_fn,
                             module.type_drop_fns.contains_key(&sd.name),
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    errors
+}
+
+// ── The box-receiver guards ─────────────────────────────────────────────────
+//
+// TWO guards, because the class has TWO shapes and neither instrument can see
+// the other's. Both are env-gated `count` reporters wired through
+// `scripts/box_receiver_burndown.sh` and its ledger — a guard nothing runs is
+// an `eprintln` behind an unset variable.
+//
+//   `validate_box_wrapper_abi`          — the DECLARATION. Does the extern
+//                                         signature this compiler synthesized
+//                                         agree with the definition the same
+//                                         compiler emits?
+//   `validate_box_get_ptr_result_consumed` — the VALUE. Was the D36 receiver
+//                                         projection's result actually used,
+//                                         or re-derived past downstream?
+//
+// ⚠ THE SECOND IS NOT A REFINEMENT OF THE FIRST. Fixing the receiver ABI takes
+// the declaration guard from 17 fires to 0 across the whole cell set while
+// `y6_field_of_temp`-shaped programs still printed garbage at rc 0 — measured,
+// with two independent implementations of the fix, which is why a declaration-
+// shaped subject can never be promoted to `fatal` on this class's behalf. And
+// the value guard is RED in both states on `t1513`'s cell, so it discriminates
+// nothing about the receiver ABI. Each covers exactly what the other cannot.
+
+/// Env gate for both box-receiver guards: `count` reports, `fatal` aborts.
+///
+/// ⛔ `fatal` IS NOT WHERE THE DECLARATION GUARD LANDS, AND THE REASON IS
+/// MEASURED. Under the shipping fix its residual is 0 on every constructed
+/// cell, and `fatal` over a 0-residual guard stands GREEN over
+/// `todo/t1513`'s program, which prints garbage at rc 0. Worse, the fire
+/// count is a function of PROGRAM SHAPE, not of defect count: it is one fire
+/// PER SYMBOL, so a file with five broken receiver places reports `1`, and
+/// placing a correct owned-local read in front of a broken one takes a
+/// genuinely-broken pre-fix program to 0 fires. A promotion to `fatal` needs a
+/// CORPUS argument, not the closure of one item.
+pub const BOX_RECEIVER_GUARD_ENV: &str = "GG_BOX_RECEIVER_GUARD";
+
+/// Run both box-receiver guards over `module`, reporting to stderr. Returns
+/// `(declaration_fires, value_fires)`.
+///
+/// ⭐ ITS SUBJECT IS A `LirModule`, SO ITS HOME IS THE LIR VALIDATOR, NOT THE
+/// C BACKEND. The prototype hung this off `generate_c_inner_impl`, which meant
+/// only a full build could reach it — neither `--emit-lir` nor `--emit-c-lir`
+/// fired a single check, and the LLVM lane got them only incidentally.
+///
+/// ⭐⭐ IT ALWAYS PRINTS A `subject=` CENSUS, AND THAT LINE IS WHAT MAKES A
+/// ZERO MEAN SOMETHING. Both of this class's prototype guards were reported as
+/// *"0 fires over the whole corpus"* — twice, one generation apart — when the
+/// truth was that the overwhelming majority of those programs never emit the
+/// instruction the guard inspects. A count of violations without a count of
+/// SUBJECTS is a number that reads as coverage and is not. The burn-down
+/// ledger's `CLEAN` rows are reconciled against `subject > 0`, so a fixture
+/// that stops exercising the mechanism reds the gate instead of quietly
+/// passing it.
+pub fn run_box_receiver_guards(module: &LirModule) -> (usize, usize) {
+    let mode = match std::env::var(BOX_RECEIVER_GUARD_ENV) {
+        Ok(m) => m,
+        Err(_) => return (0, 0),
+    };
+    if mode != "count" && mode != "fatal" {
+        return (0, 0);
+    }
+    let decl = validate_box_wrapper_abi(module);
+    for e in &decl {
+        eprintln!("[box-wrapper-abi] {}", e.message);
+    }
+    let val = validate_box_get_ptr_result_consumed(module);
+    for e in &val {
+        eprintln!("[box-getptr-dead] {}", e.message);
+    }
+    let subject = module
+        .externs
+        .iter()
+        .filter(|e| e.box_wrapper_arm.is_some())
+        .count();
+    eprintln!(
+        "[box-receiver] subject={subject} decl={} val={}",
+        decl.len(),
+        val.len()
+    );
+    if mode == "fatal" && !(decl.is_empty() && val.is_empty()) {
+        panic!(
+            "box-receiver guard: {} declaration violation(s), {} value violation(s)",
+            decl.len(),
+            val.len()
+        );
+    }
+    (decl.len(), val.len())
+}
+
+/// THE DECLARATION HALF. Every extern that `emit_box_wrapper`
+/// (`src/backend/c_lir/helpers.rs`) also DEFINES must declare param 0 as the
+/// Box handle BY VALUE — never `Ptr` / `PtrTo`.
+///
+/// # Why the compiler could contradict itself inside one output file
+///
+/// `ensure_extern` (`src/lir/lower/operands.rs`) synthesizes the callee's
+/// signature as `params: arg_types.to_vec()` — that is, from the CALLER's
+/// argument types — and its merge branch only ever upgrades a bare `Ptr`, so
+/// whichever call site is lowered FIRST wins the declaration and every other
+/// site is marshalled against it. Meanwhile `emit_box_wrapper` emits
+/// `static inline T Box__T__get(Box__T self)`. When the winning site passed a
+/// borrow, the emitted C read the borrow's target ADDRESS as the handle and
+/// printed a pointer-shaped integer at rc 0.
+///
+/// # The arm set, and the one that is missing
+///
+/// `Get` / `Set` / `GetPtr` — three of `emit_box_wrapper`'s four arms.
+///
+/// ⛔ `Drop` IS OMITTED, AND THE REASON IS THE ITERATION DOMAIN, NOT THE
+/// PREDICATE. Two earlier justifications for leaving it out were checked and
+/// both were false (*"`emit_box_wrapper` does not emit drop"* — it does;
+/// *"`todo/t1083`'s by-slot producer would trip it"* — that producer emits a
+/// DEFINITION). The true reason: `module.externs` contains no `Box__*__drop`
+/// under any spelling, so an arm for it could never fire, and an arm that
+/// cannot fire makes the guard LOOK wider than it is. Widening the guard's
+/// DOMAIN to `module.functions` is the real fix and is not this guard's job.
+///
+/// # Routing
+///
+/// The typed `LirExtern::box_wrapper_arm`, written at the declaration's own
+/// write site — never a prefix match on the mangled symbol, which would be a
+/// third ROUTING name-match in the very file `todo/t0690` names.
+pub fn validate_box_wrapper_abi(module: &LirModule) -> Vec<LirError> {
+    use crate::lir::BoxWrapperArm;
+    let mut errors = Vec::new();
+    for ext in &module.externs {
+        match ext.box_wrapper_arm {
+            Some(BoxWrapperArm::Get | BoxWrapperArm::Set | BoxWrapperArm::GetPtr) => {}
+            // See the doc comment: `Drop` is an arm that could never fire.
+            Some(BoxWrapperArm::Drop) | None => continue,
+        }
+        let Some(p0) = ext.params.first() else { continue };
+        if matches!(p0, LirType::Ptr | LirType::PtrTo(_)) {
+            errors.push(LirError {
+                func: String::new(),
+                block: None,
+                message: format!(
+                    "box-wrapper ABI mismatch: extern {:?} declares param 0 as {:?}, but \
+                     emit_box_wrapper DEFINES it taking the handle BY VALUE. The callee will \
+                     reinterpret the borrow's target address as the handle. Fix the RECEIVER \
+                     at `deref_by_value_handle_receiver` (src/ir/lowering/exprs/methods.rs), \
+                     never the declaration here.",
+                    ext.name, p0,
+                ),
+            });
+        }
+    }
+    errors
+}
+
+/// THE VALUE HALF. The result of a D36 `Box__T__get_ptr` receiver projection
+/// must be READ by something in the function that defines it.
+///
+/// # What it catches that the declaration guard cannot
+///
+/// `todo/t1513`: the D36 auto-deref block rewrites `recv` to the projection's
+/// result, and the struct-field branch downstream then re-derives the receiver
+/// from `receiver.node` — the AST — and ignores it. Two sources of truth for
+/// one receiver (Layering rule 3), inside a ratified decision. The declaration
+/// is perfectly correct in that state; the projection is simply dead.
+///
+/// # Why "used at all", and not a reference count
+///
+/// A count is defeated by two unused integers in the fixture. The emitted C
+/// reuses `__vN` names across function scopes via `#define`/`#undef`, so a
+/// whole-file grep for the name counts unrelated scopes; a calibrated
+/// threshold on that number is a property of the file, not of the SSA graph.
+/// The sound subject is membership in this function's own use-edge set —
+/// threshold 0, no calibration, and it survived twelve deliberate program-shape
+/// silencers.
+///
+/// # A named omission, because it is structural
+///
+/// The D36 block has a second wrapper-kind arm, `GuardAccept`, doing the
+/// identical `recv = <projection result>` rewrite. It is NOT covered, and
+/// widening the name filter would not reach it: the `Guard` projection is
+/// ELIMINATED between GIR and LIR (`--emit-gir` shows two `get_ptr` calls,
+/// `--emit-lir` shows none), and this guard iterates LIR. The subject would be
+/// genuinely total only at GIR. Same shape as the `Drop` arm above: outside
+/// the ITERATION DOMAIN, not merely outside the filter.
+pub fn validate_box_get_ptr_result_consumed(module: &LirModule) -> Vec<LirError> {
+    use crate::lir::BoxWrapperArm;
+    // The typed field lives on the extern; the instruction carries only the
+    // callee's symbol. Resolving symbol -> extern by EQUALITY is the sanctioned
+    // half of the boundary (`todo/t0690`'s SPELLING-ok bucket, the same shape
+    // the C backend's four `name ==` reads use); the semantic question is still
+    // answered by `box_wrapper_arm`.
+    let projections: std::collections::HashSet<&str> = module
+        .externs
+        .iter()
+        .filter(|e| e.box_wrapper_arm == Some(BoxWrapperArm::GetPtr))
+        .map(|e| e.name.as_str())
+        .collect();
+    if projections.is_empty() {
+        return Vec::new();
+    }
+    let mut errors = Vec::new();
+    for func in &module.functions {
+        let mut used: HashSet<ValueId> = HashSet::new();
+        for block in &func.blocks {
+            for inst in &block.insts {
+                for u in inst.uses() {
+                    used.insert(u);
+                }
+            }
+            for u in block.terminator.uses() {
+                used.insert(u);
+            }
+        }
+        for block in &func.blocks {
+            for inst in &block.insts {
+                let Inst::CallExtern { dst: Some(dst), name, .. } = inst else { continue };
+                if !projections.contains(name.as_str()) {
+                    continue;
+                }
+                if !used.contains(dst) {
+                    errors.push(LirError {
+                        func: func.name.clone(),
+                        block: Some(block.id),
+                        message: format!(
+                            "D36 get_ptr projection result is DEAD: {name} -> {dst:?} is never \
+                             read in @{}. The receiver was re-derived downstream from the AST \
+                             instead of the ratified `method_resolutions` channel — two sources \
+                             of truth for one receiver (todo/t1513).",
+                            func.name,
                         ),
                     });
                 }

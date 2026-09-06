@@ -26,14 +26,17 @@
 #     *(n.0)  (here)    rc 1    rc 1       9          9
 #     n.0.get()         rc 1    rc 1       garbage    9
 #
-# The `.get()` row's residual C garbage is `todo/t1373` (a `Box[T].get()`
-# through a STRUCT-FIELD receiver is handed the field's ADDRESS where the
-# by-value `__get` expects the value), NOT this fix's: the struct control
-# `known_gaps/box_get_through_struct_field_receiver_garbage.gg` prints the same
-# garbage on C and the same `9` on LLVM at pristine HEAD, under every partial
-# revert, and after the full fix. That INVARIANCE is what attributes the
-# residual to `t1373`. Switching this fixture to `.get()` would park a known
-# open defect in a live test.
+# The `.get()` row's residual C garbage WAS `t1373` (a `Box[T].get()` through a
+# STRUCT-FIELD receiver was handed the field's ADDRESS where the by-value
+# `__get` expects the value), NOT this fix's — the attribution rested on that
+# row being INVARIANT across every partial revert of this fix.
+#
+# ⊕ `t1373` IS NOW CLOSED (R51 Track A enrolled `Box` in the by-value receiver
+# chokepoint), so the `.get()` row reads `9` on both lanes too. The live cell is
+# `self_host_gaps/box_receiver_struct_field_get.gg`. This fixture nonetheless
+# KEEPS the `*(n.0)` read: it is the shape whose PRE row is `rc 1`, i.e. the one
+# that pins THIS fix, and `[[t0685]]`'s binding constraint wants a deref read
+# for the non-primitive payload cells anyway.
 newtype NX(Box[int])
 
 void main():
