@@ -202,6 +202,17 @@ set, and make an unclassifiable site a VIOLATION — measured **9 of 9 attacks b
 ⇒ **When a guard leaks once, ask whether the leaking clause is a FILTER. If it is, no amount of widening the
 filter closes it; only inverting to an expectation does.**
 
+⭐⭐ **`must_replace` EARNED ITS RULE AGAIN, AND THIS TIME IT CAUGHT A SHIPPING DEFECT.** Composing two
+R51 Track B folds ABORTED: one fold's edit targeted text the other fold had DELETED. ⇒ **a plain
+`str.replace` script would have silently no-oped and shipped a guard whose per-key pin carried a malformed
+key.** The two DO compose — after re-deriving that edit and adding a fifth nobody had named. ⭐ **"Fold scripts
+MUST assert their replace targets matched" is not hygiene; it is the only thing standing between two
+independently-correct folds and a silently-wrong composition.**
+⊕ **AND CHECK THE ARTIFACT NOBODY IS ATTACKING.** Three passes attacked `ci.yml`; the fourth attacked
+`AGENTS.md` and found the battery block's END BOUNDARY was a `unwrap_or` where the START used `.expect()` —
+**a DEFAULT where a BOUNDARY belongs.** Move a leg out of the block, respell the next heading, and the guard
+goes GREEN. ⚠ **A SIBLING lint caught it by accident, so the passing case was accidentally correct.**
+
 ⭐⭐ **A CHECKER MUST MIRROR ITS SEEDER'S PRODUCE-SIDE CONTRACT — that is the total enumeration.** All five
 escape hatches in R51 Track D turned out to be **one class**: a normalization the SEEDER applies that the
 CHECKER omitted — `stdin(null)` · `status.success()` · the corpus source · `trim_end`+lossy · **the double-run
