@@ -104,7 +104,15 @@ the tree.
   while a bootstrap or sweep runs. `driver.gg` bakes all 62 runtime `.c` files via `embed_file`.
 - ⛔ **NEVER `git checkout <ref> -- <path>` TO SET UP A REVERT.** Silently clobbers uncommitted work. Use a
   re-appliable patch. (In AGENTS.md MA-8.)
-- ⛔ **BEFORE REVIEWING OR BRIEFING AN ARTIFACT, `grep todo/` FOR IT.** R51 Track B's brief and its pass-1
+- ⛔ **A GUARD THAT FAILS SIX-Q #2 TWICE IS NOT A GUARD THAT NEEDS ANOTHER FOLD.** R51 Track B hardened one
+author-typed exemption list and left its sibling (`EXEMPT`) untouched — **strictly more permissive, because it
+skips the whole STEP before keying.** A reviewer then reproduced the original hole **by an ordinary `ci.yml`
+edit with no guard edit at all** (merge a build into the step: `cargo build --release && cargo test …`).
+⇒ ⭐ **WHEN A FIX HARDENS ONE MEMBER OF A CLASS, AUDIT THE SIBLINGS IN THE SAME PASS — otherwise the fold
+moves the rot rather than removing it.** Both attacks landed on the same structural shape: **a TOTAL became a
+GLOBAL SET, and a global set still cannot see a reclassification of one step.**
+
+⛔ **BEFORE REVIEWING OR BRIEFING AN ARTIFACT, `grep todo/` FOR IT.** R51 Track B's brief and its pass-1
 prompt BOTH missed `todo/t1406` — **open, HIGH, on the very lint under review, filed the same day as the item
 being fixed, and its own text forbids the shape the brief proposed.** Neither of us had it on a checklist.
 ⇒ **add "grep `todo/` for the artifact under review" to every reviewer preamble.**
