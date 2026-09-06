@@ -342,15 +342,36 @@ integrated ten tracks, went 13-gates green, and advanced its own headline by zer
 owner.** A recursive prerequisite chain has one at every level.
 ⊕ **Compatible with the no-new-round instruction below: this work happens INSIDE R51.**
 
+### ⚖ OWNER ASK #5, FOR THE CLOSE — **R51 WILL NOT SHIP THE OPTIMALITY INCREMENT, AND THE OWNER SHOULD HEAR IT FROM THE CLOSE, NOT INFER IT**
+
+The owner's 2026-09-06 ruling makes optimality the ROOT and pulls prerequisites in recursively. **That chain IS
+running: `t1505` is a genuine recursive prerequisite** — Track F's own brief-review surfaced it, and Track H
+exists only because F could not ship past it. So the round is not ignoring the ruling.
+⛔ **BUT F CANNOT RESUME INSIDE R51, AND THE REASON IS NOT TIME — IT IS THAT F HAS NO WORKING FIX.** Pass 3's
+`/tmp/revF51p3_shapeX.patch` *looked* solved (`30`→`3`, `map_clone` 801→0, RSS 6104→1256) and was **retracted**:
+**shape X itself miscompiles at N=7 (`7`→`1`, rc 0, three builds)** — it was measured at N=3, the one size in
+ten that is accidentally correct. ⇒ resuming F needs a **NEW DESIGN**, hence a scout and a fresh ≥3-pass
+gauntlet, which does not fit alongside H, I and a ~2h close battery.
+⇒ **THE DECISION IS THE OWNER'S, and it is genuine:** (a) extend R51 until the optimality increment lands, or
+(b) close R51 with the prerequisite (`t1505`) fixed, the net (`t1506`) built, and the increment itself
+documented-but-unshipped. ⚠ **Under (b), with autonomy suspended, the increment has NO HOME** — which is the
+precise failure the ruling was written to prevent (*"postponement has no owner"*). **Say this plainly at the
+close; do not let it read as a silent deferral.**
+⊕ **`/tmp/revF51p3_shapeX.patch` IS LIVE EVIDENCE FOR THIS ASK — DO NOT PRUNE IT** at round close until the
+owner has ruled, even though F is stood down (the prune test is *"does a live claim rest on this"*).
+
 ### ⛔⛔ OWNER INSTRUCTION 2026-09-06 — **DO NOT OPEN A ROUND AFTER R51.** Autonomy is suspended at R51's
 close. This OVERRIDES the heartbeat loop's standing *"open the next round autonomously"* and Round-lifecycle
 step 7. Close R51, run the battery, write the records, report — **then STOP.**
 
 ### 🚨🚨 AND THE ANSWER TO *"ARE ANY CRITICALS NOT BEING WORKED?"* — **ALL NINE OF THEM** (audited 2026-09-06)
 
-`grep -c '^severity = "CRITICAL"' todo/*.md` → **9**: `t0011` · `t0036` · `t1067` · `t1310` · `t1329` ·
-`t1330` · `t1359` · `t1393` · `t1418`. **NONE is in an R51 track.** The single appearance of `t1067` in any
-R51 brief is a **file-zone note**, not scope.
+⚠ **FIGURE CORRECTED 2026-09-06 (orchestrator, own hands — Core #5). The command now returns 10, not 9.**
+Regenerate: `grep -l '^severity = "CRITICAL"' todo/*.md`. The **CLAIM is unchanged and still true**, and only
+the count moved: **NINE CRITICALs are in NO R51 track** — `t0011` · `t0036` · `t1067` · `t1310` · `t1329` ·
+`t1330` · `t1359` · `t1393` · `t1418` — and the **tenth, `t1505`, IS worked, by Track H.** The line read `→ 9`
+because the audit ran BEFORE `t1505` was filed; a stale count under a live claim is exactly what Core #5
+forbids carrying. The single appearance of `t1067` in any R51 brief is a **file-zone note**, not scope.
 
 ⛔⛔ **AND THE SET GREW THREEFOLD DURING THE ROUND NAMED FOR IT.** R50's headline was *"THE CRITICAL
 MEMORY-SAFETY SET"*:
