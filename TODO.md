@@ -109,7 +109,8 @@ the TREE, never from the previous round's line.**
 | LLVM sweep | **0** | 2789 passed · 0 failed · 5020s · clean single run |
 | 8 fast gates | **0** | lib · lints · c_runtime · spec_conformance · security · ggdef · census · staging |
 | **`GG_BACKEND=llvm cargo test --test security --release`** | **0** | ✅ **GREEN ON ITS FIRST-EVER RUN** — 223 ok · 31 ignored · 0 failed · **0 never-executed**, all 254 accounted for. Found only because `t1452` showed the lint exempted it. |
-| `sanitize_sweep.sh` · `robustness_map.py --lanes all` + `--lanes c,llvm` | ⏸ | after C run 2 |
+| `sanitize_sweep.sh` | ⏳ | running with **`JOBS=4`** (default 8) — see the tension note below |
+| `robustness_map.py --lanes all` | ⏸ | last gate; `--lanes c,llvm` is SUBSUMED, do not add it |
 
 ✅ **THE OWED SECOND C RUN IS DONE AND GREEN** — 2789 passed / 0 failed / rc 0, matching the LLVM sweep's
 2789 exactly. Both lanes now stand green **in a single run each at the final tree**, which is the claim; the
@@ -128,6 +129,14 @@ uncovered** — including `sanitizer_gate_is_real_on_both_backends`, the verify-
 coverage is not execution coverage: five filters matched a test that was `#[ignore]`d and reported
 `0 passed`. The accounting that settles it parses `^test <name> ... (ok|ignored)` out of every chunk log and
 asserts **ran + ignored == declared**, 223 + 31 == 254.
+
+⚖ **A REAL TENSION, STATED SO THE NEXT SESSION DOES NOT REDISCOVER IT: MA-9 SAYS FOREGROUND, THE HARNESS
+CAPS FOREGROUND AT 10 MINUTES, AND `sanitize_sweep.sh` TAKES ~25.** It has no chunking flag (`--phase`
+belongs to `verdict.py`, not the sweep), so background is the only option and MA-9 cannot be honoured
+literally. ⇒ **attack the watchdog's actual trigger instead: `JOBS=4` (default 8) halves the concurrent ASan
+processes and so the peak RSS.** ⛔ **Do NOT lower `REPS` (default 3) to buy time — that is the ANTI-FLAKE
+repetition, and trading it for wall-clock silently weakens the instrument rather than the schedule.** If
+`JOBS=4` is still killed, go to 2; the gate gets slower, never weaker.
 
 **BATTERY ORDER (C and LLVM never simultaneously — owner):** C sweep → LLVM sweep → `self_host_bootstrap_fixed_point`
 (**mandatory this round**: J changed `src/backend/c/runtime/runtime_array.c`, an `embed_file` input, and L
