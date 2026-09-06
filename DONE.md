@@ -1,3 +1,68 @@
+- [2026-09-06] **R51 Track J — `t1360`: the leak sweep no longer reads "did not run" as "did not leak".**
+  `adjudicate_leaks` built `fixed_leak` as `for (s in allow) if (!(s in seen))`, and `seen` was set ONLY
+  from a `LEAK` verdict — so a fixture that never copied, never built, produced no binary, was killed at
+  the timeout, or died inside ASan was indistinguishable from one that ran and came back clean. It was
+  reported under `✅ no longer leaking — DELETE these rows`, and for a CITED row it went onto the FATAL
+  `retire_due` path: **the gate converted its own plumbing failure into an instruction to delete the
+  record of a live defect.** ⚠ **The item's own prescribed fix — intersect with `$OUT/covered` — was
+  MEASURED WRONG and was not shipped:** `TIMEOUT`, `CRASH:*` and `ASAN_*` are all INSIDE `covered`, so it
+  closes 5 of the 8 blind verdicts. A guard for "a selection presented as an enumeration", built on
+  another selection.
+  **What shipped instead is a POSITIVE predicate.** `ASAN_OPTIONS` gains `atexit=1`, which prints
+  `AddressSanitizer exit stats:` from the SAME at-exit path LeakSanitizer's check hangs off; `run_one`
+  greps for it per rep and emits column 5 of `verdicts.tsv`, `MEASURED`/`UNMEASURED`, unanimous over reps.
+  The adjudicator diverts non-measured rows to `unmeasured` and rows with no verdict line at all to
+  `absent` — never to `fixed_leak`, never to `retire_due`. Total over the vocabulary by construction
+  (`seen` is set by 1 of 18 label families), rather than by a blocklist that rots as labels are added.
+  **Three defects were caught by the gauntlet, two of them in the orchestrator's own prescriptions.**
+  The naive patch regressed `FIXLIST`/`COVERAGE_FLOOR=0` from rc 0 to rc 1 — the tree's standard
+  single-row re-measurement mode, cited as the regen command in three live items. The fold proposed to
+  fix it by routing "no verdict row" back to HEAD's behaviour, which was measured to **re-create t1360
+  verbatim** (a cited absent row printed t1360's own headline sentence back) and to silently disarm the
+  existing Core #6 reverse control. The shipped shape splits `absent` from `unmeasured` and guards only
+  the former with the EXISTING `[ "$COVERAGE_FLOOR" -gt 0 ]`, so the population proxy is load-bearing for
+  a MESSAGE and never for a silent pass.
+  **And the guard was green over its own options axis until the fourth pass.** `atexit=1` proves the
+  at-exit path ran, not that the leak check did: `ASANOPT=detect_leaks=0:…:atexit=1` prints the marker and
+  reports nothing, and `LSAN_OPTIONS=detect_leaks=0` **wins over** `ASAN_OPTIONS=detect_leaks=1` with the
+  same result — every row falsely `MEASURED`. Both variables are caller-overridable, so a startup
+  assertion covers both, the `LSANOPT` half spelled NEGATIVELY because an EMPTY `LSANOPT` is the
+  documented paired-instrument mode. ⚠ **AND THE FAILURE MODE IS NARROWER THAN THIS TRACK FIRST RECORDED
+  IT** — the output-review caught the overstatement and it is corrected here and in the script: with all
+  four assertions deleted and the self-test ON, the **pre-existing positive leak controls already fail
+  closed** (rc 2, SEVEN `run_selftest` failures, zero delete advice). The guards are the only cover on the
+  `RUN_SELFTEST=0` path, where a still-leaking allowlisted fixture measurably reads CLEAN + MEASURED and
+  the sweep prints `DELETE` at rc 0. ⚠ **AND THE DEFAULT-MODE VALUE IS DIAGNOSTIC, NOT TIME** — a second
+  overstatement, caught by the delta review inside the correction itself: `run_selftest || exit 2` sits
+  far above the corpus walk, so the run aborts before sweeping anything. Measured, one box, default
+  invocation: **1.268s** without the assertions, **0.065s** with them. What they buy is one line naming
+  the option instead of seven control failures pointing at the controls. The commit message of
+  `312337a48` carries the original, overstated wording; **this paragraph supersedes it.**
+  ⛔ **AND THE SAME DEFECT WAS STILL LIVE ONE LIST OVER, caught by the output-review, fixed in this
+  track (Core #4).** `fixed_corrupt=$(comm -13 got_corrupt allow_corrupt)` is
+  `for (s in allow) if (!(s in seen))` in another notation, and `got_corrupt` is set only from an `ASAN_`
+  verdict — so the CORRUPTION allowlist retired rows on fixtures nobody ran. Witnessed firing against the
+  real committed list (`stack_guard_deep_recursion`, flipped to `BUILD_FAIL_BOTH`) and reproduced here
+  end-to-end: pre-fix **rc 0 + "✅ no longer corrupting — DELETE"**, after **rc 1 + no delete advice**,
+  with the reverse control (a genuinely clean, measured row) **still retired**. Bounded today at one
+  intentional row — but `t0956` plans to ingest `security/`, which brings **23 admitted UAF/double-free
+  rows** onto that list.
+  **Coverage:** `selftest_build_fail.gg`, the first control that must NOT build, asserted end-to-end
+  through the real `xargs` pipeline at `BUILD_FAIL_BOTH`/`UNMEASURED`; column 5 pinned in BOTH polarities;
+  both non-measured adjudicator routes watched firing; **ten** needles for the parts `run_selftest`
+  cannot reach — the print-only gate blocks, the startup assertions, and the whole corruption split,
+  which `run_selftest` never touches at all. Regenerate the count with
+  `awk '/for \(needle, why\) in \[/{f=1} f && /^    \] \{/{exit} f && /^        \($/{n++} END{print n+0}' tests/lints.rs`
+  — anchored on the table's own opening line, because the first spelling of this
+  command was pinned to a LINE NUMBER that this very correction shifted, and it kept
+  returning 10 only because the eight lines it then over-read happened to be comment.
+  **The revert method, which is what is reproducible: every line and block the fix adds was deleted in
+  turn, anchored BY LINE and never by substring, and each one names the row that reds it** — the six
+  needles added for the corruption split and the two `detect_leaks` assertions were each RED-verified
+  ALONE, each firing its own needle. Full-corpus
+  blast radius zero: census byte-identical, every gating bucket identical, `unmeasured` and `absent` both
+  empty. Residuals filed as `t1581`/`t1582`/`t1583`; the "measured against the WRONG root set" sub-class
+  the axis structurally cannot see stays `t1601`.
 - [2026-09-06] **R51 Track H — `t1505` (CRITICAL) + `t0952`: the `Ref[T]` declared-parameter decision now has ONE accessor, and the leak it was hiding is gone.**
   `Ref`/`MutRef` are name-only builtins whose sole AST carrier is `Type::Named{name:"Ref"|"MutRef",[T]}`;
   `try_map_ast_type` returns `None` for them, so the IMMUTABLE `map_ast_type` degraded a declared borrow

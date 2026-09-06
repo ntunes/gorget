@@ -11109,7 +11109,12 @@ fn sanitize_allowlists_shrink_only() {
     // enumeration. The re-census enumerated instead: every allowlisted fixture
     // calling `.map(` / `.flat_map(` / `.extend(`, each re-measured with the
     // sweep's own `leak_classes` extraction, its `use_stacks=0` /
-    // `detect_leaks=1:exitcode=0` options and its REPS=3 per-class MAX.
+    // `detect_leaks=1:exitcode=0:atexit=1` options and its REPS=3 per-class
+    // MAX. (`atexit=1` only forces the at-exit stats line the sweep reads as
+    // its "the leak check RAN" marker — column 5 of verdicts.tsv. It perturbs
+    // no leak class, so this census reproduces byte-identically with it and
+    // without it; the option is quoted here because the claim is about the
+    // SWEEP'S OWN string, not about a hand reproduction.)
     // Thirteen more had shed classes, every one stable across all three reps.
     //
     // INFLOW: +1 row, +1 pair, +5 records — `vector_hof_result_element_sizing`,
@@ -11836,6 +11841,11 @@ fn sanitize_sweep_selftest_is_wired() {
         ("selftest_leak.gg", "the leak detector fires, one class at one record"),
         ("selftest_leak_twice.gg", "the same class at two records — the class check's own class"),
         ("selftest_alternating_leak.gg", "the flake detector fires on a non-unanimous row"),
+        // The only control that must NOT build. It proves the sweep can tell
+        // "ran and came back clean" apart from "was never measured", which is
+        // the whole of column 5 in verdicts.tsv; without it a fixture that
+        // stopped building was reported as one whose leak was FIXED.
+        ("selftest_build_fail.gg", "a fixture that never built reads UNMEASURED, not fixed"),
     ];
     for (name, why) in CONTROLS {
         let p = root.join("tests/fixtures/sanitize_selftest").join(name);
@@ -11878,6 +11888,101 @@ fn sanitize_sweep_selftest_is_wired() {
              a guard), and the BASE corpus must stay the top level — a directory \
              joins it only through an `IN` row in \
              tests/sanitize/CORPUS_MANIFEST.txt."
+        );
+    }
+
+    // ⛔ THE `todo/t1360` WIRING: "did not run" must not read as "did not leak".
+    // ⚠ NO COUNT HERE ON PURPOSE — this comment said "These four needles" over a
+    // ten-row table within one round of the table growing, which is the rot
+    // Core #14 is about. The table below is the enumeration; read it.
+    //
+    // These needles pin the parts of that fix the sweep's own self-test
+    // structurally cannot reach: the gate blocks, which only print; the startup
+    // assertions, which run before anything is measured; and the whole
+    // CORRUPTION split, which `run_selftest` never touches at all because that
+    // list is adjudicated by inline `comm` in the script body rather than by a
+    // function the self-test can call. Regenerate that claim -- it is a property
+    // of the function body, so read the body, never a line range:
+    //   awk '/^run_selftest\(\) \{/{f=1} f{print} f && /^\}$/{exit}' \
+    //     scripts/sanitize_sweep.sh | grep -c corrupt      ->  0
+    // Everything else in the fix is watched firing on
+    // every invocation — column 5 in both polarities, and both non-measured
+    // adjudicator routes. These are the residue, and without them a partial
+    // revert is silent.
+    for (needle, why) in [
+        (
+            r#"[ -s "$OUT/unmeasured" ]"#,
+            "the gate block that reports an allowlisted fixture the run could not \
+             measure. Without it the bucket is computed and never printed, and the \
+             sweep passes over a row whose leak nothing looked for",
+        ),
+        (
+            r#"[ -s "$OUT/absent" ]"#,
+            "the gate block that reports an allowlisted fixture with no verdict \
+             line at all — deleted, moved out of the swept population, or a worker \
+             that died before printing its row",
+        ),
+        (
+            "is missing atexit=1",
+            "the startup assertion that ASAN_OPTIONS still carries `atexit=1`. \
+             That option is what makes \"the leak check ran\" a POSITIVE fact; \
+             without it every row reads UNMEASURED",
+        ),
+        (
+            "LSAN_OPTIONS WINS over ASAN_OPTIONS",
+            "the LSANOPT half of that assertion. LeakSanitizer reads `detect_leaks` \
+             from LSAN_OPTIONS and lets it win, so an ASAN_OPTIONS-only check is \
+             green over half its own class: the at-exit marker still prints and \
+             every fixture reads MEASURED",
+        ),
+        // ⚠ The two `detect_leaks` cases were added WITHOUT needles and were
+        // measured completely silent on their own revert — deleting both left
+        // `--selftest` at rc 0 and this suite at rc 0. Readiness item 4 is not
+        // satisfied by covering the other half of the same edit.
+        (
+            "ASANOPT ($ASANOPT) disables the leak check",
+            "the assertion that ASAN_OPTIONS does not carry `detect_leaks=0`. With \
+             the self-test on, the pre-existing leak controls fail closed anyway; \
+             with RUN_SELFTEST=0 nothing else catches it and the sweep prints \
+             delete advice for a still-leaking row at rc 0",
+        ),
+        (
+            "does not enable detect_leaks=1",
+            "the assertion that ASAN_OPTIONS enables `detect_leaks=1` at all. This \
+             sweep IS the leak measurement; an option string without it measures \
+             nothing while every row still reads MEASURED",
+        ),
+        // The corruption list is adjudicated inline with `comm`, not through
+        // `adjudicate_leaks`, so `run_selftest` cannot reach ANY of it. Its
+        // three-state split is pinned here or nowhere.
+        (
+            r#"comm -12 "$OUT/corrupt_no_finding" "$OUT/got_measured""#,
+            "the intersection that stops the CORRUPTION list retiring a row on a \
+             fixture nobody ran. `comm -13 got_corrupt allow_corrupt` is \
+             `for (s in allow) if (!(s in seen))` in another notation — the same \
+             defect todo/t1360 named, one list over, on admitted use-after-frees",
+        ),
+        (
+            r#"comm -23 "$OUT/corrupt_no_finding" "$OUT/got_present""#,
+            "the population half of that split: a corruption-allowlisted fixture \
+             with no verdict line at all is not evidence the corruption is gone",
+        ),
+        (
+            r#"[ -s "$OUT/unmeasured_corrupt" ]"#,
+            "the gate block that reports it. Without the block the bucket is \
+             computed and never printed",
+        ),
+        (
+            r#"[ -s "$OUT/absent_corrupt" ]"#,
+            "the gate block for the population half, COVERAGE_FLOOR-guarded so a \
+             FIXLIST demonstration does not red on every row it did not sweep",
+        ),
+    ] {
+        assert!(
+            sweep.contains(needle),
+            "scripts/sanitize_sweep.sh no longer contains {needle:?} — {why}.\n\
+             See todo/t1360: this gate used to report a fixture it never ran as \
+             one whose leak was FIXED, with a delete-this-row instruction attached."
         );
     }
 }

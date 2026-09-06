@@ -1,0 +1,23 @@
+# POSITIVE control for COLUMN 5 of scripts/sanitize_sweep.sh's verdicts.tsv —
+# the column that answers "did the leak check actually RUN?".
+#
+# THIS FIXTURE MUST NOT BUILD, deliberately. Every other control in this
+# directory proves a detector fires on something that RAN; this one proves the
+# gate can tell "ran and came back clean" apart from "was never measured at
+# all". Before column 5 existed those were the same fact, and an allowlisted
+# fixture that stopped building was reported as one whose leak was FIXED — with
+# a delete-this-row instruction attached to a live defect (`todo/t1360`).
+#
+# It is a CHECK-time rejection, not a parse error, so the fixture still formats
+# and still reads as Gorget; and it fails identically with and without
+# `--sanitize`, which is what makes the sweep grade it BUILD_FAIL_BOTH rather
+# than BUILD_FAIL_SANITIZE_ONLY. The self-test asserts BOTH: column 2
+# BUILD_FAIL_BOTH and column 5 UNMEASURED.
+#
+# ⚠ IF THIS FIXTURE EVER STARTS BUILDING, that is a real finding: the type
+# checker stopped rejecting an int-to-String initialization. Fix the compiler,
+# do not soften the control.
+int main():
+    String s = 5
+    print(s)
+    return 0
