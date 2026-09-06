@@ -24,6 +24,12 @@ I specified the guards move to the LIR validator home. **Measured: the checkpoin
 4. **`DONE.md` lines owed at close: `t1449` (Track D, closed by removal) and `t1452` (Track B, closed by removal).** Both item files are gone, so **git history is the sole record until the round entry lands.** A track never writes `DONE.md`; the obligation transfers to the parent by construction.
 5. ⚠ **If ANY track lands `src/` changes, the new LLVM-security battery leg owes a re-measure at the FINAL tree** — it is the one leg that can turn round close red, and it adds ~13 min. **The release-profile LLVM security lane has now been passed along unmeasured for THREE rounds** — the debug lane was measured this round (223/0/31, 786 s at `53aceef2b`); the release lane was not.
 
+### 🟢 MID-ROUND CHECKPOINT at `af5ce722d` — **four tracks integrated, every SCRIPT gate and every reconciliation lint GREEN**
+**Purpose: attribution for the last two tracks.** All rc read off the **BARE** command:
+`convergence` **0** (`known_gaps=17 · todo_items=970`) · `todo_index --check` **0** · `staging_move_burndown --check` **0** (SAMPLED 2261 · TRIPS 2 · CLEAN 5) · `known_gaps_census --check` **0** (roster **241**, was 239 — Track A's repros; PASS 6 unchanged) · ⭐ `box_receiver_burndown --check` **0** (SAMPLED 2656 · TRIPS 3 · CLEAN 14) — **Track A's new gate, green in its own right.**
+⭐ **And the three reconciliation lints THREE tracks perturbed are green**: `round_close_battery_covers_ci_steps` (**fail-closed since Track B**, so an `AGENTS.md` merge can red it without touching it), `agents_md_*`, `every_test_target_runs_in_ci`. **7 battery legs.**
+⚠ **THIS IS A CHECKPOINT, NOT THE BATTERY** — no C sweep, no LLVM sweep, no sanitize, no `robustness_map`, no bootstrap. Those run once at close, per AGENTS.md step 4.
+
 ### 🟢 PRE-INTEGRATION BASELINE — the four SCRIPT gates no `cargo` target reaches, all GREEN at `ea254df90`
 **Purpose: attribution.** Measured BEFORE any R51 track integrated, so a red after integration belongs to the integration and not to the tree it landed on. **Regenerate (read every rc off the BARE command — a pipe reports the pipe's status, which has greened a red gate three times):**
 ```
