@@ -367,6 +367,49 @@ zero exceptions ⇒ **the "present but the check didn't run" window DOES NOT EXI
 ⛔ **AND A NEW RED SURFACE, RECORDED:** for an **uncited** allowlisted row the fix turns an advisory (rc 0) into a
 **FATAL** (rc 1). Correct fail-closed behaviour — but *"rc unchanged"* is true **for today's corpus only**.
 
+### ⛔⛔ K's SCOUT **REFUTED THE DESIGN I ORDERED** — and the track re-cuts to the FIELD-POSITION REJECT
+**My reject-vs-materialize reading was CONFIRMED** (annotation ⇒ REJECT, flow ⇒ MATERIALIZE) **with one correction:**
+the note's *"allowed in RETURN and PARAMETER position"* describes the **COMPILER-INTERNAL** `Ref`, **not user source** —
+D41 forbids user spelling in **all** positions, and the stdlib `extern` params are the **builtin-declaration boundary**
+`[[t1307]]` blesses. ⚠ **My handover said "param position is PERMITTED" without that qualifier; corrected here.**
+
+⛔ **1. THE MIGRATION FIXES NOTHING MEASURABLE.** `--clones=stats`, N=2000: **exactly ONE clone per `Ref[]`-declared
+extern call**, and **the owned shape ALREADY EXISTS in the same file** (`SetDrain`/`DictDrain`, `lib/std/iter.gg:960-995`)
+**and clones just as much**. ⇒ **root cause is the DECLARED-PARAM path — Track H's — not the field spelling.**
+⊕ **Core #14 violation found:** `lib/std/iter.gg:953` asserts *"Reads of `self.source` auto-borrow the owned source
+field at every extern arg position."* **Measured FALSE.**
+
+⛔ **2. THE HOT-PATH COST, PRICED.** Migration is free **today** (+1 clone against 8000). ⭐ **POST-TRACK-H IT BECOMES
+THE ONLY CLONE, AND IT IS O(n) PER ADAPTER STAGE** — `take`/`skip`/`map`/`filter` all route through the shared adapter
+ctor. Measured: `200 × d.iter().take(1)` over 20000 entries went **800 → 1200** clones. **A 4-stage chain costs FOUR
+FULL COLLECTION CLONES PER LOOP, against ZERO for the `Ref` spelling.**
+
+⛔ **3. THE GUARD'S SUBJECT WAS WRONG — IT GOES GREEN OVER THE CRITICAL.** The bind-position subject fires on
+`Option[Ref[int]]` and `Vector[Ref[Cell]]` but is **blind to the FIELD position (all 16 decls), CAPTURE, and inferred
+binds** — **and `[[t1558]]`'s CRITICAL lives in the field position.**
+⊕ **HEAD's apparent reject is ACCIDENTALLY CORRECT (SIX-Q #6):** `Ref[int] r = …` fails as
+`E_UndefinedName: undefined name Ref; did you mean Rem?` — the **generic undefined-name check**, self-documented as
+*"deliberately scoped to the top-level name"*. Measured: **`Option[Ref[int]]` ACCEPTED; `Vector[Ref[Cell]]` ACCEPTED AND
+REAL** (push succeeds, prints 1). `Ref` is name-matched at **8 sites** — a live Core #2 violation.
+
+⇒ ⭐ **RE-CUT: the track's value is the FIELD-POSITION REJECT.** *"A field-position reject DELETES THE SHAPE, so the
+dangling class has nothing to miscompile"* — a stronger safety argument than site-fixing. Population: **16 field decls
+(4 stdlib + 12 across 10 fixtures), 1 bind, 13 permitted extern params.**
+
+### ⚖⚖ OWNER ASK — **ENFORCING D41's FIELD RULE COSTS THE LAZY ITERATORS O(n) PER ADAPTER STAGE**
+⛔ **The record cannot settle this one, and I checked before asking** (D41 in full, the transient-view note, `[[t1307]]`).
+**Two ratified sentences point opposite ways for the stdlib's OWN four fields:**
+- *"No LIR storage slot may hold a `Ref`-containing type — **a stored `Ref` is a use-after-free**"* ⇒ the four are illegal.
+- *"**VIEWS ARE INTERNAL TO BUILTINS ONLY** … because `Ref` is never user-spellable, this is a **compiler guard, not a
+  rule users must learn**"* ⇒ the stdlib **is** builtins, and the guard exists to protect *users*.
+
+**THE QUESTION:** does the field-position reject apply to **user code only** — leaving `lib/std/iter.gg`'s four fields
+as a blessed builtin-declaration boundary, exactly as the 13 extern params already are — **or to the stdlib too**,
+accepting **O(n) per adapter stage** on the lazy iterators until D52 lands?
+⊕ **Either answer retires `[[t1558]]`'s CRITICAL** (user code stops spelling `Ref` fields). **The cost falls entirely on
+which side the stdlib sits.** ⚠ **This bears directly on the optimality directive** — *"as optimal as hand written by an
+expert"* — and the measured alternative is 4 full collection clones per 4-stage loop.
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
@@ -1449,6 +1492,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t1505`](todo/t1505.md) **CRITICAL** — 🆕🚨 [CRITICAL — A LATENT MISCOMPILE THAT ARMS ITSELF THE MOMENT THE ABI IS FIXED. Measured 2026-09-06 by R51 Track F's br…
 - [`t1525`](todo/t1525.md) **HIGH** — 🆕🚨 [HIGH — THE INDEPENDENT WITNESS FOR A SET THAT FOUR HAND-ENUMERATIONS GOT WRONG. Measured 2026-09-06 by R51 Track F's…
 - [`t1558`](todo/t1558.md) **CRITICAL** — 🆕🐛 [HIGH — THE RESIDUAL A MEASURED FIX DOES *NOT* CLOSE, NAMED AT THE MOMENT IT WAS MEASURED. Found 2026-09-06 by R51 Tr…
+- [`t1602`](todo/t1602.md) **HIGH** — 🆕🐛 [HIGH — A LEAK *AND* AN O(n)-PER-CALL COST HIDING BEHIND A CORRECT ANSWER. Measured 2026-09-06 by R51 Track K's scout…
 ### Medium
 
 - [`t0115`](todo/t0115.md) **MED** — 🆕🐛 [MED — COMMENT MISATTRIBUTION, PRE-EXISTING on both lanes; found 2026-08-19 by the R43 Track G output review, executo…
