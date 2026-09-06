@@ -410,6 +410,58 @@ accepting **O(n) per adapter stage** on the lazy iterators until D52 lands?
 which side the stdlib sits.** ⚠ **This bears directly on the optimality directive** — *"as optimal as hand written by an
 expert"* — and the measured alternative is 4 full collection clones per 4-stage loop.
 
+### ⚖ THE OPEN-ASK AUDIT (owner question 2026-09-06: *"is there any open ask where the documentation doesn't clarify?"*)
+**Checked every open ask against the ledger. THREE CATEGORIES, and two asks should never have reached the owner.**
+
+**A — THE RECORD ALREADY SETTLES IT ⇒ WITHDRAWN**
+- ~~D41 enforcement scope~~ — withdrawn earlier; the transient-view note states the position rule outright.
+- ⛔ **`[[t1548]]` DISSOLVES ON AN OVER-READ — MINE.** Its mechanism says *"the ratified **no-type-shadowing** ruling makes
+  ILLEGAL the only four fixtures … that **declare a user TYPE with a builtin registry name**"*. **`grep -niE 'shadow'
+  docs/define-gorget/decisions.md` returns NO shadow ruling at all**, and the ruling actually exists as **D0′'s
+  shadow-reject (2026-09-05), recorded in `[[t1408]]:30` as *"a **VALUE** may not take a **TYPE's** name"* (`int Vector
+  = 5`).** ⇒ **OPPOSITE DIRECTION.** Under the ruling as recorded, the four fixtures **stay legal, the pin survives, and
+  the item has no subject.** ⚠ **t1548 asserted a ratified rule at a scope it was never ratified at** — the same move
+  that has now failed five times this round.
+
+**B — GENUINELY UNSETTLED ⇒ REAL ASKS**
+- **`[[t1527]]`** — D53's text is `E_MoveWithoutOperator` at *consuming* positions; `decisions.md:564` says a **plain
+  non-consuming call borrows so no OPERATOR is needed** and is **silent on whether the value may silently change TYPE**
+  there. **Verified by the delta-5 review. The cell is genuinely unenumerated.**
+- **D41's FIELD rule (new)** — two ratified sentences point opposite ways for the stdlib's **own** four fields. Cost
+  measured: **O(n) per adapter stage**.
+- ⭐ **D0′'s SCOPE — the ask `[[t1548]]` should have been.** *Does the shadow-reject extend from a VALUE taking a type's
+  name to a TYPE taking a builtin type's name?* **Cheap to answer, and it RESCUES the stood-down `t1408` track** (its six
+  Core #8 miscompile cells become rejects). **This is the one to put first.**
+
+**C — NOT A DECISION AT ALL**
+- ⛔ **`[[t1549]]` — THE LEDGER ACTIVELY CONTRADICTS A RULING THE OWNER ALREADY MADE.** `decisions.md:3362` still reads
+  *"that is a separate, still-open question"* while the owner **ruled R2 on 2026-09-05**, and the ruling survives **only
+  in commit `020381d48`'s message**. ⇒ **needs TRANSCRIPTION, not a decision — and only the owner may edit the ledger.**
+- **`[[t1555]]`** — the `AGENTS.md` budget. **No document can settle it**; it is a judgement about the excellence
+  system's own cost, not a semantics question.
+
+### ⛔ J PASS 2 — TWO BLOCKING, NEITHER TOUCHING THE DESIGN. **AND THE FIFTH FAILURE OF THE ROUND IS MINE AGAIN.**
+**B1 — the "genuinely independent witness" I PRESCRIBED yields 6, not 14.** `*_axis.append(` misses **8**: five live in
+`orthogonal.append(`, three are **variable** labels (`CRASH:…`/`EXIT:…`) with no literal to grep, and **`UNKNOWN` comes
+from no `.append(` at all** — a `Verdict([...])` constructor arg that **no `.append(`-shaped grep can EVER see**. ⊕ And
+`to_sweep()` **renames** (`CORRUPT:*`→`ASAN_*`, `UB`→`UBSAN`), so even a wider grep reports the *internal* spelling.
+⇒ *"The corrected TABLE is right; the instrument handed over to regenerate it is wrong."* A working one exists
+(`/tmp/rev2J51_witness.py`, discovering every `*_MARKERS` tuple via `dir(V)`), **and it names what IT still misses** —
+the two `*_RE` families, because **a regex's language is not enumerable from source.**
+**B2 — the patch REGRESSES FIXLIST / `COVERAGE_FLOOR=0` from rc 0 to rc 1.** The new fatal block has **no
+`COVERAGE_FLOOR` guard**, sitting immediately after the one whose guard exists **for exactly this reason**. ⭐ **Both
+prior passes missed it because both drove the adjudicator with a tiny allowlist where EVERY allow row had a matching
+verdicts row — a harness that STRUCTURALLY CANNOT exhibit the shape** (SIX-Q #6).
+⭐ **The reviewer's fix is better than copying the guard:** `unmeasured` conflates *(a)* the fixture ran and the check
+did not complete — the real defect, correctly fatal — with *(b)* the fixture was never in this run's population. **Track
+presence separately and gate only (a).** ⊕ That also fixes a full-corpus case: an allowlist row whose `.gg` was
+**DELETED** has no verdicts row, and the naive patch calls it a fatal *"never leak-measured"* when the right advice is
+*"the fixture is gone, delete the row"*.
+⊕ **And SIGSEGV is the sharpest t1360 case, which NO pass had used:** rc **0** (`exitcode=0`), verdict `ASAN_SEGV`,
+marker **ABSENT** ⇒ at HEAD a segfaulting allowlisted fixture is `covered`, is not `LEAK`, and lands in `fixed_leak` →
+**"DELETE"**. **The item's own `covered` intersection would miss it too** — independent reconfirmation that the brief is
+right to contradict its item.
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
