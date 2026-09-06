@@ -11164,9 +11164,18 @@ fn readiness_checklist_rows_are_capped() {
 /// `scripts/run_integration.sh` execs ONE cargo target (`--test integration`)
 /// and its own header lists `--test security` among the targets it does not
 /// run. R50 closed having run the entire documented battery green, passed this
-/// lint, and never executed the LLVM security suite — which had never run in
-/// this project's history. A guard that green-lights the class it exists to
-/// retire is worse than none, because the checklist then cites it as evidence.
+/// lint, and never executed the LLVM security suite. A guard that green-lights
+/// the class it exists to retire is worse than none, because the checklist then
+/// cites it as evidence.
+///
+/// ⊕ And that suite is not ceremonial. `grep -n 'GG_BACKEND=llvm cargo test
+/// --test security' DONE.md` finds it recorded as a round-close gate twice —
+/// once rc 0 (213 passed, 30 ignored), once RED on `sec_64_deep_option_unwrap`
+/// and `sec_70_inline_none_nested`. **A gate that has caught real bugs and is
+/// absent from the battery is worse than one that never mattered.** (An earlier
+/// draft of this comment said the suite "had never run in this project's
+/// history". That grep falsifies it, and it sat in the doc comment of the guard
+/// whose whole subject is unverified claims rotting. Regenerate, do not trust.)
 ///
 /// So a CI step's key is `(target, discriminating env)`, and the battery must
 /// carry a SINGLE RUNNABLE LINE per key — the same bullet naming the target
@@ -11544,6 +11553,19 @@ fn round_close_battery_covers_ci_steps() {
     // exactly. devbook/25 calls for a keyed budget that pins a MULTISET rather
     // than a total, and this is that. Adding a row here is a deliberate act;
     // losing one without editing this line is not possible.
+    //
+    // DEMONSTRATED on a mutant this lint's authors did not design: hoist
+    // `GG_BACKEND: llvm` out of BOTH LLVM steps' `env:` into a job-level `env:`
+    // under `llvm-backend:` -- semantically identical to GitHub Actions, and it
+    // strips `GG_BACKEND` from both LLVM keys under the step-scoped scanner.
+    // This pin reds it (rc 101, measured); a floor would not have, because the
+    // COUNT of discriminating vars stays above any threshold while two keys
+    // quietly lose their backend axis. In the assert's `left`/`right` diff the
+    // mutant shows BOTH a loss and a spurious GAIN -- a job-level `env:` block
+    // lands in the PREVIOUS job's last-step bucket, so `--test security` picks
+    // up a binding that is not its own. The scanner's step-scope limit is real
+    // -- see cause (ii) in the assert message below -- and this pin is what
+    // makes it fail CLOSED instead of silently widening coverage.
     let mut disc: Vec<String> = keys
         .iter()
         .map(|(_, t, r, _)| {
@@ -11573,10 +11595,16 @@ fn round_close_battery_covers_ci_steps() {
          env NAMES and has no row a flag could ever match.\n\
          · An ENV binding appeared: classify it — give it a battery leg, or a \
          NON_DISCRIMINATING_ENV row with its reason — then add it here. If one \
-         DISAPPEARED, the likely cause is a row wrongly added to \
-         NON_DISCRIMINATING_ENV, which is precisely how todo/t1452's hole was \
-         argued into the last version of this lint: `GG_BACKEND` is not a knob, \
-         it selects which compiler backend the suite exercises."
+         DISAPPEARED, there are TWO causes and they take OPPOSITE remedies. \
+         (i) A row was wrongly added to NON_DISCRIMINATING_ENV — precisely how \
+         todo/t1452's hole was argued into the last version of this lint: \
+         `GG_BACKEND` is not a knob, it selects which compiler backend the \
+         suite exercises. (ii) The binding was HOISTED to a JOB- or \
+         WORKFLOW-level `env:`, which GitHub Actions treats as equivalent but \
+         this scanner does not see — it reads STEP-level `env:` only. Restore \
+         it to the step, or teach the scanner job scope. ⛔ Do NOT reach for a \
+         NON_DISCRIMINATING_ENV row in case (ii): the binding is still live in \
+         CI, and exempting it would retire a real key to silence the diff."
     );
     live_env_keys.sort();
     live_env_keys.dedup();
