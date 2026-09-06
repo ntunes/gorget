@@ -548,6 +548,48 @@ H and J executors are running; K is in review. **I am deliberately NOT opening a
 suspended at this round's close, a ~2h battery is still owed, and AGENTS.md warns against **pre-warming a future
 round's campaign**. Adding a track now buys nothing that can land.
 
+### ⭐ TRACK H's EXECUTOR LANDED `152e9d194` — the CRITICAL + `[[t0952]]`. **OUTPUT-REVIEW RUNNING.**
+Patch applied **rc 0 with ZERO base drift** across 25 intervening commits; **patch and brief did not disagree anywhere.**
+⭐ **The control the original evidence LACKED now exists:** HEAD-vs-HEAD over all 5419 = **0 rows**, and `gg check` over
+5419 = **0 diffs / 5419 SEEN** — *a positive control, not the ZERO-BYTE file the scout's evidence had.*
+⊕ **THE `lines > 4` FILTER WORRY DISSOLVED ON RE-MEASUREMENT:** the differential is **23 of 5419 RAW, no filter** — all
+23 shrink, none is a ≤4-line row. **46/46 SAME** (23 C + 23 LLVM), every one `build=0 run=0`.
+⭐ **THE LINT'S COUNTERFACTUAL IS DECISIVE:** over the identical live two-line regression, the **one-line-window** form
+reports **0** violations and the **two-line** form reports **1** — so the widening was necessary, not defensive. At
+pristine HEAD it reports **29**, matching the routed site set cell-for-cell.
+⊕ **All TEN allowlist rows MEASURED individually** — 6 deleted after measuring CLEAN, 4 **tightened** after measuring the
+class gone but the row still leaking; the fatal, **not-cited-scoped** `new_class` gate checked across all 23 (**zero gain
+a class, zero exceed a count**).
+⊕ **Self-host MEASURED:** driver C **byte-identical**; the lane has working `Ref` machinery but a declared `Ref[T]`
+**param** emits an opaque `__gg_Ref__…` nominal struct and **cc rejects all four probes** — its own defect at the same
+layer with a louder symptom. Filed `[[t1571]]`.
+
+⛔ **PARENT OBLIGATIONS FROM THIS LANDING:**
+1. ⛔ **FOUR SHARED PINS WERE MOVED AND ARE PROVISIONAL — RE-MEASURE EACH FROM THE MERGED TREE, NEVER ADD** (MA-5):
+   the **allowlist-row count**, the **class-pair count**, the **allocation census total**, and
+   **`sanitize.leak.uncited_class_pairs.pin`** — plus their `figures.db` mirrors and the **digit-keyed waiver set**
+   re-derived alongside the last of them. ⚠ **THE VALUES ARE DELIBERATELY NOT QUOTED HERE.** `figures_db_values_have_one_spelling`
+   **refused a commit of this very note** because it re-spelled a covered figure — *which is precisely how a "provisional"
+   number becomes a carried one.* **Read each from its own regenerating command at the merged tree.**
+2. **15 rotted `cites` edges across 13 items**, ten in **other tracks' files** incl. live `[[t1557]]`/`[[t1558]]`/`[[t1601]]`,
+   repointed to `DONE.md` (established spelling: `t0851`, `t1388`). **May need reconciling at merge.**
+3. **Seven FURTHER allowlist rows shed this class (two fully CLEAN) and were deliberately NOT landed** — outside the
+   brief's stated ten-row scope. Numbers per row in **`[[t1575]]`**; **the decision is mine, not the executor's.**
+
+### ⛔⛔ THE ggdef LANE HAS NOW BEEN WRONG **THREE DIFFERENT WAYS** — including my own correction
+1. a grep on **`ggdef/src/`**, a path that does not exist (the crate is `spec/ggdef/`);
+2. a **STRING grep that cannot see a TYPED AST VARIANT**;
+3. ⛔ **and MY correction: `ast::Type::Ref` is NOT the `Ref[T]` builtin — it is the D35 `Type &` SIGIL.**
+   `src/parser/ast.rs:569-570` documents it *"Borrowed reference: `Type &`"*, and its **only** construction site
+   (`src/parser/types.rs:58`, on `Token::Ampersand`) carries the comment *"NOT in param parsing"* ⇒
+   **`elaborate/mod.rs:3631` handles the sigil and can NEVER see the builtin.**
+✅ **What survives, on better evidence:** ggdef **does** MATCH both borrow-field spectests, and **all 3 `Ref[`
+occurrences in its corpus are FIELD or LOCAL-BINDING positions — zero declared parameters.**
+⇒ ⭐ **OPPOSITE CONSEQUENCES FOR THE TWO TRACKS: no ggdef debt for H (its subject is declared PARAMS), but ggdef is a
+LIVE Core #9 lane for K (its subject IS field and local positions).** Corrected into K's review mid-flight.
+⚠ **Treat a fourth formulation with the same suspicion: run the suite and read the fixtures — never infer the lane from
+a grep of the compiler.**
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
