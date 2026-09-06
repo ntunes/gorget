@@ -1,5 +1,16 @@
 # TODO
 
+### 🟢 PRE-INTEGRATION BASELINE — the four SCRIPT gates no `cargo` target reaches, all GREEN at `ea254df90`
+**Purpose: attribution.** Measured BEFORE any R51 track integrated, so a red after integration belongs to the integration and not to the tree it landed on. **Regenerate (read every rc off the BARE command — a pipe reports the pipe's status, which has greened a red gate three times):**
+```
+scripts/convergence.sh                                          # MEASURES, does not gate
+scripts/known_gaps_census.sh --check
+GG_STAGING_MOVE_GUARD=fatal scripts/staging_move_burndown.sh --check
+python3 scripts/todo_index.py --check
+```
+All four **rc 0** at that commit. ⚠ **AND A BACKGROUNDED GATE'S TASK-NOTIFICATION *"exit code 0"* IS THE WRAPPER'S, NOT THE GATE'S** — read the rc out of the output file, every time.
+⛔ **TWO OF THESE ARE EXPECTED TO GO RED WHEN TRACK F's INCREMENT LANDS, and that is CORRECT, not a regression:** `known_gaps_census --check` (its repro starts passing ⇒ **GRADUATE, never allowlist**) and `sanitize_sweep.sh` (`retire_fatal` fires on the one row cited to `t0952`). **Neither is waivable; both are discharged by the same commit that lands the fix.**
+
 ### 📊 R51 TRACK STATE (orchestrator-maintained; the round does NOT open a successor — owner 2026-09-06)
 | Track | Stage | Streak | In flight | Last finding |
 |---|---|---|---|---|
