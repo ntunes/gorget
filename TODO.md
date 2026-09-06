@@ -4,12 +4,19 @@
 | Track | Stage | Streak | In flight | Last finding |
 |---|---|---|---|---|
 | **A** receiver-place (`t1319`+`t1373`) | brief-review **pass 4** | **0/3 ↺** | yes | ⭐ **LAYER CLOSED** — option 1 reproduced by THREE passes; no further pass re-opens it. ⛔ **The GUARD's design is invalidated:** applying the Core #14 fix *this brief scopes* turns the guard GREEN while the cell still prints garbage at rc 0 — its subject reaches the DECLARATION, the defect lives in the VALUE. Pinned set now derived from the guard's **fire-delta** (hand-counting gave 5, 11, 13). |
-| **B** battery-vs-CI lint | brief-review **pass 7** (confirming) | design ✅, blocked on **APPLICATION** | yes | ⛔ The brief prescribed copying a **1.67 MB whole-file snapshot of `tests/lints.rs`** while Track D's executor writes that same file — a silent revert with no conflict. Replaced by two diffs that FAIL on drift. Composed state measures **242/0**. ⊕ A folded-scalar (`run: >`) attack nobody designed goes RED — the fail-closed inversion generalises. |
+| **B** battery-vs-CI lint | **EXECUTOR RUNNING** | **7 passes, design ✅** | yes | ⛔ The brief prescribed copying a **1.67 MB whole-file snapshot of `tests/lints.rs`** while Track D's executor writes that same file — a silent revert with no conflict. Replaced by two diffs that FAIL on drift. Composed state measures **242/0**. ⊕ A folded-scalar (`run: >`) attack nobody designed goes RED — the fail-closed inversion generalises. |
 | **C** | **STOOD DOWN**, ✅ **BRIEF HARVESTED** `c25d5176e` | — | no | Measurements landed in `[[t1408]]` (it is **FOUR** name tables, not two, disagreeing by 5 names; and the reference-grade fold is **already half-built** at `resolve.rs:159-173`, making it SMALLER than the status quo) and `[[t0718]]` (the literal-counting ratchet **cannot catch its own class** — a reviewer's "realistic regrowth" probe was a copy of a defect already live at `typecheck.rs:1291`/`:1308`, guard green). |
 | **D** snapshot freshness + `todo_index` rc | **EXECUTOR RUNNING** | 3/3 ✅ | yes | Seeder-mirror enumeration total (18 properties). Acceptance = SHAPE not count. |
 | **F** optimality increment 1 (`t0952`) | brief-review **pass 2** | **0/3 ↺** | yes | Root cause + layer CONFIRMED, headline reproduces (**OOM-kill → 1.9 MB correct run**). Reset because the fix **fights Core #4** (1 of 4 callers) and fires **SIX-Q #6 on its own mechanism** (`:1890` ByValue half unfixed; works only because `calls.rs` short-circuits first). |
 
 ⚠ **THE RESET ON F IS AN OVERRULE OF THE REVIEWER'S OWN CLASSIFICATION.** Pass 1 called all four findings scope growth; two of them name *a Core invariant fought*, which the rule says resets. **A reviewer's severity label is evidence, not a verdict.**
+
+⛔⛔ **THE ROUND'S DOMINANT DEFECT SOURCE IS THE FOLD ITSELF — MEASURED FOUR TIMES, AND THE RULE THAT FORBIDS IT ALREADY EXISTED.** *"A FOLD MAY ONLY ASSERT WHAT A COMMAND IN THAT SAME FOLD REGENERATES"* was broken by the orchestrator, repeatedly, in the act of folding:
+- Track A: A1's B3 re-imported a claim `t1083` had **already corrected**; A3 struck it three passes later.
+- Track A: A3 imported *"the sixth instance"* as a load-bearing scope decision; the command returns **11**, heterogeneous.
+- Track B: **A5 overrode A4's correct classification of attack J and A6 inherited the override UNTESTED** — measured GREEN with a control two passes later.
+- Track F: the scout's *"8 rows"* was a grep written for another purpose; the true blast radius is **17**.
+⇒ ⚠ **A FOLD IS NOT A TRANSCRIPTION STEP — IT IS THE POINT WHERE UNVERIFIED CLAIMS ENTER WITH THE AUTHORITY OF A DECISION.** When an addendum OVERRIDES an earlier pass's classification, that override needs its own measurement, or the later pass inherits a confident error. **Three of the four above cost 2+ passes to unwind.**
 
 ⛔ **AND THE DUPLICATE-FILING NEAR-MISS IS NOW A RULE.** I filed `t1470` for a finding already filed as `t1469` — same probe, four hours apart. **A duplicate born of one source report is INVISIBLE to a grep of the SYMPTOM, because both filings use the source's own words. Grep the CITED SOURCE FILES.**
 
