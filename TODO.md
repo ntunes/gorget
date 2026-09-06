@@ -151,6 +151,16 @@ set, and make an unclassifiable site a VIOLATION — measured **9 of 9 attacks b
 ⇒ **When a guard leaks once, ask whether the leaking clause is a FILTER. If it is, no amount of widening the
 filter closes it; only inverting to an expectation does.**
 
+⭐⭐ **A CHECKER MUST MIRROR ITS SEEDER'S PRODUCE-SIDE CONTRACT — that is the total enumeration.** All five
+escape hatches in R51 Track D turned out to be **one class**: a normalization the SEEDER applies that the
+CHECKER omitted — `stdin(null)` · `status.success()` · the corpus source · `trim_end`+lossy · **the double-run
+stability gate.** ⇒ **Do not hunt hatches. Enumerate what the producer does and mirror each step.**
+⛔ **AND PARTITION ON BOTH SIGNS.** A four-stage partition that felt total was total over **FALSE NEGATIVES
+ONLY** — it never asked *"what makes the guard FIRE when nothing is wrong?"* — while the design's headline
+claim was *"zero false positives."* The fifth hatch was a **false RED wearing a verdict's label**
+(`fs_ops` 0/80 mismatches sequentially, **56/80 with two concurrent copies**). **A partition on one sign is
+half a partition.**
+
 ⭐⭐ **WHEN A GUARD KEEPS YIELDING ONE MORE HOLE PER REVIEW, PARTITION ITS PIPELINE AND ENUMERATE.**
 R51 Track D's guard gave up exactly ONE escape hatch per pass — three passes, three hatches — because every
 pass asked the same question, *"what makes the two sides agree for a wrong reason?"*, **which only probes the
@@ -1587,6 +1597,7 @@ when it passes cleanly (per Task Continuity).
 - [`t1409`](todo/t1409.md) **MED** — 🆕 [MED — A GUARD THAT RECORDS A LIVE BUG AS EXPECTED. Found by R50 Track H while landing t1387's fix; the pinning pre-da…
 - [`t1378`](todo/t1378.md) **HIGH** — 🆕🚨 [HIGH — A TIER-2A GUARD CLASS THAT HAS NEVER FIRED AND CANNOT FIRE, AND IT IS THE ROOT OF THE "STRUCTURALLY BLIND VAL…
 - [`t1452`](todo/t1452.md) **HIGH** — 🆕🚨 [HIGH — A RECONCILIATION LINT WHOSE EXEMPTION REINTRODUCES THE HOLE IT EXISTS TO CLOSE. Found 2026-09-05 by the R50 o…
+- [`t1457`](todo/t1457.md) **HIGH** — 🆕🚨 [HIGH — A FIXTURE FAMILY WHOSE OBSERVABLE OUTPUT DEPENDS ON WHETHER ANOTHER TEST IS RUNNING. Measured 2026-09-06 by R…
 ### Medium
 - [`t0590`](todo/t0590.md) **LOW** — 🆕🧹 [LOW — lint ergonomics; flagged by the R42 Track-B executor 2026-08-15 (bit three times in one track), filed by the o…
 
