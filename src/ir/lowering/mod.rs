@@ -764,7 +764,7 @@ pub fn lower_module(
                         _ => AbiKind::GorgetString,
                     };
                     let abis: Vec<AbiKind> = func.params.iter().map(|p| {
-                        let tid = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                        let tid = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
                         // See the ExternBlock path below: `Ref[T]`/`MutRef[T]` borrow
                         // params are aggregate-by-pointer and must pin to AbiKind::Ptr
                         // (is_resource_type can't see through the Ptr wrapper).
@@ -952,7 +952,7 @@ pub fn lower_module(
     }
 
     // Register monomorphized function signatures
-    generic_collector.register_fn_sigs(&ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_ownerships, &mut ctx.fn_param_abis);
+    generic_collector.register_fn_sigs(&mut ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_ownerships, &mut ctx.fn_param_abis);
 
     // Propagate extern bindings to monomorphized instances of generic extern fns.
     // A generic `extern "Gorget" int f[K, V](Dict[K, V] &m) = "c_symbol"` has one
@@ -1062,7 +1062,7 @@ pub fn lower_module(
                         if p.node.name.node == "self" {
                             continue; // self handled above
                         }
-                        param_types.push(ctx.type_mapper.map_ast_type(&p.node.type_.node));
+                        param_types.push(ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry));
                     }
 
                     ctx.fn_sigs.insert(mangled.clone(), (param_types, ret_type));
@@ -1081,7 +1081,7 @@ pub fn lower_module(
                     }
                     for p in &method_def.params {
                         if p.node.name.node == "self" { continue; }
-                        let base = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                        let base = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
                         param_abis.push(ctx.compute_param_abi(base, p.node.ownership));
                     }
                     ctx.fn_param_abis.insert(mangled.clone(), param_abis);
@@ -1143,7 +1143,7 @@ pub fn lower_module(
                             abis.push(AbiKind::Auto);
                         }
                         abis.extend(method_def.params.iter().map(|p| {
-                            let tid = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                            let tid = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
                             // `Ref[T]`/`MutRef[T]` borrow params are aggregate-by-pointer
                             // → AbiKind::Ptr (is_resource_type can't see the Ptr wrapper).
                             let is_borrow_named = matches!(&p.node.type_.node,

@@ -1,3 +1,96 @@
+- [2026-09-06] **R51 Track H — `t1505` (CRITICAL) + `t0952`: the `Ref[T]` declared-parameter decision now has ONE accessor, and the leak it was hiding is gone.**
+  `Ref`/`MutRef` are name-only builtins whose sole AST carrier is `Type::Named{name:"Ref"|"MutRef",[T]}`;
+  `try_map_ast_type` returns `None` for them, so the IMMUTABLE `map_ast_type` degraded a declared borrow
+  parameter to `UNIT_TYPE` — **before** any `(TypeId, Ownership)` accessor downstream, i.e. the fact had no
+  subject left to carry it (SIX-Q #4). That decision was re-derived independently at **29** declared-param
+  sites across four files, so a caller's `fn_sigs` and the callee's own param local could disagree
+  (Layering rule 3). **Two edits, one class, producer/consumer:** `TypeMapper::map_param_ast_type`
+  (`Ref[T]`→`Ptr(T)`, `MutRef[T]`→`MutPtr(T)`, **every other spelling routed to `map_ast_type` unchanged**)
+  writes `fn_sigs`; a `callee_param_is_declared_ptr` consult in `lower_call_arg`'s fall-through arm reads it
+  and passes a `Ptr(T)` operand straight through instead of materialising a copy the callee never owns.
+  **Both or neither** — the consult cannot fire until the accessor has written.
+  ⛔ **THE DEFECT WAS LIVE AT PRISTINE HEAD, not only under a corrected ABI.** Measured, `gg check`/build/run
+  all rc 0: `int ref_len(Ref[Dict[String,int]] m): return m.len()` printed **`0`** for a seven-entry dict
+  (correct 7); `Ref[Point].x` **`0`** (77); `Ref[Vector[int]]` sum **`0`** (67); an equip
+  `int via_ref(&self, Ref[Dict] m)` **`100`** (107); `MutRef[Dict].len()` **`0`** (7). All five correct after.
+  ⭐ **`t0952` closes with it.** `tests/fixtures/known_gaps/dict_iter_ref_field_read_clone_temp_leak.gg`
+  went **rc 1, 10062 bytes leaked in 78 allocations** (byte-for-byte the filed figure) to **rc 0, ASan-CLEAN,
+  prints 6**, and is **un-`#[ignore]`d**. Sorted C clone multisets on that fixture: **HEAD 11 · accessor-alone
+  11 · consult-alone 11 · both 7** — so it reds on reverting either half, which is what makes it a complete
+  partial-revert row for the pair.
+  **BLAST RADIUS, re-measured at HEAD with a control the original evidence lacked.** `gg build --emit-c-lir`
+  is nondeterministic (`t1557`), so every row is a SORTED LINE MULTISET and a **HEAD-vs-HEAD control over all
+  5419 fixtures returned 0 differences** before any row was trusted. Differential: **23 of 5419**, raw, **no
+  filter** (the scout's "23" was a `lines > 4` filter over 33 raw rows whose control file was zero bytes —
+  indistinguishable from never-run). All 23 shrink. Those 23 build+run **identical on C and on LLVM, 46/46**.
+  `gg check` verdict AND message over all 5419: **0 differences, 5419 seen** (a positive control, not an
+  empty file). **10 allowlist rows retired or tightened, every one MEASURED under ASan** rather than inferred
+  from the sweep, which `t1360` shows cannot tell "no longer leaks" from "never ran": 6 rows deleted
+  (incl. the CITED `iter_trait_default_trait_args`, whose `⚖ ADMITTED` block went with it), 4 tightened.
+  `LEAK_CEILING` 251→245, `LEAK_CLASS_PAIRS` 436→423, `LEAK_RECORDS` 1978→1804,
+  `UNCITED_LEAK_CLASS_PAIRS` 420→409, all regenerated from the census command, with their `figures.db`
+  mirrors and the digit-keyed waiver set re-derived for 409. The fatal, NOT cited-scoped `new_class` gate was
+  checked separately across all 23: **zero gain a class, zero exceed a tolerated count.**
+  **COVERAGE (Core #12), including what ships unpinned.** Three `--lib` unit tests on the accessor,
+  RED-verified **per branch, anchored by line** (`Ref` broken ⇒ only the `Ref` row reds; `MutRef` ⇒ only
+  `MutRef`; the name guard widened ⇒ only the third). Plus a Core #6 lint,
+  `declared_param_sites_use_map_param_ast_type`, whose **window is TWO LINES and that is load-bearing**: the
+  narrow one-line form is **GREEN** over a live two-line revert of the equip site `functions.rs:1998` that the
+  widened form REDs — and the shape that defeats it is trait-default signature registration, the same family
+  the lint is the only pin for. It reports **29 violations at pristine HEAD and 0 after**, matching the patch's
+  site set cell-for-cell, with `map_ast_type_mut`/`substitute_and_map_mut` allowed because they already take
+  the borrow branch. ⚠ **The headline CRITICAL ships with no runtime regression fixture**, because every
+  shape exhibiting it is a Gorget-bodied `Ref[T]` parameter and **D41 ratifies that out of user source**
+  (`grep -rn 'Ref\[\|MutRef\[' lib/` → 18 hits, all extern params, fields or comments; zero such parameters
+  exist tree-wide). Filed as `t1574`, conditioned on `t1307`'s open owner ask.
+  ⛔ **ERRATUM A1 — RETRACTED AT ITS OWN SCOPE, NOTHING WIDER.** `t1505` said of `src/ir/lowering/mod.rs:838/852`:
+  *"AND IT ALREADY CALLS THE CANONICAL ACCESSOR AND ALREADY ANSWERS WRONG (`Ptr(T)` + `Borrow` → `ByValue`).
+  **That is the defect, not the cure.**"* — and its sibling, *"while mutable-mapper sites already hold `Ptr(T)`
+  and only the **ABI** is wrong, because `is_resource_type(Ptr(_))` is `false` → `ByValue`."* **Both are
+  RETRACTED.** `(Ptr(T), Borrow) → ByValue` is the CORRECT convention, not a defect: `ParamABI::ByValue` is
+  documented *"passed by value"* and a parameter whose GIR type is already `Ptr(T)` passes the pointer.
+  The witness needs no build — `sed -n '458,464p' src/ir/lowering/traits.rs` and `sed -n '1295,1301p'` are
+  **two sites that already ship exactly `(Ptr(T), ByValue)` for a `Ref[T]` parameter, with the corpus green
+  on them**; `is_resource_type` is `false` for `Ptr(_)` and for `UNIT_TYPE` alike, so `compute_param_abi`'s
+  output is **byte-identical before and after this change**. The fix does not invent a convention — it makes
+  29 sites agree with the 5 `*_mut` sites that already did. ⊕ `t1505`'s *"a TypeId-only accessor is INERT at
+  the second kind"* is **TRUE and STANDS**: the patch correctly skips those 5 sites, which need no fix.
+  **LANES (Core #9).** *ggdef:* no change owed — and the reasoning is re-derived, because the premise it was
+  first given was wrong. ggdef's corpus **does** contain `Ref[`-spelling fixtures (`spectests/run/borrow_field_basic.gg`,
+  `borrow_field_nongeneric.gg`, both `adjudicator: ggdef`, both MATCH), and `spec/ggdef/src/elaborate/mod.rs:3631`
+  **does** handle `ast::Type::Ref`. But `src/parser/ast.rs:569-570` defines that variant as *"Borrowed reference:
+  `Type &`"* — the D35 SUFFIX SIGIL — and its only construction site, `src/parser/types.rs:58` inside
+  `parse_type_with_ownership` on `Token::Ampersand`, is documented *"NOT in param parsing"*. It can never see the
+  `Ref[T]` builtin, which stays `Type::Named{"Ref"}` (total witness `grep -rn '"Ref"' src/`, every hit a Named
+  name test). And all **3** `Ref[` occurrences in the ggdef corpus are **field or local-binding** positions, not
+  declared parameters. ⇒ different subject, and ggdef never lowers to GIR: implementation-internal codegen,
+  Core #9's explicit exemption. Gate held: **total=245 · MATCH=227 · MISMATCH=0 · SKIP=18**, `cargo test -p ggdef`
+  green, `spectests/run` count unchanged so `MIN_FIXTURES` does not move.
+  *Self-host:* **MEASURED, not predicted.** The driver's own emitted C is **byte-identical** before and after
+  (1 320 540-line sorted multiset, `cmp` rc 0, ~82 s — a real emission on both sides, not a timeout), and every
+  probe gives the identical verdict under a HEAD-built and a fix-built driver. The lane has real `Ref` machinery
+  (`lower_types.gg:502-511` lowers `RTRef` → `GtPtr`) and it works — `borrow_field_basic` → `99|42`,
+  `borrow_field_nongeneric` → `99`, both correct — but a declared `Ref[T]`/`MutRef[T]` **parameter** resolves
+  through the mangled-nominal arm at `:348-357` instead, emitting `int64_t ref_len(__gg_Ref__Dict__…)` and a
+  by-value caller, which **`cc` rejects on all four probes**. Its own defect at the same layer, with a LOUDER
+  symptom than the Rust lane's; filed as **`t1571`**, unmoved by this change.
+  **WHY NOTHING CAUGHT THIS.** `t1378`: `module.fn_param_abis` is assigned ~247 lines AFTER the four validators
+  that read it, so `ConsumeSiteClass::CallByValueArg` has never fired — which is how a caller/callee parameter
+  disagreement passed every structural guard for the life of the tree. Not a prerequisite here; this change
+  alters no `ParamABI` value.
+  ⭐ **A SENTINEL COLLISION IT SILENTLY REPAIRS.** `lower_method_call` dispatches closure calls on
+  `local_type_id == UNIT_TYPE` under a comment asserting *"Callable parameter call"*. At HEAD a `Ref[T]`
+  parameter's local **was** `UNIT_TYPE`, so calling through one entered the `CallableParam` indirect-dispatch
+  arm. Direction strictly correct, no fixture could see it, and the comment is still an unguarded
+  invariant-assertion — filed as **`t1576`** (Core #14).
+  Also filed: **`t1572`** (`MutRef[T] &x` composes `MutPtr` twice — the site-N+1 shape, no reject exists, not a
+  regression: HEAD yielded `MutPtr(UNIT)`, equally wrong), **`t1573`** (`TypeRegistry::insert` does not dedupe,
+  so this change **widens the population** of distinct-`TypeId`-per-mint without introducing the hazard —
+  the consult compares structurally), **`t1575`** (seven further allowlist rows measured shedding this class,
+  left in place as outside this track's briefed ten-row scope, with their numbers).
+  **Gates, bare rc off each command:** `cargo test --lib` 1190/0 · `cargo test --test lints` UNFILTERED **251/0** ·
+  `--test spec_conformance` 3/0 · `--test security` 223/0 · `--test c_runtime` 3/0 · `cargo test -p ggdef` green ·
+  integration `iter` 145/0 · `dict` 105/0 · `cow` 225/0 · `clone` **37**/0 (36 + the newly un-`#[ignore]`d repro).
 - [2026-09-06] **R51 Track G — `t1064` + `t0675`: the `todo/` record's own citations are now guarded.**
   Two lints in one walk over `todo/*.md` front matter (`tests/lints.rs`): `todo_repro_paths_resolve`
   (**zero exemption surface** — no allowlist, no band, `broken.is_empty()`; ⚠ that claim is about

@@ -280,6 +280,30 @@ impl TypeMapper {
         }
     }
 
+    /// Map a DECLARED PARAMETER's AST type to its GIR TypeId.
+    ///
+    /// **The one accessor every declared-param site reads.** `Ref[T]` /
+    /// `MutRef[T]` are name-only builtins whose sole AST carrier is
+    /// `Type::Named { name: "Ref" | "MutRef", generic_args: [T] }`.
+    /// `try_map_ast_type` returns `None` for them, so `map_ast_type` degrades
+    /// a declared borrow parameter to `UNIT_TYPE` *before* any
+    /// `(TypeId, Ownership)` accessor is reached — the fact has no subject in
+    /// that signature. A parameter position must not lose it: it gets
+    /// `Ptr(T)` / `MutPtr(T)`, the same answer the extern-block registration
+    /// already produces via `map_ast_type_mut`.
+    ///
+    /// Every other spelling is routed to `map_ast_type` unchanged, so this
+    /// accessor differs from the status quo at exactly the borrow spellings.
+    pub fn map_param_ast_type(&mut self, ty: &Type, registry: &mut TypeRegistry) -> TypeId {
+        if let Type::Named { name, generic_args } = ty {
+            let base = name.node.as_str();
+            if (base == "Ref" || base == "MutRef") && generic_args.len() == 1 {
+                return self.map_ast_type_mut(ty, registry);
+            }
+        }
+        self.map_ast_type(ty)
+    }
+
     /// Mutable version of map_ast_type that can register new types.
     pub fn map_ast_type_mut(&mut self, ty: &Type, registry: &mut TypeRegistry) -> TypeId {
         match ty {
@@ -1653,6 +1677,83 @@ mod tests {
             assert_eq!(s.fields[1].name, "_1");
         } else {
             panic!("Expected Struct");
+        }
+    }
+
+    /// Helper for the `map_param_ast_type` rows below: a `Type::Named` literal.
+    fn named_ty(base: &str, args: Vec<Type>) -> Type {
+        Type::Named {
+            name: spanned(base.to_string()),
+            generic_args: args.into_iter().map(spanned).collect(),
+        }
+    }
+
+    /// `map_param_ast_type` is the single accessor every declared-parameter site
+    /// reads (see `tests/lints.rs::declared_param_sites_use_map_param_ast_type`).
+    /// `Ref[T]` in a parameter position is a pointer slot, not a unit.
+    #[test]
+    fn map_param_ref_is_ptr() {
+        let mut reg = TypeRegistry::new();
+        let mut mapper = TypeMapper::new(&mut reg);
+        let ty = named_ty("Ref", vec![Type::Primitive(PrimitiveType::Int)]);
+        let id = mapper.map_param_ast_type(&ty, &mut reg);
+        assert!(
+            matches!(reg.get(id), Some(GirType::Ptr(inner)) if *inner == I64_TYPE),
+            "Ref[int] in a declared-param position must map to Ptr(int), got {:?}",
+            reg.get(id)
+        );
+    }
+
+    /// The mutable half of the same axis. Deleting the `MutRef` arm of
+    /// `map_param_ast_type` reds this row and only this row.
+    #[test]
+    fn map_param_mutref_is_mutptr() {
+        let mut reg = TypeRegistry::new();
+        let mut mapper = TypeMapper::new(&mut reg);
+        let ty = named_ty("MutRef", vec![Type::Primitive(PrimitiveType::Int)]);
+        let id = mapper.map_param_ast_type(&ty, &mut reg);
+        assert!(
+            matches!(reg.get(id), Some(GirType::MutPtr(inner)) if *inner == I64_TYPE),
+            "MutRef[int] in a declared-param position must map to MutPtr(int), got {:?}",
+            reg.get(id)
+        );
+    }
+
+    /// The accessor differs from `map_ast_type` at EXACTLY the two borrow
+    /// spellings with one generic argument — every other spelling, including a
+    /// bare `Ref` and a two-argument `Ref`, is routed through unchanged.
+    #[test]
+    fn map_param_other_spellings_unchanged() {
+        let mut reg = TypeRegistry::new();
+        let mut mapper = TypeMapper::new(&mut reg);
+        let cases = vec![
+            Type::Primitive(PrimitiveType::Int),
+            Type::Primitive(PrimitiveType::Bool),
+            Type::Primitive(PrimitiveType::StringType),
+            named_ty("Unknown", vec![]),
+            // a one-generic-argument Named that is NOT a borrow spelling: drop
+            // the name test from the accessor's guard and this row goes RED.
+            named_ty("Vector", vec![Type::Primitive(PrimitiveType::Int)]),
+            named_ty("Ref", vec![]),
+            named_ty("MutRef", vec![]),
+            named_ty(
+                "Ref",
+                vec![
+                    Type::Primitive(PrimitiveType::Int),
+                    Type::Primitive(PrimitiveType::Int),
+                ],
+            ),
+        ];
+        for ty in cases {
+            // `map_ast_type` FIRST: `map_ast_type_mut` populates the mapper's
+            // cache, so asking the routed accessor first would make a wrongly
+            // widened guard look like a no-op.
+            let via_plain = mapper.map_ast_type(&ty);
+            let via_param = mapper.map_param_ast_type(&ty, &mut reg);
+            assert_eq!(
+                via_param, via_plain,
+                "spelling {ty:?} must be routed to map_ast_type unchanged"
+            );
         }
     }
 }

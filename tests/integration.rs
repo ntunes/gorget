@@ -9630,15 +9630,28 @@ fn known_gap_self_consuming_receiver_no_callee_drop() {
     );
 }
 
-// `todo/t0952` — `DictIter[K, V].next()` reads its `Ref[Dict[K, V]] source`
-// BORROW field four times per call and each read deep-clones the whole Dict into
-// a temp that is never freed (`auto_clone_if_ptr`,
-// `src/ir/lowering/context.rs`, does not consult the callee's declared `Ref[T]`
-// parameter). 10062 bytes in 78 allocations at HEAD, C and LLVM;
-// `gorget_map_clone*12` + `str_alloc_copy*4`, the latter INDIRECT.
+// GRADUATED (R51 Track H) — was `todo/t0952`'s `#[ignore]`d durable repro.
+// `DictIter[K, V].next()` read its `Ref[Dict[K, V]] source` BORROW field four
+// times per call and each read deep-cloned the whole Dict into a temp nothing
+// freed: 10062 bytes in 78 allocations, `gorget_map_clone*12` +
+// `str_alloc_copy*4` (the latter INDIRECT — the String keys the leaked clones
+// own), byte-identical on C and LLVM. The write site was one layer above
+// `auto_clone_if_ptr`: a declared `Ref[T]` parameter went through the IMMUTABLE
+// type mapper, which has no `Ref` branch, so the callee's `fn_sigs` entry
+// degraded to `UNIT_TYPE` and the call site could not see that its destination
+// was already a pointer slot. Routing every declared-param site through
+// `TypeMapper::map_param_ast_type` and consulting the result in
+// `lower_call_arg` removes the clone.
+//
+// ⚠ THIS ROW PINS THE LEAK, NOT THE MISCOMPILE. It reds on reverting EITHER
+// half of the fix (the accessor writes `fn_sigs`; the consult reads it, and
+// cannot fire until the accessor has written — measured: HEAD 11 clones,
+// accessor-alone 11, consult-alone 11, both 7). The silent-wrong-output half of
+// the same defect (`todo/t1505`) needs a Gorget-bodied `Ref[T]` parameter, which
+// D41 ratifies out of user source, so it is pinned by the `map_param_*` unit
+// tests in `src/ir/lowering/types.rs` and by
+// `declared_param_sites_use_map_param_ast_type` in `tests/lints.rs` instead.
 #[test]
-#[ignore = "todo/t0952 — a Ref[T] struct-field read at a Ref[T] parameter position deep-clones \
-instead of passing the pointer through, and the clone leaks. Asserts the intended ASan-clean run."]
 fn known_gap_dict_iter_ref_field_read_clone_temp_leak() {
     assert_gg_sanitize_clean("known_gaps/dict_iter_ref_field_read_clone_temp_leak", "6");
 }

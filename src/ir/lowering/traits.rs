@@ -146,7 +146,7 @@ pub fn register_trait_types(
                         if p.node.name.node == "self" {
                             continue;
                         }
-                        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                        let base_type = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
                         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
                         param_types.push(gir_type);
                         base_param_types.push(base_type);
@@ -351,7 +351,7 @@ pub fn register_trait_equip_sigs(
                     }
                     for p in &method_def.params {
                         if p.node.name.node == "self" { continue; }
-                        let base = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                        let base = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
                         param_types.push(base);
                         abis.push(ctx.compute_param_abi(base, p.node.ownership));
                     }
@@ -493,7 +493,7 @@ pub fn register_trait_equip_sigs(
                                 let mut abis = vec![super::context::ParamABI::ByPtr];
                                 for p in &method_def.params {
                                     if p.node.name.node == "self" { continue; }
-                                    let base = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                                    let base = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
                                     param_types.push(base);
                                     abis.push(ctx.compute_param_abi(base, p.node.ownership));
                                 }
@@ -1196,7 +1196,7 @@ pub fn register_unregistered_trait_equip_sigs(
                     if p.node.name.node == "self" {
                         continue;
                     }
-                    let base = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                    let base = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
                     param_types.push(base);
                     abis.push(ctx.compute_param_abi(base, p.node.ownership));
                 }
@@ -1533,7 +1533,7 @@ fn lower_static_trait_method(
     for (i, p) in method.params.iter().filter(|p| p.node.name.node != "self").enumerate() {
         let (gir_type, _) = &params[i];
         ctx.register_local(&p.node.name.node, LocalId(param_idx), *gir_type);
-        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        let base_type = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
         if ctx.is_ref_param(base_type, p.node.ownership) {
             ctx.set_bare_param(&mut builder, LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
@@ -1557,7 +1557,7 @@ fn lower_static_trait_method(
     {
         let mut pidx = 1u32;
         for p in method.params.iter().filter(|p| p.node.name.node != "self") {
-            let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+            let base_type = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
             if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
                 && ctx.type_registry.is_resource_type(base_type)
             {

@@ -117,6 +117,21 @@ fn callee_param_ownership(
     }
 }
 
+/// Whether the CALLEE declared this parameter as a borrow that is itself a
+/// pointer slot — `Ref[T]` -> `Ptr(T)`, `MutRef[T]` -> `MutPtr(T)`.
+///
+/// A `Ptr(T)` operand arriving at such a position is ALREADY the shape the
+/// destination wants; materializing it deep-copies the pointee into a temp the
+/// callee never owns and never frees (todo/t0952). This asks about the
+/// DESTINATION, which is the fact `auto_clone_if_ptr` structurally cannot see.
+fn callee_param_is_declared_ptr(ctx: &LoweringContext, pt: Option<TypeId>) -> bool {
+    let Some(t) = pt else { return false };
+    matches!(
+        ctx.type_registry.get(t),
+        Some(crate::ir::types::GirType::Ptr(_)) | Some(crate::ir::types::GirType::MutPtr(_))
+    )
+}
+
 pub(super) fn lower_call_arg(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -834,7 +849,16 @@ pub(super) fn lower_call_arg(
             }
             ctx.auto_clone_if_ptr(builder, val, arg.span)
         }
-        _ => ctx.auto_clone_if_ptr(builder, val, arg.span), // Auto-clone Ptr(T) → T at boundary
+        _ => {
+            // The callee declared this parameter `Ref[T]` / `MutRef[T]`, so the
+            // destination is a pointer slot and a `Ptr(T)` operand already fits.
+            // Auto-cloning here would materialize an owned copy the callee never
+            // takes ownership of (todo/t0952).
+            if callee_param_is_declared_ptr(ctx, callee_param_type) {
+                return val;
+            }
+            ctx.auto_clone_if_ptr(builder, val, arg.span) // Auto-clone Ptr(T) → T at boundary
+        }
     }
 }
 
