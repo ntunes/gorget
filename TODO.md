@@ -104,7 +104,15 @@ the tree.
   while a bootstrap or sweep runs. `driver.gg` bakes all 62 runtime `.c` files via `embed_file`.
 - ⛔ **NEVER `git checkout <ref> -- <path>` TO SET UP A REVERT.** Silently clobbers uncommitted work. Use a
   re-appliable patch. (In AGENTS.md MA-8.)
-- ⛔ **WHEN A TRACK'S SCOPE KEEPS GROWING, SUSPECT THE MECHANISM BEFORE REACHING FOR A SPLIT.** R51 Track C
+- ⭐⭐ **WHEN A GUARD KEEPS YIELDING ONE MORE HOLE PER REVIEW, PARTITION ITS PIPELINE AND ENUMERATE.**
+R51 Track D's guard gave up exactly ONE escape hatch per pass — three passes, three hatches — because every
+pass asked the same question, *"what makes the two sides agree for a wrong reason?"*, **which only probes the
+COMPARE stage.** Pass 4 partitioned the verdict pipeline into **invoke · read/enumerate · run · compare**,
+immediately found the untouched stage (**the corpus is SELF-DEFINING and its SIZE is unpinned — a re-seed can
+delete 1375 of 1376 snapshots with every existing guard GREEN**), and could then state the enumeration is
+**TOTAL**. ⇒ **An open-ended hunt yields one finding per reviewer; a partition ends it.**
+
+⛔ **WHEN A TRACK'S SCOPE KEEPS GROWING, SUSPECT THE MECHANISM BEFORE REACHING FOR A SPLIT.** R51 Track C
 took three blocking passes, each finding the change bigger than the brief said — ≥16 then 39 then 42 changed
 cells, plus a self-host mirror, a ggdef disposition and a `runtime_parity_corpus` exposure. **Every one of
 those traced to a SINGLE line: seeding a family as `DefKind::Import` placeholders.** A variant that answers
