@@ -55,6 +55,21 @@ omission, one heartbeat apart.
 | **C1** shadow-reject | ⚖⚖ **GENUINE — IT SURVIVES THE PROBE** | The ruling says *"at the ambiguous site"* but offers `Vector[int] Vector = [1,2,3]` as proof of an accept→reject change, **and that program has no `x[…](…)` site.** Measured at HEAD: the shadowing declaration checks **rc 0**, and `Vector.len()` on it checks **rc 0**. ⇒ reading (a) IS accept→reject; reading (b) leaves the example accepted and costs 0. **Two different semantics, and the ruling's text and its own example pick different ones.** |
 
 ⇒ ⭐ **BRING THE OWNER EXACTLY ONE QUESTION: C1.** D0′ rides along as a report, not a question.
+
+⭐⭐ **AND THEY SHARE A ROOT CAUSE — `t1408` — WHICH CHANGES WHAT TO ASK FOR.** Regenerated 2026-09-06:
+- `BUILTIN_GENERIC_TYPES` (`src/semantic/resolve.rs:19`) holds **16** names — `Vector, Deque, Dict, HashMap,
+  Set, HashSet, Box, Future, Task, Channel, Shared, Weak, Mutex, Guard, TaskGroup, FxHasher`.
+- **`Callable` is NOT among them** — it lives in a SECOND, independent `matches!` on string literals
+  (`src/semantic/types.rs:661`, with `MutCallable`/`ConsumeCallable`).
+- **`Owned` is in NEITHER** (`grep -c '"Owned"' src/semantic/resolve.rs` → **0**; no hit in `types.rs`).
+
+`t1408`'s filed mechanism states exactly this. ⇒ **C1's fix (a shadow-check) and D0′'s blocker (the type-kind
+set is not well-defined) are the SAME defect wearing two hats.** Any shadow-check keyed on the type namespace
+is structurally blind to the two spellings most likely to be shadowed by a callable-valued local, and Ruling 3
+cannot partition a set that has two disjoint definitions and a hole.
+⚠ **SO THE ORDER MATTERS AND IS NOT A PREFERENCE: `t1408` FIRST.** After it lands, C1's two readings can be
+costed against ONE type namespace instead of two-and-a-gap — and the answer may change shape, because reading
+(b)'s *"cost is provably 0"* was measured with an instrument that cannot see `Callable`/`Owned` shadows at all.
 ⚠ **AND THE HAZARD C1's INSTRUMENT SURFACED, which any fix must survive:** `Callable` and `Owned` are **NOT in
 the ScopeTable's type namespace** (`Option`/`Result`/`Set`/`Box` all are) — so a shadow-check built on that
 namespace is **blind to the two spellings most likely to be shadowed by a callable-valued local.** Same root as
