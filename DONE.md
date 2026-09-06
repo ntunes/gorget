@@ -88,6 +88,27 @@
   so this change **widens the population** of distinct-`TypeId`-per-mint without introducing the hazard —
   the consult compares structurally), **`t1575`** (seven further allowlist rows measured shedding this class,
   left in place as outside this track's briefed ten-row scope, with their numbers).
+  ⛔ **THE WIDENED WINDOW ACQUIRED A BLIND SPOT INSIDE ITS OWN JOB, and the output-review caught it.**
+  Widening DETECTION to two lines was necessary — but the same edit widened the **EXCUSE**, and the excuse
+  is what leaks: an unrelated routed call on the next line laundered a real violation. Measured on a planted
+  break at `functions.rs:1998`. **Shape A** (binding line, unrouted mapper on the next line): one-line form
+  **GREEN**, two-line form **RED**. **Shape B** (a new unrouted site written immediately above an existing
+  correct one — literally *"site 35 next to a correct site"*, which is the guard's stated job): window-wide
+  excuse **GREEN**, narrowed excuse **RED**. **Complementary blind spots; neither window dominates.**
+  Repaired by narrowing ONLY the excuse to the binding's own line (`window.contains` → `line.contains`),
+  with the asymmetry spelled out in the source so it does not read as a typo and get "fixed" back.
+  Four cells re-measured: clean tree **green** (the two legitimate two-line `traits.rs` sites carry no
+  unrouted marker on their own line, so they never reach the excuse), shape A **RED**, shape B **RED**,
+  pristine parent **still 29**.
+  ⚠ **CORRECTION TO THIS TRACK'S OWN COMMIT MESSAGE.** `152e9d194` says closing the two items *"rotted 15
+  `cites` edges across 13 items"*. **Both figures are wrong for the diff they describe.** 15 was the LINT's
+  dead-row count, which includes four of this track's own new items — files that were never committed
+  carrying a dead edge. Measured against the diff
+  (`git show 152e9d194 -- todo/ | grep '^-cites' | grep -o 'todo/t1505.md\|todo/t0952.md' | wc -l`):
+  **12 edges, on 11 removed `cites` lines, across 9 rewritten pre-existing items** plus the two closed
+  items' own lines. The repoint to `DONE.md` is correct and is the established spelling
+  (`todo/t0851`, `todo/t1388`); no edge lost information, and `todo_cites_paths_resolve` sits at its
+  pinned 28 rather than widened.
   **Gates, bare rc off each command:** `cargo test --lib` 1190/0 · `cargo test --test lints` UNFILTERED **251/0** ·
   `--test spec_conformance` 3/0 · `--test security` 223/0 · `--test c_runtime` 3/0 · `cargo test -p ggdef` green ·
   integration `iter` 145/0 · `dict` 105/0 · `cow` 225/0 · `clone` **37**/0 (36 + the newly un-`#[ignore]`d repro).

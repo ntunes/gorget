@@ -33526,7 +33526,29 @@ fn declared_param_sites_use_map_param_ast_type() {
             if unrouted.is_empty() {
                 continue;
             }
-            if ROUTED.iter().any(|m| window.contains(m)) {
+            // ⛔ THE EXCUSE IS THE BINDING'S OWN LINE, NOT THE WINDOW, AND THAT
+            // ASYMMETRY IS DELIBERATE — `line`, not `window`, is correct here.
+            // Widening detection to two lines but leaving the excuse two lines
+            // wide lets an UNRELATED routed call on the next line launder a real
+            // violation. Measured on a planted break at `functions.rs:1998`:
+            //
+            //   A: binding line, unrouted mapper on the NEXT line
+            //        one-line window GREEN (the miss the widening fixes) · here RED
+            //   B: unrouted mapper on the trigger line, an adjacent routed call
+            //      on the next line
+            //        window-wide excuse GREEN (a real violation laundered) · here RED
+            //
+            // The two windows have COMPLEMENTARY blind spots and neither
+            // dominates; detection wants the wide one, the excuse wants the
+            // narrow one. And B is inside this guard's stated job — site 35
+            // written next to an existing correct site — so an excuse that
+            // cannot see it is not a guard.
+            //
+            // Not red on arrival: the two legitimate two-line sites
+            // (`traits.rs`, trait-default registration) carry NO unrouted marker
+            // on their own line, so they exit at `unrouted.is_empty()` above and
+            // never reach this test.
+            if ROUTED.iter().any(|m| line.contains(m)) {
                 continue;
             }
             violations.push(format!(
