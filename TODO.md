@@ -110,7 +110,19 @@ the TREE, never from the previous round's line.**
 | 8 fast gates | **0** | lib · lints · c_runtime · spec_conformance · security · ggdef · census · staging |
 | **`GG_BACKEND=llvm cargo test --test security --release`** | **0** | ✅ **GREEN ON ITS FIRST-EVER RUN** — 223 ok · 31 ignored · 0 failed · **0 never-executed**, all 254 accounted for. Found only because `t1452` showed the lint exempted it. |
 | `sanitize_sweep.sh` | **0** | `JOBS=4`, `REPS=3` intact. 16 rows now over-wide → filed `t1453` (the report is ADVISORY, cannot red its own gate) |
-| `robustness_map.py --lanes all --jobs 4` | ⏳ | last gate; `--lanes c,llvm` is SUBSUMED, do not add it |
+| `robustness_map.py --lanes all --jobs 4` | **0** | 20 intra-quadrant drift, **0 FATAL**; topic 30 (G's 819 new cells) CLEAN. `--lanes c,llvm` SUBSUMED — do not add. |
+
+### ✅✅ THE FULL ROUND-CLOSE BATTERY IS GREEN — 13 GATES, EVERY rc OFF ITS BARE COMMAND
+
+⭐ **AND THE SELF-HOST LANE OUTSCORES BOTH RUST LANES**, measured this run:
+`selfhost 1708/1856 = 92.0%` · `c 1683 = 90.7%` · `llvm 1677 = 90.4%` · `asan 1651 = 89.0%` ·
+`ggdef 1064/1166 = 91.3%` adjudicated. **That is the succession plan appearing as a number** — *"the reference
+lags the self-host"* is no longer only a per-fixture observation. Regenerate:
+`python3 scripts/robustness_map.py --lanes all --jobs 4`.
+⚠ **The 20 drifts are NOT this round's to chase** — all are *non-good → a DIFFERENT non-good* (an
+already-failing cell failing differently), report-only by deliberate burn-down design, and the burn-down is
+already filed as `t0993` / `t1084` / `t1386`. **Nothing WORKS→broken**, which is the only thing the gate
+treats as a regression.
 
 ⛔ **DO NOT CHUNK `robustness_map.py` BY LANE, EVEN THOUGH `--lanes c` / `--lanes llvm` RUN INDIVIDUALLY.**
 `scripts/robustness_map.py:74` — *"Only c/llvm/selfhost participate in the CROSS-LANE DIVERGENCE GATE"* —
