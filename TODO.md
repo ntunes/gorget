@@ -1,5 +1,39 @@
 # TODO
 
+### ⛔ TRACK C IS STOOD DOWN — and the reference-grade cut is NAMED, not lost
+
+**Five passes, five different breakages, one root cause.** The gated variant *does* produce its claimed
+**0 changed cells over 624** — **and it produces them BY BEING THE DEFECT THE TRACK EXISTS TO RETIRE.** D51
+verbatim: *"seeded ONCE at registration … **a `DefId`-keyed flag is immune to an import changing what a name
+resolves to; a string compare never can be**."* The gate makes the accessor a **READ-TIME string compare**,
+and `t1408`'s own text forbids exactly that: *"DO NOT add `"Callable"` to a list inside the check: that
+replicates the defect in the code written to fix it."*
+⛔ **AND NOTHING PINS IT.** Deleting the typed-flag read changes **0 of 624 cells**, `--lib` 1187, `lints` 243
+— **the flag is DEAD, and structurally so**: it is only seeded for names the gate short-circuits on, so the
+read is unreachable-as-`Some` by construction. Readiness (4) cannot be met by any fixture.
+⊕ **The ungated cut is not the escape either** — measured, it moves `Callable` **out of the only family member
+that is currently CORRECT** (`struct Callable[T]` rejects) **into the family that is currently BROKEN**
+(`struct Vector[T]` prints `0`; `struct Box[T]` LIR-panics). **Core #8's "consistency achieved by regressing
+to the defect."**
+
+⭐ **`t0718` IS NOT A SIBLING OF `t1408` — IT IS ITS ONLY LIVE CONSUMER, WHICH IS *WHY* THE FLAG IS DEAD.**
+`typecheck.rs:1291` and `:1308` **already hold a `DefId`** (`grep -n 'is_shared_wrapper' src/semantic/typecheck.rs`).
+The scope-out's justification — *"those sites read a mangled GIR string, not a DefId"* — is **true of
+`src/ir/lowering/` and FALSE of these two.** ⇒ **`t1408` is the PRODUCER half and `t0718` the CONSUMER half of
+ONE mechanism. Shipping the producer with a gate guaranteeing no consumer can read it, and recording it as
+done, is the worst of the three orderings.**
+✅ **THE REFERENCE-GRADE CUT, for whenever this resumes:** fold `t1408`'s table into the **existing three-flag
+identity seed at `resolve.rs:159-173`**, and migrate `typecheck.rs:1291/1308` to a per-axis accessor reading
+it. **D51's prescribed shape verbatim**, needs **NO lowering migration**, and closes `t0718`'s first slice.
+⚠ **It wants a SCOUT, not another addendum** — and with rounds suspended after R51 it has no home unless the
+optimality DAG pulls it in as a prerequisite. **Track F's scout is being asked exactly that.**
+
+### ⚖ A NEW OWNER ASK FROM THIS PASS — genuinely unratified semantics, and CHEAP if answered
+**Does a shadow-reject cover a TYPE taking a builtin type's name (`struct Callable[T]`), or only a VALUE taking
+one (`int Vector = 5`)?** `t1408` records the ruling as being about a **value**. ⭐ **If a TYPE-shadow reject is
+also ratified, the ungated cut is RESCUED CHEAPLY — its six miscompile cells become rejects.** That single
+ruling converts a stood-down track into a shippable one.
+
 ### ⭐⭐ OWNER RULING 2026-09-06 — **THE OPTIMALITY TRACK PROGRESSES NOW; PREREQUISITES ARE TACKLED RECURSIVELY**
 
 **Owner, verbatim:** *"this optimality track is the long term objective for gorget. Although long term, I think
@@ -58,7 +92,7 @@ The through-line is instruments, so the round attacks instruments — and the on
 |---|---|---|
 | **A** | ⭐ **RESCOPED BY ITS SCOUT — `t1319` **+** `t1373`, ONE defect.** The discriminator is the **RECEIVER PLACE**, not closure capture: **`int peek(Box[int] b)` — a plain param — prints garbage on C.** ⛔ **AND "fix C to match LLVM" IS THE WRONG FRAME:** LLVM makes the SAME missing-load mistake and a return-type lie cancels it, via a name-matched `starts_with("Box__")` arm (Core #2) that is independently broken for `Box[float]`/`Box[String]`. **Deleting it without fixing LLVM's marshalling turns LLVM's green cells RED.** | `t1455`–`t1464` (`t1455`,`t1456` issued) |
 | **B** | **`t1452`** (HIGH) — the battery-vs-CI lint reduces each CI command to a TARGET NAME and drops env+flags. ⚠ **One REAL hole, one unverified-but-true mapping, one BENIGN collision — the item enumerates all three; "fixing" the benign row makes the battery longer and wronger.** | `t1465`–`t1474` |
-| **C** | **`t1408`** — *"is this name a TYPE?"* has two independent answers and `Owned` has neither. **Unblocks BOTH C1 (the open owner ask) and D0′.** | `t1475`–`t1484` |
+| ⛔ **C** | **`t1408` — STOOD DOWN for R51 after FIVE blocking passes.** ⭐ **SIX-Q #4, terminal: the callable family has NO `DefId` AT ALL, so at the semantic layer alone there is NO typed-flag answer available for it.** Every variant must either INVENT one (register → Core #8 value-namespace cells) or FALL BACK TO THE NAME (gate → a D51 violation). **No in-layer mechanism exists — which is why five passes each broke differently.** | `t1475`–`t1484` (unused) |
 | **D** | **`t1451`** + **`t1449`** — ⛔ **MY PROPOSED DESIGN IS DEAD: the textual git-range lint measures 0-of-7 true over 38 windows and MISSES BOTH real instances**; my "1 of 1" was an artifact of a range ending at the defect. ⭐ **Replaced by a Rust-lane freshness test: 50.7s vs 6070s, zero FPs, two independent RED witnesses, NO escape hatch.** ⊕ The class fired **twice** — `t0964` is the same family and `t1451` never cited it. | `t1485`–`t1494` |
 ⊕ **`t1453`** (16 over-wide leak rows) and **`t1320`**/**`t1454`** ride with whichever track touches their area.
 ⚠ **`t1453` verification is a FULL ~25-min sweep — there is no cheap check.** Budget it.
