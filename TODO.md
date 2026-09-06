@@ -1,5 +1,32 @@
 # TODO
 
+### ⛔⛔ OWNER INSTRUCTION 2026-09-06 — **DO NOT OPEN A ROUND AFTER R51.** Autonomy is suspended at R51's
+close. This OVERRIDES the heartbeat loop's standing *"open the next round autonomously"* and Round-lifecycle
+step 7. Close R51, run the battery, write the records, report — **then STOP.**
+
+### 🚨🚨 AND THE ANSWER TO *"ARE ANY CRITICALS NOT BEING WORKED?"* — **ALL NINE OF THEM** (audited 2026-09-06)
+
+`grep -c '^severity = "CRITICAL"' todo/*.md` → **9**: `t0011` · `t0036` · `t1067` · `t1310` · `t1329` ·
+`t1330` · `t1359` · `t1393` · `t1418`. **NONE is in an R51 track.** The single appearance of `t1067` in any
+R51 brief is a **file-zone note**, not scope.
+
+⛔⛔ **AND THE SET GREW THREEFOLD DURING THE ROUND NAMED FOR IT.** R50's headline was *"THE CRITICAL
+MEMORY-SAFETY SET"*:
+| | |
+|---|---|
+| CRITICAL open at R50's start | **3** (`t0036` 08-17 · `t0011` 08-27 · `t1067` 09-04) |
+| **filed DURING R50** | **6** (`t1310` `t1329` `t1330` `t1359` `t1393` `t1418`) |
+| **closed by R50** | **0** |
+| worked in R51 | **0** |
+
+⭐ **THE MECHANISM, AND IT IS AN ORCHESTRATION FAILURE NOT A DISCOVERY FAILURE:** R50's Track **B** carried the
+CRITICAL set (`t1067`+`t0948`+`t1210`) and **NEVER LAUNCHED** — held on an owner ask that was later
+established to be withdrawable (`D7` answers it; recourse measured). **The round's own headline track was the
+one that stalled**, and the other nine tracks — all real work — filled the round around the hole.
+⇒ ⚠ **A HELD TRACK IS INVISIBLE IN A GREEN ROUND.** Ten tracks integrated, a 13-gate battery green, and the
+thing the round was named for advanced by nothing. **This is exactly what heartbeat step (2) — "launch or
+resume anything left behind" — now exists to catch.**
+
 ### 🚀 ROUND LI (R51) IS OPEN — 2026-09-06. HEADLINE: **THE DEFECTS OUR GUARDS COULD NOT SEE.**
 
 **Why this theme, and it is a soundness framing not a metric one:** R50's tracks all held up. **Every single
