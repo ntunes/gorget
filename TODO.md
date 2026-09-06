@@ -104,7 +104,17 @@ the tree.
   while a bootstrap or sweep runs. `driver.gg` bakes all 62 runtime `.c` files via `embed_file`.
 - ⛔ **NEVER `git checkout <ref> -- <path>` TO SET UP A REVERT.** Silently clobbers uncommitted work. Use a
   re-appliable patch. (In AGENTS.md MA-8.)
-- ⭐⭐ **WHEN A GUARD KEEPS YIELDING ONE MORE HOLE PER REVIEW, PARTITION ITS PIPELINE AND ENUMERATE.**
+- ⭐⭐ **A FILTER FAILS OPEN; AN EXPECTATION OVER A DERIVED SET FAILS CLOSED.** Every successful attack on
+R51 Track B's guard — three passes, five distinct escapes — landed on a **FILTER** (an author-typed skip list,
+a prefix scanner, a target extractor). **None ever landed on a pin over a derived set.**
+⛔ **AND `docs/devbook/25:153` NAMES BOTH HALVES** — *"keyed budgets that pin a MULTISET rather than a total"*
+**AND** *"a keyed budget that also **FAILS CLOSED** — an unrecognizable site is a violation, not an
+exemption."* ⇒ ⭐ **THREE PASSES QUOTED THAT FIX AND SHIPPED HALF OF IT.** The closure — pin the derived key
+set, and make an unclassifiable site a VIOLATION — measured **9 of 9 attacks blocked at zero cost.**
+⇒ **When a guard leaks once, ask whether the leaking clause is a FILTER. If it is, no amount of widening the
+filter closes it; only inverting to an expectation does.**
+
+⭐⭐ **WHEN A GUARD KEEPS YIELDING ONE MORE HOLE PER REVIEW, PARTITION ITS PIPELINE AND ENUMERATE.**
 R51 Track D's guard gave up exactly ONE escape hatch per pass — three passes, three hatches — because every
 pass asked the same question, *"what makes the two sides agree for a wrong reason?"*, **which only probes the
 COMPARE stage.** Pass 4 partitioned the verdict pipeline into **invoke · read/enumerate · run · compare**,
