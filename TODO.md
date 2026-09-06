@@ -688,6 +688,34 @@ lines** (the repoint itself is correct and the established spelling); and **`rou
 pin the commit did not flag** — now a live three-way collision (H **87** · J **87** · me **89**), to be re-measured from
 the merged tree with the db's own instrument.
 
+### ✅✅ TRACK H INTEGRATED `f5ad8d0f3` — **the `t1505` CRITICAL and `t0952`.** Worktrees pruned; 31G → 26G.
+**Merged-tree gates, each rc off its OWN bare command:** build 0 · `--lib` 0 · `--test lints` 0 · `--test c_runtime` 0 ·
+`todo_index` 0 · `known_gaps_census` 0.
+⭐ **`roundish_headlines` IS THE MA-5 RULE'S OWN WORKED EXAMPLE:** H measured **87**, I measured **89**, **the merged
+tree measures 90** — *neither side was right*, and J's output-review independently confirmed **the lints suite is green
+ONLY at 90.** **Never add; re-measure.**
+⭐ **AND I REFUSED A BUMP RATHER THAN TAKING ONE.** `todo_cites_paths_resolve` moved 28 → 30, and **both new dead rows
+were MINE** (`t1602`, `t1604` cite `t0952.md`, which H legitimately closed). **The lint's own message names this as the
+escape `t0675` was ratified to retire** ⇒ repointed my two items to `DONE.md` (H's own established spelling) instead of
+widening the pin.
+
+### ⛔⛔ J's OUTPUT-REVIEW: **THE SIBLING ADJUDICATOR IS STILL `[[t1360]]`** — Core #4, witnessed firing
+`fixed_corrupt=$(comm -13 "$OUT/got_corrupt" "$OUT/allow_corrupt")` **is `for (s in allow) if (!(s in seen))` spelled
+with `comm`**, and `got_corrupt` is set **only** from an `ASAN_` verdict ⇒ **a corruption-allowlisted fixture that never
+ran is indistinguishable from one that ran clean.** ⛔ **Witnessed firing FROM THE SHIPPED SCRIPT** against the real
+committed allowlist: *"✅ no longer corrupting — DELETE these rows … `stack_guard_deep_recursion`"*. **Not a FIXLIST
+artefact** — re-derived on the full-corpus `verdicts.tsv`. **rc 0. Nothing reds. The sweep tells you to delete the row.**
+⇒ **J fixed the LEAK adjudicator and left its SIBLING in the same file.** Bounded today (one intentional row) — **but
+`[[t0956]]` plans to ingest `security/`, bringing 23 real UAF/double-free admissions onto that list.**
+⭐ **The fix is the SAME OPERAND, ~3 lines, blast radius ZERO today:** a corrupting fixture aborts inside ASan ⇒ marker
+absent ⇒ `UNMEASURED` (and that row **is** `UNMEASURED` today), so intersect `fixed_corrupt` with `measured`.
+⊕ **Two of J's four startup assertions are UNPINNED** (deleting the `ASANOPT detect_leaks` guards is **silent** in both
+the self-test and `--test lints`). ⊕ ⛔ **AND A LOAD-BEARING CLAIM IN THE PERMANENT RECORD IS FALSE:** five places say
+that without the guards *"the sweep prints mass delete advice"* — **measured, the pre-existing positive leak controls
+already fail closed (rc 2, seven failures) before any corpus verdict.** The guards remain a real improvement (seconds
+vs ~25 min, an accurate diagnosis, the only cover on `RUN_SELFTEST=0`) — **but a false claim in a permanent record is
+worse than a missing one.** All three returned to J's executor.
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
