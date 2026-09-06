@@ -104,7 +104,17 @@ the tree.
   while a bootstrap or sweep runs. `driver.gg` bakes all 62 runtime `.c` files via `embed_file`.
 - ⛔ **NEVER `git checkout <ref> -- <path>` TO SET UP A REVERT.** Silently clobbers uncommitted work. Use a
   re-appliable patch. (In AGENTS.md MA-8.)
-- ⭐⭐ **A FILTER FAILS OPEN; AN EXPECTATION OVER A DERIVED SET FAILS CLOSED.** Every successful attack on
+- ⛔⛔ **A "0 CHANGED CELLS" CLAIM IS THE MOST DANGEROUS SELECTION OF ALL, BECAUSE IT RETIRES THE WHOLE
+OBLIGATION SET.** R51 Track C's changed-cell count went **2 → 16 → 39 → 42 → 0**, and the **0** was used to
+delete the fixture set, the self-host mirror, the ggdef port and the Core #9 lane work in one line. A fifth
+pass built its own matrix and measured **12 over 999** — because every earlier matrix **OMITTED THE SHADOW
+AXIS, the axis the item was filed for.** ⇒ ⭐ **WHEN A NUMBER FALLS TO ZERO AND TAKES A PILE OF OBLIGATIONS
+WITH IT, THAT IS THE MOMENT TO RE-DERIVE IT ON AN INDEPENDENT AXIS SET — not to celebrate.**
+⊕ **AND CHECK WHAT A LAYER SCOPE-OUT COSTS.** Retiring a name-match at the SEMANTIC layer while LOWERING
+still name-routes converted a clean **build-failure into a silent-wrong-output miscompile** — running the
+patch's own cited precedent backwards. **A scope-out is never automatically neutral.**
+
+⭐⭐ **A FILTER FAILS OPEN; AN EXPECTATION OVER A DERIVED SET FAILS CLOSED.** Every successful attack on
 R51 Track B's guard — three passes, five distinct escapes — landed on a **FILTER** (an author-typed skip list,
 a prefix scanner, a target extractor). **None ever landed on a pin over a derived set.**
 ⛔ **AND `docs/devbook/25:153` NAMES BOTH HALVES** — *"keyed budgets that pin a MULTISET rather than a total"*
