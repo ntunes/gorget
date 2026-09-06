@@ -11138,8 +11138,8 @@ fn readiness_checklist_rows_are_capped() {
     );
 }
 
-/// `todo/t0824`: the round-close battery must actually COVER every gate CI
-/// runs — enforced, not asserted.
+/// `todo/t0824` + `todo/t1452`: the round-close battery must actually COVER
+/// every gate CI runs — enforced, not asserted.
 ///
 /// `AGENTS.md` step 4 used to end with *"The full battery covers every target
 /// CI runs, so local-green IS the round-close sign-off."* **Measured false.**
@@ -11150,19 +11150,98 @@ fn readiness_checklist_rows_are_capped() {
 ///
 /// A procedure that asserts totality it does not have is worse than one that
 /// admits the gap, and prose cannot notice a step being added to `ci.yml`
-/// tomorrow. So the claim is now a GUARD (Core #6): every `run:` command in
-/// `.github/workflows/ci.yml` is reduced to the TARGET it exercises, and every
-/// target must appear in the battery block.
+/// tomorrow. So the claim is a GUARD (Core #6): every `run:` command in
+/// `.github/workflows/ci.yml` is reduced to a KEY, and every key must have a
+/// runnable battery leg.
+///
+/// # The key carries ENV, because a target name is not a gate (`todo/t1452`)
+///
+/// This lint's first version reduced a command to a bare TARGET NAME and
+/// substring-matched that against the battery, DROPPING env and flags — with a
+/// doc-comment exemption stating that a leg naming `--test security` also
+/// satisfied CI's `--test security --release` under `GG_BACKEND=llvm`,
+/// "because the LLVM sweep bullet is what carries that axis". **It does not.**
+/// `scripts/run_integration.sh` execs ONE cargo target (`--test integration`)
+/// and its own header lists `--test security` among the targets it does not
+/// run. R50 closed having run the entire documented battery green, passed this
+/// lint, and never executed the LLVM security suite — which had never run in
+/// this project's history. A guard that green-lights the class it exists to
+/// retire is worse than none, because the checklist then cites it as evidence.
+///
+/// So a CI step's key is `(target, discriminating env)`, and the battery must
+/// carry a SINGLE RUNNABLE LINE per key — the same bullet naming the target
+/// and every `VAR=value` the key requires, because a leg that omits the env is
+/// not an instruction anyone can follow. Plus a cardinality check: a target
+/// CI runs under N distinct env-keys needs N distinct battery lines naming it,
+/// so one bullet cannot be credited for two variants of the same suite.
+///
+/// # Why the one exemption list cannot rot
+///
+/// `NON_DISCRIMINATING_ENV` is DENY-BY-DEFAULT: a variable CI starts setting
+/// tomorrow counts as discriminating until someone writes it a row with a
+/// reason, so forgetting reds this lint instead of passing silently. And every
+/// row is re-derived on each run — a row naming a variable `ci.yml` no longer
+/// sets FAILS, so dead exemptions cannot accumulate either.
 ///
 /// # What this does NOT check (Core #12: name the omitted cells)
 ///
-/// It checks MEMBERSHIP, not flags, env or ordering: a battery leg that names
-/// `--test security` satisfies CI's `--test security --release` under
-/// `GG_BACKEND=llvm` too, because the LLVM sweep bullet is what carries that
-/// axis and reproducing every env matrix here would pin CI's shape rather than
-/// its coverage. It also cannot tell you whether the documented leg was RUN.
+/// SCOPE AND MODE FLAGS. `--lanes c,llvm` vs `--lanes all`, `--test-threads=N`
+/// and `--check` are not in the key. Whether one flag set covers another is a
+/// superset question this lint cannot decide — `--lanes all` IS a strict
+/// superset of `c,llvm` (`ALL_LANES`, scripts/robustness_map.py), while a
+/// `--topic` filter would not be — so where CI and the battery differ in flags
+/// the battery must be the SUPERSET side, and that stays a human call. ⚠ And
+/// `--check` is a MODE selector that no rule keyed on flag NAMES can separate
+/// from a scope flag: on `known_gaps_census.sh` it is the gate's on/off switch
+/// (`:306` is `[ "$CHECK" -eq 1 ] || exit 0`, so without it the script exits 0
+/// and gates nothing), while `staging_move_burndown.sh:41` documents the bare
+/// form as its synonym. Same spelling, opposite meanings. That is `todo/t1406`.
+///
+/// `--release` IS in the key — BUT ONLY ON THE CI SIDE. Read the direction.
+/// A CI step built `--release` derives a key carrying it, so a battery leg that
+/// omits it reds (revert R5, pinned by attack R). The BATTERY side is
+/// `required.iter().all(...)`, a SUBSET test: it never checks that a leg
+/// carries a selector CI's key LACKS. Measured GREEN — a leg spelled
+/// `scripts/run_integration.sh --release` credits CI's DEBUG `--test
+/// integration` gate at `ci.yml:177`. That is `todo/t1406`'s mechanism
+/// verbatim, still live on the very flag this lint keys, and it is exactly what
+/// `todo/t0713`'s prescribed fix — "name `--release` in the C-sweep recipe" —
+/// would turn from theoretical into live. Do not take that route believing this
+/// lint will notice.
+///
+/// THE BATTERY SIDE IS AN UNKEYED COUNT OF MENTIONS (`todo/t1468`). The CI side
+/// is keyed and fails closed; `have` is a COUNT of battery lines naming the
+/// target and never asks WHICH key a line serves. `is_leg` below requires
+/// bullet shape plus `cargo`/`scripts/` — a SPEED BUMP, not a closure. It
+/// separates a BULLET from PROSE; it never separates a PRESCRIPTION from a
+/// PROHIBITION. Measured with a control: a bullet reading "⛔ NEVER hand-run
+/// `GG_BACKEND=llvm cargo test --test security --release`" CREDITS the leg it
+/// forbids (attack J, GREEN; the same bullet with the command text removed goes
+/// RED). And a leg that has stopped prescribing a target still credits it for
+/// as long as the line SPELLS it (attack O1). Real closure needs
+/// machine-readable leg markers in `AGENTS.md` — a separate ratifiable
+/// decision, filed as `todo/t1468`. Do not oversell the hardening: overstating
+/// a guard's reach is the class this lint exists to retire.
+///
+/// It also cannot tell you whether a documented leg was actually RUN.
 #[test]
 fn round_close_battery_covers_ci_steps() {
+    // THE KEY CENSUS -- an EXPECTATION over a DERIVED set, not a FILTER.
+    const EXPECT_KEYS: [&str; 13] = [
+        "--lib",
+        "--test c_runtime",
+        "--test integration",
+        "--test integration  [--release GG_BACKEND=llvm]",
+        "--test lints",
+        "--test security",
+        "--test security  [--release GG_BACKEND=llvm]",
+        "--test spec_conformance",
+        "-p ggdef",
+        "scripts/known_gaps_census.sh",
+        "scripts/robustness_map.py",
+        "scripts/sanitize_sweep.sh",
+        "scripts/staging_move_burndown.sh  [GG_STAGING_MOVE_GUARD=fatal]",
+    ];
     let ci = fs::read_to_string(".github/workflows/ci.yml").expect("ci.yml");
     let agents = fs::read_to_string("AGENTS.md").expect("AGENTS.md");
 
@@ -11173,11 +11252,33 @@ fn round_close_battery_covers_ci_steps() {
                  this lint reconciles against ci.yml is gone, which is a bigger problem than \
                  whatever edit removed it.");
     let rest = &agents[start..];
-    let end = rest.find("\n5. **").unwrap_or(rest.len());
+    // FAIL CLOSED at BOTH ends. `unwrap_or(rest.len())` silently widened the
+    // block to the rest of the file when step 5's heading was respelled, so a
+    // leg that had MOVED OUT of the battery still credited (measured: leg moved
+    // to step 6 + `5. **` respelled -> GREEN; the same move with the heading
+    // intact -> RED). The block's end is a boundary, not a default.
+    let end = rest.find("\n5. **").expect(
+        "AGENTS.md's Round lifecycle no longer has a `5. **` step, so the round-close \
+         battery block has no END and this lint would reconcile ci.yml against the whole \
+         rest of the file — crediting a leg that has moved OUT of step 4. Restore the \
+         heading, or move this delimiter in the same commit.",
+    );
     let battery = &rest[..end];
+    let battery_lines: Vec<&str> = battery.lines().collect();
 
     /// CI steps that are NOT gates and therefore need no battery leg. Each row
     /// states WHY, because an unexplained exemption is where a real gate hides.
+    /// ⚠ ROLE, NOT PREFIX: a row applies only when the command reduces to NO
+    /// target, so a chained `cargo build --release && cargo test --test x` is
+    /// still keyed (that step-merge was a working attack while EXEMPT was a
+    /// `contains` filter). NAMED COST of the strict form: `ci.yml:241` is
+    /// `cargo build -p ggdef --bin ggdef`, which yields the target `-p ggdef`
+    /// and is therefore NOT exempt, though its row's stated reason says it
+    /// should be. It is invisible today only because it dedupes with `:198`'s
+    /// real `-p ggdef` test key. Leave it: making the extractor yield no target
+    /// for `cargo build` would route the line back through `cmd.contains(pat)`,
+    /// the fail-OPEN shape three separate attacks exploited. Over-strict fails
+    /// closed, which is the safe direction.
     const EXEMPT: [(&str, &str); 4] = [
         ("apt-get", "environment provisioning (LLVM/SDL2 install), not a gate"),
         ("cargo build", "a PREREQUISITE of every gate below it, not a gate itself"),
@@ -11185,36 +11286,129 @@ fn round_close_battery_covers_ci_steps() {
         ("actions/", "a marketplace action, not a shell gate"),
     ];
 
-    // A CI command satisfies the battery when the battery names the same
-    // TARGET. `--test integration` is the one alias: the battery mandates the
-    // wrapper (`scripts/run_integration.sh`) rather than the raw cargo target,
-    // deliberately — a hand-rolled thread count is its own defect class.
-    let target_is_covered = |target: &str| -> bool {
-        if target == "--test integration" {
-            return battery.contains("scripts/run_integration.sh");
-        }
-        battery.contains(target)
-    };
+    /// The ONE exemption with teeth removed: env vars that change how PATIENT
+    /// or how PARALLEL a gate is, not WHAT it tests. Everything else CI sets is
+    /// discriminating and must appear in the battery leg. Deny-by-default, and
+    /// each row is asserted to still be set somewhere in ci.yml below.
+    const NON_DISCRIMINATING_ENV: [(&str, &str); 5] = [
+        ("GG_BUILD_TIMEOUT_SECS", "a deadline: the same program under test, with more patience"),
+        ("GG_TEST_TIMEOUT_SECS", "a deadline on the test binary"),
+        ("GG_STAGE1_TIMEOUT_SECS", "a deadline on the bootstrap stages"),
+        ("JOBS", "sanitize-sweep parallelism"),
+        ("GG_RUNTIME_DIFF", "CI opts OUT (`0`) of the self-host parity census the battery runs \
+                             ON by default, and says why at the step. This is the one axis \
+                             where LOCAL IS DELIBERATELY STRONGER — requiring the battery to \
+                             mirror an opt-out would REDUCE round-close coverage."),
+    ];
+    let knob = |k: &str| NON_DISCRIMINATING_ENV.iter().any(|(n, _)| *n == k);
 
-    let mut missing: Vec<String> = Vec::new();
-    let mut checked = 0usize;
-    for (i, line) in ci.lines().enumerate() {
-        let t = line.trim();
-        // `run: <cmd>` (single line) and the body lines of a `run: |` block.
-        let cmd = if let Some(c) = t.strip_prefix("run: ") {
-            if c.trim() == "|" { continue; }
-            c.trim()
-        } else if t.starts_with("cargo ") || t.starts_with("python3 scripts/")
-            || t.starts_with("scripts/") || t.contains("scripts/sanitize_sweep.sh")
-        {
-            // Body of a `run: |` block, or an env-prefixed script invocation.
-            t
-        } else {
-            continue;
-        };
-        if EXEMPT.iter().any(|(pat, _)| cmd.contains(pat)) {
+    // ---- Split ci.yml into STEPS, so a `run:` joins the `env:` that governs it.
+    let lines: Vec<&str> = ci.lines().collect();
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    let mut step_of = vec![0usize; lines.len()];
+    let mut n_steps = 0usize;
+    for (i, l) in lines.iter().enumerate() {
+        if l.trim_start().starts_with("- name:") {
+            n_steps += 1;
+        }
+        step_of[i] = n_steps;
+    }
+    let mut step_env: Vec<Vec<(String, String)>> = vec![Vec::new(); n_steps + 1];
+    let mut env_indent: Option<usize> = None;
+    for (i, l) in lines.iter().enumerate() {
+        let t = l.trim();
+        if t == "env:" {
+            env_indent = Some(indent(l));
             continue;
         }
+        let Some(ei) = env_indent else { continue };
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if indent(l) <= ei {
+            env_indent = None;
+            continue;
+        }
+        if let Some((k, v)) = t.split_once(": ") {
+            if !k.is_empty()
+                && k.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            {
+                step_env[step_of[i]]
+                    .push((k.to_string(), v.trim().trim_matches('"').to_string()));
+            }
+        }
+    }
+    let env_pairs_seen: usize = step_env.iter().map(|e| e.len()).sum();
+    let mut live_env_keys: Vec<String> =
+        step_env.iter().flatten().map(|(k, _)| k.clone()).collect();
+
+    // ---- Enumerate EVERY command ci.yml runs: each `run: <cmd>` scalar and
+    //      each non-blank, non-comment body line of a `run: |` block.
+    //      TOTAL, not a prefix filter: a filter over command SPELLINGS fails
+    //      OPEN -- the command silently leaves the key set and nothing demands
+    //      a battery leg. Measured: `GG_BACKEND=llvm cargo test --test
+    //      security --release` written as a `run: |` body line escaped the
+    //      prefix-filter scanner completely, reinstating todo/t1452's hole
+    //      with no guard edit at all.
+    let mut cmd_lines: Vec<(usize, String)> = Vec::new();
+    let mut k = 0usize;
+    while k < lines.len() {
+        let t = lines[k].trim();
+        if t == "run: |" {
+            let base = indent(lines[k]);
+            let mut j = k + 1;
+            while j < lines.len() {
+                let b = lines[j];
+                if b.trim().is_empty() {
+                    j += 1;
+                    continue;
+                }
+                if indent(b) <= base {
+                    break;
+                }
+                if !b.trim().starts_with('#') {
+                    cmd_lines.push((j, b.trim().to_string()));
+                }
+                j += 1;
+            }
+            k = j;
+            continue;
+        }
+        if let Some(c) = t.strip_prefix("run: ") {
+            cmd_lines.push((k, c.trim().to_string()));
+        }
+        k += 1;
+    }
+
+    // ---- Reduce each command to its (target, discriminating env) keys.
+    let mut keys: Vec<(usize, String, Vec<(String, String)>, String)> = Vec::new();
+    let mut unrecognized: Vec<String> = Vec::new();
+    for (i, cmd_owned) in cmd_lines.iter() {
+        let (i, cmd) = (*i, cmd_owned.as_str());
+
+        // Env governing this command: the step's `env:` block plus any inline
+        // `VAR=value` prefix (`JOBS=8 scripts/...`).
+        let mut env: Vec<(String, String)> = step_env[step_of[i]].clone();
+        for w in cmd.split_whitespace() {
+            let Some((k, v)) = w.split_once('=') else { break };
+            if k.is_empty()
+                || !k.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            {
+                break;
+            }
+            live_env_keys.push(k.to_string());
+            env.push((k.to_string(), v.to_string()));
+        }
+        let mut required: Vec<(String, String)> =
+            env.into_iter().filter(|(k, _)| !knob(k)).collect();
+        // ARTIFACT SELECTORS belong in the key: `--release` selects a DIFFERENT
+        // BINARY, exactly as an env value selects a different backend. Encoded
+        // with an empty value so it is matched bare, not as `K=V`.
+        if cmd.split_whitespace().any(|w| w == "--release") {
+            required.push(("--release".to_string(), String::new()));
+        }
+        required.sort();
+        required.dedup();
 
         // Reduce the command to the target(s) it exercises.
         let mut targets: Vec<String> = Vec::new();
@@ -11236,40 +11430,177 @@ fn round_close_battery_covers_ci_steps() {
                 }
             }
         }
+        // EXEMPT applies ONLY to a command that exercises no target at all.
+        // A command reducing to a target is a GATE whatever prefix precedes
+        // it, so a build step chained ahead of a test cannot exempt the test.
         if targets.is_empty() {
+            // A CHAINED command is never exemptable: `cargo build && <gate>`
+            // matches EXEMPT's `cargo build` row while the gate after the `&&`
+            // is what actually runs. An exemption must describe the WHOLE
+            // command, so a compound one has to be classified explicitly.
+            let chained =
+                cmd.contains("&&") || cmd.contains(';') || cmd.contains('|');
+            if !chained && EXEMPT.iter().any(|(pat, _)| cmd.contains(pat)) {
+                continue;
+            }
+            unrecognized.push(format!("  ci.yml:{}: `{cmd}`", i + 1));
             continue;
         }
         for target in targets {
-            checked += 1;
-            if !target_is_covered(&target) {
-                missing.push(format!(
-                    "  ci.yml:{}: `{target}` — from `{}`",
-                    i + 1,
-                    cmd.chars().take(90).collect::<String>()
-                ));
-            }
+            keys.push((i + 1, target, required.clone(), cmd.chars().take(90).collect()));
+        }
+    }
+    assert!(
+        unrecognized.is_empty(),
+        "ci.yml RUNS COMMANDS THIS LINT CANNOT CLASSIFY:\n{}\n\n\
+         An unrecognizable step is a VIOLATION, not an exemption (devbook/25). \
+         Either it is a gate -- teach the target extractor its spelling and give \
+         it a battery leg -- or it is not, in which case add it to EXEMPT above \
+         WITH ITS REASON. Silently skipping it is how a gate leaves the key set \
+         without anyone deciding that it should.",
+        unrecognized.join("\n")
+    );
+    keys.sort_by(|a, b| (&a.1, &a.2).cmp(&(&b.1, &b.2)));
+    keys.dedup_by(|a, b| (&a.1, &a.2) == (&b.1, &b.2));
+
+    // The battery mandates the WRAPPER for `--test integration` rather than the
+    // raw cargo target, deliberately — a hand-rolled thread count is its own
+    // defect class. That is the one alias.
+    fn spelling(target: &str) -> &str {
+        if target == "--test integration" { "scripts/run_integration.sh" } else { target }
+    }
+
+    // A LEG is a battery BULLET carrying a command -- not any line that happens to
+    // NAME one. Without this, a prose line rationalising a DELETED leg ("the plain
+    // `cargo test --test security` needs no separate leg") is COUNTED, and the
+    // cardinality check -- whose `have` side is a count of MENTIONS -- credits it.
+    let is_leg = |bl: &&str| {
+        let t = bl.trim_start();
+        t.starts_with("- **") && (bl.contains("cargo") || bl.contains("scripts/"))
+    };
+
+    let mut missing: Vec<String> = Vec::new();
+    for (ln, target, required, cmd) in &keys {
+        // (1) CO-LOCATION: one battery line naming the target AND every
+        //     required `VAR=value`, so the leg is a runnable instruction.
+        let ok = battery_lines.iter().any(|bl| {
+            is_leg(&bl)
+                && bl.contains(spelling(target))
+                && required.iter().all(|(k, v)| {
+                    if v.is_empty() { bl.contains(k.as_str()) } else { bl.contains(&format!("{k}={v}")) }
+                })
+        });
+        if !ok {
+            let envs: Vec<String> =
+                required.iter()
+                    .map(|(k, v)| if v.is_empty() { k.clone() } else { format!("{k}={v}") })
+                    .collect();
+            missing.push(format!(
+                "  ci.yml:{ln}: `{target}`{} — from `{cmd}`",
+                if envs.is_empty() { String::new() } else { format!(" under `{}`", envs.join(" ")) }
+            ));
         }
     }
 
+    // (2) CARDINALITY: a target CI runs under N distinct env-keys needs N
+    //     distinct battery lines naming it. Without this, one bullet carrying
+    //     the richer env would be credited for the plainer variant too, and
+    //     the plainer leg could silently vanish from the battery.
+    let mut targets: Vec<&String> = keys.iter().map(|(_, t, _, _)| t).collect();
+    targets.sort();
+    targets.dedup();
+    for target in targets {
+        let want = keys.iter().filter(|(_, t, _, _)| t == target).count();
+        let have = battery_lines
+            .iter()
+            .filter(|bl| is_leg(bl) && bl.contains(spelling(target)))
+            .count();
+        if have < want {
+            missing.push(format!(
+                "  `{target}`: CI runs it under {want} distinct env-key(s); the battery has \
+                 {have} line(s) naming `{}` — each variant needs its OWN runnable leg",
+                spelling(target)
+            ));
+        }
+    }
+
+    // ---- Fire counts. A green result means nothing unless the mechanism ran.
     assert!(
-        checked >= 10,
-        "the ci.yml step scanner matched only {checked} targets — it stopped parsing, so a \
-         green result here says nothing (SIX QUESTIONS #2). Check whether `run:` steps changed \
-         shape."
+        keys.len() >= 10,
+        "the ci.yml step scanner matched only {} keys — it stopped parsing, so a green \
+         result here says nothing (SIX QUESTIONS #2). Check whether `run:` steps changed shape.",
+        keys.len()
     );
+    assert!(
+        env_pairs_seen >= 15,
+        "the ci.yml `env:` scanner matched only {env_pairs_seen} variable bindings — the ENV \
+         half of every key is therefore empty, which is EXACTLY the blindness todo/t1452 \
+         records this lint shipping with. Check whether `env:` blocks changed shape."
+    );
+    // The discriminating-env axis is pinned as an EXACT SET, not a floor. A
+    // floor is a TOTAL, and a total cannot see a var being RECLASSIFIED: move
+    // `GG_BACKEND` onto the knob list while any two other discriminating vars
+    // exist and a count-based check still passes, which reinstates t1452's hole
+    // exactly. devbook/25 calls for a keyed budget that pins a MULTISET rather
+    // than a total, and this is that. Adding a row here is a deliberate act;
+    // losing one without editing this line is not possible.
+    let mut disc: Vec<String> = keys
+        .iter()
+        .map(|(_, t, r, _)| {
+            let e: Vec<String> = r
+                .iter()
+                .map(|(k, v)| if v.is_empty() { k.clone() } else { format!("{k}={v}") })
+                .collect();
+            if e.is_empty() { t.clone() } else { format!("{t}  [{}]", e.join(" ")) }
+        })
+        .collect();
+    disc.sort();
+    disc.dedup();
+    let expect_disc: Vec<String> = EXPECT_KEYS.iter().map(|s| s.to_string()).collect();
+    assert_eq!(
+        disc, expect_disc,
+        "the KEY CENSUS derived from ci.yml has changed. A key is \
+         `target  [artifact-selector env...]`, so this assert fires on THREE \
+         different edits — read WHICH row moved before reaching for \
+         NON_DISCRIMINATING_ENV.\n\
+         · A TARGET appeared or vanished (`--test x`, `-p x`, `--lib`, \
+         `scripts/x`): a gate was added, renamed or deleted in ci.yml. Give it a \
+         runnable battery leg, or an EXEMPT row with its reason, then add the \
+         key here.\n\
+         · An ARTIFACT SELECTOR moved (`--release` onto or off a step): that \
+         step now builds a DIFFERENT BINARY, so it is a different key and owes \
+         its own leg. ⛔ NON_DISCRIMINATING_ENV cannot fix this one — it exempts \
+         env NAMES and has no row a flag could ever match.\n\
+         · An ENV binding appeared: classify it — give it a battery leg, or a \
+         NON_DISCRIMINATING_ENV row with its reason — then add it here. If one \
+         DISAPPEARED, the likely cause is a row wrongly added to \
+         NON_DISCRIMINATING_ENV, which is precisely how todo/t1452's hole was \
+         argued into the last version of this lint: `GG_BACKEND` is not a knob, \
+         it selects which compiler backend the suite exercises."
+    );
+    live_env_keys.sort();
+    live_env_keys.dedup();
+    for (name, why) in NON_DISCRIMINATING_ENV {
+        assert!(
+            live_env_keys.iter().any(|k| k == name),
+            "NON_DISCRIMINATING_ENV exempts `{name}` ({why}) but ci.yml no longer sets it. \
+             A stale exemption is how this lint acquired its last one: delete the row."
+        );
+    }
 
     missing.sort();
     missing.dedup();
     assert!(
         missing.is_empty(),
-        "CI RUNS GATES THE ROUND-CLOSE BATTERY DOES NOT (todo/t0824):\n{}\n\n\
+        "CI RUNS GATES THE ROUND-CLOSE BATTERY DOES NOT (todo/t0824, todo/t1452):\n{}\n\n\
          AGENTS.md's Round lifecycle step 4 claims local-green IS the round-close sign-off. \
          That is only true while every CI gate has a battery leg — and the last time it was \
-         not, a round closed all-green with CI red on `known_gaps_census.sh --check`. Add the \
-         step to the step-4 list (a target name is enough; this lint checks membership, not \
-         flags), or, if it genuinely is not a gate, add it to EXEMPT above WITH ITS REASON. \
-         ⛔ Never resolve this by weakening the sentence in AGENTS.md — the sentence is the \
-         thing this lint exists to keep true.",
+         not, a round closed all-green with CI red on `known_gaps_census.sh --check`, and a \
+         later one never ran the LLVM security suite at all. Add a RUNNABLE leg to the step-4 \
+         list — the target AND its discriminating env on ONE line, e.g. \
+         `GG_BACKEND=llvm cargo test --test security --release` — or, if it genuinely is not \
+         a gate, add it to EXEMPT above WITH ITS REASON. ⛔ Never resolve this by weakening \
+         the sentence in AGENTS.md — the sentence is the thing this lint exists to keep true.",
         missing.join("\n")
     );
 }
