@@ -32,8 +32,11 @@
   four assertions deleted and the self-test ON, the **pre-existing positive leak controls already fail
   closed** (rc 2, SEVEN `run_selftest` failures, zero delete advice). The guards are the only cover on the
   `RUN_SELFTEST=0` path, where a still-leaking allowlisted fixture measurably reads CLEAN + MEASURED and
-  the sweep prints `DELETE` at rc 0; in the default mode their value is two seconds and an accurate
-  diagnosis instead of ~25 minutes ending in *"the instrument is broken"*. The commit message of
+  the sweep prints `DELETE` at rc 0. ⚠ **AND THE DEFAULT-MODE VALUE IS DIAGNOSTIC, NOT TIME** — a second
+  overstatement, caught by the delta review inside the correction itself: `run_selftest || exit 2` sits
+  far above the corpus walk, so the run aborts before sweeping anything. Measured, one box, default
+  invocation: **1.268s** without the assertions, **0.065s** with them. What they buy is one line naming
+  the option instead of seven control failures pointing at the controls. The commit message of
   `312337a48` carries the original, overstated wording; **this paragraph supersedes it.**
   ⛔ **AND THE SAME DEFECT WAS STILL LIVE ONE LIST OVER, caught by the output-review, fixed in this
   track (Core #4).** `fixed_corrupt=$(comm -13 got_corrupt allow_corrupt)` is
@@ -46,10 +49,17 @@
   rows** onto that list.
   **Coverage:** `selftest_build_fail.gg`, the first control that must NOT build, asserted end-to-end
   through the real `xargs` pipeline at `BUILD_FAIL_BOTH`/`UNMEASURED`; column 5 pinned in BOTH polarities;
-  both non-measured adjudicator routes watched firing; **eleven** needles for the parts `run_selftest`
+  both non-measured adjudicator routes watched firing; **ten** needles for the parts `run_selftest`
   cannot reach — the print-only gate blocks, the startup assertions, and the whole corruption split,
-  which `run_selftest` never touches at all. **Nine partial reverts, each anchored BY LINE, each naming
-  the row that reds it.** Full-corpus
+  which `run_selftest` never touches at all. Regenerate the count with
+  `awk '/for \(needle, why\) in \[/{f=1} f && /^    \] \{/{exit} f && /^        \($/{n++} END{print n+0}' tests/lints.rs`
+  — anchored on the table's own opening line, because the first spelling of this
+  command was pinned to a LINE NUMBER that this very correction shifted, and it kept
+  returning 10 only because the eight lines it then over-read happened to be comment.
+  **The revert method, which is what is reproducible: every line and block the fix adds was deleted in
+  turn, anchored BY LINE and never by substring, and each one names the row that reds it** — the six
+  needles added for the corruption split and the two `detect_leaks` assertions were each RED-verified
+  ALONE, each firing its own needle. Full-corpus
   blast radius zero: census byte-identical, every gating bucket identical, `unmeasured` and `absent` both
   empty. Residuals filed as `t1581`/`t1582`/`t1583`; the "measured against the WRONG root set" sub-class
   the axis structurally cannot see stays `t1601`.

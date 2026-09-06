@@ -320,9 +320,13 @@ mkdir -p "$OUT/logs" "$OUT/tmp" "$OUT/w"
 #   RUN_SELFTEST=1 (the default): the PRE-EXISTING positive leak controls already
 #     fail closed. Both spellings give rc 2 and SEVEN run_selftest failures
 #     ("selftest_leak column 2 = 'CLEAN', expected 'LEAK'"), before any corpus
-#     verdict and with ZERO delete advice printed. This guard does not save that
-#     run from a wrong answer; it turns ~25 minutes ending in "the instrument is
-#     broken" into two seconds naming the exact option.
+#     verdict and with ZERO delete advice printed. ⚠ AND THE COST OF NOT HAVING
+#     THIS ASSERTION IS ~1 SECOND, NOT A SWEEP: `run_selftest || exit 2` runs
+#     far above the corpus walk, so the run aborts before sweeping anything.
+#     Measured on one box, default invocation: 1.268s without these cases,
+#     0.065s with them. So the guard does not save that run from a wrong answer
+#     OR from a long wait -- what it buys is a DIAGNOSIS: one line naming the
+#     option, instead of seven control failures pointing at the controls.
 #   RUN_SELFTEST=0: nothing else covers it. Measured — a still-leaking
 #     allowlisted fixture reads CLEAN and MEASURED, and the sweep prints
 #     "✅ no longer leaking … DELETE them" at rc 0. THAT is the failure this

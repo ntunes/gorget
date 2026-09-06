@@ -11858,12 +11858,23 @@ fn sanitize_sweep_selftest_is_wired() {
     }
 
     // ⛔ THE `todo/t1360` WIRING: "did not run" must not read as "did not leak".
-    // These four needles pin the parts of that fix the sweep's own self-test
-    // structurally cannot reach — two gate blocks, which only print, and a
-    // startup assertion, which runs before anything is measured. Every OTHER
-    // part of the fix is watched firing by `run_selftest` on every invocation
-    // (column 5 in both polarities, and both non-measured adjudicator routes);
-    // these are the residue, and without them a partial revert is silent.
+    // ⚠ NO COUNT HERE ON PURPOSE — this comment said "These four needles" over a
+    // ten-row table within one round of the table growing, which is the rot
+    // Core #14 is about. The table below is the enumeration; read it.
+    //
+    // These needles pin the parts of that fix the sweep's own self-test
+    // structurally cannot reach: the gate blocks, which only print; the startup
+    // assertions, which run before anything is measured; and the whole
+    // CORRUPTION split, which `run_selftest` never touches at all because that
+    // list is adjudicated by inline `comm` in the script body rather than by a
+    // function the self-test can call. Regenerate that claim -- it is a property
+    // of the function body, so read the body, never a line range:
+    //   awk '/^run_selftest\(\) \{/{f=1} f{print} f && /^\}$/{exit}' \
+    //     scripts/sanitize_sweep.sh | grep -c corrupt      ->  0
+    // Everything else in the fix is watched firing on
+    // every invocation — column 5 in both polarities, and both non-measured
+    // adjudicator routes. These are the residue, and without them a partial
+    // revert is silent.
     for (needle, why) in [
         (
             r#"[ -s "$OUT/unmeasured" ]"#,
