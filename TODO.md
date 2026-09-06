@@ -90,17 +90,15 @@ the TREE, never from the previous round's line.**
 | ↳ `self_host_runtime` after fix | **0** | 1376 passing · 0 regressed · 2 passed/0 failed |
 | `self_host_bootstrap_fixed_point` | **ok** | inside the sweep, at the DEFAULT 600s stage timeout — no 1800 needed on a quiet box |
 | LLVM sweep | ⏳ | running (`--release`) |
-| C sweep (run 2) | ⏸ | **OWED** — see below |
+| C sweep (run 2) | **0** | 2789 passed · 0 failed · 6054s — **the owed clean single-run green, delivered** |
 | LLVM sweep | **0** | 2789 passed · 0 failed · 5020s · clean single run |
 | 8 fast gates | **0** | lib · lints · c_runtime · spec_conformance · security · ggdef · census · staging |
 | **`GG_BACKEND=llvm cargo test --test security --release`** | ⏸ | 🚨 **NEVER RUN — see `t1452`; the lint EXEMPTS it on a false premise** |
 | `sanitize_sweep.sh` · `robustness_map.py --lanes all` + `--lanes c,llvm` | ⏸ | after C run 2 |
 
-⛔ **THE C SWEEP IS OWED A SECOND RUN AND THIS IS NOT OPTIONAL.** Run 1 ended rc 101; the fix was one
-`.out` expectation file and `self_host_runtime` was re-verified rc 0 in isolation — **but the sweep has never
-been OBSERVED GREEN IN A SINGLE RUN AT THE FINAL TREE.** A per-test re-verify is not a battery. The delta is
-one test-expectation file that cannot influence another test, so the second run is expected green; expected is
-not measured.
+✅ **THE OWED SECOND C RUN IS DONE AND GREEN** — 2789 passed / 0 failed / rc 0, matching the LLVM sweep's
+2789 exactly. Both lanes now stand green **in a single run each at the final tree**, which is the claim; the
+per-test re-verify never was.
 ⊕ **The A2-class is DISCHARGED for this round by construction:** the sweep IS the detector for
 stale-snapshot-after-fixture-edit, it ran over all 1376, and it found exactly one. No separate audit needed.
 
