@@ -104,7 +104,20 @@ the tree.
   while a bootstrap or sweep runs. `driver.gg` bakes all 62 runtime `.c` files via `embed_file`.
 - ⛔ **NEVER `git checkout <ref> -- <path>` TO SET UP A REVERT.** Silently clobbers uncommitted work. Use a
   re-appliable patch. (In AGENTS.md MA-8.)
-- ⛔ **A GUARD THAT FAILS SIX-Q #2 TWICE IS NOT A GUARD THAT NEEDS ANOTHER FOLD.** R51 Track B hardened one
+- ⛔ **WHEN A TRACK'S SCOPE KEEPS GROWING, SUSPECT THE MECHANISM BEFORE REACHING FOR A SPLIT.** R51 Track C
+took three blocking passes, each finding the change bigger than the brief said — ≥16 then 39 then 42 changed
+cells, plus a self-host mirror, a ggdef disposition and a `runtime_parity_corpus` exposure. **Every one of
+those traced to a SINGLE line: seeding a family as `DefKind::Import` placeholders.** A variant that answers
+membership **at the accessor** instead measures **0 changed cells, no SH mirror, DefId-neutral** — and the
+whole accumulated scope evaporates. ⭐ **"A SPLIT WOULD HAVE DIVIDED WORK THAT SHOULD NOT EXIST."**
+⇒ **Ask "is this scope INTRINSIC, or an artifact of how I chose to do it?" BEFORE asking "should this split?"**
+
+⛔ **`grep todo/` FOR THE ARTIFACT — IT HAS NOW PAID THREE TIMES IN ONE ROUND.** Track B missed `t1406`
+(HIGH) and `t0827`; Track C missed **`t0718` (HIGH)** and `t0450`. ⚠ **Worse: Track C's pass 2 inserted a
+"realistic regrowth" probe AT THE EXACT LINE `t0718` ALREADY CITES** — it demonstrated a defect that was
+already live, already filed, already HIGH, and framed it as hypothetical.
+
+⛔ **A GUARD THAT FAILS SIX-Q #2 TWICE IS NOT A GUARD THAT NEEDS ANOTHER FOLD.** R51 Track B hardened one
 author-typed exemption list and left its sibling (`EXEMPT`) untouched — **strictly more permissive, because it
 skips the whole STEP before keying.** A reviewer then reproduced the original hole **by an ordinary `ci.yml`
 edit with no guard edit at all** (merge a build into the step: `cargo build --release && cargo test …`).
