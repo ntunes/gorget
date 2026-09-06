@@ -52,6 +52,14 @@ that is now moot, because **(a) also measures 0, through an instrument that sees
 ⇒ **THE ASK IS NO LONGER ABOUT COST. Both readings are ~free on the corpus, so the choice is purely which
 SEMANTICS you want** — and that is exactly the kind of question the record cannot settle.
 
+⚠ **PRECISION CORRECTION (Track C brief-review pass 1, 2026-09-06) — THE CONCLUSION SURVIVES, THE TOTALITY
+CLAIM DOES NOT.** I wrote *"measured through an instrument that CAN see the callable family"*. True as far as it
+goes — but the probe reads a **19-row registry**, and `Option`, `Result`, `RWLock`, `ReadGuard`, `WriteGuard`
+are resolvable builtin type names **outside it** (`Option[int] a = Some(1)` checks OK). So the sweep was total
+over 19 of ~24 names, not over the class. **The 0-hit RESULT still holds** — an independent textual grep for
+value bindings named `Option|Result|RWLock|ReadGuard|WriteGuard` across `tests/**.gg` also returns **0** — but
+it holds on two instruments, not one, and I should have said so.
+
 ⊕ **D0′ RIDES ALONG AS A REPORT, NOT A QUESTION.** Ruling 3 is not implementable as written — all 16 builtin
 generics are `DefKind::Import`/`Span::dummy()`, identical to user imports; both branches are wrong and every
 discriminator is the forbidden name list in disguise (Core #2). Prerequisite filed as `t1408`.
