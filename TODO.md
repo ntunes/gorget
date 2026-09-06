@@ -1,5 +1,37 @@
 # TODO
 
+### ✅✅ ASK 1 IS RULED — 2026-09-06. **REJECT AT THE DECLARATION (reading (a)) — AND THE REASON IS BETTER THAN MINE**
+
+**Owner, verbatim:** *"`Vector[int] Vector = [1, 2, 3]` this should fail statically at declaration. The naming
+a variable "Vector" should not be allowed because Vector is a type. If we disallow naming variables using type
+names, that unblocks the `x[]()` conflict because we can always tell if what is inside the `[]` is: 1 - a type
+(meaning this is a generic instantiation), or 2 - a variable containing a value, in which case `[]` is a
+subscript."*
+
+⭐ **THIS SUPERSEDES MY RECOMMENDATION OF (b), AND IT IS STRICTLY STRONGER.** I argued (b) because *a
+declaration is not ambiguous*. **The owner's point is that (a) does not merely CHOOSE a reject site — it BUYS
+the disambiguation, making a use-site reject UNNECESSARY.** With variable names and type names disjoint,
+**every identifier in bracket position resolves to exactly one of {type, value}**, so `x[k](v)` is decidable
+with no use-site reject at all. ⇒ **the two readings were never symmetric: (a) is a PRECONDITION, (b) is a
+PATCH.**
+
+**PRECONDITION VERIFIED, NOT ASSUMED (Core #5, measured 2026-09-06):**
+- ⭐ **THE RULE ALREADY EXISTS FOR PRIMITIVES.** A variable named after the primitive `int` is **already
+  rejected** — *"reserved keyword and cannot be used as a [name]"*. ⇒ *"a variable may not take a type's
+  name"* is **already true and enforced** for the primitive set. **This ruling COMPLETES an existing rule
+  rather than adding a new one** — which is also the honest way to explain it to a user.
+- **Type arguments are TYPES ONLY** — no const generics, no value-in-bracket position (`grep -rnE
+  'const generic|ConstGeneric' src/parser/ docs/language-design.md` → **0**; `Vector[3] v` and a `meta`-bound
+  `Vector[N] v` both fail to parse as types). ⇒ **nothing legitimate puts a VALUE in the deciding position**,
+  so the disjointness test is TOTAL.
+- **Cost is smaller than feared:** generic type parameters are **struct-scoped and do not leak** — `struct
+  Pair[A, B]` with a file-scope `int A = 5` checks **rc 0** today. Affected namespace = the builtin generics
+  plus **237 distinct user type names** across `tests/fixtures/*.gg`.
+
+⛔ **ASK 2 IS NOT ANSWERED BY THIS.** A *variable* taking a type's name is now ruled. A **TYPE** taking a
+type's name (`struct Vector[T]`) is a different question and remains OPEN — and it is the one that today
+**silently prints `0` instead of `7`**, while `struct Callable[T]` rejects and `struct Box[T]` LIR-panics.
+
 ### ⛔ TRACK C IS STOOD DOWN — and the reference-grade cut is NAMED, not lost
 
 **Five passes, five different breakages, one root cause.** The gated variant *does* produce its claimed
