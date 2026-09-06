@@ -276,6 +276,32 @@ its own banner warns that asserting only rows 1-2 *"would pass even if the point
 **and then asserts the fresh copy's answer.**
 ⚠ **Scope is INDEPENDENT of the D41 ask** — either way sites 2-5 + the validator are needed.
 
+### ✅ THE GENERATOR SURVIVED A REAL ATTACK (delta-4) — and its ONE honest limit is recorded
+Reviewer built its own matched pair: reproduces **30** exactly · **fails loudly** on a missing binary · compares **rc AND
+stderr** (the 6 message cells are rc 1 both sides) · **catches its own class BOTH ways** (identical binaries → 0, no
+crash; changed pair → 30) · **deterministic**, two runs byte-identical incl. `--json`, no `[[t1557]]` exposure ·
+`proc_guard.run` genuinely routed, not allowlisted. ⭐ **Its printed factorization is DERIVED from the iterated
+structures, so printed product == iterated product — adding a name or shape cannot skip a cross.**
+⛔ **N1, THE HONEST LIMIT: the SHAPE LIST is still a hand enumeration.** The generator mechanises the **cross** (killing
+the 11→14→18 failure) but **cannot prevent a MISSING SHAPE — which is exactly what produced 18→30.** Its docstring
+overstates by one step; **it mechanises the cross, not the axis.**
+
+### ⛔ THIRD OCCURRENCE OF ONE PATTERN THIS ROUND — **the fix for a mis-citation was itself a mis-citation**
+`[[t1527]]`'s corrected D53 clause claims `.lock()` is *"what EVERY fixture in `tests/fixtures/mutex_*` does"*.
+`grep -L '\.lock()' tests/fixtures/mutex_*.gg` → **7 of 14**; six are reject fixtures, **and the seventh
+(`mutex_async_contention.gg`) reads AND mutates a mutex-protected payload with NO `.lock()`, via `shared int x`** —
+which `docs/language-reference.md:1171` and **D53 itself (`decisions.md:554`)** document as the compiler wrapping in
+`Shared[T]`, *"the compiler emits the ordering"*. ⇒ **a RATIFIED, SHIPPED, IMPLICIT LOCK ACQUISITION on payload access,
+and `t1527`'s ARM A IS LITERALLY THAT PATH** — a live counter-example to the inference the ask hands the owner.
+⇒ **Core #15(b): present the SET with a disposition per row, never a universal.** The three occurrences were an
+enumeration (11→14→18→30), a retraction (my `ParamABI` refile), and now a citation — **all three were universals
+asserted over a set nobody enumerated.**
+
+### ⚠ A CONTROL THAT ONLY PRINTS IS NOT A CONTROL
+`coercion_identity_matrix.py` prints `⛔ CONTROL MOVED (this invalidates the run)` and then **exits 0**. The script calls
+its own run invalid and returns success. **Nothing consumes the rc yet, so non-blocking — but this repo reads verdicts
+off the bare rc, and a piped tail has greened a red gate three times this session, twice on me.**
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
