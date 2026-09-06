@@ -1,0 +1,33 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# A USER type that happens to be spelled `RWLock` is NOT the builtin `RWLock`: it
+# gets its own `DefId` with `builtin_kind = None`, so it is not transparent for
+# coercion and this mismatch is a type error.
+#
+# ⛔ BEFORE THE TYPED FLAG THIS COMPILED, because `unify` asked
+# `name == "Mutex" || name == "Shared" || name == "RWLock"` — a question a USER
+# declaration answers `true`. So the checker unified `RWLock[int]` with `int` and
+# the program went on to build and run. MEASURED at the pre-fix compiler:
+# `gg check` OK, then AddressSanitizer: **stack-buffer-overflow, READ of size
+# 8** — the callee reads the second field of a struct that was never there,
+# off the caller's stack frame.
+#
+# ⚠ THE FIELD OFFSET IS LOAD-BEARING TO THIS FIXTURE, which is why the struct
+# has TWO fields and the body reads the SECOND. A one-field version of the same
+# program reads offset 0, gets the `int` back, prints `5`, and is ASan-CLEAN —
+# an accept that is just as wrong and that a memory instrument cannot see.
+#
+#
+# Direction: builtin-named wrapper EXPECTED, `int` supplied (`unify` arm A).
+# Asserted by `coercion_identity_user_rwlock_struct_arg_rejects`.
+
+struct RWLock[T]:
+    T first
+    T second
+
+int take_w(RWLock[int] w):
+    return w.second
+
+void main():
+    print(take_w(5))

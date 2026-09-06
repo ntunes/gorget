@@ -1,0 +1,33 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# A USER type that happens to be spelled `Mutex` is NOT the builtin `Mutex`: it
+# gets its own `DefId` with `builtin_kind = None`, so it is not transparent for
+# coercion and this mismatch is a type error.
+#
+# ⛔ BEFORE THE TYPED FLAG THIS COMPILED, because `unify` asked
+# `name == "Mutex" || name == "Shared" || name == "RWLock"` — a question a USER
+# declaration answers `true`. So the checker unified `Mutex[int]` with `int` and
+# the program went on to build and run. MEASURED at the pre-fix compiler:
+# `gg check` OK, then AddressSanitizer: **stack-buffer-overflow, READ of size
+# 8** — the `match` reads the payload of a variant that was never constructed.
+#
+#
+# DECLARATION FORM axis: an `enum` shadow reaches the same arm as a `struct`
+# one — both arrive as `ResolvedType::Generic` with one type argument, which is
+# all the arm's guard tests. The two remaining declaration forms cannot reach
+# it, mechanically: `newtype Mutex(int)` because `parse_newtype` never parses
+# generic params, so `args.len() == 1` is unreachable; `type Mutex[T] = Wrap[T]`
+# because an alias resolves through and the arm reads the TARGET's name.
+# Asserted by `coercion_identity_user_mutex_enum_rejects`.
+
+enum Mutex[T]:
+    Held(T)
+
+int take_w(Mutex[int] w):
+    match w:
+        case Mutex.Held(v): return v
+    return 0
+
+void main():
+    print(take_w(5))

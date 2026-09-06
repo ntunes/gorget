@@ -1,0 +1,20 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# ⛔ THE AXES DISAGREE, AND THIS ROW IS THE PROOF. `Weak` and `Mutex` are BOTH
+# `DerefWrapperKind::NonDerefContainer` on the field-access axis — and only
+# `Mutex` is transparent for coercion. So the coercion axis CANNOT be derived
+# from the field-access one: writing
+# `is_coercion_transparent = deref_wrapper_kind() == Some(NonDerefContainer)`
+# turns this row green and makes `Weak[int]` unify with `int`.
+#
+# Measured AT THE ARM, not read off the source: `Weak[int]` has one type
+# argument, so it DOES reach the guard, and the guard answers `false`. That is
+# why the identity carries one variant per NAME, never per axis class.
+# Asserted by `coercion_identity_weak_is_not_coercion_transparent`.
+
+void take_w(Weak[int] w):
+    print(1)
+
+void main():
+    print(take_w(5))

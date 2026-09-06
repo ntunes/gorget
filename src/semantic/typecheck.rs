@@ -1287,8 +1287,7 @@ impl<'a> TypeChecker<'a> {
             // A shared variable has type T but may be passed where Mutex[T] or Shared[T]
             // is expected (e.g., spawned functions that receive the raw wrapper).
             (ResolvedType::Generic(def_id, args), _) if args.len() == 1 => {
-                let name = &self.scopes.get_def(*def_id).name;
-                let is_shared_wrapper = name == "Mutex" || name == "Shared" || name == "RWLock";
+                let is_shared_wrapper = self.scopes.get_def(*def_id).is_coercion_transparent();
                 if is_shared_wrapper {
                     self.unify(args[0], b, span);
                     a
@@ -1304,8 +1303,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             (_, ResolvedType::Generic(def_id, args)) if args.len() == 1 => {
-                let name = &self.scopes.get_def(*def_id).name;
-                let is_shared_wrapper = name == "Mutex" || name == "Shared" || name == "RWLock";
+                let is_shared_wrapper = self.scopes.get_def(*def_id).is_coercion_transparent();
                 if is_shared_wrapper {
                     self.unify(a, args[0], span);
                     b
@@ -1834,7 +1832,7 @@ impl<'a> TypeChecker<'a> {
                                 let blame_is_wrapper = match self.types.get(blame_resolved) {
                                     ResolvedType::Defined(def_id)
                                     | ResolvedType::Generic(def_id, _) => {
-                                        self.scopes.get_def(*def_id).deref_wrapper_kind.is_some()
+                                        self.scopes.get_def(*def_id).deref_wrapper_kind().is_some()
                                     }
                                     _ => false,
                                 };
@@ -2050,7 +2048,7 @@ impl<'a> TypeChecker<'a> {
                         if type_args.len() == 1 {
                             if let Some(def_id) = self.resolve_name(callee.span.start, cname) {
                                 let def = self.scopes.get_def(def_id);
-                                if def.deref_wrapper_kind
+                                if def.deref_wrapper_kind()
                                     == Some(DerefWrapperKind::NonDerefContainer)
                                 {
                                     if let Ok(inner_tid) = super::types::ast_type_to_resolved(
@@ -3251,7 +3249,7 @@ impl<'a> TypeChecker<'a> {
                                             return self.types.error_id;
                                         }
                                     };
-                                    let container_kind = self.scopes.get_def(container_did).deref_wrapper_kind;
+                                    let container_kind = self.scopes.get_def(container_did).deref_wrapper_kind();
                                     // Try auto-deref for GuardAccept / DerefTarget.
                                     if !is_auto_derivable {
                                         if let Some(wrapper_kind) = container_kind {
@@ -3521,7 +3519,7 @@ impl<'a> TypeChecker<'a> {
                                                         let outer_is_box = self
                                                             .scopes
                                                             .get_def(*outer_did)
-                                                            .deref_wrapper_kind
+                                                            .deref_wrapper_kind()
                                                             == Some(DerefWrapperKind::DerefTarget);
                                                         if outer_is_box {
                                                             if let Some(&box_inner_tid) =
@@ -3916,7 +3914,7 @@ impl<'a> TypeChecker<'a> {
                     // fields; `.foo` on them is always invalid.
                     ResolvedType::Primitive(_) => FieldDisp::NoField,
                     ResolvedType::Defined(did) | ResolvedType::Generic(did, _) => {
-                        match self.scopes.get_def(*did).deref_wrapper_kind {
+                        match self.scopes.get_def(*did).deref_wrapper_kind() {
                             Some(DerefWrapperKind::NonDerefContainer) => FieldDisp::NoField,
                             Some(DerefWrapperKind::GuardAccept) => {
                                 match self.wrapper_inner_field_status(&resolved_rt, &field.node) {
@@ -6753,7 +6751,7 @@ impl<'a> TypeChecker<'a> {
                 // here (layering rule 2). A USER `struct Vector[T]` shadowing
                 // the builtin gets a distinct DefId with the flag `false` and
                 // still owes its derive.
-                if self.scopes.get_def(def_id).has_intrinsic_equality {
+                if self.scopes.get_def(def_id).has_intrinsic_equality() {
                     return args.iter().find_map(|a| self.eq_comparable_blame(*a, depth + 1));
                 }
                 let name = self.scopes.get_def(def_id).name.clone();
@@ -6774,7 +6772,7 @@ impl<'a> TypeChecker<'a> {
                 if self.scopes.get_def(def_id).kind == DefKind::GenericParam {
                     return None;
                 }
-                if self.scopes.get_def(def_id).has_intrinsic_equality {
+                if self.scopes.get_def(def_id).has_intrinsic_equality() {
                     return None;
                 }
                 let name = self.scopes.get_def(def_id).name.clone();

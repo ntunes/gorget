@@ -1,0 +1,38 @@
+# KNOWN GAP — `todo/t1527`. `gg check` ACCEPTS this program and the compiled
+# binary SIGSEGVs.
+#
+# `unify`'s shared-variable coercion arms make `Shared[T]` / `Mutex[T]` /
+# `RWLock[T]` transparent to `T`, so a `shared int` may be passed where a
+# `Shared[int]` is expected — the arms' own comment says that is what they are
+# FOR ("spawned functions that receive the raw wrapper"). Lowering never
+# materializes the wrapper, so the callee receives the raw `int64_t` where its
+# ABI wants a `void*`.
+#
+# MEASURED at `8e6b8d2d3`: `gg check` rc 0, "OK: no semantic errors"; the C
+# emits `warning: passing argument 1 of 'worker' makes pointer from integer
+# without a cast [-Wint-conversion]` ("expected 'void *' but argument is of
+# type 'int64_t'"), and the binary is terminated by SIGSEGV (signal 11). The
+# `async` + `spawn worker(counter)` spelling — literally the one the comment
+# describes — crashes identically, inside `__shared_token_worker`.
+#
+# ⚠ THIS IS THE BUILTIN PATH. It has nothing to do with a user type shadowing
+# a builtin name (that class is `todo/t0718` / D51, closed on this axis by the
+# `coercion_identity/` row set). Measured on BOTH sides of that migration —
+# revert the diff, rebuild, re-run: identical crash. Lowering was not touched.
+#
+# ⚖ INTENDED — AND THE DIRECTION IS AN OWNER ASK (`todo/t1527`). This fixture
+# asserts the ACCEPT direction: the program prints `1` and exits 0, matching
+# what `gg check` already promises. The defensible alternative is that the
+# coercion arms should REJECT this instead, since no `Shared` allocation exists
+# anywhere in the program. What is NOT in doubt is that accept-then-SIGSEGV is
+# wrong. Same shape as `known_gaps/box_trait_import_flips_accept_reject.gg`
+# before D51 ratified its direction.
+#
+# Asserted by `known_gap_shared_var_coerced_to_wrapper_param_segv`.
+
+void worker(Shared[int] c):
+    print(1)
+
+void main():
+    shared int counter = 0
+    worker(counter)

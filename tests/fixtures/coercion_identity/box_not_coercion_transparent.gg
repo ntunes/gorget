@@ -1,0 +1,27 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# ⛔ D51, VERBATIM, ON THE ONE-WORD EDIT THIS ROW EXISTS TO STOP: adding `Box`
+# to the coercion list *"would make the symptom go away while preserving the
+# defect, and is not an acceptable fix."*
+#
+# `Box[Concrete]` → `Box[Trait]` (D51's own subject, `todo/t0710`) is a TRAIT
+# OBJECT upcast and wants a real `TraitObject` arm in `unify`. Making `Box`
+# coercion-transparent instead would make `Box[int]` unify with `int` — this
+# program — and with everything else its inner unifies with.
+#
+# ⚠ THE ACCESSOR-PARITY UNIT TESTS CANNOT REPLACE THIS ROW AND THIS ROW CANNOT
+# REPLACE THEM. Adding `Box` to the accessor is invisible to a seed-coverage
+# test (every `DefId` still carries the right identity); deleting a seed site is
+# invisible to a pure-function parity test. Both guards ship, and this row is
+# the fixture-level half — measured: it flips rc 1 → 0 under that one edit.
+# Asserted by `coercion_identity_box_is_not_coercion_transparent`.
+
+int take_int(int x):
+    return x + 1
+
+void show(Box[int] b):
+    print(take_int(b))
+
+void main():
+    show(Box(5))
