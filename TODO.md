@@ -62,6 +62,16 @@ POSSIBLY INCOMPLETE**, having probed the module-import route for `Mutex` alone a
 convention *"a convention judgement, not a measurement"* — which is precisely what produced the first selection.
 ⇒ the fold asks the executor to **MEASURE the axis** (`name` vs `name × route`), not to add three rows.
 
+### ⛔⛔ DO NOT RUN `scripts/round_cleanup.sh` AT THIS ROUND'S CLOSE — IT WOULD PRUNE LIVE AGENTS **AND** EAT NEW FIXTURES
+A dry-run 2026-09-06 emitted `git worktree remove --force` for **ALL FOUR** agent worktrees, **two of which held
+running agents** (C's executor, H's scout). It selects on cleanliness alone with **no keep-list** — `[[t1146]]`
+facet 1. ⛔ **AND its capture step is `git -C "$wt" diff > "$out"` with no `git add -A`**, so it would have
+reported a successful capture of C's executor while **silently dropping every new fixture** (untracked by
+construction) and then `--force`-removing the worktree — `[[t1146]]` facet 2, appended today.
+⇒ **PRUNE BY HAND, ONE WORKTREE AT A TIME, VERIFYING `git status --porcelain` FIRST.** Done for the superseded
+first output-review (reclaimed ~5G, 38G→33G); **the delta reviewer's tree is deliberately KEPT** while its
+findings are being worked, in case it must be re-questioned.
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
