@@ -52,8 +52,21 @@ that is now moot, because **(a) also measures 0, through an instrument that sees
 ⇒ **THE ASK IS NO LONGER ABOUT COST. Both readings are ~free on the corpus, so the choice is purely which
 SEMANTICS you want** — and that is exactly the kind of question the record cannot settle.
 
-⚠ **PRECISION CORRECTION (Track C brief-review pass 1, 2026-09-06) — THE CONCLUSION SURVIVES, THE TOTALITY
-CLAIM DOES NOT.** I wrote *"measured through an instrument that CAN see the callable family"*. True as far as it
+⛔⛔ **STOP — THE C1 COST NUMBER IS WITHDRAWN ENTIRELY (Track C pass 2, 2026-09-06). DO NOT QUOTE IT TO THE
+OWNER.** This is the **THIRD** correction to the same claim in one day, and the sequence is the finding:
+I reported *"0 hits over 5405 files"* → pass 1 narrowed it to *"total over 19 of ~24 names"* → **pass 2
+measured the instrument BLIND ON THE IMPORT PATH.** `DefInfo.builtin_type_kind` is NOT inherited through
+`from std.collections import Vector` (the def resolves to a `Struct`, not the `Import` placeholder — its
+sibling `deref_wrapper_kind` needed a SECOND seed site for exactly this, and the patch claimed parity without
+measuring it). **743 of 5405 files (13.7%) import a builtin generic by name and are in the blind set.**
+⚠ **AND THE POSITIVE CONTROL PASSED WHILE NEVER TOUCHING THE BLIND AXIS** — it fired on `Vector`/`Callable`
+*without* an import. **Core #13: the instrument could not see the class it was asked about, and its control
+could not see that it could not.** The sweep may still genuinely be 0; **the measurement does not establish it,
+so there is no number to give.**
+⭐ **THE LESSON I OWE THE OWNER MORE THAN THE NUMBER: a figure that has been corrected twice should be
+WITHDRAWN, not narrowed a third time.** Each narrowing kept the headline alive while shrinking its warrant.
+
+⚠ **SUPERSEDED — pass 1's narrower correction, kept for its scope:** I wrote *"measured through an instrument that CAN see the callable family"*. True as far as it
 goes — but the probe reads a **19-row registry**, and `Option`, `Result`, `RWLock`, `ReadGuard`, `WriteGuard`
 are resolvable builtin type names **outside it** (`Option[int] a = Some(1)` checks OK). So the sweep was total
 over 19 of ~24 names, not over the class. **The 0-hit RESULT still holds** — an independent textual grep for
