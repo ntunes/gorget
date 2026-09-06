@@ -353,6 +353,12 @@ edit with no guard edit at all** (merge a build into the step: `cargo build --re
 moves the rot rather than removing it.** Both attacks landed on the same structural shape: **a TOTAL became a
 GLOBAL SET, and a global set still cannot see a reclassification of one step.**
 
+⛔⛔ **"FILE FIRST, THEN BRIEF" MEANS *COMMIT* FIRST — A STAGED FILE IS INVISIBLE.** R51 Track A's addendum
+cited `todo/t1469` twice as filed. It existed on disk and was **`git add`ed but never committed**, so it was
+absent from a frozen worktree AND from git history; the reviewer correctly reported it as nonexistent and
+flagged it as *"the identical failure `t1319`'s own text records."* ⇒ **`git add` is not filing. Commit, then
+brief, then cite.**
+
 ⛔ **BEFORE REVIEWING OR BRIEFING AN ARTIFACT, `grep todo/` FOR IT.** R51 Track B's brief and its pass-1
 prompt BOTH missed `todo/t1406` — **open, HIGH, on the very lint under review, filed the same day as the item
 being fixed, and its own text forbids the shape the brief proposed.** Neither of us had it on a checklist.
@@ -1493,6 +1499,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t1438`](todo/t1438.md) **HIGH** — 🆕🚨 [HIGH — A LANE DIVERGENCE IN THE *ANSWER*, NOT IN DEFINED-NESS. Found 2026-09-05 by R50 Track L's scout while measuri…
 - [`t1373`](todo/t1373.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT ON THE DEFAULT BACKEND FROM struct { Box[int] }, THE PLAINEST SHAPE THERE IS. Found 2026-…
 - [`t1319`](todo/t1319.md) **HIGH** — 🆕🚨 [HIGH — SILENT WRONG OUTPUT ON THE DEFAULT BACKEND, INVISIBLE TO EVERY SINGLE-LANE INSTRUMENT. Found by R50 Track B's…
+- [`t1469`](todo/t1469.md) **HIGH** — 🆕🚨 [HIGH — THE REFERENCE LAGS THE SELF-HOST (Core #8 / succession plan). Measured 2026-09-06 by R51 Track A's layer prob…
 ### Medium
 - [`t0474`](todo/t0474.md) **MED** — 🆕🔧 [MED — prerequisite for retiring the last indirect-call shape heuristic; filed 2026-08-19 by R43 Track C] Tag LARGE n…
 - [`t0475`](todo/t0475.md) **LOW** — 🧹 [LOW — Layering rule 3, one source of truth per axis; found 2026-08-19 by R43 Track C] src/backend/c_lir/helpers.rs ca…
