@@ -326,8 +326,9 @@ The delegated-task pipeline (→ Review) is the atom; a **round** is the unit th
 3. **Commit as the chains land** (→ Task Continuity, "Commit autonomously when green").
 4. **Round-close gate — the FULL local battery**, matching CI's target set, with the round's commits on the integration branch:
    - **C sweep.** `GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 scripts/run_integration.sh 2>&1 | tee /tmp/integration-$RANDOM.log` — **both** knobs. Use the wrapper, never a hand-rolled thread count.
-   - **Then the LLVM sweep, SEQUENTIALLY, never in parallel**, plus the bootstrap / parity-split gates the change touched.
+   - **Then the LLVM sweep, SEQUENTIALLY, never in parallel** — `GG_BACKEND=llvm GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 scripts/run_integration.sh --release` — plus the bootstrap / parity-split gates the change touched.
    - **AND the separate `cargo` targets `--test integration` never touches:** `-p ggdef`, `--test spec_conformance`, `--test security`, `--test lints`, `--test c_runtime`, `--lib`.
+   - **⊕ And the LLVM-lane security run, its OWN CI step** — neither sweep reaches it: `GG_BACKEND=llvm GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 cargo test --test security --release -- --test-threads=1`.
    - **⊕ And the two SCRIPT gates no `cargo` target reaches:** `scripts/known_gaps_census.sh --check` and `GG_STAGING_MOVE_GUARD=fatal scripts/staging_move_burndown.sh --check`. ⚠ **Read every rc off the BARE command** — `script | tail` reports the PIPE's status, which has greened a red gate three times in one session.
    - **⊕ And `scripts/sanitize_sweep.sh`** (~25 min, ASan leak + corruption allowlists).
    - **⊕ Also run `python3 scripts/robustness_map.py --lanes all`** — five lanes (C · LLVM · self-host · ASan · ggdef), which is what CI gates on; fails on any WORKS→broken regression. ⚠ **The BARE command is `--lanes c` (the `--lanes` default) — one lane, not five**; it was written here as if it were five for two rounds. Never edit an expectation to match what the compiler prints.
