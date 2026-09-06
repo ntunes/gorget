@@ -25,7 +25,9 @@ pub enum DefKind {
 /// RV-A field-access disposition for a BUILTIN smart-pointer / guard wrapper
 /// type. NOT itself seeded: it is the FIELD-ACCESS AXIS's projection of the
 /// `BuiltinTypeKind` identity, read through `DefInfo::deref_wrapper_kind()`
-/// (`None` = not a wrapper) at the field-access reject site.
+/// (`None` = not a wrapper) at the field-access reject site. The three variants
+/// key the 3-way diagnostic table in the RV-A brief
+/// (`the RV-A fieldaccess brief (git history)`).
 ///
 /// ⚠ THE RETURN TYPE IS LOAD-BEARING (D51 / `todo/t0718`). The accessor must
 /// keep handing out `Option<DerefWrapperKind>` rather than the identity
@@ -34,8 +36,6 @@ pub enum DefKind {
 /// that boundary would drag the migration into lowering — where the decision
 /// sites read a mangled GIR type string with no `DefId` to hang a flag on.
 /// Keeping the projection here is what keeps the semantic half severable.
-/// The three variants key the 3-way diagnostic table in the RV-A brief
-/// (`the RV-A fieldaccess brief (git history)`).
 ///
 /// ⚠ THIS FLAG IS THE TYPED SOURCE OF TRUTH ONLY IN SEMANTIC ANALYSIS. Lowering
 /// does NOT read it — it RE-DERIVES "is this a guard wrapper?" from the mangled
