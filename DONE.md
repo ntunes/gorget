@@ -1,3 +1,37 @@
+- [2026-09-06] **R51 Track B — `t1452`: the battery-vs-CI reconciliation lint was an UNKEYED TOTAL, and half of it still is.**
+  `round_close_battery_covers_ci_steps` (`tests/lints.rs`) exempted CI's `cargo test --test security --release`
+  under `GG_BACKEND=llvm` on the stated grounds that *"the LLVM sweep bullet is what carries that"* — but the
+  LLVM sweep bullet runs a different target, so **a CI step was exempted by a reason that does not hold**, and
+  the round-close battery could run green while CI was red. ⭐ **The deeper defect was the shape, not the
+  entry:** the lint compared TOTALS rather than keyed steps, so any two errors that cancelled read as green.
+  Track B made the block's end boundary **fail-closed** (`rest.find("\n5. **").expect(...)`), which means an
+  `AGENTS.md` merge can red the lint **without any track touching it** — correct behaviour, and a trap for
+  whoever merges. ⚠ **Half the surface is still an unkeyed total**, recorded rather than quietly fixed.
+  Closed by removal — `git` history is the item's only other record.
+
+- [2026-09-06] **R51 Track D — `t1449`: an rc that described the tree it had just replaced.**
+  `scripts/todo_index.py --write` **reported the PRE-WRITE state** — it rewrote the generated index correctly
+  and then validated against a stale in-memory view, so a run that *fixed* the index still printed
+  `todo_index: N problem(s)` and exited **1**. ⭐ **The cost was paid every round by every agent**: the
+  documented workaround was to run `--write` twice, which this round's orchestrator did roughly twenty times
+  before the fix landed and the first invocation started returning rc 0. Also landed snapshot freshness on the
+  Rust lane with `SNAPSHOT_COUNT_FLOOR`. ⚠ **That floor has ZERO SLACK by construction** — growth is safe, but
+  a sibling's `git rm` of a single `.out` reds it, so it is set from the measured output and never by
+  arithmetic. Closed by removal.
+
+- [2026-09-06] **R51 Track C — `t0718` first slice: ONE typed builtin identity, and a figure replaced by its generator.**
+  `DefInfo.builtin_kind: Option<BuiltinTypeKind>` — one variant per builtin name, read through three named
+  per-axis accessors — subsuming `DerefWrapperKind::for_builtin_name` and `builtin_has_intrinsic_equality`, and
+  taking registration-time name-matching functions in `src/semantic/` from **2 → 1** (Layering rule 2). Ships a
+  29-row fixture set, RED-verified as a set against the pre-fix compiler.
+  ⭐ **The durable lesson is not the code.** The item's changed-cell count went **11 → 14 → 18 → 30**, corrected
+  by four different agents — none careless: each chose a factorization and enumerated honestly inside it. The
+  pass that reached 30 got there only by generating the **product** mechanically, comparing rc **and** stderr,
+  since a message cell is invisible to rc alone. ⇒ the item now carries **`scripts/coercion_identity_matrix.py`**
+  instead of an integer, per Core #15(a). ⚠ **Its honest limit is recorded in its own docstring: it mechanises
+  the CROSS, not the AXIS** — a missing *shape* is still human judgement, and a missing shape is exactly what
+  produced 18→30. A moved control exits **3**, because a control that only prints is not a control.
+
 - [2026-09-06] **R51 Track G — `t1064` + `t0675`: the `todo/` record's own citations are now guarded.**
   Two lints in one walk over `todo/*.md` front matter (`tests/lints.rs`): `todo_repro_paths_resolve`
   (**zero exemption surface** — no allowlist, no band, `broken.is_empty()`; ⚠ that claim is about
