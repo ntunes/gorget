@@ -170,9 +170,12 @@ fn gg_binary() -> &'static Path {
 /// tests execute the C backend even under `GG_BACKEND=llvm` — filed as
 /// `todo/t0730`. Do NOT "fix" this by adding flag forwarding: what
 /// `gg run --backend=llvm` should MEAN is an unratified semantics question and
-/// an owner call, and t0730 records the measured radius (6 `gg_command("run")`
-/// sites, two of them Rust parity ORACLES that must stay on the reference lane
-/// whichever way the decision goes).
+/// an owner call, and t0730 records the measured radius (two of the
+/// `gg_command("run")` sites are Rust parity ORACLES that must stay on the
+/// reference lane whichever way the decision goes). ⚠ THE COUNT LIVES IN THE
+/// ITEM, NOT HERE, and it is not a `grep -c`: a raw grep counts prose mentions
+/// of the token — including this one — as call sites, which is how the figure
+/// that used to sit on this line went stale twice.
 fn gg_command(subcommand: &str) -> Command {
     let mut cmd = Command::new(gg_binary());
     cmd.arg(subcommand);
@@ -67142,5 +67145,496 @@ fn float32_consuming_positions_accept_float_literal() {
     check_gg_fails(
         "known_gaps/float32_consuming_positions_accept_float_literal.gg",
         "expected `float32`",
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SNAPSHOT FRESHNESS ON THE RUST LANE — the cheap front-runner for
+// `self_host_runtime`'s staleness class (`todo/t1451`, `todo/t0964`).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// What a snapshot row can be, once decided. `Red` fails the build; `Report` is
+/// printed and counted and does not.
+enum SnapshotRow {
+    Red(String),
+    Report(String),
+}
+
+/// The pre-run cells — the two a checker must decide WITHOUT running anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotPrecheck {
+    Orphan,
+    EmptySnapshot,
+}
+
+/// PURE. Everything decided before the fixture runs.
+///
+/// Extracted from the net's body so the cells whose corpus population is 0
+/// today (`orphans` = 0, 0-byte `.out` = 0, both measured over 1376 files) are
+/// still RED-VERIFIABLE: `snapshot_row_classifier_cells` drives this function
+/// with synthetic inputs, so deleting either check reds a row instead of
+/// silently passing on a corpus that happens not to contain the case.
+///
+/// ⚠ THE NON-EMPTY CHECK IS ON THE **RAW** BYTES, NEVER THE TRIMMED VALUE.
+/// `regenerate_runtime_snapshots` writes `format!("{stdout}\n")`
+/// UNCONDITIONALLY — a fixture whose stable output is the empty string still
+/// gets a 1-byte `.out`. So "empty after `trim_end`" is a criterion the
+/// PRODUCER DOES NOT HAVE, and asserting it here would hard-red a row the
+/// seeder can legitimately produce. "0 raw bytes" is a faithful mirror: the
+/// seeder cannot emit one, so such a file did not come from the regen.
+fn snapshot_row_precheck(fixture_exists: bool, raw_snapshot: &[u8]) -> Option<SnapshotPrecheck> {
+    if !fixture_exists {
+        return Some(SnapshotPrecheck::Orphan);
+    }
+    if raw_snapshot.is_empty() {
+        return Some(SnapshotPrecheck::EmptySnapshot);
+    }
+    None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotRunVerdict {
+    Agree,
+    NonZeroExit(Option<i32>),
+    Disagree,
+}
+
+/// PURE. THE ACCEPTANCE CRITERION, mirroring the seeder property for property.
+///
+/// `regenerate_runtime_snapshots` refuses to write a snapshot when the oracle
+/// exits non-zero (`Regen::Skipped("rust gg run failed (reject/crash)")`), and
+/// the value it stores is `String::from_utf8_lossy(&stdout).trim_end()` plus one
+/// `\n`. So read-and-`trim_end` is the EXACT INVERSE of the write, not a loose
+/// compare — and the status check is the producer's own gate, not an addition.
+///
+/// ⛔ DO NOT "TIGHTEN" THIS TO A RAW BYTE-COMPARE. `io_input` prints a trailing
+/// space its snapshot does not carry (`'got: \nname? hello \n'` RAN vs
+/// `'got: \nname? hello\n'` SNAPSHOT); the cell passes only because `trim_end`
+/// is applied to BOTH sides. Measured across the corpus: 0 of 1376 `.out` files
+/// carry trailing whitespace, so the trim is load-bearing on the RUN side only
+/// — which is exactly where the seeder applies it.
+fn classify_snapshot_run(
+    raw_snapshot: &[u8],
+    success: bool,
+    exit_code: Option<i32>,
+    stdout: &[u8],
+) -> SnapshotRunVerdict {
+    if !success {
+        return SnapshotRunVerdict::NonZeroExit(exit_code);
+    }
+    let want = String::from_utf8_lossy(raw_snapshot);
+    let got = String::from_utf8_lossy(stdout);
+    if got.trim_end() == want.trim_end() {
+        SnapshotRunVerdict::Agree
+    } else {
+        SnapshotRunVerdict::Disagree
+    }
+}
+
+/// First 90 chars of a value, for a readable failure row.
+fn clip_snapshot_value(s: &str) -> String {
+    s.chars().take(90).collect()
+}
+
+/// RED-VERIFICATION FOR THE ROWS NO CORPUS CELL PINS.
+///
+/// Three of `snapshot_freshness_on_the_rust_lane`'s checks guard populations
+/// that are EMPTY today — 0 orphans, 0 zero-byte snapshots, 0 fixtures printing
+/// matching stdout while exiting non-zero (all three measured over 1376 files).
+/// "Currently empty" is not "pinned": deleting any of them would leave the whole
+/// corpus green, so the partial revert would ship. Driving the two pure
+/// deciders with synthetic cells converts them into rows that go RED on the
+/// revert, which is what readiness item (4) asks for.
+///
+/// **THE PARTIAL-REVERT TABLE FOR THE WHOLE NET, AND WHAT IS NOT PINNED.**
+/// Each row was measured by applying that revert alone and running the named
+/// gate.
+///
+/// | revert | pinned by |
+/// |---|---|
+/// | swap `run_with_timeout_catching` → `run_with_timeout` | `tests/lints.rs::corpus_net_panicking_runner_count` (9 → 10, and it NAMES the new site). ⚠ Nothing else reds: the net itself stayed GREEN on the full corpus with this revert applied — that is exactly why the lint exists. |
+/// | drop `!status.success()` | this test's `NonZeroExit` cells |
+/// | drop the orphan `is_file()` | this test's `Orphan` cell (the corpus has 0 orphans) |
+/// | drop `!raw.is_empty()` | this test's `EmptySnapshot` cell |
+/// | tighten `trim_end` → raw compare | this test's `io_input`-shaped cell, AND 4 corpus rows including `io_input` itself |
+///
+/// NOT PINNED, deliberately, each for a stated reason:
+/// * **remove the whole net** — inherent to any guard addition; nothing can pin
+///   a test's own existence from inside it.
+/// * **remove `SNAPSHOT_COUNT_FLOOR`** — it IS the pin for corpus shrink; there
+///   is no second instrument, by design (a shadow copy would be the "parallel
+///   lists kept in sync by hand" smell).
+/// * **drop `.stdin(Stdio::null())`** — structurally unrevertable HERE:
+///   `proc_guard::run_with_deadline_opts` nulls stdin itself when no stdin data
+///   is supplied, overriding the caller. Measured green with the revert applied
+///   both under `cargo test` and with the binary fed a never-EOF pipe.
+/// * **drop the double-run stability gate** — it only fires on a row that
+///   already mismatches, so on a green corpus removing it changes nothing. Its
+///   RED-verification needs a deliberately non-deterministic fixture, which the
+///   corpus does not carry and should not grow (`todo/t1457`).
+#[test]
+fn snapshot_row_classifier_cells() {
+    use SnapshotRunVerdict::{Agree, Disagree, NonZeroExit};
+
+    // R6 — the orphan row. A `.out` whose `.gg` is gone must be named as a
+    // FOSSIL, not run: without this it surfaces as `prints ""` or, worse, as
+    // CRASHED-OR-TIMED-OUT — infra noise wearing a verdict's label.
+    assert_eq!(
+        snapshot_row_precheck(false, b"42\n"),
+        Some(SnapshotPrecheck::Orphan),
+    );
+
+    // R8 — a 0-byte `.out` cannot have come from the seeder.
+    assert_eq!(
+        snapshot_row_precheck(true, b""),
+        Some(SnapshotPrecheck::EmptySnapshot),
+    );
+    // ...and the seeder's genuine minimum (a stable-EMPTY fixture) is 1 byte,
+    // which must NOT trip it. This is the cell that fails if the check is
+    // "tightened" to the trimmed value.
+    assert_eq!(snapshot_row_precheck(true, b"\n"), None);
+    assert_eq!(snapshot_row_precheck(true, b"42\n"), None);
+
+    // R4 — right stdout, wrong exit status. The seeder refuses to snapshot a
+    // non-zero oracle, so matching stdout from a failing run is not agreement.
+    assert_eq!(
+        classify_snapshot_run(b"hi\n", false, Some(1), b"hi\n"),
+        NonZeroExit(Some(1)),
+    );
+    // `reported_exit_code` spells a signal death 128+signo, so a SIGSEGV that
+    // still managed to print the expected bytes is named, not swallowed.
+    assert_eq!(
+        classify_snapshot_run(b"hi\n", false, Some(139), b"hi\n"),
+        NonZeroExit(Some(139)),
+    );
+
+    // R7 — `trim_end` on BOTH sides, in `io_input`'s live shape. Dropping the
+    // trim on EITHER side reds this cell (and reds `io_input` in the corpus).
+    assert_eq!(
+        classify_snapshot_run(
+            b"got: \nname? hello\n",
+            true,
+            Some(0),
+            b"got: \nname? hello \n",
+        ),
+        Agree,
+    );
+
+    // Baselines: the two verdicts the corpus actually exercises.
+    assert_eq!(classify_snapshot_run(b"42\n", true, Some(0), b"42\n"), Agree);
+    assert_eq!(
+        classify_snapshot_run(b"newtype works\n", true, Some(0), b"42\n"),
+        Disagree,
+    );
+
+    eprintln!("snapshot_row_classifier_cells: 9 synthetic cells checked");
+}
+
+/// **Snapshot freshness, measured on the RUST lane (`todo/t1451`).**
+///
+/// Every `tests/fixtures/runtime_snapshots/<stem>.out` is seeded from a STABLE
+/// MATCH: `regenerate_runtime_snapshots` stores `o1` — the **RUST oracle's**
+/// stdout — and only when the self-host reproduced it and both lanes were
+/// stable across two runs. A committed snapshot is therefore equally an
+/// assertion ABOUT THE RUST LANE, and that assertion is checkable with no
+/// self-host driver build at all.
+///
+/// It is worth having because the only detector today is `self_host_runtime`,
+/// ~100 minutes into the full C sweep. Four gates cannot see this class: the
+/// executor runs targeted tests (MA-4 puts sweeps on the parent), the
+/// output-review reads a diff in which `<stem>.gg` and `<stem>.out` look
+/// unrelated, `--lib`/lints/census/staging never touch it, and the coupling is
+/// implicit — a top-level fixture AUTO-JOINS the snapshot corpus with nothing
+/// in either file naming the other.
+///
+/// ⛔ **THIS DOES NOT REPLACE `self_host_runtime`.** A self-host-only drift
+/// leaves the Rust lane matching. It front-runs it for the STALENESS class on
+/// the RUST lane only.
+///
+/// ⚠ **TWO DIFFERENT RULES GOVERN THIS TEST. CONFLATING THEM BREAKS IT.**
+///
+/// * The **ACCEPTANCE CRITERION** — what counts as agreement — **MIRRORS THE
+///   SEEDER**, property for property: null stdin, the exit-status gate,
+///   `trim_end` on both sides, raw-bytes non-empty, and the double-run
+///   stability gate. Each of those is a normalization
+///   `regenerate_runtime_snapshots` applies; a checker that omits one accepts,
+///   or rejects, what the producer would not. Every escape hatch found while
+///   this test was designed was exactly one such omission.
+/// * The **FAILURE POLICY is `self_host_runtime`'s, NOT the seeder's.** The
+///   seeder is uniformly lenient (a hung oracle ⇒ `Skipped`, never fatal)
+///   because it is PRODUCING data. This is a VERDICT, so a timeout/crash row
+///   **REDS** it: a timeout is not distinguishable from a hang-regression, and
+///   a change that makes a fixture infinite-loop IS the miscompile class.
+///   Demoting that row to a report would be a guard that green-lights the class
+///   it was written to retire. The repo has twice fixed timeout flake AT THE
+///   KNOB (`GG_TEST_TIMEOUT_SECS`) and never by downgrading an assertion.
+///
+/// The ONE cell where the seeder's policy does govern is NON-DETERMINISM: it
+/// prints `Flaky` and never asserts on it. So a fixture that disagrees on run 1
+/// and disagrees DIFFERENTLY on run 2 is REPORTED and named, citing
+/// `todo/t1457` (eight snapshot fixtures name a fixed shared path and can
+/// corrupt each other's observable output) — it is not red.
+///
+/// **CLEARING A RED — the surgical move, not the wide one.** A disagreement is
+/// cleared by re-seeding THAT ONE `.out` with proof, the way `d10cc14da`
+/// (`newtype`) and `3361605db` (`closure_mixed_implicit_explicit_wiring`) did:
+/// one file each, with the new value corroborated from independent sources
+/// (the program's meaning, the live Rust-lane assertion, the self-host's own
+/// output) before the bytes were written. A whole-corpus
+/// `GG_REGEN_RUNTIME_SNAPSHOT=1` rewrite is NOT the remedy —
+/// `parity_declared_fixtures_have_no_snapshot`'s own doc calls it "a regen the
+/// owner ruling forbids running casually", and it WIPES every `.out` first, so
+/// it can silently shrink the corpus this net measures.
+#[test]
+fn snapshot_freshness_on_the_rust_lane() {
+    // MIRROR THE SEEDER: it invokes `gg` RAW (`Command::new(gg_exe).arg("run")`),
+    // never `gg_command("run")`, which appends `--backend=` for `run` — a flag
+    // `gg run` ACCEPTS AND SILENTLY IGNORES (`todo/t0730`). So under
+    // `GG_BACKEND=llvm` this net would re-run the identical C-lane comparison
+    // for zero added signal. Skip it — and PRINT the skip, because an invisible
+    // skip is how a gate decays into a no-op.
+    if skip_under_llvm() {
+        eprintln!(
+            "snapshot_freshness_on_the_rust_lane: SKIPPED under GG_BACKEND=llvm. `gg run` \
+             accepts and ignores `--backend` (todo/t0730), so this would re-run the identical \
+             C-lane check. Revisit here when t0730 is decided — the item's radius paragraph \
+             names this site."
+        );
+        return;
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let snapshot_dir = manifest_dir.join("tests/fixtures/runtime_snapshots");
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+
+    let mut stems: Vec<String> = std::fs::read_dir(&snapshot_dir)
+        .expect("read tests/fixtures/runtime_snapshots")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |x| x == "out"))
+        .map(|p| p.file_stem().unwrap().to_string_lossy().to_string())
+        .collect();
+    stems.sort();
+
+    // SHRINK-ONLY FLOOR — the `RESOLVER_MATCH_FLOOR` / `C_EMIT_MATCH_FLOOR`
+    // idiom, and it closes a hole every OTHER guard over this corpus has.
+    //
+    // This net derives its corpus from `read_dir` of the very artifact it
+    // checks, and `regenerate_runtime_snapshots` WIPES every `.out` before
+    // rewriting the current stable-match set. So a regression that breaks N
+    // fixtures, followed by the re-seed `self_host_runtime`'s own failure
+    // message recommends, DELETES the N rows that would have caught it — and
+    // this net then greens on a corpus quietly reduced by N. Measured against
+    // every existing guard's actual logic: a corpus cut from 1376 files to ONE
+    // (`bitwise_ops`) passes `self_host_runtime`'s non-empty + `bitwise_ops`
+    // checks AND both directions of `parity_declared_fixtures_have_no_snapshot`.
+    // The COUNT was pinned nowhere.
+    //
+    // Growth cannot lower a floor, so an added fixture never touches this.
+    // LOWERING IT MUST NAME THE REMOVED FIXTURE(S) and why — a floor lowered to
+    // accommodate one's own deletion is the mirror of the ceiling sin Core #9
+    // forbids. Regenerate with:
+    //     ls tests/fixtures/runtime_snapshots/*.out | wc -l
+    const SNAPSHOT_COUNT_FLOOR: usize = 1376;
+    assert!(
+        stems.len() >= SNAPSHOT_COUNT_FLOOR,
+        "the runtime-snapshot corpus SHRANK: {} files, floor {SNAPSHOT_COUNT_FLOOR}.\n\
+         A whole-corpus `GG_REGEN_RUNTIME_SNAPSHOT=1` wipes every `.out` and rewrites only \
+         the current stable-match set, so a regression that breaks N fixtures followed by a \
+         regen DELETES the N rows that would have caught it — and every other guard over \
+         this corpus stays green (measured: a corpus of one file passes all of them).\n\
+         If snapshots were removed DELIBERATELY, lower this floor in the same commit and \
+         NAME the removed fixture(s) and the reason. Regenerate with:\n    \
+         ls tests/fixtures/runtime_snapshots/*.out | wc -l",
+        stems.len(),
+    );
+
+    let paths: Vec<PathBuf> = stems
+        .iter()
+        .map(|s| fixtures_dir.join(format!("{s}.gg")))
+        .collect();
+
+    // NO `with_silent_panic_hook` here, deliberately, for the same reason
+    // `self_host_runtime` omits it: the hook is process-global and this net runs
+    // by DEFAULT alongside ~1100 non-serial tests, so installing a silent one
+    // would swallow THEIR panic messages for the duration. The per-fixture
+    // timeout is already caught below and turned into a named row.
+    //
+    // NOT `#[serial]`, also deliberately: five corpus-wide comparison nets
+    // (lexer/parser/resolver/type/check) already run non-serial and concurrent
+    // with `self_host_runtime`; the worker count is `(cpus/2).clamp(2,8)`
+    // precisely so concurrent nets stay safe, and the measured worst single
+    // fixture under real contention was 2.13s against a 30s floor deadline. The
+    // residual — shared-path fixtures corrupting each other's observable output
+    // — is `todo/t1457`, and it is handled by the double-run gate below, which
+    // a lock would not fix anyway (the racers are plain `#[test]`s outside any
+    // serial group).
+    let snapshot_dir = &snapshot_dir;
+    let rows: Vec<Option<SnapshotRow>> = parallel_map_fixtures(&paths, |fixture| {
+        let stem = fixture.file_stem().unwrap().to_string_lossy().to_string();
+        let raw = match std::fs::read(snapshot_dir.join(format!("{stem}.out"))) {
+            Ok(b) => b,
+            Err(e) => return Some(SnapshotRow::Red(format!("{stem}: snapshot read failed: {e}"))),
+        };
+
+        match snapshot_row_precheck(fixture.is_file(), &raw) {
+            Some(SnapshotPrecheck::Orphan) => {
+                return Some(SnapshotRow::Red(format!(
+                    "{stem}: ORPHAN — the snapshot has no tests/fixtures/{stem}.gg. A fossil \
+                     `.out` pins output for a program that no longer exists; `git rm` it."
+                )));
+            }
+            Some(SnapshotPrecheck::EmptySnapshot) => {
+                return Some(SnapshotRow::Red(format!(
+                    "{stem}: EMPTY SNAPSHOT — 0 raw bytes. The seeder writes `{{stdout}}\\n` \
+                     unconditionally and can never produce one, so this file did not come \
+                     from the regen."
+                )));
+            }
+            None => {}
+        }
+
+        // MIRROR THE SEEDER, THREE PROPERTIES IN ONE CALL: the RAW `gg run`
+        // (not `gg_command`, which would append an ignored `--backend`), the
+        // CATCHING runner (a timeout becomes a NAMED ROW instead of a panic
+        // that aborts the worker and discards every result it accumulated —
+        // measured: without it a single hanging fixture prints `worker
+        // panicked` and ZERO mention of a genuine staleness in the same run),
+        // and `.stdin(Stdio::null())`, which the seeder sets at both of its
+        // oracle calls so `io_input.gg` snapshots its EOF-path output instead
+        // of blocking on an inherited non-EOF stdin.
+        //
+        // ⚠ MEASURED: THAT LAST ONE IS A MIRROR, NOT THE ENFORCEMENT.
+        // `proc_guard::run_with_deadline_opts` (`src/proc_guard.rs`, the single
+        // runner every `run_with_timeout*` reaches) sets
+        // `.stdin(Stdio::null())` itself whenever no stdin data is supplied,
+        // OVERRIDING whatever the caller put on the `Command`. So a fixture
+        // cannot inherit the harness's stdin through this harness at all:
+        // deleting the call below is a no-op, verified twice — green under
+        // `cargo test`, and green again with the test binary fed a pipe that
+        // never reaches EOF (`sleep 400 | <binary> --test-threads=1`). It stays
+        // because the rule for this net is to mirror the seeder property for
+        // property, and because it keeps the guarantee local if that default
+        // ever moves — but do NOT record it as the thing that closes the hole.
+        let run = |tag: &str| {
+            run_with_timeout_catching(
+                Command::new(gg_binary())
+                    .arg("run")
+                    .arg(fixture)
+                    .stdin(Stdio::null()),
+                &format!("{stem} [{tag}]"),
+            )
+        };
+
+        let out1 = match run("run 1") {
+            Ok(o) => o,
+            Err(msg) => {
+                return Some(SnapshotRow::Red(format!(
+                    "{stem}: CRASHED-OR-TIMED-OUT ({msg})"
+                )));
+            }
+        };
+        let v1 = classify_snapshot_run(
+            &raw,
+            out1.status.success(),
+            reported_exit_code(&out1.status),
+            &out1.stdout,
+        );
+        if v1 == SnapshotRunVerdict::Agree {
+            return None;
+        }
+
+        // THE SEEDER'S STABILITY GATE, MIRRORED. `regenerate_runtime_snapshots`
+        // runs the oracle TWICE and refuses to produce a snapshot when the two
+        // runs disagree (`Regen::Flaky`). A checker whose acceptance criterion
+        // is the seeder's must therefore re-run before it rejects. Zero cost on
+        // a green corpus — only a mismatching row pays for it.
+        //
+        // ⚠ AND THE REJECT PATH IS THE SEEDER'S TOO, NOT "report only if it
+        // mismatches BOTH times": that form goes silently GREEN on a fixture
+        // that has become genuinely non-deterministic. Stable disagreement is a
+        // verdict; UNSTABLE disagreement is its own named class.
+        let out2 = match run("run 2") {
+            Ok(o) => o,
+            Err(msg) => {
+                return Some(SnapshotRow::Red(format!(
+                    "{stem}: CRASHED-OR-TIMED-OUT on the confirming re-run ({msg})"
+                )));
+            }
+        };
+        let v2 = classify_snapshot_run(
+            &raw,
+            out2.status.success(),
+            reported_exit_code(&out2.status),
+            &out2.stdout,
+        );
+        let g1 = String::from_utf8_lossy(&out1.stdout).trim_end().to_string();
+        let g2 = String::from_utf8_lossy(&out2.stdout).trim_end().to_string();
+        if v1 != v2 || g1 != g2 {
+            return Some(SnapshotRow::Report(format!(
+                "{stem}: NONDETERMINISTIC — run 1 {v1:?} {:?}, run 2 {v2:?} {:?}. The seeder \
+                 refuses to snapshot a fixture whose output varies, so this is NOT adjudicated \
+                 as staleness. Eight snapshot fixtures name a fixed shared path and can corrupt \
+                 each other's observable output when two executions overlap — `todo/t1457`.",
+                clip_snapshot_value(&g1),
+                clip_snapshot_value(&g2),
+            )));
+        }
+
+        let want = String::from_utf8_lossy(&raw).trim_end().to_string();
+        Some(SnapshotRow::Red(match v1 {
+            SnapshotRunVerdict::NonZeroExit(code) => format!(
+                "{stem}: NON-ZERO EXIT ({code:?}) with stdout {:?}. The seeder refuses to \
+                 snapshot a fixture whose oracle run fails, so a committed `.out` asserts \
+                 this fixture EXITS 0 on the Rust lane.",
+                clip_snapshot_value(&g1),
+            ),
+            _ => format!(
+                "{stem}: snapshot {:?} but the Rust lane prints {:?}",
+                clip_snapshot_value(&want),
+                clip_snapshot_value(&g1),
+            ),
+        }))
+    });
+
+    let mut reds: Vec<String> = Vec::new();
+    let mut reports: Vec<String> = Vec::new();
+    for row in rows.into_iter().flatten() {
+        match row {
+            SnapshotRow::Red(m) => reds.push(m),
+            SnapshotRow::Report(m) => reports.push(m),
+        }
+    }
+
+    // FIRE COUNT — a green run must still say how much it looked at, or a
+    // corpus that quietly shrank is indistinguishable from a corpus that
+    // agreed. (The floor above is the gate; this is the reader's number.)
+    eprintln!(
+        "snapshot_freshness_on_the_rust_lane: checked {} snapshot(s) against the Rust lane, \
+         {} disagreement(s), {} nondeterministic",
+        stems.len(),
+        reds.len(),
+        reports.len(),
+    );
+    for r in &reports {
+        eprintln!("  REPORTED (not a verdict): {r}");
+    }
+
+    assert!(
+        reds.is_empty(),
+        "{} committed snapshot(s) disagree with the RUST lane:\n  {}\n\n\
+         A snapshot is seeded from the Rust oracle's own stdout, so a disagreement means \
+         EITHER the `.out` is stale (its fixture's output changed and the `.out` was not \
+         re-seeded) OR the Rust lane regressed. Both are reds worth having at lint speed \
+         instead of ~100 minutes into the C sweep.\n\n\
+         CLEARING IT: re-seed THAT ONE `.out` surgically, with proof — the shape of \
+         `d10cc14da` and `3361605db`, one file each, the new value corroborated from \
+         independent sources (the program's meaning, the live Rust-lane assertion, the \
+         self-host's own output) BEFORE the bytes are written. Do NOT reach for a \
+         whole-corpus `GG_REGEN_RUNTIME_SNAPSHOT=1`: it wipes every `.out` first, and \
+         `parity_declared_fixtures_have_no_snapshot` calls it a regen the owner ruling \
+         forbids running casually.",
+        reds.len(),
+        reds.join("\n  "),
     );
 }

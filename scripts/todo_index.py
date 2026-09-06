@@ -40,6 +40,22 @@ regenerates it and `--check` fails when it is stale.
 
     python3 scripts/todo_index.py            # check (what the lint runs)
     python3 scripts/todo_index.py --write    # regenerate TODO.md's index
+
+`--write` reports the tree it LEAVES BEHIND, never the one it replaced: every
+condition it repairs is a counted repair on the success line, not a problem.
+The repairable set is CLOSED and it is exactly five: a stale pointer line, an
+unindexed item, a pointer whose item file is GONE, a DUPLICATE pointer to such
+an id, and a pointer whose id and href disagree.  A `--write` that exits
+non-zero means it could NOT make the index current — an unloadable item file, a
+duplicate pointer to a LIVE item, an item with no matching heading region.
+Only the bare invocation is a verdict on the tree as found.
+
+⚠ THE SUPPRESSION IS SCOPED TO WHAT `--write` GENUINELY REPAIRS, never to
+`write` alone.  A pointer whose file is missing from `items` is dropped either
+way, but that is a repair only when the file is really gone; when it is on disk
+and merely failed to load, the drop DESTROYS a live item's pointer and must
+stay reported (`tests/lints.rs::todo_index_write_reports_the_tree_it_leaves`
+pins all five cells and three negative controls).
 """
 import os
 import re
@@ -176,17 +192,27 @@ def main(argv):
     lines = open(TODO, encoding='utf-8').read().split('\n')
 
     seen = []
+    dropped = 0
     for i, area, priority, ident in walk(lines):
         if ident is None:
             continue
         m = POINTER_RE.match(lines[i])
-        if m.group(1) != m.group(2):
+        if m.group(1) != m.group(2) and not write:
             errors.append('TODO.md:%d: pointer id and href disagree' % (i + 1))
-        if ident in seen:
+        if ident in seen and not (write and ident not in items):
             errors.append('TODO.md:%d: `%s` is pointed at twice' % (i + 1, ident))
         seen.append(ident)
         if ident not in items:
-            errors.append('TODO.md:%d: pointer to a missing todo/%s.md' % (i + 1, ident))
+            # SUPPRESS ONLY WHAT `--write` ACTUALLY REPAIRS. The drop filter
+            # below removes this row unconditionally, but that is a REPAIR only
+            # when the item file is genuinely GONE. When the file is STILL ON
+            # DISK and merely failed to load (no `+++` fence, bad id line), the
+            # drop DESTROYS a live item's pointer -- so the row must stay
+            # reported, or `--write` silently unindexes an item that exists.
+            if write and not os.path.exists(os.path.join(ITEMS, ident + '.md')):
+                dropped += 1
+            else:
+                errors.append('TODO.md:%d: pointer to a missing todo/%s.md' % (i + 1, ident))
             continue
         f = items[ident]
         if area is None:
@@ -213,13 +239,16 @@ def main(argv):
     if write:
         # Drop pointers whose file is gone, then append the unindexed ones at
         # the end of their (area, priority) region.
-        # A dropped pointer is NOT counted into the success line, and that is
-        # deliberate: dropping one requires a pointer whose id is absent from
-        # `items`, and the walk above has already recorded
-        # 'pointer to a missing todo/<id>.md' for that very row — so a drop
-        # always coincides with an error and the success line never prints.
-        # A counter that is structurally always 0 where it is shown is exactly
-        # the thing this message was rewritten to stop doing.
+        # ⚠ A DROP IS A REPAIR, NOT A PROBLEM — and it MUST be named on the
+        # success line. It used to be silent there on the argument that a drop
+        # "always coincides with an error so the success line never prints":
+        # true, and that WAS the defect (todo/t1449). The run that removed the
+        # row also reported the row as a problem and exited 1, so `--write`'s rc
+        # described the tree it had just replaced. `&&`-chained callers
+        # short-circuited on it. Now the drop is counted, reported, and folded
+        # into the arithmetic identity below, so `--write` is authoritative
+        # about the tree it leaves behind — which is the only tree its caller
+        # will ever see.
         lines = [l for l in lines
                  if not (POINTER_RE.match(l) and POINTER_RE.match(l).group(1) not in items)]
         for ident in missing:
@@ -238,7 +267,12 @@ def main(argv):
         open(TODO, 'w', encoding='utf-8').write('\n'.join(lines))
 
     if errors:
-        sys.stderr.write('todo_index: %d problem(s)\n' % len(errors))
+        # NAME THE DROPS ON THE ERROR PATH TOO. `dropped` otherwise lives only
+        # on the success line, which never prints at rc 1 — so on a MIXED tree
+        # (one genuine drop plus one unrelated problem) the run would remove a
+        # row and say nothing about it, which is this script's own class.
+        moved = ' (%d pointer(s) dropped)' % dropped if dropped else ''
+        sys.stderr.write('todo_index: %d problem(s)%s\n' % (len(errors), moved))
         for e in errors:
             sys.stderr.write('  %s\n' % e)
         return 1
@@ -249,20 +283,22 @@ def main(argv):
     # filing, not a symptom. Printed bare next to the word OK it looks exactly
     # like rows the index lost, and a reader who takes it for one goes hunting
     # for a phantom. Naming the move that explains it closes the arithmetic:
-    #     item(s) == pointer(s) found + inserted
+    #     item(s) == pointer(s) found − dropped + inserted
+    # (`dropped` is a `--write`-only move and is 0 in check mode; `seen` counts a
+    # dropped pointer because the walk records it before the membership test.)
     # On the success path that identity is exact, so it is CHECKED rather than
     # merely claimed: every id in `seen` is distinct and present in `items` (any
     # violation is already an error above), so `missing` is exactly the
     # difference and every one of them is inserted or errors out.
-    if len(items) != len(seen) + inserted:
+    if len(items) != len(seen) - dropped + inserted:
         sys.stderr.write(
-            'todo_index: INTERNAL — %d item(s) but %d pointer(s) found + %d inserted. '
-            'These are equal by construction on the success path; a mismatch means '
-            'the index walk and the item loader disagree.\n'
-            % (len(items), len(seen), inserted))
+            'todo_index: INTERNAL — %d item(s) but %d pointer(s) found - %d dropped '
+            '+ %d inserted. These are equal by construction on the success path; a '
+            'mismatch means the index walk and the item loader disagree.\n'
+            % (len(items), len(seen), dropped, inserted))
         return 1
-    print('todo_index: OK — %d item(s), %d pointer(s) found, %d inserted, index current'
-          % (len(items), len(seen), inserted))
+    print('todo_index: OK — %d item(s), %d pointer(s) found − %d dropped + %d inserted, '
+          'index current' % (len(items), len(seen), dropped, inserted))
     return 0
 
 

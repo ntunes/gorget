@@ -9782,6 +9782,258 @@ fn todo_index_is_current() {
     );
 }
 
+/// Build a HERMETIC sandbox root for `scripts/todo_index.py`.
+///
+/// The script computes `ROOT = dirname(dirname(abspath(__file__)))`, so a copy
+/// placed at `<tmp>/scripts/todo_index.py` resolves ROOT to `<tmp>`: the real
+/// `TODO.md` is STRUCTURALLY UNREACHABLE from these cells, not merely avoided.
+/// That matters because these cells DAMAGE the tree they run against, and
+/// `--test lints` runs concurrently with everything else.
+///
+/// Returns the `TempDir` (RAII cleanup) with `ids` filed and the index settled.
+fn todo_index_sandbox(ids: &[&str]) -> tempfile::TempDir {
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/todo_index.py");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    fs::create_dir_all(root.join("scripts")).expect("mkdir scripts");
+    fs::create_dir_all(root.join("todo")).expect("mkdir todo");
+    fs::copy(&script, root.join("scripts/todo_index.py")).expect("copy todo_index.py");
+    fs::write(
+        root.join("TODO.md"),
+        "# TODO\n\n## Guards / lints / test-infra\n\n### High\n\n### Medium\n\n### Low\n",
+    )
+    .expect("write TODO.md");
+    for id in ids {
+        fs::write(
+            root.join(format!("todo/{id}.md")),
+            format!(
+                "id = \"{id}\"\nmechanism = \"synthetic\"\nareas = [\"guards\"]\nlane = \"\"\n\
+                 severity = \"MED\"\nfiled = \"2026-09-06\"\npriority = \"Medium\"\n\
+                 cites = []\nrepro = []\n+++\n- **synthetic item {id}**\n"
+            ),
+        )
+        .expect("write item");
+    }
+    // Settle the pointers in. BOTH runs must be rc 0 — if the baseline is not
+    // clean the cells below would be measuring the sandbox, not the script.
+    for pass in 0..2 {
+        let (rc, out, err) = todo_index_run(root, &["--write"]);
+        assert_eq!(rc, Some(0), "sandbox settle pass {pass} failed:\n{out}{err}");
+    }
+    tmp
+}
+
+/// Run the sandbox's copy of the script; returns `(exit code, stdout, stderr)`.
+fn todo_index_run(root: &Path, args: &[&str]) -> (Option<i32>, String, String) {
+    let out = std::process::Command::new("python3")
+        .arg(root.join("scripts/todo_index.py"))
+        .args(args)
+        .output()
+        .expect("python3 <sandbox>/scripts/todo_index.py failed to start");
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// **`--write` REPORTS THE TREE IT LEAVES BEHIND, NOT THE ONE IT REPLACED**
+/// (`todo/t1449`).
+///
+/// `scripts/todo_index.py --write` used to rewrite the index correctly and then
+/// validate against the pre-write view, so a run that FIXED the index still
+/// printed `todo_index: N problem(s)` and exited 1. The rc lagged by exactly one
+/// invocation. `--write` is the remedy `todo_index_is_current` prescribes and it
+/// is usually run inside a chain: a `&&` after it short-circuits on the false
+/// rc 1 and silently skips whatever came next — quiet in the direction that
+/// matters. Core #13: an index validator that cannot see its own write is
+/// structurally unable to answer the question it is invoked to answer.
+///
+/// FOUR conditions `--write` genuinely repairs are pinned here, because the
+/// original report named only one and three siblings survived the first fix —
+/// the classic enumeration-is-a-selection failure. Each cell asserts **rc 0 on
+/// the FIRST invocation**, which is what makes them RED against the pre-fix
+/// script. THREE negative controls pin the other direction: the suppression is
+/// scoped to what `--write` actually repairs, so check mode stays a verdict and
+/// a genuinely-unrepairable row still reds.
+///
+/// The cells damage their tree deliberately, so they run in a hermetic sandbox
+/// (see `todo_index_sandbox`) — the real `TODO.md` is unreachable from here.
+///
+/// **PARTIAL-REVERT TABLE, measured one revert at a time against these same
+/// seven cells.** Every substantive change to `scripts/todo_index.py` reds at
+/// least one row, and the PRE-FIX script at `bfcd22807` reds CELL 3, CELL 4 and
+/// CELL 5 (Core #6 — the guard fails on the commit that motivated it):
+///
+/// | revert | reds |
+/// |---|---|
+/// | drop the cell-3 gate entirely | CELL 3, CELL 4 |
+/// | widen cell 3 to `if write:` (drop the `os.path.exists` predicate) | CELL 3′ |
+/// | drop the `− dropped` arithmetic | CELL 3, CELL 4 (INTERNAL) |
+/// | drop the cell-4 widening | CELL 4 |
+/// | drop the cell-5 gate | CELL 5 |
+///
+/// NOT PINNED, and named rather than left implicit: the `dropped` count printed
+/// on the ERROR path needs a MIXED tree (a genuine drop co-occurring with an
+/// unrelated problem), which none of these cells builds; and the OK line's
+/// `− … +` signs are cosmetic and not asserted beyond the substring `N dropped`.
+#[test]
+fn todo_index_write_reports_the_tree_it_leaves() {
+    // ── CELL 3 — a pointer whose item file is GONE. t1449's own repro. ──────
+    {
+        let tmp = todo_index_sandbox(&["t0001", "t0002"]);
+        let root = tmp.path();
+        fs::remove_file(root.join("todo/t0002.md")).expect("rm item");
+        let (rc, out, err) = todo_index_run(root, &["--write"]);
+        assert_eq!(
+            rc,
+            Some(0),
+            "CELL 3 — `--write` removed the dangling pointer AND reported it as a problem, so \
+             its rc describes the tree it just replaced (todo/t1449).\n{out}{err}"
+        );
+        assert!(
+            out.contains("1 dropped"),
+            "CELL 3 — the drop must be NAMED on the success line, or `--write` silently \
+             unindexes a row and the arithmetic on the page does not close.\n{out}{err}"
+        );
+        let todo = fs::read_to_string(root.join("TODO.md")).unwrap();
+        assert!(!todo.contains("t0002"), "CELL 3 — the row was not actually dropped:\n{todo}");
+    }
+
+    // ── CELL 3′ — the item file EXISTS but fails to load (no `+++` fence). ──
+    // `--write` DROPS this row too, and here the drop is NOT a repair: the item
+    // is on disk, so unindexing it destroys a live pointer. SIX-Q #4 — the
+    // rule's subject ("a pointer whose item file is GONE") does not cover this
+    // case, and widening the suppression to every dropped row would reproduce
+    // t1449's own class INSIDE t1449's fix. The row must stay REPORTED.
+    {
+        let tmp = todo_index_sandbox(&["t0001", "t0002"]);
+        let root = tmp.path();
+        let item = root.join("todo/t0002.md");
+        let body = fs::read_to_string(&item).unwrap().replace("\n+++\n", "\nPLUS\n");
+        fs::write(&item, body).expect("corrupt item");
+        let (rc, _out, err) = todo_index_run(root, &["--write"]);
+        assert_eq!(
+            rc,
+            Some(1),
+            "CELL 3′ — an unloadable item file must still red; it is not repairable.\n{err}"
+        );
+        assert!(
+            err.contains("missing todo/t0002.md"),
+            "CELL 3′ — `--write` DELETED t0002's pointer row while its file is still on disk, \
+             and said nothing about it. Suppress ONLY what `--write` repairs: gate on the item \
+             file being genuinely absent, never on `write` alone.\n{err}"
+        );
+        assert!(item.is_file(), "CELL 3′ — the probe must corrupt, not delete, the item file");
+    }
+
+    // ── CELL 4 — a DUPLICATE pointer to a MISSING id. ───────────────────────
+    // The drop filter is id-keyed and removes BOTH rows, so both are repaired —
+    // but the `is pointed at twice` error was ungated and kept the rc at 1.
+    {
+        let tmp = todo_index_sandbox(&["t0001", "t0002"]);
+        let root = tmp.path();
+        duplicate_pointer_row(root, "t0002");
+        fs::remove_file(root.join("todo/t0002.md")).expect("rm item");
+        let (rc, out, err) = todo_index_run(root, &["--write"]);
+        assert_eq!(
+            rc,
+            Some(0),
+            "CELL 4 — both duplicate rows pointed at a missing id and BOTH were dropped, so \
+             the run repaired everything it reported.\n{out}{err}"
+        );
+        assert!(out.contains("2 dropped"), "CELL 4 — both drops must be counted.\n{out}{err}");
+    }
+
+    // ── CELL 5 — a pointer whose id and href DISAGREE. ──────────────────────
+    // `--write` always rewrites a disagreeing row (the id is present, so the
+    // stale-text branch repairs it), yet the error was ungated.
+    {
+        let tmp = todo_index_sandbox(&["t0001", "t0002"]);
+        let root = tmp.path();
+        let todo_path = root.join("TODO.md");
+        let before = fs::read_to_string(&todo_path).unwrap();
+        let damaged = before.replace("`t0002`](todo/t0002.md)", "`t0002`](todo/t0001.md)");
+        assert_ne!(before, damaged, "CELL 5 — the probe failed to damage the href");
+        fs::write(&todo_path, &damaged).unwrap();
+        let (rc, out, err) = todo_index_run(root, &["--write"]);
+        assert_eq!(
+            rc,
+            Some(0),
+            "CELL 5 — `--write` rewrote the disagreeing row and still reported it.\n{out}{err}"
+        );
+        assert_eq!(
+            fs::read_to_string(&todo_path).unwrap(),
+            before,
+            "CELL 5 — the row must actually be repaired, not merely un-reported"
+        );
+    }
+
+    // ── NEGATIVE CONTROL 1 — CHECK MODE IS STILL A VERDICT. ─────────────────
+    // The suppression is gated on `write`; a bare run over the same damaged
+    // tree must still red. Without this the fix could be "stop reporting it".
+    {
+        let tmp = todo_index_sandbox(&["t0001", "t0002"]);
+        let root = tmp.path();
+        fs::remove_file(root.join("todo/t0002.md")).expect("rm item");
+        let (rc, _out, err) = todo_index_run(root, &[]);
+        assert_eq!(rc, Some(1), "NEG 1 — bare check must still red on a dangling pointer.\n{err}");
+        assert!(err.contains("missing todo/t0002.md"), "NEG 1 — and must still NAME it.\n{err}");
+    }
+
+    // ── NEGATIVE CONTROL 2 — a duplicate pointer to a LIVE item is NOT
+    // repairable, so `--write` must still red and must leave both rows. ──────
+    {
+        let tmp = todo_index_sandbox(&["t0001", "t0002"]);
+        let root = tmp.path();
+        duplicate_pointer_row(root, "t0002");
+        let (rc, _out, err) = todo_index_run(root, &["--write"]);
+        assert_eq!(rc, Some(1), "NEG 2 — a duplicate row for a LIVE item is unrepaired.\n{err}");
+        assert!(err.contains("is pointed at twice"), "NEG 2 — and must be named.\n{err}");
+        let todo = fs::read_to_string(root.join("TODO.md")).unwrap();
+        assert_eq!(
+            todo.matches("(todo/t0002.md)").count(),
+            2,
+            "NEG 2 — `--write` does not de-duplicate, so both rows must survive"
+        );
+    }
+
+    // ── NEGATIVE CONTROL 3 — check mode still reds an id/href disagreement. ──
+    {
+        let tmp = todo_index_sandbox(&["t0001", "t0002"]);
+        let root = tmp.path();
+        let todo_path = root.join("TODO.md");
+        let damaged = fs::read_to_string(&todo_path)
+            .unwrap()
+            .replace("`t0002`](todo/t0002.md)", "`t0002`](todo/t0001.md)");
+        fs::write(&todo_path, damaged).unwrap();
+        let (rc, _out, err) = todo_index_run(root, &[]);
+        assert_eq!(rc, Some(1), "NEG 3 — bare check must still red on id/href disagreement.\n{err}");
+        assert!(err.contains("id and href disagree"), "NEG 3 — and must name it.\n{err}");
+    }
+
+    eprintln!("todo_index_write_reports_the_tree_it_leaves: 4 repair cells + 3 negative controls");
+}
+
+/// Append a second copy of `<id>`'s pointer row to the sandbox's `TODO.md`,
+/// immediately after the original, so the walk sees the id twice.
+fn duplicate_pointer_row(root: &Path, id: &str) {
+    let path = root.join("TODO.md");
+    let src = fs::read_to_string(&path).unwrap();
+    let needle = format!("](todo/{id}.md)");
+    let mut out: Vec<String> = Vec::new();
+    let mut duplicated = false;
+    for line in src.split('\n') {
+        out.push(line.to_string());
+        if !duplicated && line.contains(&needle) {
+            out.push(line.to_string());
+            duplicated = true;
+        }
+    }
+    assert!(duplicated, "duplicate_pointer_row: no pointer row for {id} in\n{src}");
+    fs::write(&path, out.join("\n")).unwrap();
+}
+
 /// **Repo-hygiene guard — `docs/plans/` stays gone; `docs/define-gorget/` is
 /// ledger-only.** Owner ruling 2026-07-17 (memory `feedback-no-scouts-briefs-in-repo`):
 /// round-scoped scouts, briefs, censuses, and plans are `/tmp`-ONLY and are never
@@ -27157,6 +27409,117 @@ fn process_spawn_deadline_arm_count() {
         "the Python spawn census FAILED:\n{}{}",
         String::from_utf8_lossy(&census.stdout),
         String::from_utf8_lossy(&census.stderr),
+    );
+}
+
+/// **The PANICKING runner's population inside corpus nets only ever SHRINKS.**
+///
+/// Third guard in the same family, one instrument over: not *which* runner a
+/// site uses, but *how many* sites still use the one that destroys results.
+///
+/// `run_with_timeout` PANICS on a deadline overrun. Inside a
+/// `parallel_map_fixtures` worker that panic is re-raised by
+/// `.expect("worker panicked")`, so ONE load-induced timeout aborts the whole
+/// run, names no fixture in the headline, and DISCARDS every result the corpus
+/// walk had accumulated. Measured with a hanging fixture planted alongside a
+/// genuine snapshot staleness: with `run_with_timeout_catching` BOTH rows are
+/// named; with the plain runner the output is `worker panicked: Any { .. }` and
+/// ZERO mention of the staleness. So on a verdict-bearing net the panicking
+/// runner is not a rougher edge — it is an ESCAPE HATCH: under contention the
+/// net yields an abort instead of a verdict, and the class escapes while the
+/// failure reads as infra noise that invites retry-and-suppress.
+///
+/// ⚠ THE PREDICATE IS NEGATIVE ON PURPOSE, AND THAT IS THE WHOLE DESIGN. The
+/// obvious positive form — "every verdict-bearing net contains
+/// `run_with_timeout_catching`" — was measured and FALSE-POSITIVES ON 2 OF 4
+/// COMPLIANT SITES: `self_host_runtime` and `self_host_comprehension_net` reach
+/// the catching path INDIRECTLY through `self_host_emit_cc_run` and do not
+/// contain the token at all. A 50% false-positive rate is what got this track's
+/// first design killed; counting the OTHER set cannot make that mistake.
+///
+/// The remaining plain calls are the `*_comparison` family — measured, 9 CALLS
+/// across 7 nets (lexer / parser / resolver / type / check / lowerer / c_emit;
+/// the last two call it twice, once per lane). ⚠ The unit is CALLS, not nets:
+/// a net that grows a second plain call is exactly the drift this counts, and
+/// an earlier hand census of this same population reported 8 by counting nets.
+///
+/// They are NOT all diagnostic-always-pass — `resolver_comparison` carries
+/// `RESOLVER_MATCH_FLOOR` and `c_emit_comparison` carries `C_EMIT_MATCH_FLOOR`,
+/// both real asserts. The honest reason they are allowed to stay is that a
+/// panic there reds FAIL-SAFE: it aborts before the floor is computed, so no
+/// floor is ever satisfied by a truncated count. That argument does NOT extend
+/// to a net whose verdict is the ABSENCE of rows, where an abort destroys the
+/// evidence instead of the conclusion.
+///
+/// Scoped to `parallel_map_fixtures` closures because `run_with_timeout(`
+/// appears 161 times elsewhere in the file, where it is the right call. Comments
+/// and strings are stripped first — `self_host_runtime`'s own prose names the
+/// token, and an enumeration that cannot tell code from prose is approximate.
+#[test]
+fn corpus_net_panicking_runner_count() {
+    /// CALL SITES inside a `parallel_map_fixtures` closure still using the
+    /// PANICKING `run_with_timeout`. Raising this is not a fix — route the new
+    /// corpus net through `run_with_timeout_catching` and record a per-fixture
+    /// outcome. A REMOVED one lowers it. Regenerate by running this test.
+    const EXPECTED_PLAIN_RUNNERS: usize = 9;
+
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/integration.rs");
+    let src = fs::read_to_string(&path).expect("read tests/integration.rs");
+    let code: Vec<char> = strip_rust_comments_and_strings(&src).chars().collect();
+
+    let mut line_of: Vec<usize> = Vec::with_capacity(code.len());
+    let mut line = 1usize;
+    for c in &code {
+        line_of.push(line);
+        if *c == '\n' {
+            line += 1;
+        }
+    }
+
+    let region: Vec<char> = "parallel_map_fixtures(".chars().collect();
+    let call: Vec<char> = "run_with_timeout(".chars().collect();
+    let mut sites: Vec<String> = Vec::new();
+
+    let mut i = 0usize;
+    while i + region.len() <= code.len() {
+        if code[i..i + region.len()] != region[..] {
+            i += 1;
+            continue;
+        }
+        // Walk to the matching `)` of THIS call, counting the plain-runner
+        // calls inside it. Parens in strings and comments are already blanked.
+        let mut depth = 1usize;
+        let mut j = i + region.len();
+        while j < code.len() {
+            match code[j] {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            if j + call.len() <= code.len() && code[j..j + call.len()] == call[..] {
+                sites.push(format!("  tests/integration.rs:{}", line_of[j]));
+            }
+            j += 1;
+        }
+        i = j.max(i + region.len());
+    }
+
+    assert_eq!(
+        sites.len(),
+        EXPECTED_PLAIN_RUNNERS,
+        "the PANICKING runner's population inside `parallel_map_fixtures` closures changed: \
+         {} vs expected {EXPECTED_PLAIN_RUNNERS}.\n{}\n\n\
+         A NEW one means a corpus net where a single timeout aborts the worker and DISCARDS \
+         every result it had accumulated — including any genuine finding co-occurring with it. \
+         Do not raise this baseline: call `run_with_timeout_catching` and turn the timeout into \
+         a NAMED per-fixture row. A REMOVED one lowers it.",
+        sites.len(),
+        sites.join("\n"),
     );
 }
 
