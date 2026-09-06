@@ -504,6 +504,28 @@ drops a fixture **silently**) · **worker died before its `printf`**. **Only the
 PRESENT, leak report ABSENT**: the marker proves the **at-exit path** ran, not the **leak check**. `ASANOPT` is
 caller-overridable ⇒ **mass DELETE advice, the new guard fully green over its own class.** Needs a startup assertion.
 
+### ✅ J SIGNED OFF AT PASS 4 — EXECUTOR LAUNCHED. **And the guard I prescribed was green over HALF ITS OWN CLASS.**
+Pass 4 drove **all four variants on its OWN harness** after verifying its inputs byte-identically. Replacement:
+**FIXLIST rc 0 with ZERO bogus delete lines** (HEAD and the struck split each print six) — ⭐ **and NOT accidentally
+green: a fixlist that DOES contain an allowlisted `BUILD_FAIL_BOTH` still REDs.** Reverse control: HEAD and the struck
+split **pass silently**; the naive patch and the replacement **FAIL loudly**. Real-corpus blast radius: every gating
+bucket identical, `shrunk_class` byte-identical, **bare rc 0**.
+⛔ **F1 — SIX-Q #4 ON MY OWN GUARD.** I prescribed asserting `$ASANOPT` contains `detect_leaks=1`. **LeakSanitizer reads
+`detect_leaks` from `LSAN_OPTIONS` AND LETS IT WIN:** `ASAN detect_leaks=1` + `LSAN detect_leaks=0` ⇒ **marker PRESENT,
+leak report ABSENT** — the identical mass-false-`MEASURED` failure, through the variable that most directly controls
+LSan. ⇒ **the assertion needs the `LSANOPT` half too, in the NEGATIVE spelling** (an EMPTY `LSANOPT` is the documented
+paired-instrument mode). ⚠ **A guard prescribed to close an axis, itself green over half that axis.**
+⊕ **F2:** the `SEVERITY` witness claim SURVIVES but I cited the wrong enforcement site — `to_sweep()` does **not**
+KeyError and `--format sweep` is what the sweep calls; the real one is **`_sorted` (`verdict.py:577/:579`)**, on the path
+of both non-literal `Verdict(` sites. **Cite that, or a reader concludes the witness is vacuous when it is not.**
+⊕ **F3:** the `absent` fatality is **right** (a deleted `.gg` with a live allowlist row is a stale waiver **nothing else
+in the tree catches**) — **but it is a new red surface: an UNCITED row whose fixture was deleted goes HEAD rc 0 → rc 1.**
+⊕ **THE AXES ARE NOW CLOSED** with F1: termination modes · population · `ASANOPT` · `LSANOPT`. Pressed and found closed:
+`print_stats=0`, `log_path`/abort/SIGKILL (fail CLOSED), column-5 addition (**every `verdicts.tsv` consumer reads
+`$1/$2/$3` — no `$NF`, no `NF ==`**), both fixture walkers scoped to `self_host_`.
+⊕ **E1 is ONE site, not fourteen:** 17 hits = 1 (the changed line) + 1 (`tests/lints.rs:11096`, becomes FALSE) + **15
+hand-repro/provenance that STAY CORRECT.**
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
