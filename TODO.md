@@ -109,8 +109,18 @@ the TREE, never from the previous round's line.**
 | LLVM sweep | **0** | 2789 passed · 0 failed · 5020s · clean single run |
 | 8 fast gates | **0** | lib · lints · c_runtime · spec_conformance · security · ggdef · census · staging |
 | **`GG_BACKEND=llvm cargo test --test security --release`** | **0** | ✅ **GREEN ON ITS FIRST-EVER RUN** — 223 ok · 31 ignored · 0 failed · **0 never-executed**, all 254 accounted for. Found only because `t1452` showed the lint exempted it. |
-| `sanitize_sweep.sh` | ⏳ | running with **`JOBS=4`** (default 8) — see the tension note below |
-| `robustness_map.py --lanes all` | ⏸ | last gate; `--lanes c,llvm` is SUBSUMED, do not add it |
+| `sanitize_sweep.sh` | **0** | `JOBS=4`, `REPS=3` intact. 16 rows now over-wide → filed `t1453` (the report is ADVISORY, cannot red its own gate) |
+| `robustness_map.py --lanes all --jobs 4` | ⏳ | last gate; `--lanes c,llvm` is SUBSUMED, do not add it |
+
+⛔ **DO NOT CHUNK `robustness_map.py` BY LANE, EVEN THOUGH `--lanes c` / `--lanes llvm` RUN INDIVIDUALLY.**
+`scripts/robustness_map.py:74` — *"Only c/llvm/selfhost participate in the CROSS-LANE DIVERGENCE GATE"* —
+so per-lane invocations measure each lane and **destroy the comparison between them**, which is a substantive
+part of what the gate checks. It must be ONE `--lanes all` invocation. ⇒ **the memory lever here is
+`--jobs 4` (default `min(8, cpu_count)`), never splitting the run.**
+⭐ **THE GENERAL RULE THIS ROUND EARNED TWICE:** the security suite chunked safely because its cells are
+INDEPENDENT; this one cannot because its cells are COMPARED. **Before slicing any gate, ask whether it
+measures each unit or the RELATIONSHIP between units** — and if you slice anyway, prove the slices execute
+the whole (223 + 31 == 254).
 
 ✅ **THE OWED SECOND C RUN IS DONE AND GREEN** — 2789 passed / 0 failed / rc 0, matching the LLVM sweep's
 2789 exactly. Both lanes now stand green **in a single run each at the final tree**, which is the claim; the
