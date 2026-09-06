@@ -37,9 +37,20 @@ accept→reject and (b) really is a no-op for that program. Regenerate with a 4-
 TYPE?"* has two independent answers — `BUILTIN_GENERIC_TYPES` (`src/semantic/resolve.rs`, 16 names) and a
 separate `matches!` on string literals (`src/semantic/types.rs`) — and **`Owned` is in NEITHER**
 (`grep -c '"Owned"' src/semantic/resolve.rs` → 0). Any shadow-check keyed on the type namespace is blind to
-`Callable` and `Owned`, **the two spellings most likely to be shadowed by a callable-valued local**.
-⚠ **So (b)'s headline "cost is provably 0" was measured by an instrument that cannot see the case that would
-make it expensive.** After `t1408` lands, both readings can be costed against one namespace.
+`Callable`. ⛔ **RETRACTED 2026-09-06 AT ITS OWN SCOPE: I ALSO WROTE `Owned`, AND THAT HALF IS FALSE.**
+`Owned` has **no user spelling** — it is a parser-level suffix sigil (`!`/`^` per D27), and
+`Owned[int] a = 5` is `E_UndefinedName: undefined name 'Owned'` (measured). A brief telling an executor to
+"register `Owned`" would send them at a parser sigil. **The `Callable`-family half STANDS and is proven**: the
+scout neutralized only `types.rs:661`'s literals, anchored BY LINE, rebuilt, and got `E_UndefinedName` for
+`Callable[int(int)] g` while `Vector` stayed clean.
+
+⭐⭐ **AND THE COST OBJECTION IS NOW ANSWERED — WITH AN INSTRUMENT THAT CAN SEE THE CLASS.** The scout added an
+env-gated probe reading the new accessor, **verified it FIRES on both `Vector` and `Callable` (positive
+control)**, then swept **5405 fixture files: 0 hits**. ⇒ **reading (a) — reject at the shadowing DECLARATION —
+costs ZERO on the repo corpus.** My whole objection was that (b)'s "provably 0" came from a blind instrument;
+that is now moot, because **(a) also measures 0, through an instrument that sees the callable family.**
+⇒ **THE ASK IS NO LONGER ABOUT COST. Both readings are ~free on the corpus, so the choice is purely which
+SEMANTICS you want** — and that is exactly the kind of question the record cannot settle.
 
 ⊕ **D0′ RIDES ALONG AS A REPORT, NOT A QUESTION.** Ruling 3 is not implementable as written — all 16 builtin
 generics are `DefKind::Import`/`Span::dummy()`, identical to user imports; both branches are wrong and every
