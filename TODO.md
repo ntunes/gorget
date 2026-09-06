@@ -1,5 +1,43 @@
 # TODO
 
+### ⭐⭐ TRACK F SCOUT — **THE DAG HAS A THIRD AXIS NEITHER PLAN DOC OWNS, AND IT IS EXACTLY WHAT "RECURSIVELY" REACHES**
+
+```
+ROOT  G — "compilation as optimal as hand-written by an expert"
+      ├── G-COST   don't emit a clone an expert wouldn't write     (cow-cost-contract.md · t0538)
+      ├── G-LEGAL  the language must be able to EXPRESS that       (cow-transient-view-model.md · D41)
+      └── G-SOUND  ⭐ the clone/materialize op must ITSELF be correct, and borrow-vs-owned
+                   provenance must SURVIVE to every ownership boundary.
+                   ← NEITHER PLAN DOC OWNS THIS. It is the recursive prerequisite.
+```
+**L0 (G-SOUND) → L1 (first increment) → L2 (Phase A summary+arg elision) → L3 (`warn`) → L4 (B: guaranteed-elision set) → L5 (C: knob) → L6 (D: #13/D40 + D52).** `B→C` is non-negotiable per `t0538`.
+
+### 🚨 **6 OF THE 9 CRITICALs ARE GENUINELY IN THE CHAIN — and all nine still reproduce**
+**Kind 1 — they FALSIFY THE SUMMARY'S INPUT FACTS** (borrow-vs-owned provenance failing to survive a boundary — exactly what `materializes_param[i]`/`returns_view_of[i]` encode): **`t1329`** (sharpest — it sits *at the return boundary*: `Box[String] take(H &h): return h.b` **checks rc 0**, ASan shows the UAF; a summary reading that signature computes `returns_view_of[0]=false` and elision then moves at the caller's last use ⇒ **the exact dangling-view UAF the design exists to prevent**) · **`t0011`** · **`t0036`**.
+**Kind 2 — they make the design's SAFE FALLBACK UNSOUND**, and this is the one that should worry us: the whole cost design rests on *"a summary that cannot prove deadness CLONES."* **`t1330`** (struct clone of a `Box[String]` field → rc 134 double-free) · **`t1359`** · **`t1418`**. ⛔ **If "just clone it" is memory-unsafe for those families, THE CONSERVATIVE BRANCH IS NOT CONSERVATIVE — and a clone-counting benchmark is counting broken operations, so the measurement oracle dies with it.**
+**NOT in the chain:** `t1067` (D7-gated; `lacks_materialization_path` returns the *correct* answer) · `t1310` (self-host lane; succession-plan concern) · `t1393` (ownership facts intact — it corrupts the **monomorphized call graph the summary is computed over**, a graph-integrity gate, not a per-signature-fact one).
+⛔ **TWO FILED MECHANISMS ARE MEASURABLY FALSE — a fixture built to either filed shape would sit GREEN FOREVER.** `t1359`: clone-of-clone is *clean*; the real path is `gorget_map_put_cloned` via `filter`/`map`/`update`. `t1418`: **not a double-free today — a 338 B LEAK**; the second free is emitted but masked by `gorget_shared_drop` skipping `gorget_array_free`, so **fixing the Shared drop CONVERTS the leak into the filed double-free.**
+
+### ⭐⭐ FIRST SHIPPABLE INCREMENT — **`t0952`, ~35 lines, and it turns an OOM-KILL into a correct run**
+Root cause one layer above where the item points (Core #1): `GenericCollector` maps a declared `Ref[T]` param through the immutable mapper, which refuses `Ref`, so the param degrades to `Unit`/`ByValue` and the call site **deep-clones**. **Nothing gates it — it REMOVES clones rather than relying on them being correct.**
+| probe | pristine HEAD | + prototype |
+|---|---|---|
+| `Dict[int,int]` **N=20 000** | ⛔ **rc 137 — SIGKILL, OOM-killed** | ✅ **rc 0, correct, RSS 1 912 KB** |
+| `Dict[int,int]` N=200 | `map_clone=`**801**, leaked **4 921 344 B**, RSS 6 088 KB | **0 / 0 / 1 252 KB** |
+| 8 `LEAK_ALLOWLIST` rows (ASan) | **59 196 B**, all 8 RED | **408 B** — 4 rows fully clean |
+Gates: `--lib` 1187/0 · `iter` 144/0 · `dict` 104/0 · `cow` 225/0 · `clone` 36/0 · ⭐ **`self_host_clone_ceiling` and `self_host_stage1_clone_ceiling` are NOT `#[ignore]`d, both RAN and PASSED — the fix does not move the self-compile clone meter, so no re-pin and no owner-authorized re-anchor.** Patch `git apply --check` clean at HEAD.
+⭐ ***A program correct in the language, in ordinary safe syntax, `gg check` clean, that DIES ON INPUT SIZE — and it costs 35 lines.*** It also **dissolves `t1307`** and means **D41 does not need to bend**. Core #4 siblings to check: `t0949`, `t0951`.
+
+### ⛔ THREE CORRECTIONS TO WHAT I BRIEFED — one is mine before it is the owner's
+- ⛔ **"scalar `&` write-through has NO WORKING PRECEDENT" is FALSE at that scope.** Measured: `void bump(int &n): n = n+1` prints **2** on both backends; **240 corpus files** use scalar-`&` params; **the self-host itself depends on `bool &` write-through.** ⇒ **`t1404`'s claim is TRUE AT ITS OWN SCOPE** — the `for x in &coll` *whole-binding loop-element rebind* has no precedent. **Retract at the retracted claim's scope, not wider.**
+- ⛔ **"row 4 unsound at HEAD" is STALE** — true for one morning (`1eb15dcd0` 04:25 → `237c19ff2` 08:01 closing `t1362`). **Row 4's mechanism is measured SOUND at HEAD.**
+- ⛔⛔ **THE 12-ROW DECISION TABLE WAS NEVER COMMITTED ANYWHERE.** It lived only in the lost `/tmp` scout report (`grep -rn 't1362' docs/` → 0). ⇒ **R1's ruling CANNOT BE IMPLEMENTED AS RECORDED**: the disposition covers rows 1–3, 5–9, 10, 12, 4 = **11 of 12 — ROW 11 IS UNACCOUNTED FOR**, and nobody can check because the table does not exist. **This is my problem before it is the owner's.**
+⊕ **`cow-transient-view-model.md`'s header is stale in BOTH directions:** Rule 1 base **BUILT**, Rule 1 extension **UNBUILT** (`g.at(0).n = 99` accepted, **write silently lost**), Rule 2 **PARTIAL** (all 12 `returns_view: true` decls are String slice/trim; **`get`/`first`/`last` are `false`**, name whitelist still live), Rule 3 **UNBUILT**. **Re-tagging the getters IS the real Rule-2 build and what makes `returns_view_of[i]` trustworthy** — but it changes two readers ⇒ Core #9, all lanes.
+
+### ⚖ OWNER-ASK-CLASS NODES IN THE DAG
+`t0538`'s cost contract needs a **RATIFICATION pass, not an executor** (askable inside R51) · **R2** reject-vs-materialize (measurement cannot settle it; filed as `t1403` with `repro = []` and **zero test hits** — against the cardinal rule) · ⛔ **`t0544`: the RATIFIED ledger instructs the WRONG INSTRUMENT** — `decisions.md:3175` says re-derive with `scripts/clone_attribution.sh`, which by its own header sees **~3.5 %** of clone volume; changing a ratified entry is an owner ask · **A36 vs D42** — `--warn=all` bounded by `since` **requires a language-version field in `gorget.toml`** that does not exist.
+⚠ **PRIOR ART CUTS AGAINST THE DIRECTION and must be measured against the EAGER baseline, not only against itself:** Lean measured **2× peak memory** from deferring; Koka declined to ship this; Morphic measured **6.4 %** of in-place mutations *forced* to clone.
+
 ### ✅✅ ASK 1 IS RULED — 2026-09-06. **REJECT AT THE DECLARATION (reading (a)) — AND THE REASON IS BETTER THAN MINE**
 
 **Owner, verbatim:** *"`Vector[int] Vector = [1, 2, 3]` this should fail statically at declaration. The naming
