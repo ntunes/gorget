@@ -1,3 +1,25 @@
+- [2026-09-06] **R51 Track G — `t1064` + `t0675`: the `todo/` record's own citations are now guarded.**
+  Two lints in one walk over `todo/*.md` front matter (`tests/lints.rs`): `todo_repro_paths_resolve`
+  (**zero exemption surface** — no allowlist, no band, `broken.is_empty()`) and `todo_cites_paths_resolve`
+  (`todo/t0675`'s owner-ratified guard, `git show eff582caa`, landed with its own `:LINE`-stripped
+  resolver, the existing `DOC_CITATION_ABSENT_BY_DESIGN` allowlist, an env-gate for the fatal form and a
+  two-directional pin during burn-down). The asymmetry is deliberate and stated in the source: `cites`
+  contains one legitimate absence (the ratified-but-unbuilt `lib/std/stablemap.gg`), `repro` contains none.
+  **Burn-down: 16 broken `repro` rows / 14 items → 0**, adjudicated per row rather than bulk-repointed —
+  7 prefix-omissions, 5 repoints, 2 CLOSURES (`t0124`, `t0633`: both bodies falsified by their own live,
+  un-`#[ignore]`d, passing tests), 2 field corrections where the machine-read half had never received a
+  prose correction (`t0311`, 18 days; `t0387`, two different dead spellings of one live file).
+  **The predicate is unit-aware, measured in both directions:** a FILE, or a directory that is not a corpus
+  ROOT and holds a `.gg` RECURSIVELY — `is_file()` reds every legitimate multi-file repro, `exists()`
+  accepts `tests/fixtures` itself, and "direct `.gg` only" breaks `manifest_malformed`.
+  **Core #14:** `t0591` and the `MISSING_BUDGET` comment in `tests/lints.rs` both asserted the
+  `set_index_ggdef_divergence` repro "was never committed". It was, at `4de74d79a`, and it graduated at
+  `2edb9c06b`. Both corrected; the surviving residue is an owner ask to reword `decisions.md:1720`.
+  - `t0124` CLOSED — the 4 comprehension emitters' loop-carried bare-param hoist landed on all seven cells
+    on both lanes (R44); `cow_loop_bare_param_comprehension` + `_matrix` are live and green.
+  - `t0633` CLOSED — `auto`-typed dict/set comprehensions give the intended `10\n3`;
+    `sound_auto_dict_set_comprehension_values` is live and green (R44).
+
 - [2026-09-06] **🏁 ROUND L (R50) CLOSED — THE CRITICAL MEMORY-SAFETY SET + R49's DEFERRED HALVES. Ten tracks integrated, full battery green.**
   **Integrated:** A1 (`t1077` nested `Box[Box[T]]` read one deref too many) · C2 (`t0045`+`t0403`) · F1r
   (`t1362`+`t0750`, a CoW sever that did not survive a scope boundary) · G (819 value-semantics cells + 3
