@@ -104,7 +104,12 @@ the tree.
   while a bootstrap or sweep runs. `driver.gg` bakes all 62 runtime `.c` files via `embed_file`.
 - ⛔ **NEVER `git checkout <ref> -- <path>` TO SET UP A REVERT.** Silently clobbers uncommitted work. Use a
   re-appliable patch. (In AGENTS.md MA-8.)
-- ⛔ **RUN LONG GATES IN THE FOREGROUND** (MA-9). Background gates are killed by the HARNESS watchdog —
+- ⛔ **BEFORE REVIEWING OR BRIEFING AN ARTIFACT, `grep todo/` FOR IT.** R51 Track B's brief and its pass-1
+prompt BOTH missed `todo/t1406` — **open, HIGH, on the very lint under review, filed the same day as the item
+being fixed, and its own text forbids the shape the brief proposed.** Neither of us had it on a checklist.
+⇒ **add "grep `todo/` for the artifact under review" to every reviewer preamble.**
+
+⛔ **RUN LONG GATES IN THE FOREGROUND** (MA-9). Background gates are killed by the HARNESS watchdog —
   `oom_kill` in `/sys/fs/cgroup/memory.events` does **not** move, so it is not kernel OOM. **Read that counter
   as a DELTA, never a level.** Memory lever: `JOBS=4` / `--jobs 4`, never fewer `REPS`.
 - ⛔ **BEFORE SLICING A GATE, ASK WHETHER IT MEASURES EACH UNIT OR THE RELATIONSHIP BETWEEN UNITS.** The
