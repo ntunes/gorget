@@ -1,0 +1,42 @@
+# DURABLE REPRO for `todo/t1513` — D36 method auto-deref through a STRUCT-FIELD
+# receiver returns GARBAGE at rc 0, on BOTH lanes.
+#
+# WRONG TODAY (measured at HEAD, both builds rc 0, both runs rc 0):
+#     C     → 187651117351584 (a pointer-shaped integer)
+#     LLVM  → 187651590935200
+# `gg check` is clean and ASan reports nothing.
+#
+# ⚠ IT SURVIVES THE RECEIVER-PLACE FIX, AND THAT IS THE POINT. The R51 fix makes
+# the `Box__P__get_ptr` DECLARATION correct — the declaration-shaped guard goes
+# from firing to silent on this program — while the printed value stays garbage.
+# A guard on the declaration cannot see this class; `validate_box_get_ptr_result_consumed`
+# (src/lir/validate.rs) is the one that can, and it is RED here in both states.
+#
+# MECHANISM (`todo/t1513`): the D36 block rewrites `recv` to the projection's
+# result and the struct-field branch downstream then RE-DERIVES the receiver
+# from `receiver.node` — the AST — and ignores it. Two sources of truth for one
+# receiver (Layering rule 3), inside a ratified decision: D36 point 3 ratifies
+# `method_resolutions` as THE single channel and says verbatim not to add a
+# parallel one. The proximate cause is ORDER (SIX-Q #5): the D36 `get_ptr` block
+# emits BEFORE the by-value chokepoint, so the chokepoint's correction lands on
+# a value the field branch has already re-derived past.
+#
+# ⊕ `index_elem_place_info` is a DECLARED Core #4 sibling of `field_place_info`
+# — the source says so in a comment — and carries the same shape through a
+# Vector element (`todo/t1526`). Fix them together.
+#
+# INTENDED (asserted by the `#[ignore]`d test): `11` on C and on LLVM.
+struct P:
+    int v
+
+equip P:
+    int val(self):
+        return self.v
+
+struct H:
+    Box[P] b
+
+void main():
+    Box[P] bb = Box(P(11))
+    H h = H(^bb)
+    print(h.b.val())

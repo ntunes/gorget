@@ -1,0 +1,37 @@
+# `todo/t1373` / `todo/t1319` — RECEIVER PLACE: STRUCT FIELD.
+#
+# `Box[T].get()` reached through a struct field was handed the FIELD'S ADDRESS
+# where the by-value `Box__T__get` expects the handle, so the callee
+# reinterpreted the borrow's target address as the box and the program printed
+# a pointer-shaped integer at rc 0. `gg check` clean, ASan clean, LLVM correct
+# — only a cross-lane diff or the declaration guard could see it.
+#
+# RED-VERIFIED AS WRITTEN against the pre-fix compiler: prints garbage
+# (e.g. 187651331084960) on C, `9` on LLVM. POST-fix: `9` on both.
+#
+# ⚠ ONE RECEIVER PLACE PER FILE, AND THAT IS A MEASUREMENT, NOT A STYLE RULE.
+# `ensure_extern` (src/lir/lower/operands.rs) synthesizes ONE declaration per
+# MANGLED SYMBOL from whichever call site is lowered first, so five places
+# sharing one payload emit exactly ONE `Box__int64_t__get` and all five sites
+# marshal against it: the file would claim five cells in its NAME and pin one.
+# Splitting by payload does not rescue it either — `Box[int]` and `Box[int64]`
+# collapse to the SAME symbol. And the order that decides the winner is
+# LOWERING order, not statement order: top-level function bodies lower before
+# `main`, so a file that reads its control first is not thereby safe.
+#
+# ⚠ LIVES IN `tests/fixtures/self_host_gaps/`, NOT AT TOP LEVEL. Every
+# top-level `tests/fixtures/*.gg` is auto-scanned into `runtime_parity_corpus`;
+# the self-host lane has NO `is_by_value_receiver` chokepoint to mirror this
+# fix into (`todo/t1537`), so a top-level landing would push
+# `RUNTIME_DIFF_NONMATCH_CEILING` past a shrink-only pin that sits at zero
+# slack — and Core #9 ⊕ forbids raising it for a round's own inflow. The
+# Rust-lane coverage is unchanged (`run_gg` runs it like any fixture).
+# Graduating these to top level is what closes `todo/t1537`.
+
+struct SB:
+    Box[int] b
+
+void main():
+    Box[int] bb = Box(9)
+    SB s = SB(^bb)
+    print(s.b.get())

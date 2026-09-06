@@ -1,3 +1,50 @@
+- [2026-09-06] **R51 Track A — THE RECEIVER-PLACE CLASS: `t1319` + `t1373` closed as ONE defect.**
+  `Box[T]` is a `typedef void*` and every helper `emit_box_wrapper` defines takes the handle BY VALUE.
+  Reached through anything but an owned local — struct field, plain parameter, `&`-parameter, closure
+  capture — the receiver arrived as `Ptr(Box__T)`, and `ensure_extern` then RE-DECLARED the callee from
+  the CALLER's argument types, so **the compiler contradicted its own definition inside one output file**.
+  Programs printed a pointer-shaped integer at rc 0: `gg check` clean, ASan clean, LLVM right by accident.
+  **Fix:** enrol `Box` in `deref_by_value_handle_receiver` — the by-value receiver chokepoint that already
+  served eleven other handle types — through the typed `TypeMetadata::is_box` flag. Not a
+  `BuiltinTypeProtocol` row: every member of that table is `CopySemantics::Trivial` with `drop_fn: None`,
+  and a row routes field receivers into a shallow copy of an owner that aborts the compile.
+  **Also shipped:** a Core #14 dead branch whose two arms were both `recv.clone()` under a comment claiming
+  one dereferenced (it changes program output — `make().b.val()` garbage → `11`); the trait-box exclusion
+  DELETED, leaving zero name probes on the path; `LirExtern::box_wrapper_arm` as typed metadata at the
+  declaration's own write site; and two guards moved off the C backend to the LIR validator.
+
+  **⭐ THE MEASUREMENT WORTH KEEPING: THE COMMITTED CORPUS CONTAINED NO FIXTURE THAT READ A BOX THROUGH
+  ANYTHING BUT AN OWNED LOCAL.** 2652 fixtures swept, 22 emit a Box wrapper at all, and the guard fired on
+  ZERO of them at base while firing on every probe. The class did not survive because the instruments were
+  blind — it survived because the fixture set sampled ONE value of the receiver axis. And the "owned local
+  is correct" control that every enumeration rested on is itself order-dependent: one declaration is
+  synthesized per mangled symbol from whichever call site is LOWERED first, so putting a broken place in
+  front of the control makes the control print garbage too. That is why the eight new fixtures are one
+  receiver place per file: five places in one file emit exactly ONE `Box__int64_t__get` and pin ONE of them.
+
+  **Pinned set, derived mechanically** (stdout diff, pre-fix vs shipping binary, both lanes): 13 cells
+  changed on C, 4 on LLVM. Eight ship as fixtures in `tests/fixtures/self_host_gaps/` (the sanctioned hatch
+  — the self-host has no chokepoint to mirror the fix into, `t1537`, and the parity ceiling is NOT raised).
+  Four are named, unpinnable and filed as `t1540`: `Box[String]`/`Box[bool]` payloads cannot run on the
+  LLVM lane in EITHER state. One — `t1513` — changes garbage-to-garbage and is pinned by the value guard,
+  not by stdout. `t1373`'s `#[ignore]`d repro GRADUATES to a live assertion.
+
+  **Guards, wired as four artifacts** (`scripts/box_receiver_burndown.sh` + `tests/gaps/BOX_RECEIVER_BURNDOWN.txt`
+  + a live CI step + the lint asserting the step is live + an `EXPECT_KEYS` row and its `AGENTS.md` battery
+  leg): a DECLARATION guard at `count`, never `fatal` — at 0 residual `fatal` stands GREEN over `t1513`,
+  which prints garbage at rc 0 (`t1539`) — and a VALUE guard, permanently RED at 3 programs.
+  ⭐ **The `CLEAN` rows are reconciled against a `subject=` CENSUS, not against zero.** This class shipped
+  the vacuous version of its own gate twice ("0 fires over 72", "141 rows, no false positives") because
+  almost none of those programs emit the instruction the guard inspects. Gutting a CLEAN fixture to
+  `print(41)` now reds the gate with "no longer EXERCISES the mechanism".
+
+  **Gates (rc off the BARE command):** `cargo build` 0 · `--lib` 1187/0 · `--test lints` 246/0 (+2 new;
+  `no_growth_in_name_prefix_routing` at exactly 204) · `--test integration box` 69/0 · `closure` 156/0 ·
+  `trait` 92/0 · `serializ` 3/0 · `drop_raii` 1/0 · `box_receiver_burndown.sh --check` 0
+  (SAMPLED=2652 TRIPS=3 CLEAN=10, ~95 s) · ASan delta 0 over 12 programs.
+  **NOT run, and named:** the self-host lane (`t1537`), the full C and LLVM sweeps (the parent's), `float32`,
+  `t1514`'s struct layout.
+
 - [2026-09-06] **🏁 ROUND L (R50) CLOSED — THE CRITICAL MEMORY-SAFETY SET + R49's DEFERRED HALVES. Ten tracks integrated, full battery green.**
   **Integrated:** A1 (`t1077` nested `Box[Box[T]]` read one deref too many) · C2 (`t0045`+`t0403`) · F1r
   (`t1362`+`t0750`, a CoW sever that did not survive a scope boundary) · G (819 value-semantics cells + 3

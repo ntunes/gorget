@@ -166,6 +166,27 @@ jobs:
           GG_STAGING_MOVE_GUARD: fatal
           GG_BUILD_TIMEOUT_SECS: 600
 
+      # The BOX-RECEIVER class ships TWO guards and neither can be promoted to
+      # `fatal`: the declaration guard's residual is 0 under the fix, and a
+      # 0-residual fatal guard stands GREEN over `todo/t1513`'s program, which
+      # prints garbage at rc 0. So the promoter is `count` and THIS STEP is what
+      # makes the counts observable — without it both guards are `eprintln`s
+      # behind a variable nothing sets, which is the shape the sibling step
+      # above exists to warn about.
+      #
+      # It reconciles by SET EQUALITY over the whole corpus (top level +
+      # `self_host_gaps/` + `known_gaps/`), so a NEW violation anywhere reds it,
+      # and it probes the CLEAN rows against the `subject=` census so a fixture
+      # cannot silently stop exercising the route it holds. `--emit-lir` stops
+      # before the C backend and the linker; regenerate the cost with
+      # `time scripts/box_receiver_burndown.sh --check` rather than trusting a
+      # figure here — that is the number that rotted on the step above.
+      - name: box-receiver guard burn-down
+        run: scripts/box_receiver_burndown.sh --check
+        env:
+          GG_BOX_RECEIVER_GUARD: count
+          GG_BUILD_TIMEOUT_SECS: 600
+
       # The remaining test targets. Enumerated here rather than left to
       # `cargo test` because the other steps need per-target thread counts and
       # env. The `every_test_target_runs_in_ci` lint asserts this list stays

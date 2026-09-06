@@ -940,7 +940,7 @@ fn try_build_ir(
         gorget::lir::types::wire_collection_bridges(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
-        gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
+        gorget::lir::validate::assert_module_valid(&lir_module, gorget::lir::validate::BOX_RECEIVER_GUARD_CHECKPOINT);
         // Order matters: pointee_types FIRST so value_types can fall back
         // through it for `Inst::Load { ty: Void }` (matches the C backend's
         // local single-pass behaviour, now consolidated upstream).
@@ -978,7 +978,7 @@ fn try_build_ir(
         gorget::lir::types::wire_collection_bridges(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
-        gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
+        gorget::lir::validate::assert_module_valid(&lir_module, gorget::lir::validate::BOX_RECEIVER_GUARD_CHECKPOINT);
         // Order matters: pointee_types FIRST so value_types can fall back
         // through it for `Inst::Load { ty: Void }` (matches the C backend's
         // local single-pass behaviour, now consolidated upstream).
@@ -1026,7 +1026,7 @@ fn try_build_ir(
         gorget::lir::types::wire_collection_bridges(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
-        gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
+        gorget::lir::validate::assert_module_valid(&lir_module, gorget::lir::validate::BOX_RECEIVER_GUARD_CHECKPOINT);
         // Order matters: pointee_types FIRST so value_types can fall back
         // through it for `Inst::Load { ty: Void }` (matches the C backend's
         // local single-pass behaviour, now consolidated upstream).
@@ -1822,7 +1822,7 @@ fn try_profile(
     gorget::lir::types::wire_collection_bridges(&mut lir_module);
     gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
     gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
-    gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
+    gorget::lir::validate::assert_module_valid(&lir_module, gorget::lir::validate::BOX_RECEIVER_GUARD_CHECKPOINT);
     gorget::lir::types::compute_module_pointee_types(&mut lir_module);
     gorget::lir::types::compute_module_value_types(&mut lir_module);
     gorget::lir::types::compute_module_value_origins(&mut lir_module);

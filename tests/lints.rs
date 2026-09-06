@@ -11491,7 +11491,7 @@ fn readiness_checklist_rows_are_capped() {
 #[test]
 fn round_close_battery_covers_ci_steps() {
     // THE KEY CENSUS -- an EXPECTATION over a DERIVED set, not a FILTER.
-    const EXPECT_KEYS: [&str; 13] = [
+    const EXPECT_KEYS: [&str; 14] = [
         "--lib",
         "--test c_runtime",
         "--test integration",
@@ -11501,6 +11501,7 @@ fn round_close_battery_covers_ci_steps() {
         "--test security  [--release GG_BACKEND=llvm]",
         "--test spec_conformance",
         "-p ggdef",
+        "scripts/box_receiver_burndown.sh  [GG_BOX_RECEIVER_GUARD=count]",
         "scripts/known_gaps_census.sh",
         "scripts/robustness_map.py",
         "scripts/sanitize_sweep.sh",
@@ -25921,6 +25922,200 @@ fn staging_move_guard_wired_into_ci() {
          `assign_warnings` list (`src/ir/lowering/mod.rs`)."
     );
 }
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║ R51 TRACK A — BOX-RECEIVER GUARD WIRING (added region begins)            ║
+// ║ `box_receiver_guard_wired_into_ci` + `box_receiver_burndown_shrink_only`.║
+// ║ Nothing outside this banner pair was touched by that track except the    ║
+// ║ `EXPECT_KEYS` array in `round_close_battery_covers_ci_steps`, which      ║
+// ║ gains one row (13 -> 14) for the new CI step.                           ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+/// The box-receiver guards' promoter has no other driver, so this asserts the
+/// CI step that sets it is LIVE — the same contract, and the same positive
+/// control, as `staging_move_guard_wired_into_ci` beside it.
+#[test]
+fn box_receiver_guard_wired_into_ci() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let ci_path = root.join(".github/workflows/ci.yml");
+    let ci = fs::read_to_string(&ci_path).expect("ci.yml readable");
+
+    // POSITIVE CONTROL (Core #13 / SIX-Q #2): the predicate must be able to
+    // catch its own class. Comment the step out and it has to read as absent,
+    // which a bare `ci.contains(...)` cannot do.
+    let commented: String = ci
+        .lines()
+        .map(|l| {
+            if l.contains("box_receiver_burndown.sh") || l.contains("GG_BOX_RECEIVER_GUARD") {
+                format!("#{l}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let control = live_lines_of_ci_job(&commented, "test");
+    assert!(
+        !control.iter().any(|l| l.contains("box_receiver_burndown.sh")),
+        "the CI-wiring predicate cannot see a commented-out step — it would \
+         green-light the exact class it exists to catch (SIX-Q #2)."
+    );
+
+    let live = live_lines_of_ci_job(&ci, "test");
+    assert!(
+        !live.is_empty(),
+        "could not locate job `test` in {} — the job was renamed or the parser \
+         drifted; fix `live_lines_of_ci_job` rather than deleting this lint.",
+        ci_path.display()
+    );
+    assert!(
+        live.iter()
+            .any(|l| l.contains("run: scripts/box_receiver_burndown.sh --check")),
+        "job `test` in .github/workflows/ci.yml does not RUN \
+         `scripts/box_receiver_burndown.sh --check` on a live step.\n\
+         Both box-receiver guards are env-gated reporters with no other driver, so \
+         without this step they are `eprintln`s behind a variable nothing sets. A guard \
+         CI does not run is not a guard."
+    );
+    // The VALUE-BEARING spelling. ⛔ AND THE VALUE IS `count`, DELIBERATELY:
+    // under the receiver-place fix the DECLARATION guard's residual is 0 on
+    // every constructed cell, so `fatal` would stand GREEN over `todo/t1513`'s
+    // program, which prints garbage at rc 0. Its fire count is also a function
+    // of PROGRAM SHAPE rather than of defect count — one fire per SYMBOL, and
+    // a correct read placed first in a file drives a broken program to 0 — so
+    // promoting it needs a CORPUS argument, not one item's closure.
+    assert!(
+        live.iter().any(|l| l.contains("GG_BOX_RECEIVER_GUARD: count")),
+        "job `test` in .github/workflows/ci.yml does not set \
+         `GG_BOX_RECEIVER_GUARD: count` on a live step. The name alone is not the \
+         wiring — `run_box_receiver_guards` returns immediately for any other value \
+         (`src/lir/validate.rs`). Do NOT 'strengthen' this to `fatal`: see the comment \
+         above, and `tests/gaps/BOX_RECEIVER_BURNDOWN.txt`'s header."
+    );
+}
+
+/// Shrink-only ratchet on the box-receiver burn-down ledger.
+///
+/// The rows are OUTCOMES — each was produced by RUNNING the compiler under the
+/// promoter. `--check` already reconciles the TRIP set by set equality over the
+/// whole corpus; this is the follow-on half, making every removal lower a
+/// constant VISIBLY IN THE DIFF so a burn-down notch cannot be spent twice.
+///
+/// ⭐ IT RATCHETS THE TWO GUARDS SEPARATELY, because they measure different
+/// things and only one of them was burned to zero this round. `DECL_TOTAL` is 0
+/// — the receiver-ABI class is CLOSED, so any decl fire at all is a regression.
+/// `VAL_TOTAL` is the open D36 re-derivation class (`todo/t1513`, `todo/t1526`),
+/// which is permanently red until those write sites are fixed. A guard that is
+/// permanently red at a known n is the NORMAL case for this ledger idiom, not a
+/// defect in it.
+#[test]
+fn box_receiver_burndown_shrink_only() {
+    /// Exactly the three open D36 receiver re-derivation programs.
+    const TRIP_CEILING: usize = 3;
+    /// Sum of the TRIP rows' DECLARATION fires. Zero: the receiver-ABI class
+    /// this ledger was created with is closed, so a nonzero total is a
+    /// regression, not a burn-down row.
+    const DECL_TOTAL: usize = 0;
+    /// Sum of the TRIP rows' VALUE fires. `todo/t1513` (1) + `todo/t1526`'s
+    /// `&self`-through-field (2) + its `index_elem_place_info` sibling (1).
+    const VAL_TOTAL: usize = 4;
+    /// The eight receiver-place cells this round closed, plus two pre-existing
+    /// controls. Never let this shrink below the cells the fix touched.
+    const CLEAN_FLOOR: usize = 10;
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("tests/gaps/BOX_RECEIVER_BURNDOWN.txt");
+    let body = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+
+    let mut trips: Vec<String> = Vec::new();
+    let mut cleans: Vec<String> = Vec::new();
+    let mut decl_total = 0usize;
+    let mut val_total = 0usize;
+    for line in body.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let mut it = t.split_whitespace();
+        let kind = it.next().unwrap_or_default();
+        let fixture = it.next().unwrap_or_default().to_string();
+        match kind {
+            "TRIP" => {
+                let d: usize = it.next().unwrap_or("").parse().unwrap_or_else(|_| {
+                    panic!("TRIP row {fixture:?} has no decl count; the row shape is \
+                            `TRIP <fixture> <decl_n> <val_n>`")
+                });
+                let v: usize = it.next().unwrap_or("").parse().unwrap_or_else(|_| {
+                    panic!("TRIP row {fixture:?} has no val count; the row shape is \
+                            `TRIP <fixture> <decl_n> <val_n>`")
+                });
+                assert!(
+                    d > 0 || v > 0,
+                    "TRIP row {fixture:?} claims 0 declaration AND 0 value violations. \
+                     A TRIP row that does not trip is a CLEAN row with the wrong label."
+                );
+                decl_total += d;
+                val_total += v;
+                trips.push(fixture);
+            }
+            "CLEAN" => cleans.push(fixture),
+            other => panic!(
+                "BOX_RECEIVER_BURNDOWN.txt row kind {other:?} is neither TRIP nor CLEAN"
+            ),
+        }
+    }
+
+    for f in trips.iter().chain(cleans.iter()) {
+        assert!(
+            root.join(f).exists(),
+            "BOX_RECEIVER_BURNDOWN.txt cites {f:?}, which does not exist. A ledger \
+             pointing at nothing is how a ratchet becomes decoration (Core #14)."
+        );
+    }
+
+    // EXACT, not `<=` — a ceiling counts rows but does not identify them, so
+    // `<=` lets a fixed row be swapped for a new one with no signal.
+    assert_eq!(
+        trips.len(),
+        TRIP_CEILING,
+        "box-receiver burn-down has {} TRIP row(s), TRIP_CEILING says {TRIP_CEILING}.\n\
+         GREW? A Box wrapper is declared with a POINTER receiver where the emitter \
+         defines it BY VALUE, or a D36 receiver projection went dead — both are silent \
+         wrong output at rc 0. ⛔ SHRINK-ONLY: fix the WRITE SITE \
+         (`deref_by_value_handle_receiver`, src/ir/lowering/exprs/methods.rs).\n\
+         SHRANK? That is the win — lower TRIP_CEILING in this same commit.\n\
+         Regenerate with `scripts/box_receiver_burndown.sh --sweep`.",
+        trips.len()
+    );
+    assert_eq!(
+        decl_total, DECL_TOTAL,
+        "box-receiver burn-down TRIP rows carry {decl_total} DECLARATION fire(s); \
+         DECL_TOTAL is {DECL_TOTAL}. The receiver-ABI class is CLOSED — a declaration \
+         that disagrees with `emit_box_wrapper`'s definition is a fresh regression, not \
+         a row to park."
+    );
+    assert_eq!(
+        val_total, VAL_TOTAL,
+        "box-receiver burn-down TRIP rows carry {val_total} VALUE fire(s); VAL_TOTAL is \
+         {VAL_TOTAL}. This is the open D36 receiver re-derivation class \
+         (`todo/t1513`, `todo/t1526`); lower it when a write site is fixed, and never \
+         raise it."
+    );
+    assert!(
+        cleans.len() >= CLEAN_FLOOR,
+        "box-receiver burn-down has {} CLEAN row(s), floor is {CLEAN_FLOOR}. The CLEAN \
+         rows are the gate's other side (Core #13: a gate that fires on everything is no \
+         more evidence than one that never fires), and the script reconciles each of \
+         them against the `subject=` census so they cannot go vacuous. Removing one \
+         silently drops a positive control.",
+        cleans.len()
+    );
+}
+
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║ R51 TRACK A — BOX-RECEIVER GUARD WIRING (added region ends)              ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 
 /// Shrink-only ratchet on the staging-move burn-down ledger.
 ///

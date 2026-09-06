@@ -53037,17 +53037,159 @@ done",
 /// which INVERTS `todo/t0685`'s measurement that this cell is green on both
 /// backends (true for a LOCAL receiver only).
 ///
-/// ⚠ NOT R50 Track A2's, and this fixture is the control that proves it: A2
-/// brought `newtype NX(Box[int])` to PARITY with this struct, and the struct is
-/// identically wrong at pristine HEAD, under each partial revert, and after the
-/// full fix. Un-ignore when the field-receiver call emit derefs like its sibling.
+// ══════════════════════════════════════════════════════════════
+// R51 Track A — THE RECEIVER-PLACE CLASS (`todo/t1319` + `todo/t1373`,
+// closed as ONE defect).
+//
+// `Box[T]` is a `typedef void*` and every helper `emit_box_wrapper` defines
+// takes the handle BY VALUE. Reached through anything but an owned local — a
+// struct field, a plain parameter, an `&`-parameter, a closure capture — the
+// receiver arrived as `Ptr(Box__T)`, one indirection too many, and
+// `ensure_extern` then RE-DECLARED the callee from the caller's argument types
+// so the compiler contradicted its own definition inside one output file. The
+// programs printed a pointer-shaped integer at rc 0, `gg check` clean, ASan
+// clean.
+//
+// The fix enrols `Box` in `deref_by_value_handle_receiver` — the by-value
+// receiver chokepoint that already served eleven other handle types — through
+// the typed `TypeMetadata::is_box` flag.
+//
+// ⚠ THE COMMITTED CORPUS CONTAINED NO FIXTURE THAT READ A BOX THROUGH ANYTHING
+// BUT AN OWNED LOCAL. The class did not survive because the instruments were
+// blind; it survived because the fixture set sampled ONE value of the receiver
+// axis. That is why these are one cell per file: five places in one file emit
+// exactly ONE mangled symbol and pin ONE of them.
+//
+// The declaration guard (`validate_box_wrapper_abi`) and the value guard
+// (`validate_box_get_ptr_result_consumed`) are burned down by
+// `scripts/box_receiver_burndown.sh` against `tests/gaps/BOX_RECEIVER_BURNDOWN.txt`.
+// ══════════════════════════════════════════════════════════════
+
+/// RECEIVER PLACE: struct field. Closes `todo/t1373`'s headline cell.
+///
+/// ⊕ SUPERSEDES the `#[ignore]`d `known_gaps/box_get_through_struct_field_receiver_garbage.gg`,
+/// which asserted the same `9` on the same program and is deleted in the same
+/// commit: the assertion moves from ignored to LIVE, which is what a
+/// graduation is.
 #[test]
-#[ignore = "KNOWN GAP (t1373): `Box[T].get()` through a struct-field receiver passes the field's \
-ADDRESS to a by-value `__get`; C prints garbage, LLVM prints 9, both rc 0. Asserts the INTENDED 9."]
-fn box_get_through_struct_field_receiver_garbage() {
+fn box_receiver_struct_field_get() {
+    run_gg("self_host_gaps/box_receiver_struct_field_get.gg", "9");
+}
+
+/// RECEIVER PLACE: plain parameter — the plainest shape in the language, and a
+/// route `opaque_handle_route_fixtures_exist` does not name (`todo/t1471`).
+#[test]
+fn box_receiver_plain_param_get() {
+    run_gg("self_host_gaps/box_receiver_plain_param_get.gg", "41");
+}
+
+/// RECEIVER PLACE: `&`-parameter.
+#[test]
+fn box_receiver_amp_param_get() {
+    run_gg("self_host_gaps/box_receiver_amp_param_get.gg", "41");
+}
+
+/// RECEIVER PLACE: closure capture — `todo/t1319`'s filed program verbatim.
+/// Also a route the opaque-handle lint does not name.
+#[test]
+fn box_receiver_closure_capture_get() {
+    run_gg("self_host_gaps/box_receiver_closure_capture_get.gg", "41");
+}
+
+/// READ SHAPE: D36 §9.4 auto-deref through a plain parameter.
+///
+/// ⚠ A CORE #8 BOTH-WRONG CELL, so no cross-lane diff could have found it: C
+/// and LLVM printed the SAME pointer-shaped garbage at rc 0 before the fix.
+#[test]
+fn box_d36_plain_param_method() {
+    run_gg("self_host_gaps/box_d36_plain_param_method.gg", "107");
+}
+
+/// READ SHAPE: D36 auto-deref through an `&`-parameter. Both-wrong pre-fix.
+#[test]
+fn box_d36_amp_param_method() {
+    run_gg("self_host_gaps/box_d36_amp_param_method.gg", "107");
+}
+
+/// READ SHAPE: D36 auto-deref through a closure capture. Both-wrong pre-fix,
+/// and in no enumeration this class produced before the cross-product was
+/// built.
+#[test]
+fn box_d36_closure_capture_method() {
+    run_gg("self_host_gaps/box_d36_closure_capture_method.gg", "107");
+}
+
+/// CORE #14 — the dead `if`/`else` whose two arms were both `recv.clone()`.
+///
+/// ⚠ IT WAS NOT COSMETIC. Three review passes concluded the Core #14 edit
+/// "fixes the ABI, not the value" from a measurement on ONE cell
+/// (`todo/t1513`, which really is unmoved). This shape — D36 auto-deref
+/// through a field of a TEMPORARY — goes garbage → `11` on both lanes, and
+/// reverting ONLY the Core #14 arm with the receiver fix in place turns it
+/// red again.
+#[test]
+fn box_d36_field_of_temp_method() {
+    run_gg("self_host_gaps/box_d36_field_of_temp_method.gg", "11");
+}
+
+/// KNOWN GAP (`todo/t1513`) — D36 auto-deref through a STRUCT-FIELD receiver
+/// returns garbage at rc 0 on BOTH lanes, and SURVIVES the receiver-place fix.
+///
+/// ⚠ THIS IS THE CELL THAT MAKES A DECLARATION-SHAPED GUARD INSUFFICIENT. The
+/// fix takes `validate_box_wrapper_abi` from firing to silent on this program
+/// while the printed value stays garbage — so a `fatal` promotion of that guard
+/// would stand GREEN over a live silent-wrong-output program. The value guard
+/// `validate_box_get_ptr_result_consumed` is RED here in both states, and this
+/// fixture is its `TRIP` row in `tests/gaps/BOX_RECEIVER_BURNDOWN.txt`.
+#[test]
+#[ignore = "KNOWN GAP (t1513): D36 method auto-deref through a struct-field receiver \
+re-derives the receiver from the AST (`field_place_info`) and ignores the ratified \
+`method_resolutions` channel, so the projection's result is dead and the program prints \
+garbage at rc 0 on both lanes. Asserts the INTENDED 11."]
+fn box_d36_field_receiver_dead_projection() {
     run_gg(
-        "known_gaps/box_get_through_struct_field_receiver_garbage.gg",
-        "9",
+        "known_gaps/box_d36_field_receiver_dead_projection.gg",
+        "11",
+    );
+}
+
+/// KNOWN GAP (`todo/t1526`) — the same field-receiver re-derivation with a
+/// `&self` method: **rc 134, `free(): invalid pointer`.** Heap corruption, at
+/// pristine base AND under the receiver-place fix.
+///
+/// ⚠ IT IS THE THIRD SEVERITY ON ONE AXIS AND IT WAS FOUND LAST — garbage
+/// (`t1513`) → SEGV (`t1514`) → heap corruption (here). An enumeration built by
+/// COMPARING STDOUT finds its members in ascending order of how loudly they
+/// fail, because a cell that aborts before printing produces no stdout to
+/// compare. That is the opposite of triage order; enumerate by MECHANISM.
+#[test]
+#[ignore = "KNOWN GAP (t1526): a D36 `&self` method through a struct-field receiver \
+writes through the field's address rather than the payload and aborts with `free(): \
+invalid pointer` (rc 134), base and post-fix alike. Asserts the INTENDED 12."]
+fn box_d36_field_mut_method_heap_corruption() {
+    run_gg(
+        "known_gaps/box_d36_field_mut_method_heap_corruption.gg",
+        "12",
+    );
+}
+
+/// KNOWN GAP (`todo/t1526`) — `index_elem_place_info`, which the source itself
+/// labels *"Sibling of `field_place_info` (Core #4)"*, through a field of a
+/// Vector ELEMENT.
+///
+/// ⊕ It also refutes *"the `collection_elem` route cannot be written"* at that
+/// claim's own scope: `Vector[Box[int]]` genuinely does not compile
+/// (`todo/t1083`, `todo/t1471`), but `Vector[<struct with a Box field>]` does,
+/// so the route IS reachable and the lint cell IS writable — just not through
+/// the shape that was tried.
+#[test]
+#[ignore = "KNOWN GAP (t1526): D36 auto-deref through a field of a VECTOR ELEMENT — the \
+declared Core #4 sibling of the struct-field case — prints garbage at rc 0, base and \
+post-fix alike. Asserts the INTENDED 11."]
+fn box_d36_vector_elem_field_method_garbage() {
+    run_gg(
+        "known_gaps/box_d36_vector_elem_field_method_garbage.gg",
+        "11",
     );
 }
 

@@ -1,0 +1,81 @@
+# Burn-down ledger for the BOX-RECEIVER class — two guards, one file.
+#
+#   validate_box_wrapper_abi              (the DECLARATION) — every extern that
+#   `emit_box_wrapper` also DEFINES must declare param 0 as the Box handle BY
+#   VALUE. `ensure_extern` synthesizes the declaration from the CALLER's
+#   argument types, so a borrow-typed receiver at whichever call site is lowered
+#   FIRST wins the declaration and every other site is marshalled against it.
+#   The callee then reads the borrow's target ADDRESS as the handle: garbage at
+#   rc 0, `gg check` clean, ASan clean.
+#
+#   validate_box_get_ptr_result_consumed  (the VALUE) — the D36 §9.4 auto-deref
+#   receiver projection's result must be READ. `todo/t1513`: the struct-field
+#   branch re-derives the receiver from `receiver.node` (the AST) and ignores
+#   the projection, so it goes dead. Two sources of truth for one receiver.
+#
+# ⛔ NEITHER GUARD SUBSUMES THE OTHER, AND THAT IS THE LOAD-BEARING FACT. The
+# receiver-place fix takes the DECLARATION guard from 13 fires to 0 across every
+# constructed cell — while the three TRIP rows below still print garbage, or
+# abort with `free(): invalid pointer`, at rc 0/134. A `fatal` promotion of a
+# 0-residual declaration guard would therefore stand GREEN over live
+# silent-wrong-output programs. That is why the promoter is `count`.
+#
+# Row kinds — both are OUTCOMES of running the compiler, not source-text counts:
+#   TRIP  <fixture> <decl_n> <val_n>   must STILL violate, with exactly those
+#                                      counts. If either drops, the write site
+#                                      was fixed: DELETE the row and lower the
+#                                      ceilings in tests/lints.rs in the same
+#                                      commit.
+#   CLEAN <fixture>                    must NOT violate — AND must still carry
+#                                      `subject > 0`, i.e. still EMIT a Box
+#                                      wrapper extern for the guards to inspect.
+#
+# ⭐⭐ THE `subject=` CENSUS IS WHAT MAKES A `CLEAN` ROW EVIDENCE. This class
+# shipped the vacuous version of this gate TWICE: "0 fires over 72 fixtures" and
+# "141 rows, no false positives", both true and both nearly meaningless, because
+# the overwhelming majority of those programs never emit the instruction the
+# guard inspects. `run_box_receiver_guards` always prints
+# `[box-receiver] subject=N decl=D val=V`, and the script reds a CLEAN row whose
+# subject count has fallen to 0. A fixture cannot silently stop exercising the
+# route it was committed to hold.
+#
+# ⛔ SHRINK-ONLY. A new TRIP row means a NEW silent-wrong-output program — fix
+# the write site (`deref_by_value_handle_receiver`,
+# src/ir/lowering/exprs/methods.rs), do not park it here.
+#
+# Regenerate the TRIP set over the whole corpus with:
+#   scripts/box_receiver_burndown.sh --sweep
+
+# ── TRIP: open defects, each with a filed item ───────────────────────────────
+# `todo/t1513` — D36 auto-deref through a struct field: garbage at rc 0, BOTH
+# lanes. Survives the receiver-place fix; the declaration guard goes silent on
+# it while the value stays wrong.
+TRIP  tests/fixtures/known_gaps/box_d36_field_receiver_dead_projection.gg  0 1
+# `todo/t1526` — the same shape with a `&self` method: rc 134,
+# `free(): invalid pointer`. HEAP CORRUPTION, the loudest severity on this axis
+# and the one an enumeration built by comparing stdout finds LAST. Two dead
+# projections, one per method call.
+TRIP  tests/fixtures/known_gaps/box_d36_field_mut_method_heap_corruption.gg  0 2
+# `todo/t1526` — `index_elem_place_info`, which the source itself labels
+# "Sibling of `field_place_info` (Core #4)". Reached through a field of a Vector
+# ELEMENT, which also proves the `collection_elem` route is writable after all.
+TRIP  tests/fixtures/known_gaps/box_d36_vector_elem_field_method_garbage.gg  0 1
+
+# ── CLEAN: the receiver-place cells this round closed ────────────────────────
+# One receiver place per file: five places in ONE file emit exactly ONE mangled
+# symbol and would pin ONE of them.
+CLEAN tests/fixtures/self_host_gaps/box_receiver_struct_field_get.gg
+CLEAN tests/fixtures/self_host_gaps/box_receiver_plain_param_get.gg
+CLEAN tests/fixtures/self_host_gaps/box_receiver_amp_param_get.gg
+CLEAN tests/fixtures/self_host_gaps/box_receiver_closure_capture_get.gg
+CLEAN tests/fixtures/self_host_gaps/box_d36_plain_param_method.gg
+CLEAN tests/fixtures/self_host_gaps/box_d36_amp_param_method.gg
+CLEAN tests/fixtures/self_host_gaps/box_d36_closure_capture_method.gg
+CLEAN tests/fixtures/self_host_gaps/box_d36_field_of_temp_method.gg
+
+# ── CLEAN: pre-existing controls, so the gate is not only about new files ────
+# The owned-local receiver — the cell that was ALWAYS correct, and the one whose
+# correctness turned out to be order-dependent: put a broken place first in the
+# same file and the control prints garbage too.
+CLEAN tests/fixtures/box_heap.gg
+CLEAN tests/fixtures/drop_raii.gg
