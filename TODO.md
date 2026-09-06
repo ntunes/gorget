@@ -1,5 +1,24 @@
 # TODO
 
+### 🚀 ROUND LI (R51) IS OPEN — 2026-09-06. HEADLINE: **THE DEFECTS OUR GUARDS COULD NOT SEE.**
+
+**Why this theme, and it is a soundness framing not a metric one:** R50's tracks all held up. **Every single
+defect found after they integrated was in a GUARD or an INSTRUMENT** — a lint that credited a suite which had
+never run, a detector whose only sighting is 100 minutes into a sweep, an index writer whose rc describes the
+state it replaced, and three of the orchestrator's own audit greps wrong in both directions. Meanwhile
+**`t1319` is a live silent-wrong-output on the DEFAULT backend that no single lane and no sanitizer can see.**
+The through-line is instruments, so the round attacks instruments — and the one defect they were blind to.
+
+**ROSTER — four tracks, each with a private disjoint ID BLOCK (MA-3b; a track NEVER picks its own):**
+| track | scope | ids |
+|---|---|---|
+| **A** | **`t1319`** (HIGH) — `Box` captured by a closure prints GARBAGE on C, `41` on LLVM, both rc 0, ASan CLEAN. Core #8: fix the C lane, never the expectation. **Owes the `known_gaps` repro it was filed without.** | `t1455`–`t1464` |
+| **B** | **`t1452`** (HIGH) — the battery-vs-CI lint reduces each CI command to a TARGET NAME and drops env+flags. ⚠ **One REAL hole, one unverified-but-true mapping, one BENIGN collision — the item enumerates all three; "fixing" the benign row makes the battery longer and wronger.** | `t1465`–`t1474` |
+| **C** | **`t1408`** — *"is this name a TYPE?"* has two independent answers and `Owned` has neither. **Unblocks BOTH C1 (the open owner ask) and D0′.** | `t1475`–`t1484` |
+| **D** | **`t1451`** + **`t1449`** — detection latency (a stale fixture snapshot is only visible 100 min into the sweep; the naive lint is **2-of-3 false positives**, refinement measured) and the index writer's lagging rc. | `t1485`–`t1494` |
+⊕ **`t1453`** (16 over-wide leak rows) and **`t1320`**/**`t1454`** ride with whichever track touches their area.
+⚠ **`t1453` verification is a FULL ~25-min sweep — there is no cheap check.** Budget it.
+
 ### ✅ ROUND L (R50) IS CLOSED — 2026-09-06. Ten tracks integrated, **13-gate battery green**.
 Full narrative in `DONE.md`'s R50 entry. **This block is PENDING-ONLY: invariants and commands, never numbers.**
 
