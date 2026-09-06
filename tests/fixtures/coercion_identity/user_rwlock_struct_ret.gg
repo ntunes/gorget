@@ -10,7 +10,9 @@
 # declaration answers `true`. So the checker unified `RWLock[int]` with `int` and
 # the program went on to build and run. MEASURED at the pre-fix compiler:
 # `gg check` OK, C emits `-Wint-conversion`, and the program RUNS and prints a
-# raw heap pointer (measured: `187650505388705`) where an `int` was expected.
+# raw heap pointer where an `int` was expected (e.g. `187650505388705` — ⚠ A
+# POINTER VALUE, DIFFERENT ON EVERY RUN under ASLR; illustration, not a
+# reproducible constant).
 #
 #
 # Direction: `int` EXPECTED, builtin-named wrapper supplied (`unify` arm B).

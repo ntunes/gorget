@@ -15,7 +15,10 @@
 # MEASURED at `24156ed68`: `gg check` rc 0; C emits `warning: passing argument 1
 # of 'take_int' makes integer from pointer without a cast [-Wint-conversion]`
 # ("expected 'int64_t' but argument is of type 'void *'"); the program exits 0
-# having printed `187651999621793`. ⚠ An exit-code gate cannot see this one at
+# having printed a raw handle pointer (e.g. `187651999621793` — ⚠ A POINTER
+# VALUE, DIFFERENT ON EVERY RUN under ASLR; the digits illustrate, they do not
+# reproduce, which is why the test asserts `8` and not the wrong value).
+# ⚠ An exit-code gate cannot see this one at
 # all — it is the quieter and, by the round's own severity ranking,
 # silent-wrong-output rather than a crash.
 #

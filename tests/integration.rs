@@ -68016,6 +68016,35 @@ fn coercion_identity_module_route_rwlock_ctor_blames_the_annotation() {
     );
 }
 
+/// VERDICT · INLINE · `enum` · arm B — the intersection of two axes this set
+/// covered separately (`enum` for arm A only, arm B for `struct` only). It was
+/// CHANGED and pinned by nothing, and was found by REGENERATING the whole
+/// product with `scripts/coercion_identity_matrix.py` rather than enumerating
+/// by hand. Same accept-then-miscompile class as `user_mutex_struct_ret`.
+#[test]
+fn coercion_identity_user_mutex_enum_ret_rejects() {
+    check_gg_fails(
+        "coercion_identity/user_mutex_enum_ret.gg",
+        "expected `int`, found `Mutex[int]`",
+    );
+}
+
+#[test]
+fn coercion_identity_user_shared_enum_ret_rejects() {
+    check_gg_fails(
+        "coercion_identity/user_shared_enum_ret.gg",
+        "expected `int`, found `Shared[int]`",
+    );
+}
+
+#[test]
+fn coercion_identity_user_rwlock_enum_ret_rejects() {
+    check_gg_fails(
+        "coercion_identity/user_rwlock_enum_ret.gg",
+        "expected `int`, found `RWLock[int]`",
+    );
+}
+
 
 /// KNOWN GAP `todo/t1527` — the BUILTIN shared-variable coercion accepts and
 /// then SIGSEGVs. `unify` makes `Shared[T]` transparent to `T`, so a

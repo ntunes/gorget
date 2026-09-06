@@ -1,4 +1,4 @@
-# The user's own `Mutex`, in a module. See `main.gg`.
+# The user's own `Mutex`, in a module. See `main.gg` and `ctor_main.gg`.
 
 struct Mutex[T]:
     T value
