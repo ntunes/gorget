@@ -1,5 +1,18 @@
 # TODO
 
+### 📊 R51 TRACK STATE (orchestrator-maintained; the round does NOT open a successor — owner 2026-09-06)
+| Track | Stage | Streak | In flight | Last finding |
+|---|---|---|---|---|
+| **A** receiver-place (`t1319`+`t1373`) | brief-review **pass 3** | **2/3** | yes | Layer settled: **option 1**, typed-registry widening — it satisfies option 2's OWN validator with option 2's pin absent. Open: the coverage home (`Box` never enters `opaque_handle_route_fixtures_exist`), `\|pinned\|==\|changed\|` fails 5 vs **11**, `_TraitObj` hoist (`t1474`). |
+| **B** | brief-review **pass 6** | **2/3** | yes | Guard landed on a FILTER (fails open); partitioned. |
+| **C** | **STOOD DOWN** after 5 blocking passes | — | no | SIX-Q #4: the callable family has **no `DefId` at all**, so no typed-flag answer exists at the semantic layer. Ask-2's ruling + the Import-as-provenance design now give it a mechanism. |
+| **D** snapshot freshness + `todo_index` rc | **EXECUTOR RUNNING** | 3/3 ✅ | yes | Seeder-mirror enumeration total (18 properties). Acceptance = SHAPE not count. |
+| **F** optimality increment 1 (`t0952`) | brief-review **pass 2** | **0/3 (RESET)** | yes | Root cause + layer CONFIRMED, headline reproduces (**OOM-kill → 1.9 MB correct run**). Reset because the fix **fights Core #4** (1 of 4 callers) and fires **SIX-Q #6 on its own mechanism** (`:1890` ByValue half unfixed; works only because `calls.rs` short-circuits first). |
+
+⚠ **THE RESET ON F IS AN OVERRULE OF THE REVIEWER'S OWN CLASSIFICATION.** Pass 1 called all four findings scope growth; two of them name *a Core invariant fought*, which the rule says resets. **A reviewer's severity label is evidence, not a verdict.**
+
+⛔ **AND THE DUPLICATE-FILING NEAR-MISS IS NOW A RULE.** I filed `t1470` for a finding already filed as `t1469` — same probe, four hours apart. **A duplicate born of one source report is INVISIBLE to a grep of the SYMPTOM, because both filings use the source's own words. Grep the CITED SOURCE FILES.**
+
 ### ⭐⭐ TRACK F SCOUT — **THE DAG HAS A THIRD AXIS NEITHER PLAN DOC OWNS, AND IT IS EXACTLY WHAT "RECURSIVELY" REACHES**
 
 ```
@@ -24,9 +37,9 @@ Root cause one layer above where the item points (Core #1): `GenericCollector` m
 |---|---|---|
 | `Dict[int,int]` **N=20 000** | ⛔ **rc 137 — SIGKILL, OOM-killed** | ✅ **rc 0, correct, RSS 1 912 KB** |
 | `Dict[int,int]` N=200 | `map_clone=`**801**, leaked **4 921 344 B**, RSS 6 088 KB | **0 / 0 / 1 252 KB** |
-| 8 `LEAK_ALLOWLIST` rows (ASan) | **59 196 B**, all 8 RED | **408 B** — 4 rows fully clean |
-Gates: `--lib` 1187/0 · `iter` 144/0 · `dict` 104/0 · `cow` 225/0 · `clone` 36/0 · ⭐ **`self_host_clone_ceiling` and `self_host_stage1_clone_ceiling` are NOT `#[ignore]`d, both RAN and PASSED — the fix does not move the self-compile clone meter, so no re-pin and no owner-authorized re-anchor.** Patch `git apply --check` clean at HEAD.
-⭐ ***A program correct in the language, in ordinary safe syntax, `gg check` clean, that DIES ON INPUT SIZE — and it costs 35 lines.*** It also **dissolves `t1307`** and means **D41 does not need to bend**. Core #4 siblings to check: `t0949`, `t0951`.
+| `LEAK_ALLOWLIST` rows (ASan) | ⛔ **the "8 rows / 59 196 B" figures are STRUCK** (pass 1: the 8 came from `t1307`'s grep, written for another purpose — a SELECTION; and the before-figure measured **62 310 B**, not 59 196) | ⭐ **17 rows move — 8 fully clean + 9 shrink; ~274 of 1978 leak records, ~14 % of the backlog. BIGGER than briefed.** Regenerate by sweeping all 23 `map_clone`/`set_clone` rows at HEAD. |
+Gates: `--lib` 1187/0 · `iter` 144/0 · `dict` 104/0 · `cow` 225/0 · `clone` 36/0 · ⭐ **the fix does not move the self-compile clone meter — MEASURED TRUE, both stages byte-identical pristine vs prototype.** ⛔ **But "no re-pin" is FALSE:** all four lines print `action=RE-PIN` **at pristine HEAD** — **pre-existing drift, not this fix's**; attribute it that way or an executor blames their own change. ⚠ Stage-1 `array_clone` sits at 0.681 % of a ~1 % band — **0.32 % headroom.** ⚠ **Filter trap: `self_host_clone_ceiling` matches only ONE of the two tests — use `clone_ceiling`.** Patch `git apply --check` clean at HEAD.
+⭐ ***A program correct in the language, in ordinary safe syntax, `gg check` clean, that DIES ON INPUT SIZE — and it costs 35 lines.*** ⛔ *"Dissolves `t1307`"* **overstates** — what dissolves is the *"must be equally fast"* objection; **D41's in-tree casualty remains** (4 stored-borrow fields), so *"D41 does not need to bend"* also overstates. ⛔ **AND THE CORE #4 SIBLINGS ARE NOT `t0949`/`t0951`** — those items **explicitly discriminate themselves from `t0952`** in their own bodies (*"different write site, different file, and neither fix touches the other"*). The real sets: `grep -n 'substitute_and_map(mapper' src/ir/lowering/generics/mod.rs` (5 sites) and `grep -rn 'ctx.auto_clone_if_ptr(' src/` (**4 callers, 1 guarded, no arm-count lint**) — filed as **`t1476`**, which also records that **RATCHET C cannot catch this class**: its predicate counts `emit_clone(`/`call_clone(`, and a clone-**suppression** adds neither.
 
 ### ⛔ THREE CORRECTIONS TO WHAT I BRIEFED — one is mine before it is the owner's
 - ⛔ **"scalar `&` write-through has NO WORKING PRECEDENT" is FALSE at that scope.** Measured: `void bump(int &n): n = n+1` prints **2** on both backends; scalar-`&` params are used across the corpus (regenerate the count -- `grep -rlE '\b(int|bool|float|byte) &' tests/fixtures lib | wc -l` measured ~140 files / 207 occurrences; the previously-quoted 240 counted ALL `&` params and is WITHDRAWN); **the self-host itself depends on `bool &` write-through.** ⇒ **`t1404`'s claim is TRUE AT ITS OWN SCOPE** — the `for x in &coll` *whole-binding loop-element rebind* has no precedent. **Retract at the retracted claim's scope, not wider.**
