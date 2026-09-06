@@ -761,6 +761,32 @@ timeout is NOT a regression until compared at HEAD*. **Re-run that leg with the 
 live processes — **process liveness proved nothing**; the `self_host_lowerer` driver churning fixtures did. The sweep is
 in the **self-host bootstrap phase**, whose tests print only on completion, so a quiet log there is expected, not hung.
 
+### ✅ J's DELTA REVIEW: **SIGN OFF on code and design** — and MY correction contained a new overstatement
+**Verified independently:** the corruption fix reproduced on the reviewer's own corpus (pre-fix **rc 0 + `✅ no longer
+corrupting — DELETE`** → post-fix **rc 1, no delete advice**), **with the reverse control still retiring** a clean
+measured row. ⭐ **The ORDERING is load-bearing, not a predicate detail:** running the REAL committed row
+(`stack_guard_deep_recursion … UNMEASURED`) through the post-fix script, **had `fixed_corrupt` been written without
+subtracting `got_corrupt` FIRST, that row would land in `unmeasured_corrupt` and the committed sweep would be
+PERMANENTLY rc 1.**
+⊕ **The structural claim is measured TRUE:** `sed -n '597,777p' scripts/sanitize_sweep.sh | grep -c corrupt` → **0** —
+the self-test genuinely cannot reach the corruption path, so the needles really are its only coverage. **All six RED
+alone** by line-anchored revert. ⊕ **Item C verified in BOTH modes**, incl. the load-bearing half (`RUN_SELFTEST=0` ⇒
+**rc 0 and delete advice for a fixture that measurably still leaks**).
+⭐ **AND TWO ADJUDICATIONS I ASKED IT TO SECOND-GUESS BOTH CAME BACK IN THE EXECUTOR'S FAVOUR:** the count-drift
+*"nothing filed"* is **right** (columns 1/2/4/5 byte-identical over 2261 rows, both rows already carry the `*N+` marker,
+`count_drift` never touches `rc`, and `[[t0572]]` names both rows — *"filed, not waved through"*); and **there is NO
+THIRD LIST** — verified by grep **and** by chasing the reasoning (the file's other absence-inference sits on the
+`for (s in seen)` branch; `known_gaps_census.sh`'s same `comm` shape **fails closed**).
+
+⛔🔴 **THE ONE THING TO ACT ON IS MINE.** `sanitize_sweep.sh:324` and `DONE.md:36` say the guard turns *"~25 minutes …
+into two seconds"*. **FALSE by ~1000×** — `run_selftest || exit 2` is at `:780`, the corpus walk at `:871`; measured, a
+full non-`--selftest` run with the assertions deleted exits **rc 2 in 1.057s**, self-test spread **0.68s**. ⇒ **the cost
+is ~1 SECOND.** ⚠ **I wrote that sentence in addendum 5 and the executor took it in good faith** — *precisely the failure
+mode item C exists to correct, reintroduced inside the correction.* ⊕ Plus: *"eleven needles"* is **ten**;
+`tests/lints.rs:11861` still says *"These four needles"* above a ten-entry loop (**a Core #14 stale comment introduced
+by this delta**); *"nine partial reverts"* is not regenerable (six verified); and one `✅ … landed` breadcrumb in the
+still-open `[[t0952]]`.
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
