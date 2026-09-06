@@ -38,6 +38,37 @@ Gates: `--lib` 1187/0 · `iter` 144/0 · `dict` 104/0 · `cow` 225/0 · `clone` 
 `t0538`'s cost contract needs a **RATIFICATION pass, not an executor** (askable inside R51) · **R2** reject-vs-materialize (measurement cannot settle it; filed as `t1403` with `repro = []` and **zero test hits** — against the cardinal rule) · ⛔ **`t0544`: the RATIFIED ledger instructs the WRONG INSTRUMENT** — `decisions.md:3175` says re-derive with `scripts/clone_attribution.sh`, which by its own header sees **~3.5 %** of clone volume; changing a ratified entry is an owner ask · **A36 vs D42** — `--warn=all` bounded by `since` **requires a language-version field in `gorget.toml`** that does not exist.
 ⚠ **PRIOR ART CUTS AGAINST THE DIRECTION and must be measured against the EAGER baseline, not only against itself:** Lean measured **2× peak memory** from deferring; Koka declined to ship this; Morphic measured **6.4 %** of in-place mutations *forced* to clone.
 
+### ✅✅ ASK 2 IS RULED — 2026-09-06. **TYPES MAY NOT BE SHADOWED. REJECT OUTRIGHT.**
+
+**Owner, verbatim:** *"I think we should reject it outright. I think types should not be shadowed. Why would we
+want that to work? What would we gain from that? We do support type aliasing with the `type` keyword."*
+
+⭐ **THE CHALLENGE LANDS AND MY OPTION (ii) HAD NO ANSWER.** I offered *"make it work"* as the eventual
+reference-grade end state **without ever asking what it buys.** It buys nothing: if you want your own type you
+write `struct MyVector`; if you want a shorter name for a builtin you write `type V = Vector[int]`. **Shadowing
+adds no expressiveness and costs every reader.** ⇒ **(i) is not a stepping stone to (ii) — (ii) was never
+worth reaching.**
+
+**VERIFIED, NOT ASSUMED (measured 2026-09-06):**
+- ✅ **The escape hatch is real and generic.** `type` is a keyword (`src/lexer/token.rs:447,531`) with
+  generic aliases documented at `docs/language-reference.md:968-969` (`type Callback = int(int, int)`,
+  `type StringMap[V] = Dict[String, V]`). Probe: `type Vec2[T] = MyVec[T]` → **checks, builds, prints 7.**
+- ⛔⛔ **AND THE REJECT MUST COVER `type`, OR THE HOLE STAYS OPEN THROUGH IT.** `type Vector[T] = MyVec[T]` —
+  an ALIAS shadowing the builtin — **checks, builds and prints `7` today.** ⇒ **the alias path handles the
+  shadow CORRECTLY where the `struct` path miscompiles to `0`.** A rule spelled only over `struct` leaves a
+  second door. **The rule's subject is "a declaration that introduces a TYPE NAME" — `struct`, `enum`,
+  `newtype` AND `type`.**
+⊕ **That asymmetry is also the proof the miscompile is not intrinsic:** shadowing works fine through the alias
+path, so `struct Vector[T]` printing `0` is a **defect**, not a consequence of shadowing being hard.
+
+**SCOPE OF THE RULE (both asks together):** ⑴ a **VALUE** may not take a type's name (Ask 1 — already true for
+primitives, now total); ⑵ a **TYPE** may not take an existing type's name (Ask 2 — all four introducing forms).
+⇒ **type names are a single flat namespace with no shadowing, and values are disjoint from it.**
+⭐ **`x[k](v)` is then decidable with no use-site reject at all** — which was Ask 1's whole argument.
+
+⊕ **THIS RESCUES TRACK C** (stood down above): its six Core #8 miscompile cells become **rejects**, and the
+`t1408` re-cut no longer has to make `struct Vector[T]` *work* — only reject it.
+
 ### ✅✅ ASK 1 IS RULED — 2026-09-06. **REJECT AT THE DECLARATION (reading (a)) — AND THE REASON IS BETTER THAN MINE**
 
 **Owner, verbatim:** *"`Vector[int] Vector = [1, 2, 3]` this should fail statically at declaration. The naming
