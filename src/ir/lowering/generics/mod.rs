@@ -1802,7 +1802,7 @@ impl GenericCollector {
     /// Register monomorphized function signatures in the fn_sigs map.
     pub fn register_fn_sigs(
         &self,
-        mapper: &TypeMapper,
+        mapper: &mut TypeMapper,
         registry: &mut TypeRegistry,
         fn_sigs: &mut FxHashMap<String, (Vec<TypeId>, TypeId)>,
         fn_param_ownerships: &mut FxHashMap<String, Vec<crate::parser::ast::Ownership>>,
@@ -1844,7 +1844,7 @@ impl GenericCollector {
                                 && p.node.name.node == name
                                 && p.node.ownership == Ownership::Borrow
                             {
-                                let base = substitute_and_map(mapper, &p.node.type_.node, &subs);
+                                let base = substitute_and_map_param(mapper, registry, &p.node.type_.node, &subs);
                                 if registry.is_resource_type(base) {
                                     move_override_params.insert(name.to_string());
                                 }
@@ -1856,7 +1856,7 @@ impl GenericCollector {
                 let param_types: Vec<TypeId> = template.params.iter()
                     .filter(|p| !p.node.is_meta_op) // meta op params have no runtime slot
                     .map(|p| {
-                        let base = substitute_and_map(mapper, &p.node.type_.node, &subs);
+                        let base = substitute_and_map_param(mapper, registry, &p.node.type_.node, &subs);
                         // MutableBorrow params become MutPtr in the GIR
                         if matches!(p.node.ownership, Ownership::MutableBorrow) {
                             registry.insert(GirType::MutPtr(base))
@@ -1887,7 +1887,7 @@ impl GenericCollector {
                         } else {
                             p.node.ownership
                         };
-                        let base = substitute_and_map(mapper, &p.node.type_.node, &subs);
+                        let base = substitute_and_map_param(mapper, registry, &p.node.type_.node, &subs);
                         let is_move = registry.is_resource_type(base);
                         match ownership {
                             Ownership::MutableBorrow => super::context::ParamABI::ByMutPtr,
@@ -2280,7 +2280,7 @@ impl GenericCollector {
                 // mapper would produce a concrete `FnPtr` TypeId, which the
                 // body lowering then tries to treat as an owned value and
                 // mis-assembles struct-field inits.
-                let base = substitute_and_map(mapper, &p.node.type_.node, &subs);
+                let base = substitute_and_map_param(mapper, registry, &p.node.type_.node, &subs);
                 let final_param_type = if matches!(p.node.ownership, Ownership::MutableBorrow) {
                     registry.insert(GirType::MutPtr(base))
                 } else {
@@ -2732,6 +2732,19 @@ fn substitute_and_map(
 ) -> TypeId {
     let substituted = substitute_type(ty, subs);
     mapper.map_ast_type(&substituted)
+}
+
+/// Like substitute_and_map, but for a DECLARED PARAMETER position: routes
+/// through `map_param_ast_type` so a `Ref[T]` / `MutRef[T]` spelling keeps its
+/// pointer shape instead of degrading to `UNIT_TYPE`.
+fn substitute_and_map_param(
+    mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+    ty: &Type,
+    subs: &[(String, Type)],
+) -> TypeId {
+    let substituted = substitute_type(ty, subs);
+    mapper.map_param_ast_type(&substituted, registry)
 }
 
 /// Like substitute_and_map, but auto-registers new collection/Option/Result types.

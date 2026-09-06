@@ -10866,7 +10866,23 @@ fn sanitize_allowlists_shrink_only() {
     // fixture that still leaks x3 -- so exactly ONE of the owner's two `t0953`
     // admissions clears. Regenerate:
     //   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -vc '^$'
-    const LEAK_CEILING: usize = 251;
+    // ⚖ 251 -> 245 (R51 Track H). SIX rows RETIRED, every one MEASURED ASan-clean
+    // under the fix rather than inferred from the sweep (todo/t1360: the sweep
+    // cannot tell "no longer leaks" from "never ran", so a row deleted on its
+    // say-so is a guess). `todo/t0952`'s write site -- a declared `Ref[T]`
+    // parameter mapped through the immutable mapper, degrading to `UNIT_TYPE`,
+    // so a `Ref[T]` argument at a `Ref[T]` parameter deep-cloned instead of
+    // passing the pointer through -- is fixed at its producer, and with it the
+    // whole `gorget_map_clone` / `gorget_set_clone` family these rows admitted.
+    // The six: `dict_keys_lazy_resource`, `dict_values_lazy_resource`,
+    // `set_take_values`, `stdlib_iter_dict`, `stdlib_iter_set`, and the CITED
+    // `iter_trait_default_trait_args` (its `⚖ ADMITTED` block retired with it --
+    // a block is the row's reason to exist). Four further rows shed the class
+    // but still leak something else and were TIGHTENED, not deleted:
+    // `borrow_field_lazy_dict_iter`, `dict_keys_lazy`, `dict_values_lazy`,
+    // `set_filter_count`. Regenerate:
+    //   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -vc '^$'
+    const LEAK_CEILING: usize = 245;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -11180,8 +11196,15 @@ fn sanitize_allowlists_shrink_only() {
     //     | awk -F, '{p+=NF; for(i=1;i<=NF;i++){n=$i; sub(/.*\*/,"",n); \
     //         if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} r+=n}} \
     //         END{print "pairs",p; print "records",r; print "loose",loose}'
-    const LEAK_CLASS_PAIRS: usize = 436;
-    const LEAK_RECORDS: usize = 1978;
+    // ⚖ R51 Track H: 436 -> 423 pairs, 1978 -> 1804 records. `todo/t0952`'s write
+    // site is fixed at the producer, so the `gorget_map_clone` /
+    // `gorget_set_clone` mechanism ten rows admitted is GONE -- six rows retired
+    // whole and four tightened, all ten MEASURED under ASan rather than inferred
+    // from the sweep (todo/t1360). Regenerated from the command above, not by
+    // subtracting a delta. ⚠ SHARED COUNTER, PROVISIONAL: the integrating parent
+    // re-measures from the merged tree (MA-5).
+    const LEAK_CLASS_PAIRS: usize = 423;
+    const LEAK_RECORDS: usize = 1804;
     const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     // ── THE CITATION RATCHET (R48 Track T-a1) ────────────────────────────────
@@ -11275,7 +11298,18 @@ fn sanitize_allowlists_shrink_only() {
     // ones, which were never in this count) and nine where a tightening removed
     // the class outright. None crosses the cited/uncited line; this is not a
     // citation drive.
-    const UNCITED_LEAK_CLASS_PAIRS: usize = 420;
+    // ⚖ 420 -> 409 (R51 Track H). Eleven pairs that CEASED TO EXIST, not a
+    // citation drive: `todo/t0952`'s write site is fixed, so the
+    // `gorget_map_clone` / `gorget_set_clone` mechanism is gone from ten rows --
+    // five uncited rows retired whole, four tightened, and the CITED
+    // `iter_trait_default_trait_args` retired with its `⚖ ADMITTED` block. That
+    // row's two pairs were CITED, so they were never in this count and the
+    // thirteen removed pairs land as eleven here. Nothing crosses the
+    // cited/uncited line. Every one of the ten was MEASURED ASan-clean or
+    // measured shedding exactly that class -- never deleted on the sweep's
+    // say-so, which `todo/t1360` shows cannot distinguish "no longer leaks" from
+    // "never ran".
+    const UNCITED_LEAK_CLASS_PAIRS: usize = 409;
 
     // A `todo/` item counts as citable for a pair only if it EXISTS and its body
     // NAMES the pair's top-frame symbol. Cached: 293 rows would otherwise re-read
@@ -33361,4 +33395,193 @@ fn self_host_wrap_arith_uses_wrapping_compute_c() {
              reference does not.",
         );
     }
+}
+
+/// todo/t1505 / todo/t0952, Core #6 + Core #4: the `Ref[T]` / `MutRef[T]`
+/// **declared-parameter** decision has exactly ONE accessor —
+/// `TypeMapper::map_param_ast_type` — and every declared-param site in
+/// `src/ir/lowering/` reads it.
+///
+/// THE CLASS THIS RETIRES. `Ref`/`MutRef` are name-only builtins whose sole AST
+/// carrier is `Type::Named { name: "Ref" | "MutRef", generic_args: [T] }`.
+/// `TypeMapper::try_map_ast_type` returns `None` for them, so the *immutable*
+/// `map_ast_type` silently degrades a declared borrow parameter to `UNIT_TYPE`
+/// — before any `(TypeId, Ownership)` accessor downstream is reached, i.e. the
+/// fact has no subject left to carry it. The decision was re-derived
+/// independently at 29 such sites across four files, so a caller's `fn_sigs`
+/// entry and the callee's own param local could disagree: measured at the
+/// pre-fix tree, `int ref_len(Ref[Dict[String,int]] m): return m.len()` printed
+/// `0` for a seven-entry dict at rc 0, on BOTH backends (todo/t1505), and the
+/// same divergence made `lower_call_arg` materialize a clone the callee never
+/// owns and never frees (todo/t0952). Routing every site through one accessor
+/// is Layering-discipline rule 3, "one source of truth per axis, read through
+/// one accessor".
+///
+/// WHAT COUNTS AS ROUTED. `map_ast_type_mut` and `substitute_and_map_mut`
+/// already take the `Ref`/`MutRef` branch, so the five sites that use them were
+/// always correct and are allowed here — this guard would otherwise be red on
+/// arrival over code that has no defect.
+///
+/// ⚠ THE WINDOW IS TWO LINES, NOT ONE, AND THAT IS LOAD-BEARING. A
+/// single-line conjunctive pattern is blind to the two-statement spelling
+///
+///     let subst_p = generics::substitute_type_pub(&p.node.type_.node, &subs);
+///     let base = ctx.type_mapper.map_ast_type_mut(&subst_p, &mut reg);
+///
+/// which occurs twice in-tree (`traits.rs`, trait-default signature
+/// registration). Those two are correct — the point is that the *shape* defeats
+/// a one-line pattern, and it is the shape of trait-default/equip signature
+/// registration, which is the SAME FAMILY this guard is the only pin for
+/// (see below). A guard whose one blind spot lies inside the family it solely
+/// protects is not a guard.
+///
+/// ⚠⚠ WHY THIS LINT IS THE ONLY PARTIAL-REVERT PIN FOR PART OF THE CLASS.
+/// D41 (`docs/define-gorget/decisions.md`) ratifies that `Ref` never appears in
+/// user source, so the miscompiling shape — a Gorget-bodied `Ref[T]`/`MutRef[T]`
+/// parameter — is not writable in a conformant fixture and does not exist
+/// anywhere in `lib/` or `tests/fixtures/`. The leak repro
+/// `tests/fixtures/known_gaps/dict_iter_ref_field_read_clone_temp_leak.gg` reds
+/// on reverting either half of the producer/consumer pair (the accessor, and
+/// the `lower_call_arg` consult that reads what it writes), and
+/// `map_param_*` in `src/ir/lowering/types.rs`'s unit tests pins the accessor's
+/// body. Neither reds on reverting a SITE, and no D41-legal fixture can. That
+/// residual is this lint's whole job.
+///
+/// ⚠ WHAT IT DOES NOT COVER, so it is not read as total: closure /
+/// `Callable[T]` parameters are a SEPARATE site family — `ast::Type::Function`
+/// params are bare types with no `type_` wrapper, mapped through
+/// `ctx.map_type_with_subs(&p.node)` in `src/ir/lowering/stmts/mod.rs`. That
+/// family was measured correct at the pre-fix tree (a lambda and a free
+/// function with identical bodies and identical declared `Ref[Dict]` params
+/// printed `7` and `0` respectively) and is untouched by the fix.
+///
+/// Regenerate the site set:
+/// ```text
+/// grep -rn 'map_ast_type\|substitute_and_map\|map_type_with_subs' src/ir/ | grep '\.node\.type_\.node'
+/// ```
+#[test]
+fn declared_param_sites_use_map_param_ast_type() {
+    /// `<ident>.node.type_.node` where `<ident>` is a loop-bound declared
+    /// parameter. Field sites (`f.node.type_.node`) and equipped-type sites
+    /// (`equip.type_.node`) are deliberately out of subject.
+    fn names_declared_param_type(line: &str) -> bool {
+        for pat in ["p.node.type_.node", "param.node.type_.node"] {
+            let mut from = 0usize;
+            while let Some(rel) = line[from..].find(pat) {
+                let abs = from + rel;
+                let prev_ok = abs == 0 || {
+                    let b = line.as_bytes()[abs - 1];
+                    !b.is_ascii_alphanumeric() && b != b'_'
+                };
+                if prev_ok {
+                    return true;
+                }
+                from = abs + 1;
+            }
+        }
+        false
+    }
+
+    // Mappers that DROP the `Ref`/`MutRef` branch. Using one of these on a
+    // declared parameter is the defect.
+    const UNROUTED: &[&str] = &[
+        "map_ast_type(",
+        "substitute_and_map(",
+        "substitute_and_map_type(",
+        "map_type_with_subs(",
+    ];
+    // The param-aware accessor plus the two `_mut` mappers that already take
+    // the borrow branch.
+    const ROUTED: &[&str] = &[
+        "map_param_ast_type(",
+        "substitute_and_map_param(",
+        "substitute_and_map_param_type(",
+        "map_ast_type_mut(",
+        "substitute_and_map_mut(",
+    ];
+
+    let mut triggers = 0usize;
+    let mut violations: Vec<String> = Vec::new();
+
+    let mut files = walkdir_rs("src/ir/lowering");
+    files.sort();
+    for path in files {
+        let src = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let lines: Vec<&str> = src.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if !names_declared_param_type(line) {
+                continue;
+            }
+            triggers += 1;
+            // TWO-LINE WINDOW: the mapper may sit on the binding's own line or
+            // on the statement immediately after it.
+            let mut window = String::from(*line);
+            if let Some(next) = lines.get(i + 1) {
+                window.push('\n');
+                window.push_str(next);
+            }
+            let unrouted: Vec<&str> =
+                UNROUTED.iter().copied().filter(|m| window.contains(m)).collect();
+            if unrouted.is_empty() {
+                continue;
+            }
+            // ⛔ THE EXCUSE IS THE BINDING'S OWN LINE, NOT THE WINDOW, AND THAT
+            // ASYMMETRY IS DELIBERATE — `line`, not `window`, is correct here.
+            // Widening detection to two lines but leaving the excuse two lines
+            // wide lets an UNRELATED routed call on the next line launder a real
+            // violation. Measured on a planted break at `functions.rs:1998`:
+            //
+            //   A: binding line, unrouted mapper on the NEXT line
+            //        one-line window GREEN (the miss the widening fixes) · here RED
+            //   B: unrouted mapper on the trigger line, an adjacent routed call
+            //      on the next line
+            //        window-wide excuse GREEN (a real violation laundered) · here RED
+            //
+            // The two windows have COMPLEMENTARY blind spots and neither
+            // dominates; detection wants the wide one, the excuse wants the
+            // narrow one. And B is inside this guard's stated job — site 35
+            // written next to an existing correct site — so an excuse that
+            // cannot see it is not a guard.
+            //
+            // Not red on arrival: the two legitimate two-line sites
+            // (`traits.rs`, trait-default registration) carry NO unrouted marker
+            // on their own line, so they exit at `unrouted.is_empty()` above and
+            // never reach this test.
+            if ROUTED.iter().any(|m| line.contains(m)) {
+                continue;
+            }
+            violations.push(format!(
+                "{}:{} — {} on a declared parameter\n    {}",
+                path.display(),
+                i + 1,
+                unrouted.join(" + "),
+                line.trim(),
+            ));
+        }
+    }
+
+    assert!(
+        triggers >= 40,
+        "the declared-param witness collapsed to {triggers} sites — the guard's \
+         subject is gone, not the class. Re-derive it with:\n  \
+         grep -rn 'type_\\.node' src/ir/ | grep -E '\\b(p|param)\\.node\\.type_\\.node'",
+    );
+
+    assert!(
+        violations.is_empty(),
+        "{} declared-parameter site(s) bypass `TypeMapper::map_param_ast_type`:\n\n{}\n\n\
+         A `Ref[T]` / `MutRef[T]` parameter mapped through the immutable \
+         `map_ast_type` degrades to `UNIT_TYPE`, so the caller's `fn_sigs` entry \
+         and the callee's own param local disagree: the callee reads through a \
+         unit-typed slot (silent wrong output at rc 0 on both backends, \
+         todo/t1505) and `lower_call_arg` materializes a clone the callee never \
+         owns (todo/t0952). Route the site through \
+         `ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry)` \
+         — or, on the generic path, `substitute_and_map_param{{,_type}}`. \
+         `map_ast_type_mut` / `substitute_and_map_mut` are also correct: they \
+         already take the borrow branch.",
+        violations.len(),
+        violations.join("\n"),
+    );
 }

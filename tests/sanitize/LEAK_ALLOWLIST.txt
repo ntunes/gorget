@@ -83,8 +83,8 @@
 #                         TAB <class>=<todo-id>[,<class>=<todo-id>...]
 #
 # The THIRD column is the per-class citation, and it is CLASS-KEYED because the
-# ratchet is: `gorget_map_clone=t0952` says which item owns THAT mechanism in
-# THIS fixture. A class MAY REPEAT when more than one filed item owns records of
+# ratchet is: `__gorget_array_reserve_one=t0951` says which item owns THAT
+# mechanism in THIS fixture. A class MAY REPEAT when more than one filed item owns records of
 # it — `callable_literal_at_consuming_positions`'s
 # `__gorget_closure_env_alloc=t0948,__gorget_closure_env_alloc=t0971,`
 # `__gorget_closure_env_alloc=t0972` is how a row whose records of ONE frame have
@@ -224,7 +224,7 @@ async_channel_waker	gorget_channel_new*2
 async_select	gorget_channel_new*4
 async_task_group_fire	gorget_channel_new*2
 atomic_int_amp_param	gorget_atomic_int_new*1
-borrow_field_lazy_dict_iter	gorget_dict_new*3,gorget_map_clone*24
+borrow_field_lazy_dict_iter	gorget_dict_new*3
 borrow_field_method_dispatch	__gorget_array_reserve_one*1,gorget_dict_new*3,str_alloc_copy*2
 box_trait_vector_lit	__gorget_box_alloc_Robot*1,str_alloc_copy*1
 # ⚖ ADMITTED (R48 Track R, 2026-09-02; attribution CORRECTED and the pins
@@ -308,7 +308,10 @@ box_trait_vector_lit	__gorget_box_alloc_Robot*1,str_alloc_copy*1
 # carry none; the rows that postdate it do. ⚠ This used to name three
 # (`iter_trait_default_trait_args`, `self_whole_move_ok`,
 # `vector_hof_cross_type_map`); the third RETIRED at R50 Track E, measured clean,
-# and a hand-kept list is exactly what rots. Regenerate the live set:
+# and the FIRST at R51 Track H — `todo/t0952`'s write site fixed, the fixture
+# measured ASan-CLEAN, its `⚖ ADMITTED` block retired with the row. Only
+# `self_whole_move_ok` is left, which is why a hand-kept list is exactly what
+# rots. Regenerate the live set:
 #   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | awk -F'\t' 'NF>2 {print $1}'
 # ⚖ ADMITTED (R49 Track L, 2026-09-04; OWNER RULING TAKEN TWICE — see below).
 # EIGHT rows, ONE root, and the root is FILED: `todo/t1210` — the Rust lane frees
@@ -555,12 +558,10 @@ deserializable	str_alloc_copy*3
 dict_drain_basic	gorget_dict_new*6,gorget_map_clone*18
 dict_drain_resource	gorget_dict_new*6,gorget_map_clone*18,str_alloc_copy*21
 dict_iter_enumerate	gorget_map_clone*12,str_alloc_copy*5
-dict_keys_lazy	__gorget_closure_env_alloc*1,gorget_map_clone*18
-dict_keys_lazy_resource	gorget_map_clone*9,str_alloc_copy*4
+dict_keys_lazy	__gorget_closure_env_alloc*1
 dict_user_key_auto	str_alloc_copy*1
 dict_user_key_hashable	str_alloc_copy*1
-dict_values_lazy	__gorget_closure_env_alloc*1,gorget_map_clone*18
-dict_values_lazy_resource	gorget_map_clone*9,str_alloc_copy*4
+dict_values_lazy	__gorget_closure_env_alloc*1
 dop_throw_rhs	str_alloc_copy*1
 ecs_advanced	__gorget_closure_env_alloc*1
 ecs_basics	__gorget_closure_env_alloc*1,gorget_array_reserve*1
@@ -611,36 +612,6 @@ io_input	gorget_readline*2
 # R47. Under a ruling whose entire content is per-row citations, the citation
 # is the deliverable: check the next one by EXPERIMENT too.
 iter_terminal_stmt_positions	gorget_array_reserve*1,str_alloc_copy*1
-# ⚖ ADMITTED (R48 Track T-a1, 2026-09-03; covered by the third ⚖ EXTENDED
-# paragraph in this file's header). THE FIXTURE IS R48's (added `4e0dc7811`,
-# 2026-08-31); THE MECHANISM IS NOT — `DictIter`'s `Ref[Dict[K, V]] source` field
-# has been there since `815173bb8` (2026-04-26) and `auto_clone_if_ptr`'s Clone
-# arm since `e9f559e52` (2026-08-19), both before this round opened.
-# MECHANISM, ATTRIBUTED BY EXPERIMENT AND FILED AS `todo/t0952`: `DictIter[K, V]`
-# declares its source field a BORROW (`Ref[Dict[K, V]] source`,
-# lib/std/iter.gg:863-866) and `next()` reads it FOUR times, once per
-# `__dict_iter_*` extern — every one of which also declares its parameter
-# `Ref[Dict[K, V]]`. Each read deep-copies the whole map (`gorget_map_clone` <-
-# `DictIter__GorgetString__int64_t__next` <- `…__count` <- `main`) into a temp no
-# `gorget_map_free` ever reaches. The fixture's last line, `m.iter().count()` over
-# a three-entry Dict, is the whole leak.
-# THE TWO CLASSES ARE ONE MECHANISM, MEASURED, NOT ASSUMED: the four
-# `str_alloc_copy` records are INDIRECT (`str_alloc_copy` <-
-# `gorget_string_clone_to_owned` <- `gorget_string_clone_inplace` <-
-# `gorget_map_clone`) — the String KEYS the leaked clones own. The int-keyed
-# control leaks `gorget_map_clone*12` and nothing else, which is what proves it.
-# 12, NOT 4, AND IT IS NOT A DICT-SIZE ARTEFACT: 4 clone SITES x 3 allocations
-# inside `gorget_map_clone`. A two-entry Dict leaks the same 12 RECORDS in 27
-# rather than 39 allocations — the bytes scale, the record count does not.
-# NEAREST FILED FAMILY IS `todo/t0164` (the Json accessors' `gorget_map_clone`),
-# and it is a DIFFERENT CALL SITE: same frame, `is_object`/`get`/`has` on the
-# self-host lane. Closing t0164's Json bullet does not touch lib/std/iter.gg.
-# RETIRES: t0952
-# `todo/t0952` ships
-# `known_gaps/dict_iter_ref_field_read_clone_temp_leak.gg` — a five-line for-loop
-# whose signature is byte-identical to this row's — and the `#[ignore]`d
-# `known_gap_dict_iter_ref_field_read_clone_temp_leak` asserting the clean run.
-iter_trait_default_trait_args	gorget_map_clone*12,str_alloc_copy*4	gorget_map_clone=t0952,str_alloc_copy=t0952
 iterator_adapters	__gorget_closure_env_alloc*4
 json_edge_cases	str_alloc_copy*9
 json_parse	str_alloc_copy*1
@@ -752,9 +723,8 @@ semaphore_basic	__gorget_spawn_limited_work*3+
 serialize_collections	str_alloc_copy*7
 set_drain_basic	gorget_dict_new*2,gorget_set_clone*6
 set_drain_resource	gorget_dict_new*2,gorget_set_clone*6,str_alloc_copy*7
-set_filter_count	__gorget_closure_env_alloc*1,gorget_set_clone*6
+set_filter_count	__gorget_closure_env_alloc*1
 set_iter_enumerate_lir_panic	gorget_set_clone*6
-set_take_values	gorget_set_clone*6
 set_user_key_hashable	str_alloc_copy*1
 # ⚖ ADMITTED (owner 2026-08-31). Owned by `todo/t0609` item (2) — a call or
 # await RESULT TEMP consumed as a call ARGUMENT is never drop-registered.
@@ -825,11 +795,9 @@ stdlib_io_file_writer	str_alloc_copy*1
 stdlib_io_stdout_typed	str_alloc_copy*2
 stdlib_io_writer	gorget_array_reserve*3,str_alloc_copy*1
 stdlib_iter_bounds_coverage	gorget_string_push_char*4,str_alloc_copy*3
-stdlib_iter_dict	gorget_map_clone*36
 stdlib_iter_drain	__gorget_array_reserve_one*3,str_alloc_copy*4
 stdlib_iter_join	gorget_string_push_char*3,str_alloc_copy*3
 stdlib_iter_more_terminals	gorget_string_push_char*1,str_alloc_copy*1
-stdlib_iter_set	gorget_set_clone*24
 stdlib_udp_typed	str_alloc_copy*1
 stress_alloc_closures	__gorget_closure_env_alloc*1
 stress_atomic_hammer	gorget_atomic_int_new*1

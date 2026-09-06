@@ -1640,7 +1640,7 @@ pub fn lower_function(
         .params
         .iter()
         .map(|p| {
-            let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+            let base_type = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
             let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
             let param_name = p.node.name.node.as_str();
             (gir_type, Some(param_name))
@@ -1654,7 +1654,7 @@ pub fn lower_function(
         let base_param_types: Vec<TypeId> = func
             .params
             .iter()
-            .map(|p| ctx.type_mapper.map_ast_type(&p.node.type_.node))
+            .map(|p| ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry))
             .collect();
         ctx.fn_sigs.insert(name.to_string(), (base_param_types, return_type));
     }
@@ -1670,7 +1670,7 @@ pub fn lower_function(
     ctx.callable_return_types_clear();
     for (i, p) in func.params.iter().enumerate() {
         let local_id = LocalId((i + 1) as u32); // _1, _2, ...
-        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        let base_type = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.register_local(&p.node.name.node, local_id, gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
@@ -1735,7 +1735,7 @@ pub fn lower_function(
     // and flips the LIR drop flag, suppressing the exit drop).
     for (i, p) in func.params.iter().enumerate() {
         let local_id = LocalId((i + 1) as u32);
-        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        let base_type = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.drops.register_param(local_id, gir_type, &ctx.type_registry);
         if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
@@ -1995,7 +1995,7 @@ pub fn lower_equip_method(
         if p.node.name.node == "self" {
             continue; // self handled above
         }
-        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        let base_type = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         params.push((gir_type, Some(p.node.name.node.as_str())));
     }
@@ -2025,7 +2025,7 @@ pub fn lower_equip_method(
         if p.node.name.node == "self" {
             continue;
         }
-        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        let base_type = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
@@ -2066,7 +2066,7 @@ pub fn lower_equip_method(
             if p.node.name.node == "self" {
                 continue;
             }
-            let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+            let base_type = ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry);
             let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
             ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
             if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
@@ -2091,7 +2091,7 @@ pub fn lower_equip_method(
             .params
             .iter()
             .filter(|p| p.node.name.node != "self")
-            .map(|p| ctx.type_mapper.map_ast_type(&p.node.type_.node))
+            .map(|p| ctx.type_mapper.map_param_ast_type(&p.node.type_.node, &mut ctx.type_registry))
             .collect();
         ctx.fn_sigs.insert(mangled_name.clone(), (base_param_types, return_type));
     }
@@ -2312,7 +2312,7 @@ pub fn lower_generic_function(
                     && p.node.name.node == name
                     && p.node.ownership == Ownership::Borrow
                 {
-                    let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+                    let base_type = substitute_and_map_param_type(ctx, &p.node.type_.node, &subs);
                     if ctx.type_registry.is_resource_type(base_type) {
                         move_override_params.insert(name.to_string());
                     }
@@ -2328,7 +2328,7 @@ pub fn lower_generic_function(
         .iter()
         .filter(|p| !p.node.is_meta_op)
         .map(|p| {
-            let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+            let base_type = substitute_and_map_param_type(ctx, &p.node.type_.node, &subs);
             let ownership = if move_override_params.contains(&p.node.name.node) {
                 Ownership::Move
             } else {
@@ -2360,7 +2360,7 @@ pub fn lower_generic_function(
         }
         local_idx += 1;
         let local_id = LocalId(local_idx);
-        let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+        let base_type = substitute_and_map_param_type(ctx, &p.node.type_.node, &subs);
         let is_move_override = move_override_params.contains(&p.node.name.node);
         let ownership = if is_move_override {
             Ownership::Move
@@ -2417,7 +2417,7 @@ pub fn lower_generic_function(
         }
         drop_idx += 1;
         let local_id = LocalId(drop_idx);
-        let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+        let base_type = substitute_and_map_param_type(ctx, &p.node.type_.node, &subs);
         let ownership = if move_override_params.contains(&p.node.name.node) {
             Ownership::Move
         } else {
@@ -2753,7 +2753,7 @@ fn lower_equip_method_with_subs(
         if p.node.name.node == "self" {
             continue;
         }
-        let base_type = substitute_and_map_type(ctx, &p.node.type_.node, subs);
+        let base_type = substitute_and_map_param_type(ctx, &p.node.type_.node, subs);
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         params.push((gir_type, Some(p.node.name.node.as_str())));
     }
@@ -2785,7 +2785,7 @@ fn lower_equip_method_with_subs(
         if p.node.name.node == "self" {
             continue;
         }
-        let base_type = substitute_and_map_type(ctx, &p.node.type_.node, subs);
+        let base_type = substitute_and_map_param_type(ctx, &p.node.type_.node, subs);
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
@@ -2826,7 +2826,7 @@ fn lower_equip_method_with_subs(
             if p.node.name.node == "self" {
                 continue;
             }
-            let base_type = substitute_and_map_type(ctx, &p.node.type_.node, subs);
+            let base_type = substitute_and_map_param_type(ctx, &p.node.type_.node, subs);
             let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
             ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
             if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
@@ -3083,6 +3083,18 @@ fn substitute_and_map_type(
 ) -> TypeId {
     let substituted = generics::substitute_type_pub(ty, subs);
     ctx.type_mapper.map_ast_type(&substituted)
+}
+
+/// Substitute type parameters in a DECLARED PARAMETER's AST type and map it,
+/// routing through `map_param_ast_type` so a `Ref[T]` / `MutRef[T]` spelling
+/// keeps its pointer shape instead of degrading to `UNIT_TYPE`.
+fn substitute_and_map_param_type(
+    ctx: &mut LoweringContext,
+    ty: &Type,
+    subs: &[(String, Type)],
+) -> TypeId {
+    let substituted = generics::substitute_type_pub(ty, subs);
+    ctx.type_mapper.map_param_ast_type(&substituted, &mut ctx.type_registry)
 }
 
 /// Extract the return type of a callable/function parameter type.
