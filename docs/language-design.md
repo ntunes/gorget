@@ -68,6 +68,7 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 | Local type inference — annotate at boundaries, infer inside | Orphan rule violations — trait coherence must be enforced |
 | Distinct / newtype types to prevent semantic misuse at compile time | `typeof null === 'object'`-style lies — the type system must be honest |
 | Integer overflow as an explicit compile-time choice, never silent UB | Dynamic typing as the default path for any core operation |
+| One namespace for types and values (D55) — a name is a type or a value, never both, so `x[a](b)` is determined by what `x` is rather than by a syntax rule | Names that mean one thing in type position and another in call position — the collision resolves silently and the diagnostic names the wrong cause |
 
 ### Error Handling
 
