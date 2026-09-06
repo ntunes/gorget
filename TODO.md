@@ -620,6 +620,42 @@ attempt must land its reject as a typed `static_reject`, never as an `ElabError`
 while the explicitly-spelled form compiles. **Discriminated from `[[t0933]]` in the item: same panic site, different
 producer.** ⚠ **And the panic is a SECOND defect — GIR validation had already produced a clean diagnostic.**
 
+### ⭐ TRACK J LANDED `312337a48` — **the owed clean sweep ran, rc 0.** OUTPUT-REVIEW RUNNING.
+**FULL `sanitize_sweep.sh`, ONE CLEAN UNINTERRUPTED RUN, rc 0**, script **untouched for its whole duration**
+(`md5sum` unchanged) — the rule the scout broke, respected. Blast radius **zero**: 2261 rows, every row 5 fields, 0 dup
+stems, census **byte-identical**, `unmeasured` 0, `absent` 0, all 251 allowlist stems `MEASURED` and still `LEAK`.
+⭐ **AN IN-CORPUS WITNESS THAT `[[t1360]]`'s OWN PRESCRIBED OPERAND WAS WRONG:** 422 rows read `UNMEASURED`, and
+`stack_guard_deep_recursion  ASAN_stack-overflow  …  UNMEASURED` **is INSIDE `covered`** — the intersection the item
+prescribed would have called it measured.
+⭐ **FIXLIST three-way, and the half that matters:** HEAD **rc 0 with 4 bogus delete lines** · naive patch **rc 1** (the
+regression) · **shipped rc 0 with ZERO** — **and NOT accidentally green: a fixlist that DOES contain an allowlisted
+`BUILD_FAIL` fixture still REDs.**
+⊕ **End-to-end `BUILD_FAIL_BOTH` PROVEN through the real `run_one` pipeline** — the one thing no brief-review could
+close, because none built a compiler. ⊕ **Nine partial reverts, each redding a NAMED row, anchored BY LINE**, tree
+byte-identically restored after each. ⊕ **F1's load-bearing control reproduced: empty `LSANOPT` → 0**, confirming the
+negative spelling was required.
+
+⛔⛔ **AND THE EXECUTOR OVERTURNED MY COVERAGE SET — THE THIRD ORCHESTRATOR PRESCRIPTION FALSIFIED ON THIS TRACK.**
+The brief scoped coverage as *"3 `_want` lines"*. **Measured: reverts R4 and R5b each leave EVERY listed assertion
+GREEN.** ⇒ it added two adjudicator probes (ROUTE-1/ROUTE-2) **and four `tests/lints.rs` needles for the parts
+`run_selftest` STRUCTURALLY CANNOT REACH** (two gate blocks that only print; the startup assertion, which runs before
+anything is measured). ⚠ **Addendum 1's ⭐2 — *"the reverse control is ALREADY WIRED, you only need the NEW
+direction"* — is TRUE BUT NOT SUFFICIENT.**
+
+⛔ **PARENT OBLIGATIONS FROM J:**
+1. **`[[t1360]]` is CLOSED** (`git rm` + `DONE.md`). ⚠ **`DONE.md` AND `TODO.md` WILL CONFLICT with sibling entries at
+   integration** — resolve the handover block to MY side, then regenerate the index (MA-3's split).
+2. ⛔⛔ **`roundish_headlines` PIN COLLISION IS NOW REAL, NOT FORECAST:** J set it to **87**; **I set it to 89** one
+   heartbeat earlier for three `DONE.md` entries I wrote. **Both measured base+themselves.** ⇒ **RE-MEASURE FROM THE
+   MERGED TREE with the db's own instrument (`bash scripts/clone_meter_check.sh --round-close-census`) and set it from
+   THAT — never by adding, never by taking either side.** Move `measured_at` with it.
+3. **`[[t1601]]`'s `cites` dropped `todo/t1360.md`** (a dead row would red the `todo_cites_paths_resolve` pin).
+⊕ **E1 is 18 hits now, not 17** — J's own F1 comment quotes the option string. Still 1 changed + 1 corrected + 15 left.
+⊕ **Filed from J's block: `[[t1581]]`** (four unwitnessed cells) · **`[[t1582]]`** (make the swept population an
+artifact; ⚠ **`awk '$2=="IN"' tests/sanitize/CORPUS_MANIFEST.txt` returns NOTHING today, so a fixture moved off the top
+level leaves the population SILENTLY**) · **`[[t1583]]`** (the `FNR==NR` empty-allowlist degenerate, pre-existing and
+made SAFER by this fix). One line added to `[[t0956]]`.
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
