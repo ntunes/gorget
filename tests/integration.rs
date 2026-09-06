@@ -67841,45 +67841,6 @@ fn coercion_identity_builtin_rwlock_import_still_coerces() {
 /// CONTROL — the axes disagree. `Weak` and `Mutex` share a
 /// `DerefWrapperKind`, and only `Mutex` coerces. Deriving axis 3 from axis 1
 /// turns this row green.
-/// ACCEPT — `unify`'s SECOND coercion arm, the mirror direction (the wrapper is
-/// SUPPLIED where something else is expected). Every other accept row in this
-/// directory takes arm A.
-///
-/// ⛔ MEASURED, and it is why this row exists: setting `is_shared_wrapper =
-/// false` at arm B ALONE leaves all 17 other rows and the whole `--lib` suite
-/// GREEN, while the same edit at arm A reds four rows. Across all 5424 `.gg`
-/// under `tests/fixtures/`, arm B reached the accepting branch ZERO times — so
-/// a change that merely NARROWS arm B (rather than reverting it, which the
-/// `*_struct_ret` rows do catch) was invisible. This program is the first to
-/// reach it.
-#[test]
-fn coercion_identity_builtin_mutex_ret_still_coerces() {
-    check_gg_ok("coercion_identity/builtin_mutex_ret_coerces.gg");
-}
-
-/// THE ELEVENTH CHANGED CELL — a MESSAGE cell, not a verdict cell, and the only
-/// one of the eleven that an exit-code sweep is structurally blind to.
-///
-/// `Mutex(5)` with a generic `struct Mutex[T]` in scope cannot infer `T` — a
-/// pre-existing, name-independent gap, so rc 1 on both sides. What moved is the
-/// BLAME: pre-fix the coercion arm answered `true` on the USER's `Mutex` and
-/// unwrapped the annotation before reporting, giving ``expected `int` `` — a
-/// type the author never wrote. Post-fix it names the annotation and matches
-/// the name-neutral `struct Wrap[T]` control exactly.
-///
-/// The forbidden string is the pre-fix spelling. ⚠ An earlier probe dismissed
-/// this cell as "not a cell at all"; that probe declared no `struct Mutex[T]`
-/// and so measured the BUILTIN path (rc 0 on both sides) against a control that
-/// DID declare its struct.
-#[test]
-fn coercion_identity_user_mutex_ctor_blames_the_annotation() {
-    check_gg_fails_exclusive(
-        "coercion_identity/user_mutex_ctor_message.gg",
-        "expected `Mutex[int]`, found `Mutex`",
-        "expected `int`, found `Mutex`",
-    );
-}
-
 #[test]
 fn coercion_identity_weak_is_not_coercion_transparent() {
     check_gg_fails(
@@ -67915,6 +67876,146 @@ fn coercion_identity_task_keeps_derive_advice() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// D51 COERCION IDENTITY — THE REST OF THE AXIS.
+//
+// The typed axis is the THREE-NAME coercion set: pre-fix, `is_shared_wrapper`
+// was `name == "Mutex" || name == "Shared" || name == "RWLock"`, three separate
+// string literals. Every reachability path to that decision therefore owes all
+// three names, and the rows above pinned the module-import route for `Mutex`
+// alone — on BOTH the verdict question and the message question.
+//
+// MEASURED (matched pairs, same probes against pre-fix and post-fix `src/`):
+// the product is real. All three names change on both routes and on both
+// questions, so `|changed| = 18`, not 11:
+//
+//     verdict · inline · struct arm A   3   pinned above
+//     verdict · inline · struct arm B   3   pinned above
+//     verdict · inline · enum   arm A   3   pinned above
+//     verdict · module                  3   1 above + 2 here
+//     message · inline                  3   1 above + 2 here
+//     message · module                  3   3 here
+//
+// NAMED OMISSIONS, with the mechanism that makes each one not a cell:
+//   · `newtype Mutex(int)` — `parse_newtype` never parses generic params, so
+//     the value can never be `ResolvedType::Generic` and `args.len() == 1` is
+//     unreachable. Measured rc 0 on both sides.
+//   · `type Mutex[T] = Wrap[T]` — an alias resolves through and the arm reads
+//     the TARGET's name. Measured rc 0 on both sides.
+//   · `enum` on the module route, and arm A on the module route — the route
+//     changes only which `DefId` the name binds to, which is pinned at all
+//     three names by the verdict·module rows; the declaration form changes only
+//     the `Generic` producer, pinned at all three names inline.
+//   · the BUILTIN ctor (`Mutex[int] m = Mutex(5)` with no user declaration, and
+//     the same through `from std.sync import Mutex`) — rc 0 on both sides, so
+//     not a cell. ⚠ This is the observation that made the message half of the
+//     axis look empty: a probe written without the user declaration measures
+//     THIS, not the cell next to it.
+// ---------------------------------------------------------------------------
+
+/// ACCEPT — `unify`'s SECOND coercion arm, the mirror direction (the wrapper is
+/// SUPPLIED where something else is expected). Every other accept row in this
+/// directory takes arm A.
+///
+/// ⛔ MEASURED, and it is why this row exists: before this fixture, setting
+/// `is_shared_wrapper = false` at arm B ALONE left every other row and the
+/// whole `--lib` suite GREEN, while the same edit at arm A reds four rows.
+/// Across the whole fixture corpus, arm B reached the accepting branch ZERO
+/// times — so a change that merely NARROWS arm B (rather than reverting it,
+/// which the `*_struct_ret` rows do catch) was invisible. This program is the
+/// first in the tree to reach it, and the two arms now red disjoint row sets.
+#[test]
+fn coercion_identity_builtin_mutex_ret_still_coerces() {
+    check_gg_ok("coercion_identity/builtin_mutex_ret_coerces.gg");
+}
+
+/// VERDICT · MODULE ROUTE · `Shared`. Sibling of
+/// `coercion_identity_module_route_rejects`, which pinned this route for
+/// `Mutex` only.
+#[test]
+fn coercion_identity_module_route_shared_rejects() {
+    check_gg_fails(
+        "coercion_identity/module_route_shared/main.gg",
+        "expected `int`, found `Shared[int]`",
+    );
+}
+
+/// VERDICT · MODULE ROUTE · `RWLock` — and mechanically the least redundant of
+/// the three: `RWLock` is not in `BUILTIN_GENERIC_TYPES`, so its identity comes
+/// from the builtin-module struct seed rather than the placeholder loop.
+#[test]
+fn coercion_identity_module_route_rwlock_rejects() {
+    check_gg_fails(
+        "coercion_identity/module_route_rwlock/main.gg",
+        "expected `int`, found `RWLock[int]`",
+    );
+}
+
+/// MESSAGE · INLINE · `Mutex`. rc 1 on both sides; only the BLAME moves.
+/// Pre-fix the arm answered `true` on the USER's `Mutex` and unwrapped the
+/// annotation before reporting, naming a type the author never wrote. The
+/// forbidden string is that pre-fix spelling — an rc sweep cannot see this row.
+#[test]
+fn coercion_identity_user_mutex_ctor_blames_the_annotation() {
+    check_gg_fails_exclusive(
+        "coercion_identity/user_mutex_ctor_message.gg",
+        "expected `Mutex[int]`, found `Mutex`",
+        "expected `int`, found `Mutex`",
+    );
+}
+
+/// MESSAGE · INLINE · `Shared`.
+#[test]
+fn coercion_identity_user_shared_ctor_blames_the_annotation() {
+    check_gg_fails_exclusive(
+        "coercion_identity/user_shared_ctor_message.gg",
+        "expected `Shared[int]`, found `Shared`",
+        "expected `int`, found `Shared`",
+    );
+}
+
+/// MESSAGE · INLINE · `RWLock`.
+#[test]
+fn coercion_identity_user_rwlock_ctor_blames_the_annotation() {
+    check_gg_fails_exclusive(
+        "coercion_identity/user_rwlock_ctor_message.gg",
+        "expected `RWLock[int]`, found `RWLock`",
+        "expected `int`, found `RWLock`",
+    );
+}
+
+/// MESSAGE · MODULE ROUTE · `Mutex`. The cell where both of the review's
+/// findings meet: an imported user type, and an observable an exit-code sweep
+/// is blind to.
+#[test]
+fn coercion_identity_module_route_mutex_ctor_blames_the_annotation() {
+    check_gg_fails_exclusive(
+        "coercion_identity/module_route/ctor_main.gg",
+        "expected `Mutex[int]`, found `Mutex`",
+        "expected `int`, found `Mutex`",
+    );
+}
+
+/// MESSAGE · MODULE ROUTE · `Shared`.
+#[test]
+fn coercion_identity_module_route_shared_ctor_blames_the_annotation() {
+    check_gg_fails_exclusive(
+        "coercion_identity/module_route_shared/ctor_main.gg",
+        "expected `Shared[int]`, found `Shared`",
+        "expected `int`, found `Shared`",
+    );
+}
+
+/// MESSAGE · MODULE ROUTE · `RWLock`.
+#[test]
+fn coercion_identity_module_route_rwlock_ctor_blames_the_annotation() {
+    check_gg_fails_exclusive(
+        "coercion_identity/module_route_rwlock/ctor_main.gg",
+        "expected `RWLock[int]`, found `RWLock`",
+        "expected `int`, found `RWLock`",
+    );
+}
+
 
 /// KNOWN GAP `todo/t1527` — the BUILTIN shared-variable coercion accepts and
 /// then SIGSEGVs. `unify` makes `Shared[T]` transparent to `T`, so a
@@ -67925,8 +68026,12 @@ fn coercion_identity_task_keeps_derive_advice() {
 /// ⚠ NOT the D51 user-shadow class — that one is closed on this axis by
 /// `tests/fixtures/coercion_identity/`. This is the builtin path, measured
 /// identical on BOTH sides of that migration (revert, rebuild, same crash).
-/// It is why the four `coercion_identity/builtin_*_coerces.gg` accept rows are
+/// It is why the five `coercion_identity/builtin_*_coerces.gg` accept rows are
 /// wired to `check_gg_ok` and not `run_gg`; promote them when this lands.
+///
+/// ⚠ ARM A ONLY. Its mirror is `known_gap_mutex_coerced_to_int_arg_wrong_output`
+/// — same coercion rule, opposite direction, and a DIFFERENT failure mode
+/// (rc 0 with silent wrong output, not a crash). `todo/t1527` covers both.
 #[test]
 #[ignore = "KNOWN GAP (R51 Track C, 2026-09-06, found while building the \
 positive controls for the D51 coercion-identity migration): `gg check` accepts \
@@ -67940,4 +68045,31 @@ fn known_gap_shared_var_coerced_to_wrapper_param_segv() {
     // the owner ask recorded in todo/t1527; what is not in doubt is that
     // accept-then-SIGSEGV is wrong.
     run_gg("known_gaps/shared_var_coerced_to_wrapper_param_segv.gg", "1");
+}
+
+/// KNOWN GAP `todo/t1527`, THE MIRROR DIRECTION — and a different failure mode,
+/// which is why it is its own repro rather than a second spelling of the one
+/// above. Arm A hands a bare scalar to a pointer-ABI parameter and SIGSEGVs;
+/// arm B hands a real `Mutex[int]` handle to an `int64_t` parameter, so the
+/// pointer is READ AS AN INTEGER: rc 0, and `187651999621793` where `8` was
+/// expected. ⚠ An exit-code gate is blind to this one.
+///
+/// ⚖ It also sharpens the owner ask. "Make it work" means MATERIALIZE a wrapper
+/// for arm A and UNWRAP a live lock for arm B — an implicit `.lock()` at an
+/// argument boundary, which D53's lock discipline exists to make the author
+/// write. The two directions do not share an answer.
+#[test]
+#[ignore = "KNOWN GAP (R51 Track C, 2026-09-06, found by the delta review of \
+the arm-B accept row): `gg check` accepts a builtin Mutex[int] passed where an \
+int is expected and the program prints the handle POINTER as an integer at rc \
+0 -- silent wrong output, not the SIGSEGV its arm-A sibling produces. \
+PRE-EXISTING. Whether the fix is to unwrap the lock at the boundary (this \
+test's assertion, which is an implicit .lock() under D53) or to REJECT the \
+coercion is an owner ask -- todo/t1527."]
+fn known_gap_mutex_coerced_to_int_arg_wrong_output() {
+    // INTENDED: the accept direction the checker already promises — the lock is
+    // read and the program prints 8. The alternative reading (reject at check)
+    // is the owner ask in todo/t1527; what is not in doubt is that
+    // accept-then-print-a-pointer is wrong.
+    run_gg("known_gaps/mutex_coerced_to_int_arg_wrong_output.gg", "8");
 }

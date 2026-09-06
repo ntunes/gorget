@@ -1,0 +1,4 @@
+# The user's own `Shared`, in a module. See `main.gg` and `ctor_main.gg`.
+
+struct Shared[T]:
+    T value

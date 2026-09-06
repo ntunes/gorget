@@ -1,0 +1,38 @@
+# KNOWN GAP — `todo/t1527`, THE MIRROR DIRECTION. `gg check` ACCEPTS this
+# program and it prints a raw heap pointer instead of `8`.
+#
+# ⛔ THIS IS NOT THE SAME DEFECT AS ITS SIBLING REPRO, AND THE DIFFERENCE IS THE
+# WHOLE REASON IT EXISTS. `known_gaps/shared_var_coerced_to_wrapper_param_segv.gg`
+# is `unify` arm A — a bare scalar handed to a parameter whose ABI wants a
+# pointer, which SIGSEGVs. This is arm B, the exact inverse: a real
+# `Mutex[int]` HANDLE handed to a parameter that wants an `int64_t`, so the
+# pointer is read as an integer. Same coercion rule, opposite direction,
+# and a different failure mode:
+#
+#   arm A   `-Wint-conversion` (int64_t -> void*)   SIGSEGV, signal 11
+#   arm B   `-Wint-conversion` (void* -> int64_t)   rc 0, SILENT WRONG OUTPUT
+#
+# MEASURED at `24156ed68`: `gg check` rc 0; C emits `warning: passing argument 1
+# of 'take_int' makes integer from pointer without a cast [-Wint-conversion]`
+# ("expected 'int64_t' but argument is of type 'void *'"); the program exits 0
+# having printed `187651999621793`. ⚠ An exit-code gate cannot see this one at
+# all — it is the quieter and, by the round's own severity ranking,
+# silent-wrong-output rather than a crash.
+#
+# ⚖ INTENDED — AND THE DIRECTION IS AN OWNER ASK (`todo/t1527`), WHICH THIS
+# FIXTURE'S EXISTENCE SHARPENS. This asserts the ACCEPT direction: `8`.
+# ⛔ But note what "make it work" MEANS here, because it is not what it means
+# for arm A. Arm A would have to MATERIALIZE a wrapper around a scalar. Arm B
+# would have to UNWRAP a live `Mutex[int]` into an `int` at an argument
+# boundary — an IMPLICIT LOCK ACQUISITION, which D53's lock discipline exists to
+# make the author write. So the two directions do not share an answer, and the
+# ask has to be put as two questions rather than one.
+#
+# Asserted by `known_gap_mutex_coerced_to_int_arg_wrong_output`.
+
+int take_int(int x):
+    return x + 1
+
+void main():
+    Mutex[int] m = Mutex[int](7)
+    print(take_int(m))
