@@ -526,6 +526,28 @@ in the tree catches**) — **but it is a new red surface: an UNCITED row whose f
 ⊕ **E1 is ONE site, not fourteen:** 17 hits = 1 (the changed line) + 1 (`tests/lints.rs:11096`, becomes FALSE) + **15
 hand-repro/provenance that STAY CORRECT.**
 
+### ⭐⭐ ASK 2 NARROWS AND **K IS UNBLOCKED** — I TESTED THE BLOCK INSTEAD OF ACCEPTING IT
+Pass 1 blocked K on *"the stdlib carve-out has NO TYPED CARRIER, so 'one-line-switchable' can only be a path/name
+match"* — a 9th Core #2 violation. **Measured, and it is wrong on BOTH halves:**
+1. ⭐ **`extern` IS A TYPED AST VARIANT** — `FunctionBody::Extern(Spanned<String>)`, `src/parser/ast.rs:217`. ⇒ **all
+   **13** tree-wide extern `Ref` params are exempted by reading a TYPED VARIANT. No path match, no name match.**
+2. ⭐⭐ **AND EXEMPTING BARE STRUCT-FIELD DECLARATIONS COSTS THE CRITICAL NOTHING** — measured: **every one of pass 1's
+   five falsifying cells has ZERO bare `Ref` field-decl lines** (`grep -cE '^[[:space:]]+(Ref|MutRef)\[' <cell>` → 0
+   for all five). They are generic args, enum payloads, tuple elements and collection elements.
+⇒ **K ships the SPELLING reject with two STATED, TYPED exemptions — `FunctionBody::Extern` (permanent) and bare
+field declarations (TEMPORARY, pending the ask) — still deletes ALL FIVE CRITICAL cells, and leaves `lib/std/iter.gg`
+compiling.** ⚠ **Pass 2 is auditing this claim specifically; it is MINE, it is NEW, and nobody has reviewed it. I have
+told the owner K is proceeding, so a refutation is the single most useful thing that pass can return.**
+
+⇒ ⚖ **ASK 2 IS NARROWED, NOT REMOVED: do the stdlib's FOUR struct-FIELD declarations eventually get rejected too?**
+**It is a FOLLOW-UP, not a gate.** The 13 externs are settled by `[[t1307]]` and by the typed variant; only the 4 fields
+remain, and the temporary exemption keeps them legal meanwhile.
+
+### 📌 WHY ONLY 2 TRACKS ARE IN FLIGHT AND THAT IS CORRECT
+H and J executors are running; K is in review. **I am deliberately NOT opening a speculative fifth track**: autonomy is
+suspended at this round's close, a ~2h battery is still owed, and AGENTS.md warns against **pre-warming a future
+round's campaign**. Adding a track now buys nothing that can land.
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
