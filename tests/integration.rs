@@ -67231,6 +67231,25 @@ fn classify_snapshot_run(
     }
 }
 
+/// PURE. Do two runs' verdicts describe the SAME outcome class?
+///
+/// ⚠ NOT `v1 == v2`, and the difference is a hole rather than a nicety.
+/// `NonZeroExit` carries the exit code, so a fixture that fails CONSISTENTLY
+/// but with a VARYING code — SIGSEGV on one run, SIGABRT on the next, which is
+/// an ordinary shape for a corrupted heap — would compare unequal and get
+/// downgraded from a RED to a report. Two failing runs are a STABLE
+/// disagreement whatever the signal; only the seeder's own axis (does the
+/// OUTPUT vary?) plus success-vs-failure decides non-determinism, and the
+/// seeder never compares exit codes at all — it treats "run 1 succeeded, run 2
+/// failed" as `Flaky` and has no vocabulary for the rest.
+fn snapshot_verdicts_agree_on_class(a: SnapshotRunVerdict, b: SnapshotRunVerdict) -> bool {
+    use SnapshotRunVerdict::NonZeroExit;
+    match (a, b) {
+        (NonZeroExit(_), NonZeroExit(_)) => true,
+        _ => a == b,
+    }
+}
+
 /// First 90 chars of a value, for a readable failure row.
 fn clip_snapshot_value(s: &str) -> String {
     s.chars().take(90).collect()
@@ -67257,6 +67276,18 @@ fn clip_snapshot_value(s: &str) -> String {
 /// | drop the orphan `is_file()` | this test's `Orphan` cell (the corpus has 0 orphans) |
 /// | drop `!raw.is_empty()` | this test's `EmptySnapshot` cell |
 /// | tighten `trim_end` → raw compare | this test's `io_input`-shaped cell, AND 4 corpus rows including `io_input` itself |
+/// | weaken `snapshot_verdicts_agree_on_class` to `==` | this test's varying-signal cell |
+///
+/// ⚠ **EVERY ROW ABOVE EXCEPT THE FIRST PINS A *DECIDER-LEVEL* REVERT, NOT A
+/// *CALL-SITE-LEVEL* ONE.** Each precheck and each verdict has exactly ONE
+/// production consumer — the net's `match snapshot_row_precheck(…)` block and
+/// its two `classify_snapshot_run` calls — so a revert that deletes the CALL
+/// leaves the decider intact and every cell here still passes. Measured:
+/// deleting the whole `match snapshot_row_precheck(…)` block leaves the suite
+/// GREEN (rc 0). The only row with a second, independent witness is the trim,
+/// which also reds `io_input` in the corpus. Extracting the deciders bought
+/// RED-verifiability for logic whose corpus population is 0; it did not, and
+/// cannot, pin that the net still asks them.
 ///
 /// NOT PINNED, deliberately, each for a stated reason:
 /// * **remove the whole net** — inherent to any guard addition; nothing can pin
@@ -67327,7 +67358,21 @@ fn snapshot_row_classifier_cells() {
         Disagree,
     );
 
-    eprintln!("snapshot_row_classifier_cells: 9 synthetic cells checked");
+    // THE STABILITY GATE'S OWN AXIS — a consistently-FAILING fixture must stay
+    // a RED even when the signal differs between runs (SIGSEGV then SIGABRT is
+    // an ordinary shape for a corrupted heap). A bare `v1 == v2` there
+    // downgrades a stable failure to a report, which is the guard green-lighting
+    // its own class. Reverting `snapshot_verdicts_agree_on_class` to `==` reds
+    // the first of these.
+    assert!(snapshot_verdicts_agree_on_class(
+        NonZeroExit(Some(139)),
+        NonZeroExit(Some(134)),
+    ));
+    assert!(!snapshot_verdicts_agree_on_class(Agree, NonZeroExit(Some(1))));
+    assert!(!snapshot_verdicts_agree_on_class(Disagree, NonZeroExit(Some(1))));
+    assert!(snapshot_verdicts_agree_on_class(Disagree, Disagree));
+
+    eprintln!("snapshot_row_classifier_cells: 13 synthetic cells checked");
 }
 
 /// **Snapshot freshness, measured on the RUST lane (`todo/t1451`).**
@@ -67570,7 +67615,7 @@ fn snapshot_freshness_on_the_rust_lane() {
         );
         let g1 = String::from_utf8_lossy(&out1.stdout).trim_end().to_string();
         let g2 = String::from_utf8_lossy(&out2.stdout).trim_end().to_string();
-        if v1 != v2 || g1 != g2 {
+        if !snapshot_verdicts_agree_on_class(v1, v2) || g1 != g2 {
             return Some(SnapshotRow::Report(format!(
                 "{stem}: NONDETERMINISTIC — run 1 {v1:?} {:?}, run 2 {v2:?} {:?}. The seeder \
                  refuses to snapshot a fixture whose output varies, so this is NOT adjudicated \

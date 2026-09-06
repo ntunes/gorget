@@ -9863,13 +9863,16 @@ fn todo_index_run(root: &Path, args: &[&str]) -> (Option<i32>, String, String) {
 /// **PARTIAL-REVERT TABLE, measured one revert at a time against these same
 /// seven cells.** Every substantive change to `scripts/todo_index.py` reds at
 /// least one row, and the PRE-FIX script at `bfcd22807` reds CELL 3, CELL 4 and
-/// CELL 5 (Core #6 — the guard fails on the commit that motivated it):
+/// CELL 5 (Core #6 — the guard fails on the commit that motivated it).
+/// ⚠ The "reds" column is the FULL set each revert breaks, measured cell by cell
+/// OUT OF PROCESS; this test itself aborts at the FIRST failing assert, so a run
+/// only ever shows the earliest of them:
 ///
 /// | revert | reds |
 /// |---|---|
-/// | drop the cell-3 gate entirely | CELL 3, CELL 4 |
+/// | drop the cell-3 gate entirely | CELL 3 (observed), CELL 4 |
 /// | widen cell 3 to `if write:` (drop the `os.path.exists` predicate) | CELL 3′ |
-/// | drop the `− dropped` arithmetic | CELL 3, CELL 4 (INTERNAL) |
+/// | drop the `− dropped` arithmetic | CELL 3 (observed), CELL 4 — both INTERNAL |
 /// | drop the cell-4 widening | CELL 4 |
 /// | drop the cell-5 gate | CELL 5 |
 ///
@@ -27437,7 +27440,24 @@ fn process_spawn_deadline_arm_count() {
 /// contain the token at all. A 50% false-positive rate is what got this track's
 /// first design killed; counting the OTHER set cannot make that mistake.
 ///
-/// The remaining plain calls are the `*_comparison` family — measured, 9 CALLS
+/// ⛔ **AND THE INDIRECTION CUTS BOTH WAYS — DO NOT READ THOSE TWO AS FULLY
+/// COMPLIANT.** `self_host_emit_cc_run` uses the CATCHING runner only for the
+/// RUN step; its driver EMIT step is the PLAIN one (`grep -n 'let emit =
+/// run_with_timeout(' tests/integration.rs` → the hit inside
+/// `fn self_host_emit_cc_run`). So a hung self-host DRIVER still aborts a
+/// verdict-bearing worker and discards every result it accumulated — the exact
+/// defect this guard retires, one level of indirection away, in
+/// `self_host_runtime`, `self_host_comprehension_net` and
+/// `self_host_runtime_diff`. Filed as `todo/t1508`. Pre-existing and NOT
+/// counted here: this lint's subject is calls written LEXICALLY INSIDE a
+/// `parallel_map_fixtures` closure, and widening it to reachability would need
+/// a call-graph walk, not a scan.
+///
+/// ⇒ the sentence this guard is NOT entitled to is *"the plain runner is now
+/// confined to sites where a panic reds fail-safe"*. What it IS entitled to:
+/// **the LEXICALLY-VISIBLE plain population does not grow.**
+///
+/// The plain calls it counts are the `*_comparison` family — measured, 9 CALLS
 /// across 7 nets (lexer / parser / resolver / type / check / lowerer / c_emit;
 /// the last two call it twice, once per lane). ⚠ The unit is CALLS, not nets:
 /// a net that grows a second plain call is exactly the drift this counts, and
