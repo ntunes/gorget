@@ -462,6 +462,48 @@ marker **ABSENT** ⇒ at HEAD a segfaulting allowlisted fixture is `covered`, is
 **"DELETE"**. **The item's own `covered` intersection would miss it too** — independent reconfirmation that the brief is
 right to contradict its item.
 
+### ⛔⛔ K PASS 1 FALSIFIED THE FIELD-POSITION SUBJECT **BY MEASUREMENT** — and named the ratified one
+**"A field-position reject DELETES THE SHAPE" is FALSE.** Five cells, **ZERO user-written `Ref` field decls**, all rc 0,
+same silent-wrong-output class: `struct W[T]: T source` @ `W[Ref[Dict]]` (**prints 3, correct 5** — byte-identical to
+the CRITICAL's own cell with the field decl replaced by `T source`) · `enum Wrap: Held(Ref[Dict])` · a **tuple**
+`(Ref[Dict], int)` with no struct at all · `Holder[T]` @ `Holder[Ref[int]]` · `Vector[Ref[Cell]]` + push (real).
+⇒ **a field-position subject sees none of them.**
+
+⭐ **AND THE RATIFIED SUBJECT IS SIMPLER.** D41 ratifies **TWO** subjects — **(a) a user-facing SPELLING ban** (*"`Ref`
+never appears in user source"*) and **(b) an internal LIR-STORAGE-SLOT guard**. *"Field position" is neither*, and the
+note's position framing is what **D41's ledger entry explicitly demotes**. **Every one of the five cells contains a
+user-written `Ref[` TOKEN ⇒ a SPELLING subject deletes all five, needs no monomorphization view, and fits
+`src/semantic/`.** ⊕ **Honest residual, measured:** `auto g = cells.get(0)` rests an `Option[Ref[Cell]]` with **zero
+`Ref` tokens** — a spelling ban cannot reach it, **which is exactly why D41 states half (b) separately.**
+
+⛔ **THREE MORE BLOCKERS:** population is **18 field decls, not 16** (the "whole tree" grep missed `spectests/run/`, and
+anchoring on a line *starting* with `Ref[` structurally misses enum payloads, tuples and generic substitution — **the
+sixth enumeration corrected this round**) · **`ggdef` DOES adjudicate**, MATCHing both borrow-field spectests, because
+**a STRING grep cannot see a TYPED AST VARIANT** (`ast::Type::Ref`, `spec/ggdef/src/elaborate/mod.rs:3631`) — *the path
+was right and the grep still wrong* · **the stdlib carve-out has NO TYPED CARRIER** (`is_stdlib`/`is_std_module`/path
+fields: **0 hits in `src/`**), so "one-line-switchable" could only be a **9th name match** in a brief that flags the
+existing 8 as a live Core #2 violation.
+⇒ ⛔ **`[[t1307]]`'s STDLIB ASK IS NOW BLOCKING FOR THIS TRACK, NOT DEFERRABLE.**
+⇒ **VERDICT: re-cut a THIRD time to the SPELLING subject and SPLIT** — 12 fixtures + 2 spectests to migrate, four lane
+floors + an exact `MIN_FIXTURES` pin whose ratchet duty *"attaches to the FIXTURE, not to any track pipeline"*, and a
+live ggdef obligation. **Reviewer explicitly says do NOT stand down: the CRITICAL is real and reproduces.**
+
+### ⛔⛔ J PASS 3: **MY OWN PRESCRIBED FIX RE-CREATED `[[t1360]]`** — struck by name in addendum 3
+The (a)/(b) split I folded routes a no-row allowlist entry to `fixed_leak` ⇒ **"✅ no longer leaking — DELETE these
+rows"**, and a cited one to **"CITED ROW … DELETE OR TIGHTEN"** — **`t1360`'s own headline sentence printed back
+verbatim**, against an item whose requirement is that UNMEASURED *"must never produce delete advice"*.
+⛔ **AND IT SILENTLY DISARMED AN EXISTING CORE #6 REVERSE CONTROL** — with `selftest_clean` having no row, the split puts
+it in `retire_due` so the assertion **PASSES and the disappearance goes undetected**. ⭐ **Two addenda each sound alone;
+the later one quietly deleted half of what the earlier one certified as already-covered.**
+⊕ *"Case (b) is not a defect at all"* was wrong: it conflates **deleted** · **still leaks but left the population**
+(⚠ `awk -F'\t' '$2=="IN"' tests/sanitize/CORPUS_MANIFEST.txt` returns **NOTHING** today, so any move off the top level
+drops a fixture **silently**) · **worker died before its `printf`**. **Only the first deserves delete advice.**
+⭐ **THE MEASURED REPLACEMENT'S KEY PROPERTY:** the struck split made the presence proxy load-bearing for a
+**SILENT-PASS** decision; the replacement makes it load-bearing only for a **MESSAGE**.
+⛔ **AND A FOURTH AXIS THE GUARD IS GREEN OVER — THE OPTIONS AXIS.** `detect_leaks=0:exitcode=0:atexit=1` ⇒ **marker
+PRESENT, leak report ABSENT**: the marker proves the **at-exit path** ran, not the **leak check**. `ASANOPT` is
+caller-overridable ⇒ **mass DELETE advice, the new guard fully green over its own class.** Needs a startup assertion.
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
