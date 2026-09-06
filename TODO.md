@@ -227,6 +227,29 @@ whose source spells `Ref[` without carrying a typed `Ref`. **AGENTS.md sends a t
 arbitration; pass 3 has it.** ⛔ **Whatever is concluded must land in a COMMIT — the fact currently lives only in Track
 I's brief and DIES with it at round close.**
 
+### ⛔ TWO STALLS THIS HEARTBEAT, BOTH MINE — and how each was closed
+**C had its delta-4 review OWED with no agent** (new committed `scripts/` surface, unreviewed) → **launched, scoped to
+the generator alone.** The question is narrow: *is it correct, TOTAL, and self-checking?* ⭐ **A generator that hardcodes
+its shape list is the same hand enumeration in better packaging — the exact failure it was built to end.**
+**I's UNBLOCKED half had nothing running.** Its reject half is owner-blocked, but the **extern-carve-out ACCEPT rows**
+are safe under any ruling (`[[t1307]]`: *"PERMITTED — `extern` PARAMETERS … Leave these alone."*). ⇒ **PROPOSED to fold
+them into H rather than run a 3-pass gauntlet for a few rows** — scope inside a sound design, which does not reset a
+streak. ⛔ **NOT DECIDED: H's pass 3 was asked to RULE on it, including the deciding question — would those rows RED
+without H's fix?** If the extern shapes are correct at HEAD too, they pin nothing and the proposal is worthless. **It
+has no measurement behind it; it is a scheduling convenience, and its cheapest death is that pass.**
+
+### 📌 K's SCOUT RETURNED — `[[t1558]]` RE-GRADED **HIGH → CRITICAL** (`18b0bf9a1`); brief owed next
+Headline was false (zero clones; the field init is already a pointer store). The real defect is **silent wrong output**
+on the live-source branch. ⛔ **The lowering fix ALONE miscompiles and ASan is STRUCTURALLY BLIND** — the block-exit drop
+zeroes the stack-resident header so a dangling read returns 0 from **valid stack memory**; **stdout adjudicates this
+class, the inverse of the usual rule.** ⇒ Core #10: the rejection ships in the SAME change. **DECIDED: reject by
+extending the existing dangling machinery (`origins.rs:204`), not by extending the source's lifetime — lifetime
+extension is GC semantics and contrary to the ratified model.**
+⊕ **`tests/fixtures/cow_amp_ref_field_forward.gg` RATIFIES the defect** and must flip row 3 `3`→`4` in the same change;
+its own banner warns that asserting only rows 1-2 *"would pass even if the pointer were mangled into a fresh copy"* —
+**and then asserts the fresh copy's answer.**
+⚠ **Scope is INDEPENDENT of the D41 ask** — either way sites 2-5 + the validator are needed.
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
