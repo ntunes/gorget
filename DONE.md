@@ -1,3 +1,62 @@
+- [2026-09-06] **🏁 ROUND L (R50) CLOSED — THE CRITICAL MEMORY-SAFETY SET + R49's DEFERRED HALVES. Ten tracks integrated, full battery green.**
+  **Integrated:** A1 (`t1077` nested `Box[Box[T]]` read one deref too many) · C2 (`t0045`+`t0403`) · F1r
+  (`t1362`+`t0750`, a CoW sever that did not survive a scope boundary) · G (819 value-semantics cells + 3
+  guards) · H (`t1387`) · K (`t1385`, 93 cell-lanes gated, both allowlists ratchet BOTH ways) · E (`t0953`
+  closure-arg drain at the three HOF expanders) · A2 (`t1374`+`t1375`+`t0104`, `newtype` construction never
+  became a `StructInit` so BOTH backends name-matched it) · J (`t1407`, `fill` duplicated one heap payload
+  into N slots and handed the runtime a pointer into the buffer it was about to realloc) · L (`t1410`, the
+  wrapping operators emitted UB and the obvious fix regressed a cell).
+  **Held, not integrated:** B (capture cell) · C1 (owner ask) · D0′ · D1 · K2.
+
+  **⭐ THE MEASUREMENT WORTH KEEPING: THE SELF-HOST LANE NOW OUTSCORES BOTH RUST LANES.**
+  `selfhost 1708/1856 = 92.0%` · `c 1683 = 90.7%` · `llvm 1677 = 90.4%` · `asan 1651 = 89.0%` ·
+  `ggdef 1064/1166 = 91.3%` adjudicated. Regenerate: `python3 scripts/robustness_map.py --lanes all --jobs 4`.
+  *"The reference lags the self-host"* has been a per-fixture observation for several rounds; this is the first
+  time it is a corpus-wide number, and it is the succession plan's own criterion.
+
+  **Battery: 13 gates, every rc read off its BARE command.** C sweep · LLVM sweep (2789 passed each, the two
+  lanes agreeing on corpus size as well as result) · `--lib` · `lints` · `c_runtime` · `spec_conformance` ·
+  `security` · `-p ggdef` · `known_gaps_census --check` · `staging_move_burndown --check` · **the
+  LLVM+ASan+UBSan security suite** · `sanitize_sweep.sh` · `robustness_map --lanes all` (20 intra-quadrant
+  drift, **0 fatal**, topic 30 clean).
+
+  **⚠ THE C SWEEP NEEDED TWO RUNS AND THE LEDGER SAYS SO.** Run 1 was **rc 101** on one failure —
+  `self_host_runtime`, the 1376-snapshot lock-in net, reporting `newtype: WRONG-OUTPUT (oracle="newtype works"
+  self="42")`. **The self-host was RIGHT and the committed snapshot was STALE:** A2 had repurposed
+  `tests/fixtures/newtype.gg` from `print("newtype works")` — which constructed a newtype and then printed a
+  CONSTANT STRING, never reading the payload, so it was structurally incapable of catching the defect it was
+  named for — to `print(id.0)`, and did not re-seed the `.out`. Verified from three agreeing sources before
+  touching it (the program's meaning, the live Rust assertion `run_gg("newtype.gg", "42")`, the self-host's own
+  output), then re-run clean. ⚠ **AND THE SWEEP'S TASK NOTIFICATION REPORTED "exit code 0" WHILE THE SWEEP WAS
+  rc 101** — a wrapper's trailing `tail`, caught only by reading the bare value.
+
+  **⭐ EVERY ROUND-CLOSE FINDING LANDED IN A GUARD OR AN INSTRUMENT, NOT IN A TRACK'S CODE.** Five filed:
+  **`t1449`** the index writer's rc describes the state it just replaced · **`t1450`** an F1r named omission
+  (`Select` covered structurally, never behaviourally) that existed only in a `/tmp` brief and was ~20 minutes
+  from deletion · **`t1451`** the only detector for a stale fixture snapshot is a test 100 minutes into the
+  sweep · **`t1452` (HIGH)** the battery-vs-CI lint reduces every CI command to a TARGET NAME and drops env
+  and flags, so it credited `GG_BACKEND=llvm cargo test --test security --release` to the LLVM sweep bullet —
+  **a suite that had NEVER RUN in this project's history, and which passed 223/0 on its first execution** ·
+  **`t1453`** 16 leak-allowlist rows now admit more than the corpus produces, reported by a sweep advisory
+  that prints AFTER its own rc and therefore cannot red the gate it advises on.
+
+  **⚠ AND THREE OF MY OWN AUDIT INSTRUMENTS WERE WRONG, IN BOTH DIRECTIONS.** The convergence figure counted
+  the two ENDPOINTS and so was blind to 16 items filed AND closed inside the round (78/12 reported against a
+  true 96/26) — and it survived my own check because I validated an endpoint-derived number against an
+  endpoint-derived number, two figures from one blind method agreeing. The revert audit grepped for a PHRASE
+  and reported 0 for two tracks that fully complied in other words. The closure audit could not distinguish a
+  completion from a WITHDRAWAL and flagged 2 defects where there were none. ⇒ **a cheap textual audit is a
+  POINTER, not a verdict.**
+
+  **Rules earned and recorded:** the working tree is a GATE input, not just a build input (J's bootstrap RED
+  was a one-word comment edit to an `embed_file` input mid-run) · `git checkout <ref> -- <path>` silently
+  clobbers uncommitted work, same family as the stash prohibition · MA-9 sharpened — a STATUS probe
+  self-matches exactly as a wait predicate does, so ask the ARTIFACT, not the process table · run long gates in
+  the FOREGROUND, and if you slice one, prove the slices EXECUTE the whole (223 + 31 == 254 caught 16 skipped
+  cells) · a gate whose cells are COMPARED cannot be chunked at all (`robustness_map`'s cross-lane divergence).
+
+  Convergence: `known_gaps 17→17 · TODO items 870→940 · net +70 (regen: scripts/convergence.sh 17 870 96)`
+
 - [2026-09-05] ⚠ **NAMED OMISSIONS FROM `t1410`'s CLOSURE (R50 Track L).** Written here because a brief dies
   at round close and *"nothing recorded what was never run"* is how a family gets declared closed.
   **(1) THE SELF-HOST PORT'S ONLY INSTRUMENT IS A SOURCE-TEXT RATCHET.** `self_host_lowerer` is an `OUT` row
