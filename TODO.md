@@ -939,8 +939,8 @@ Three passes, three design invalidations — **but converging, not thrashing**: 
 | ~~**I**~~ → **ABSORBED INTO K** (they converge on the same 4 lines) | ⛔ **MERGED 2026-09-06** — see the merge note below | — | via K | Opened because the owner asked for the blind spot closed this round. **ZERO Gorget-bodied fns take a `Ref[T]`/`MutRef[T]` param** — all 13 declarations are `extern`; a silently-miscompiling prototype is **green on 365/366 fixtures**. ⛔ **Two affected site-pairs fire 0× across 2637 fixtures**, so readiness (1) is UNSATISFIABLE for them from committed fixtures — only this track's cells will ever reach them. |
 | **D** snapshot freshness + `todo_index` rc | ✅✅ **INTEGRATED `6d8380f9a`** — worktree pruned | 3/3 ✅ | — | At the MERGED tree: `--lib` **1187/0**, `--test lints` **244/0** (was 242 — D adds two), `snapshot_` **3 passed / 1376 checked / 0 disagreements**, all rc 0 **off bare commands**. **MA-5 discharged: `ls …/*.out \| wc -l` → 1376 == the pin, MEASURED not arithmetic.** ⊕ It also closed a hole its own review had explicitly declined to ask for: a fixture failing consistently with a VARYING signal (SIGSEGV then SIGABRT) was downgraded RED→Report by `v1 != v2`; now 13 synthetic cells, RED-verified. **`t1508` filed; `DONE.md` line still owed.** | Ships 3 guards + a 1376-row corpus net (**+47 s per C sweep**). ⛔ **It measured a BRIEFED PREMISE FALSE:** `.stdin(Stdio::null())` is a mirror, not the enforcement — `proc_guard` nulls stdin itself, overriding the caller, so hatch R3 is **unpinnable**, not env-dependent. ⊕ Corrects the plain-runner count to **9 CALL SITES across 7 nets** (three passes said 8, counting *nets*). **`t1449` CLOSED (`git rm`); `t1451` narrowed, still open.** |
 | **G** repro/`cites` path guard (`t1064`+`t0675`) | ✅✅ **INTEGRATED `a73dfe1e1`** — worktrees pruned | 3/3 ✅ | — | Merged-tree, all rc 0 off bare commands: `--lib` **1187/0**, `--test lints` **248/0**, `todo_index` **967/967**. **`repro` 16 broken rows → 0; `cites` 34/33 → 30/29.** ⭐ **FOUR lints where one was briefed** — one of them **`t0675`'s owner-agreed guard, UNBUILT since 2026-08-23** — and one written to pin the escape its own output-review found. | Shipped **THREE** lints, not the one briefed — **244 → 247** — because two predicate halves were **corpus-unpinnable** and it pinned them against the real tree rather than name them omissions. **`repro` 16 broken rows → 0; `cites` 34/33 → 30/29.** Reached **5 REPOINT / 2 CLOSE** independently (third agent to land there) and verified no `cites` field names either closed item, so the closure **manufactured none of the dangling-citation defect the track exists to catch.** |
-| **H** `t1505` — the CRITICAL F surfaced | 🆕 **SCOUT RUNNING** | — | yes | Opened because **F stood down leaving its own CRITICAL unworked**, and the owner's standing directive is that optimality progresses with **prerequisites tackled RECURSIVELY**. ⛔ **No round follows R51**, so unworked now means deferred indefinitely. Scout is told **FIXTURE-ONLY or DON'T is an acceptable answer.** |
-| **F** optimality increment 1 (`t0952`) | ⛔ **STOOD DOWN** after 4 passes · ✅ **HARVESTED `aad202677`** | — | — | ✅ **Pass 3 SOLVED the miscompile** — `/tmp/revF51p3_shapeX.patch`: `30`→`3` with the full win (`map_clone` 801→**0**, RSS 6104→**1256**). Core #10 reject NOT needed. ⛔ But my five-site list held one **DEAD** site (invoked 173×, always empty), **MISLABELLED** (`register_method_instance_sigs`, not `register_equip_sigs`), while omitting **five live** ones. ⛔ **A 3-entry fixture — the size every probe in this family used — SITS GREEN over a live miscompile; 7 entries prints `1`.** ⇒ size fixtures to DISTINGUISH. ⛔ **`MutRef[T]` unmeasured in all three passes.** | Root cause + layer CONFIRMED, headline reproduces (**OOM-kill → 1.9 MB correct run**). Reset because the fix **fights Core #4** (1 of 4 callers) and fires **SIX-Q #6 on its own mechanism** (`:1890` ByValue half unfixed; works only because `calls.rs` short-circuits first). |
+| **H** `t1505` — the CRITICAL F surfaced | ✅✅ **INTEGRATED `f5ad8d0f3`** — worktrees pruned | 4 passes ✅ | — | Opened because **F stood down leaving its own CRITICAL unworked**, and the owner's standing directive is that optimality progresses with **prerequisites tackled RECURSIVELY**. ⛔ **No round follows R51**, so unworked now means deferred indefinitely. Scout is told **FIXTURE-ONLY or DON'T is an acceptable answer.** |
+| **F** optimality increment 1 (`t0952`) | ⛔ **STOOD DOWN** after 4 passes · ✅ **HARVESTED `aad202677`** + **`[[t1607]]`** | — | — | ⛔ **CORRECTED AT CLOSE — pass 3 did NOT solve it.** Shape X *looked* solved (`30`→`3`, `map_clone` 801→**0**, RSS 6104→**1256**, Core #10 reject not needed) and was **RETRACTED: it MISCOMPILES at N=7** (`7`→`1`, rc 0, three builds). **N=3 is the one size in ten that is accidentally correct**, and every probe in the family used it. This row read *"SOLVED"* while line ~1397 recorded the retraction — **a contradiction inside one handover.** ⛔ But my five-site list held one **DEAD** site (invoked 173×, always empty), **MISLABELLED** (`register_method_instance_sigs`, not `register_equip_sigs`), while omitting **five live** ones. ⛔ **A 3-entry fixture — the size every probe in this family used — SITS GREEN over a live miscompile; 7 entries prints `1`.** ⇒ size fixtures to DISTINGUISH. ⛔ **`MutRef[T]` unmeasured in all three passes.** | Root cause + layer CONFIRMED, headline reproduces (**OOM-kill → 1.9 MB correct run**). Reset because the fix **fights Core #4** (1 of 4 callers) and fires **SIX-Q #6 on its own mechanism** (`:1890` ByValue half unfixed; works only because `calls.rs` short-circuits first). |
 
 ⚠ **THE RESET ON F IS AN OVERRULE OF THE REVIEWER'S OWN CLASSIFICATION.** Pass 1 called all four findings scope growth; two of them name *a Core invariant fought*, which the rule says resets. **A reviewer's severity label is evidence, not a verdict.**
 
@@ -1388,7 +1388,17 @@ integrated ten tracks, went 13-gates green, and advanced its own headline by zer
 owner.** A recursive prerequisite chain has one at every level.
 ⊕ **Compatible with the no-new-round instruction below: this work happens INSIDE R51.**
 
-### ⚖ OWNER ASK #5, FOR THE CLOSE — **R51 WILL NOT SHIP THE OPTIMALITY INCREMENT, AND THE OWNER SHOULD HEAR IT FROM THE CLOSE, NOT INFER IT**
+### ✅⛔ OWNER ASK #5 IS **WITHDRAWN — ITS PREMISE WENT STALE THE MOMENT TRACK H INTEGRATED** (2026-09-06)
+
+⛔ **THE HEADING BELOW IS FALSE AS WRITTEN AND IS KEPT ONLY SO THE RETRACTION IS LEGIBLE.** It was drafted while
+Track F was standing down, and **`t0952` — optimality increment 1 — WAS then shipped, by Track H (`f5ad8d0f3`).**
+It is not a prerequisite: its filed mechanism is *"a LEAK **and an O(n) deep copy per iteration step**"*, and it
+removed **four `gorget_map_clone` calls per `DictIter.next()`** (clone multiset **11 → 7** on the repro). ⇒ **there
+is no unshipped increment to ask about.** What survives is a different, smaller finding — the clone meters cannot
+SEE that win — filed as **`[[t1607]]`**. ⚠ **This ask was folded forward once without re-checking its premise and
+reached a filed item that way; the fold rule exists for exactly this.**
+
+#### (superseded) R51 WILL NOT SHIP THE OPTIMALITY INCREMENT
 
 The owner's 2026-09-06 ruling makes optimality the ROOT and pulls prerequisites in recursively. **That chain IS
 running: `t1505` is a genuine recursive prerequisite** — Track F's own brief-review surfaced it, and Track H
@@ -1403,8 +1413,10 @@ gauntlet, which does not fit alongside H, I and a ~2h close battery.
 documented-but-unshipped. ⚠ **Under (b), with autonomy suspended, the increment has NO HOME** — which is the
 precise failure the ruling was written to prevent (*"postponement has no owner"*). **Say this plainly at the
 close; do not let it read as a silent deferral.**
-⊕ **`/tmp/revF51p3_shapeX.patch` IS LIVE EVIDENCE FOR THIS ASK — DO NOT PRUNE IT** at round close until the
-owner has ruled, even though F is stood down (the prune test is *"does a live claim rest on this"*).
+⊕ ✅ **RESOLVED AT CLOSE — THE ASK NO LONGER DEPENDS ON A `/tmp` ARTIFACT.** It is filed as **`[[t1607]]`**, which
+carries the measured numbers, the N=7 retraction and the accidental-correctness lesson **in its own text**. ⛔ The
+patch itself is deliberately **NOT** preserved: it is a **known-miscompiling** design, and a retracted diff kept on
+disk beside good-looking numbers is precisely what a later agent re-applies.
 
 ### ⛔⛔ OWNER INSTRUCTION 2026-09-06 — **DO NOT OPEN A ROUND AFTER R51.** Autonomy is suspended at R51's
 close. This OVERRIDES the heartbeat loop's standing *"open the next round autonomously"* and Round-lifecycle
@@ -3151,6 +3163,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t1516`](todo/t1516.md) **MED** — 🆕🧹 [MED — Core #14 applied to the record itself: the FIELD is guarded and the PROSE is not, and the prose is where the r…
 - [`t1540`](todo/t1540.md) **MED** — 🆕 [MED — FOUR CELLS PINNED ON ONE LANE ONLY, BECAUSE THE OTHER LANE CANNOT BUILD THEM. Measured 2026-09-06 by R51 Track…
 - [`t1542`](todo/t1542.md) **MED** — 🆕🛡 [MED — A RATCHET THAT PENALISES DOCUMENTING THE THING IT RATCHETS. Found 2026-09-06 by R51 Track A's executor, re-con…
+- [`t1607`](todo/t1607.md) **MED** — 🆕📏 [MED — RE-CUT 2026-09-06, SAME DAY, BECAUSE ITS ORIGINAL PREMISE WAS FALSE.]
 ### Low
 
 - [`t0606`](todo/t0606.md) — 🧹 (G1 follow-up) lint-file-scope: widen g1_projected_materialize_sites_untrack files[] IF a projected-materialize cow_be…
