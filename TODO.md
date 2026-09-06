@@ -748,6 +748,19 @@ Started on the integrated tree with **A–H in and J out**, detached, rc capture
 H's own worktree** — this is the first full-corpus check of it on the integration branch. **A red now belongs to A–H,
 not to J**, which is the technique that prevented a wrong attribution at the mid-round checkpoint.
 
+### ⛔⛔ THE CLOSE BATTERY NEEDS `GG_STAGE1_TIMEOUT_SECS=1800` — I OMITTED IT FROM THE BASELINE SWEEP
+**The bootstrap stages obey NEITHER `GG_BUILD_TIMEOUT_SECS` NOR `GG_TEST_TIMEOUT_SECS`** — they read
+`GG_STAGE1_TIMEOUT_SECS` (default **600**), **and its load auto-adjust samples `/proc/loadavg` ONCE at test start, so it
+cannot protect a 20-minute stage on a box that loads up later.** I set the two that do *not* apply and omitted the one
+that does, while a sibling review was running — i.e. **on a multi-agent box, which is exactly the case the rule names.**
+⇒ **THE CLOSE BATTERY'S C SWEEP MUST BE:**
+`GG_STAGE1_TIMEOUT_SECS=1800 GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 scripts/run_integration.sh`
+⚠ **AND IF THE BASELINE SWEEP REPORTS A BOOTSTRAP TIMEOUT, IT IS NOT A REGRESSION** — AGENTS.md is explicit: *a stage
+timeout is NOT a regression until compared at HEAD*. **Re-run that leg with the env set before concluding anything.**
+⊕ **Diagnosed by ASKING THE ARTIFACT, not the process table** (MA-9): the log sat at 2222 lines for ~20 minutes with two
+live processes — **process liveness proved nothing**; the `self_host_lowerer` driver churning fixtures did. The sweep is
+in the **self-host bootstrap phase**, whose tests print only on completion, so a quiet log there is expected, not hung.
+
 ### ⛔ INTEGRATION OBLIGATIONS — the PARENT's, carried from the two output-reviews (do NOT lose these at merge)
 0. ✅ **DISCHARGED for D at `6d8380f9a`:** obligation 3 (floor re-measured 1376) and the merged-tree gate run. **Headroom regenerated at that tree: 1572** — but Track B still adds ~331, so **regenerate AGAIN after B merges.**
 1. ⛔ **`AGENTS.md` HEADROOM IS NOT CARRIABLE — three commits touch that file and the merge changes it.** Regenerate at the MERGED tree: `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`.
