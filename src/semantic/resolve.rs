@@ -5,7 +5,7 @@ use crate::span::{Span, Spanned};
 
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, TypeId};
-use super::scope::{DefKind, DerefWrapperKind, ScopeKind, ScopeTable};
+use super::scope::{BuiltinTypeKind, DefKind, ScopeKind, ScopeTable};
 use super::types::{self, TypeTable};
 
 pub use crate::parser::ast::Ownership;
@@ -158,17 +158,17 @@ pub fn collect_top_level(
     // The real struct definitions from std.collections replace these when imported.
     for type_name in BUILTIN_GENERIC_TYPES {
         if let Ok(did) = scopes.define(type_name.to_string(), DefKind::Import, Span::dummy()) {
-            // RV-A: seed the typed deref-wrapper kind on the BUILTIN def (the
-            // ONE allowed registration name-match; every downstream read is the
-            // typed flag). Non-wrapper builtins (Vector/Dict/…) map to `None`.
-            if let Some(kind) = DerefWrapperKind::for_builtin_name(type_name) {
-                scopes.get_def_mut(did).deref_wrapper_kind = Some(kind);
-            }
-            // D46 + rider: seed the typed intrinsic-equality flag on the same
-            // builtin defs, from the same one-allowed registration name-match.
-            if crate::semantic::scope::builtin_has_intrinsic_equality(type_name) {
-                scopes.get_def_mut(did).has_intrinsic_equality = true;
-            }
+            // D51 SEED SITE A. Seed the builtin-type IDENTITY on the BUILTIN
+            // def (the ONE allowed registration name-match; every downstream
+            // read goes through a per-axis accessor on the typed flag).
+            // Registry names with no axis today (`Future`/`Task`/`Channel`/
+            // `TaskGroup`/`FxHasher`) map to `None` — see `BuiltinTypeKind`'s
+            // doc on why they are deliberately outside the set.
+            //
+            // ⚠ ORDER IS LOAD-BEARING: this must run AFTER `scopes.define`,
+            // because the `DefKind::Import` inherit in `define_with_mutability`
+            // finds this dummy-span def by lookup. Do not hoist it.
+            scopes.get_def_mut(did).builtin_kind = BuiltinTypeKind::for_builtin_name(type_name);
         }
     }
     // Register built-in Option[T] and Result[T,E] enum types with their variants.
@@ -177,11 +177,19 @@ pub fn collect_top_level(
         ("Result", vec!["Ok", "Error"]),
     ] {
         if let Ok(enum_def_id) = scopes.define(enum_name.to_string(), DefKind::Enum, Span::dummy()) {
+            // D51 SEED SITE C — the PRELUDE re-point. `Option`/`Result` are
+            // NOT in `BUILTIN_GENERIC_TYPES`, so seed site A never sees them
+            // and this is their ONLY seed. ⛔ It must be RE-POINTED at the
+            // identity, never deleted on the theory that the predicate covers
+            // it: deleting it makes `Some(1) == Some(1)` REJECT while
+            // `cargo test --lib` stays green.
+            //
             // D46 rider: `Option`/`Result` ARE enums, so half 2's literal text
             // would have rejected `Some(1) == Some(1)` forever. The rider
             // settles that collision — they are prelude types the user cannot
             // annotate, so their equality is intrinsic on element comparability.
-            scopes.get_def_mut(enum_def_id).has_intrinsic_equality = true;
+            scopes.get_def_mut(enum_def_id).builtin_kind =
+                BuiltinTypeKind::for_builtin_name(enum_name);
             let mut variant_infos = Vec::new();
             for vname in variant_names {
                 if let Ok(variant_def_id) = scopes.define(vname.to_string(), DefKind::Variant, Span::dummy()) {
@@ -620,35 +628,26 @@ fn collect_item(
                         let param_names = extract_generic_param_names(&s.generic_params);
                         ctx.struct_generic_bounds.insert(def_id, (param_names, bounds));
                     }
-                    // RV-A: seed the typed deref-wrapper kind on builtin-module
-                    // wrapper STRUCTS (Box in std.collections; RWLock/ReadGuard/
-                    // WriteGuard in std.sync), gated on the defining scope being
+                    // D51 SEED SITE B. Seed the builtin-type IDENTITY on
+                    // builtin-module STRUCTS, gated on the defining scope being
                     // a BUILTIN module — a USER `struct ReadGuard` gets `None`
-                    // and so stops escaping E_NoFieldFound. `Box` needs seeding
-                    // here as well as in BUILTIN_GENERIC_TYPES because
+                    // and so stops escaping E_NoFieldFound and the `unify`
+                    // coercion arms.
+                    //
+                    // ⚠ THIS SITE IS NOT REDUNDANT WITH SITE A. `RWLock` /
+                    // `ReadGuard` / `WriteGuard` are declared in `lib/std/sync.gg`
+                    // and are NOT in `BUILTIN_GENERIC_TYPES`, so this is their
+                    // ONLY seed. And `Box` / `Vector` / `Dict` / … need seeding
+                    // here as well as at site A because
                     // `from std.collections import Box` resolves to THIS struct
-                    // def, not the Import placeholder (the mid-scout miss).
-                    if let Some(kind) = DerefWrapperKind::for_builtin_name(s.name.node.as_str()) {
+                    // def, not the Import placeholder.
+                    if let Some(kind) = BuiltinTypeKind::for_builtin_name(s.name.node.as_str()) {
                         let in_builtin = matches!(
                             scopes.scope_kind(scopes.current_scope()),
                             ScopeKind::FileModule { path } if crate::stdlib::is_builtin_module(path)
                         );
                         if in_builtin {
-                            scopes.get_def_mut(def_id).deref_wrapper_kind = Some(kind);
-                        }
-                    }
-                    // D46 + rider: the real `Vector`/`Dict`/`Set` STRUCTS in
-                    // std.collections resolve to THIS def, not the Import
-                    // placeholder, so the intrinsic-equality flag needs the
-                    // same builtin-module-gated seed (the `Box` precedent
-                    // directly above).
-                    if crate::semantic::scope::builtin_has_intrinsic_equality(s.name.node.as_str()) {
-                        let in_builtin = matches!(
-                            scopes.scope_kind(scopes.current_scope()),
-                            ScopeKind::FileModule { path } if crate::stdlib::is_builtin_module(path)
-                        );
-                        if in_builtin {
-                            scopes.get_def_mut(def_id).has_intrinsic_equality = true;
+                            scopes.get_def_mut(def_id).builtin_kind = Some(kind);
                         }
                     }
                 }
@@ -2752,5 +2751,152 @@ struct Point:
         assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
         assert!(scopes.lookup("Drawable").is_some());
         assert!(scopes.lookup("Measurable").is_some());
+    }
+
+    // ---------------------------------------------------------------------
+    // D51 identity — GUARD FORM 1: SEED COVERAGE, read off a resolved `DefId`.
+    //
+    // This is HALF of the guard. Its sibling — GUARD FORM 2, in
+    // `src/semantic/scope.rs`'s test module — asserts ACCESSOR CONTENT over the
+    // union of names. ⛔ NEITHER CATCHES THE OTHER'S CLASS:
+    //
+    //   * FORM 2 is a set of PURE FUNCTIONS of a `&str`. Delete a seed site and
+    //     every one of its assertions still passes — measured: deleting the
+    //     prelude re-point leaves `cargo test --lib` fully green while
+    //     `Some(1) == Some(1)` starts rejecting.
+    //   * The tests below never call an accessor's body against a literal list,
+    //     so an accessor-CONTENT edit (adding `Box` to `is_coercion_transparent`)
+    //     leaves them green.
+    //
+    // Every seam of the identity gets a row here: seed A, seed B, the prelude
+    // re-point, the `DefKind::Import` inherit, and a USER shadow asserting
+    // `None`. The last is the one that makes the whole mechanism worth having.
+    // ---------------------------------------------------------------------
+
+    /// Wrap parsed items in a synthetic BUILTIN file-module, so seed site B's
+    /// `is_builtin_module` gate is satisfied without touching the real stdlib.
+    fn collect_in_builtin_module(
+        module_path: &[&str],
+        source: &str,
+    ) -> (ScopeTable, TypeTable, Vec<SemanticError>) {
+        let mut parser = Parser::new(source);
+        let inner = parser.parse_module();
+        assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
+
+        let module = Module {
+            items: vec![Spanned {
+                node: Item::Module {
+                    path: module_path.iter().map(|s| s.to_string()).collect(),
+                    items: inner.items,
+                },
+                span: Span::dummy(),
+            }],
+            span: Span::dummy(),
+        };
+
+        let mut scopes = ScopeTable::new();
+        let mut types = TypeTable::new();
+        let mut errors = Vec::new();
+        collect_top_level(&module, &mut scopes, &mut types, &mut errors);
+        (scopes, types, errors)
+    }
+
+    fn builtin_kind_of(scopes: &ScopeTable, name: &str) -> Option<BuiltinTypeKind> {
+        let did = scopes
+            .lookup(name)
+            .unwrap_or_else(|| panic!("`{name}` is not in scope after collection"));
+        scopes.get_def(did).builtin_kind
+    }
+
+    /// SEAM 1 — seed site A: the `BUILTIN_GENERIC_TYPES` placeholder loop.
+    #[test]
+    fn identity_seed_a_covers_the_builtin_generic_placeholders() {
+        let (scopes, _, _) = parse_and_collect("");
+        assert_eq!(builtin_kind_of(&scopes, "Mutex"), Some(BuiltinTypeKind::Mutex));
+        assert_eq!(builtin_kind_of(&scopes, "Shared"), Some(BuiltinTypeKind::Shared));
+        assert_eq!(builtin_kind_of(&scopes, "Weak"), Some(BuiltinTypeKind::Weak));
+        assert_eq!(builtin_kind_of(&scopes, "Box"), Some(BuiltinTypeKind::Box));
+        assert_eq!(builtin_kind_of(&scopes, "Guard"), Some(BuiltinTypeKind::Guard));
+        assert_eq!(builtin_kind_of(&scopes, "Vector"), Some(BuiltinTypeKind::Vector));
+        assert_eq!(builtin_kind_of(&scopes, "Dict"), Some(BuiltinTypeKind::Dict));
+        // Registry names deliberately OUTSIDE the identity (`todo/t1265`).
+        assert_eq!(builtin_kind_of(&scopes, "Task"), None);
+        assert_eq!(builtin_kind_of(&scopes, "Channel"), None);
+        assert_eq!(builtin_kind_of(&scopes, "FxHasher"), None);
+    }
+
+    /// SEAM 2 — seed site B: builtin-module structs. `RWLock` / `ReadGuard` /
+    /// `WriteGuard` are declared in `lib/std/sync.gg` and are NOT in
+    /// `BUILTIN_GENERIC_TYPES`, so this site is their ONLY seed.
+    #[test]
+    fn identity_seed_b_covers_builtin_module_structs() {
+        let (scopes, _, _) = collect_in_builtin_module(
+            &["std", "sync"],
+            "struct RWLock[T]:\n    T value\n\nstruct ReadGuard[T]:\n    T value\n",
+        );
+        assert_eq!(builtin_kind_of(&scopes, "RWLock"), Some(BuiltinTypeKind::RWLock));
+        assert_eq!(
+            builtin_kind_of(&scopes, "ReadGuard"),
+            Some(BuiltinTypeKind::ReadGuard)
+        );
+    }
+
+    /// SEAM 2b — the same declaration in a NON-builtin module gets nothing.
+    /// This is what makes seam 2 a gate rather than a name match.
+    #[test]
+    fn identity_seed_b_is_gated_on_the_module_being_builtin() {
+        let (scopes, _, _) =
+            collect_in_builtin_module(&["mylib"], "struct RWLock[T]:\n    T value\n");
+        assert_eq!(builtin_kind_of(&scopes, "RWLock"), None);
+    }
+
+    /// SEAM 3 — the PRELUDE re-point. `Option`/`Result` are not in
+    /// `BUILTIN_GENERIC_TYPES`; deleting this seed leaves `--lib` green and
+    /// makes `Some(1) == Some(1)` reject.
+    #[test]
+    fn identity_prelude_repoint_covers_option_and_result() {
+        let (scopes, _, _) = parse_and_collect("");
+        assert_eq!(builtin_kind_of(&scopes, "Option"), Some(BuiltinTypeKind::Option));
+        assert_eq!(builtin_kind_of(&scopes, "Result"), Some(BuiltinTypeKind::Result));
+        let did = scopes.lookup_type("Option").unwrap();
+        assert!(
+            scopes.get_def(did).has_intrinsic_equality(),
+            "the prelude `Option` must keep intrinsic equality"
+        );
+    }
+
+    /// SEAM 4 — the `DefKind::Import` inherit. `from std.sync import Mutex`
+    /// creates a NEW def; without the inherit it carries no identity and the
+    /// import silently changes what the program means (D51's whole subject).
+    #[test]
+    fn identity_is_inherited_through_an_import() {
+        let (scopes, _, _) = parse_and_collect("from std.sync import Mutex\n");
+        let did = scopes.lookup_type("Mutex").unwrap();
+        let def = scopes.get_def(did);
+        assert_eq!(def.kind, DefKind::Import);
+        assert_ne!(def.span, Span::dummy(), "expected the user's import def, not the placeholder");
+        assert_eq!(def.builtin_kind, Some(BuiltinTypeKind::Mutex));
+        assert!(def.is_coercion_transparent());
+    }
+
+    /// SEAM 5 — a USER type shadowing a builtin name gets `None` on EVERY
+    /// axis. This is the row the class exists for: a `DefId`-keyed flag cannot
+    /// be moved by what a name resolves to.
+    #[test]
+    fn a_user_shadow_of_a_builtin_name_gets_no_identity() {
+        let (scopes, _, _) = parse_and_collect("struct Mutex[T]:\n    T value\n");
+        let did = scopes.lookup_type("Mutex").unwrap();
+        let def = scopes.get_def(did);
+        assert_eq!(def.kind, DefKind::Struct);
+        assert_eq!(def.builtin_kind, None);
+        assert!(!def.is_coercion_transparent());
+        assert_eq!(def.deref_wrapper_kind(), None);
+        assert!(!def.has_intrinsic_equality());
+
+        // …and the same for the equality axis, which has its own seed path.
+        let (scopes, _, _) = parse_and_collect("struct Vector[T]:\n    T value\n");
+        let did = scopes.lookup_type("Vector").unwrap();
+        assert_eq!(scopes.get_def(did).builtin_kind, None);
+        assert!(!scopes.get_def(did).has_intrinsic_equality());
     }
 }

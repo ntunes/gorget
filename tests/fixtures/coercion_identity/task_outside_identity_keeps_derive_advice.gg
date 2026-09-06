@@ -1,0 +1,28 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# NAME-SET PIN — the identity holds exactly the UNION of the two predicates it
+# replaced (16 names), NOT the whole builtin registry (21).
+#
+# `Task` / `TaskGroup` / `Channel` / `Future` / `FxHasher` are single-owner
+# handles that carry no axis today, and whether they should carry one is the
+# OPEN, UNRULED cell in `todo/t1265` — which names the right shape for it: one
+# further accessor answering *"can the author write an impl for this?"*, not a
+# reach for `builtin_kind.is_some()`.
+#
+# ⛔ WHAT THIS ROW STOPS: admitting those five to the identity AND transcribing
+# `deref_wrapper_kind.is_some()` as `builtin_kind.is_some()` at the D46
+# derive-advice gate (`src/semantic/typecheck.rs`) would silently suppress the
+# advice below, closing `t1265`'s cell by accident and in the direction nobody
+# ruled. `d46_equality/reject_eq_shared_handle.gg` pins the OTHER side of that
+# gate — that `Shared` IS in the no-advice set — and neither row implies the
+# other.
+# Asserted by `coercion_identity_task_keeps_derive_advice`.
+
+int compute():
+    return 1
+
+void main():
+    Task[int] a = spawn compute()
+    Task[int] b = spawn compute()
+    print(a == b)

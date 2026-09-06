@@ -23,11 +23,19 @@ pub enum DefKind {
 }
 
 /// RV-A field-access disposition for a BUILTIN smart-pointer / guard wrapper
-/// type. Seeded ONCE at registration onto `DefInfo.deref_wrapper_kind`
-/// (`None` = not a wrapper) and read via the typed flag at the field-access
-/// reject site.
-/// The three variants key the 3-way diagnostic table in the RV-A brief
+/// type. NOT itself seeded: it is the FIELD-ACCESS AXIS's projection of the
+/// `BuiltinTypeKind` identity, read through `DefInfo::deref_wrapper_kind()`
+/// (`None` = not a wrapper) at the field-access reject site. The three variants
+/// key the 3-way diagnostic table in the RV-A brief
 /// (`the RV-A fieldaccess brief (git history)`).
+///
+/// ⚠ THE RETURN TYPE IS LOAD-BEARING (D51 / `todo/t0718`). The accessor must
+/// keep handing out `Option<DerefWrapperKind>` rather than the identity
+/// itself: `MethodResolution.auto_deref` carries this value across into
+/// `src/ir/lowering/exprs/methods.rs`, and propagating `BuiltinTypeKind` to
+/// that boundary would drag the migration into lowering — where the decision
+/// sites read a mangled GIR type string with no `DefId` to hang a flag on.
+/// Keeping the projection here is what keeps the semantic half severable.
 ///
 /// ⚠ THIS FLAG IS THE TYPED SOURCE OF TRUTH ONLY IN SEMANTIC ANALYSIS. Lowering
 /// does NOT read it — it RE-DERIVES "is this a guard wrapper?" from the mangled
@@ -68,53 +76,197 @@ pub enum DerefWrapperKind {
     NonDerefContainer,
 }
 
-impl DerefWrapperKind {
-    /// The ONE allowed registration-time name-match (mirrors the
-    /// `compute_drop_taint` seeding precedent): map a builtin wrapper type
-    /// name to its field-access disposition, `None` for every non-wrapper
-    /// name. Callers seed `DefInfo.deref_wrapper_kind` from this ONLY for
-    /// definitions in the builtin registry / builtin modules, so a user
-    /// struct sharing the name never gets a kind.
-    pub fn for_builtin_name(name: &str) -> Option<DerefWrapperKind> {
+/// **The builtin-type IDENTITY (D51).** ONE variant per builtin NAME, seeded
+/// ONCE at registration onto `DefInfo.builtin_kind`, with a separate per-axis
+/// accessor for every semantic question — exactly the shape the ledger
+/// prescribes: *"one registration producing a builtin-wrapper identity, with
+/// separate per-axis accessors reading from it — `unify` asking 'transparent
+/// for coercion?' and the field path asking its own question, both off the same
+/// seeded fact."*
+///
+/// **Why an identity and not another flag — the argument is a COUNT.**
+/// Registration-time name-match functions in `src/semantic/`: **2 before this**
+/// (`DerefWrapperKind::for_builtin_name` and `builtin_has_intrinsic_equality`),
+/// **3** had the coercion axis been given a third parallel flag, **1** now.
+/// This is the only shape that makes the count go DOWN, which is how it
+/// satisfies D51's *"the typed mechanism already exists — do not build a new
+/// one"* at the same time as its *"both off the same seeded fact"*: the
+/// identity SUBSUMES the two predicates rather than sitting beside them.
+///
+/// ⛔ **ONE VARIANT PER NAME, NEVER PER AXIS-CLASS.** `Weak` and `Mutex` are
+/// both `NonDerefContainer` on the field-access axis and DISAGREE on the
+/// coercion axis. Collapsing variants into axis classes — or deriving one axis
+/// from another, e.g. `is_coercion_transparent = deref_wrapper_kind() ==
+/// Some(NonDerefContainer)` — silently makes `Weak[int]` coercion-transparent.
+/// Per-name variants are what let the axes disagree, which is the whole reason
+/// D51 says *"do not simply reuse `DerefWrapperKind`"*.
+///
+/// **The name set is the UNION of the two predicates this replaces, and no
+/// wider.** `Task` / `TaskGroup` / `Channel` / `Future` / `FxHasher` are in the
+/// builtin registry but carry no axis today, and whether they should is the
+/// open cell in `todo/t1265` (*"one flag answering: can the author write an
+/// impl for this?"*). Admitting them here would decide that unruled question by
+/// accident the moment any caller reached for `builtin_kind.is_some()` — so
+/// they stay out, and `t1265` widens the set deliberately when it is ruled.
+///
+/// ⚠ **This is NOT the single source of truth for "is this builtin".** Tuples
+/// and `Array[T, N]` are `ResolvedType` variants with no def name at all and
+/// are handled structurally at each predicate; the callable family
+/// (`Callable` / `MutCallable` / `ConsumeCallable`) is still matched by name in
+/// `src/semantic/types.rs` (`todo/t1408`). A guard asserting that every builtin
+/// decision routes through `builtin_kind` would be false by construction.
+///
+/// ⚠ **Every accessor below is an EXHAUSTIVE match with no `_` arm, on
+/// purpose.** rustc's exhaustiveness check is the independent witness that a
+/// new variant cannot be added without a per-axis decision being made for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinTypeKind {
+    // Field-access wrappers (RV-A).
+    Box,
+    Guard,
+    ReadGuard,
+    WriteGuard,
+    Shared,
+    Weak,
+    Mutex,
+    RWLock,
+    // Prelude enums (D46 rider).
+    Option,
+    Result,
+    // Builtin aggregates (D46 rider).
+    Vector,
+    Deque,
+    Set,
+    HashSet,
+    Dict,
+    HashMap,
+}
+
+impl BuiltinTypeKind {
+    /// **The ONE allowed registration-time name-match** (mirrors the
+    /// `compute_drop_taint` seeding precedent). Callers seed
+    /// `DefInfo.builtin_kind` from this ONLY for definitions in the builtin
+    /// registry / builtin modules, so a USER type sharing one of these names
+    /// gets a distinct `DefId` with `None` on every axis at once.
+    pub fn for_builtin_name(name: &str) -> Option<BuiltinTypeKind> {
         match name {
-            "Box" => Some(DerefWrapperKind::DerefTarget),
-            "Guard" | "ReadGuard" | "WriteGuard" => Some(DerefWrapperKind::GuardAccept),
-            "Shared" | "Weak" | "Mutex" | "RWLock" => Some(DerefWrapperKind::NonDerefContainer),
+            "Box" => Some(BuiltinTypeKind::Box),
+            "Guard" => Some(BuiltinTypeKind::Guard),
+            "ReadGuard" => Some(BuiltinTypeKind::ReadGuard),
+            "WriteGuard" => Some(BuiltinTypeKind::WriteGuard),
+            "Shared" => Some(BuiltinTypeKind::Shared),
+            "Weak" => Some(BuiltinTypeKind::Weak),
+            "Mutex" => Some(BuiltinTypeKind::Mutex),
+            "RWLock" => Some(BuiltinTypeKind::RWLock),
+            "Option" => Some(BuiltinTypeKind::Option),
+            "Result" => Some(BuiltinTypeKind::Result),
+            "Vector" => Some(BuiltinTypeKind::Vector),
+            "Deque" => Some(BuiltinTypeKind::Deque),
+            "Set" => Some(BuiltinTypeKind::Set),
+            "HashSet" => Some(BuiltinTypeKind::HashSet),
+            "Dict" => Some(BuiltinTypeKind::Dict),
+            "HashMap" => Some(BuiltinTypeKind::HashMap),
             _ => None,
         }
     }
-}
 
-/// D46 + its 2026-09-04 rider: does a BUILTIN generic aggregate carry INTRINSIC
-/// structural equality — `==` legal whenever every element is itself comparable
-/// — rather than requiring the author to write `@derive(Equatable)`?
-///
-/// The rider's rationale is ANNOTATABILITY: *"there is nowhere to write
-/// `@derive(Equatable)`"* is a statement about the USER's reach, and it is
-/// equally true of every prelude/builtin container below. The line the language
-/// draws is **declarable ⇒ require `@derive`; non-declarable ⇒ intrinsic when
-/// the elements are comparable**.
-///
-/// This is the registration-time name-match, mirroring
-/// `DerefWrapperKind::for_builtin_name` verbatim: callers seed
-/// `DefInfo.has_intrinsic_equality` from it ONLY for definitions in the builtin
-/// registry / builtin modules, so a USER `struct Vector` gets a distinct DefId
-/// with `false` and still needs its derive. Every downstream read is the TYPED
-/// flag (layering rule 2) — never the name.
-///
-/// NOT listed, deliberately, and each for the rider's own reason:
-/// `Box` / `Callable` (a trait object and a closure have no structural equality
-/// to give — the rider names both as REJECT); `Shared` / `Weak` / `Mutex` /
-/// `Guard` / `Task` / `TaskGroup` / `Channel` / `Future` / `FxHasher`
-/// (single-owner handles — D53's carve-out family, where the only equality
-/// available is the identity one D46 exists to refuse). Tuples and
-/// `Array[T,N]` need no entry: they are `ResolvedType` variants with no def
-/// name at all, handled structurally at the predicate.
-pub fn builtin_has_intrinsic_equality(name: &str) -> bool {
-    matches!(
-        name,
-        "Option" | "Result" | "Vector" | "Deque" | "Set" | "HashSet" | "Dict" | "HashMap"
-    )
+    /// **AXIS 1 — RV-A field access.** What `.field` on this wrapper means;
+    /// `None` for a builtin that is not a field-access wrapper at all.
+    /// See `DerefWrapperKind` for why the return type stays this projection.
+    pub fn deref_wrapper_kind(self) -> Option<DerefWrapperKind> {
+        match self {
+            BuiltinTypeKind::Box => Some(DerefWrapperKind::DerefTarget),
+            BuiltinTypeKind::Guard
+            | BuiltinTypeKind::ReadGuard
+            | BuiltinTypeKind::WriteGuard => Some(DerefWrapperKind::GuardAccept),
+            BuiltinTypeKind::Shared
+            | BuiltinTypeKind::Weak
+            | BuiltinTypeKind::Mutex
+            | BuiltinTypeKind::RWLock => Some(DerefWrapperKind::NonDerefContainer),
+            BuiltinTypeKind::Option
+            | BuiltinTypeKind::Result
+            | BuiltinTypeKind::Vector
+            | BuiltinTypeKind::Deque
+            | BuiltinTypeKind::Set
+            | BuiltinTypeKind::HashSet
+            | BuiltinTypeKind::Dict
+            | BuiltinTypeKind::HashMap => None,
+        }
+    }
+
+    /// **AXIS 2 — D46 + its 2026-09-04 rider.** Does this builtin aggregate
+    /// carry INTRINSIC structural equality — `==` legal whenever every element
+    /// is itself comparable — rather than requiring the author to write
+    /// `@derive(Equatable)`?
+    ///
+    /// The rider's rationale is ANNOTATABILITY: *"there is nowhere to write
+    /// `@derive(Equatable)`"* is a statement about the USER's reach, and it is
+    /// equally true of every prelude/builtin container that answers `true`
+    /// here. The line the language draws is **declarable ⇒ require `@derive`;
+    /// non-declarable ⇒ intrinsic when the elements are comparable**.
+    ///
+    /// `false`, deliberately, and each for the rider's own reason: `Box`
+    /// (a trait object has no structural equality to give — the rider names it
+    /// as REJECT, alongside `Callable`); `Shared` / `Weak` / `Mutex` / `RWLock`
+    /// / `Guard` / `ReadGuard` / `WriteGuard` (single-owner handles — D53's
+    /// carve-out family, where the only equality available is the identity one
+    /// D46 exists to refuse).
+    pub fn has_intrinsic_equality(self) -> bool {
+        match self {
+            BuiltinTypeKind::Option
+            | BuiltinTypeKind::Result
+            | BuiltinTypeKind::Vector
+            | BuiltinTypeKind::Deque
+            | BuiltinTypeKind::Set
+            | BuiltinTypeKind::HashSet
+            | BuiltinTypeKind::Dict
+            | BuiltinTypeKind::HashMap => true,
+            BuiltinTypeKind::Box
+            | BuiltinTypeKind::Guard
+            | BuiltinTypeKind::ReadGuard
+            | BuiltinTypeKind::WriteGuard
+            | BuiltinTypeKind::Shared
+            | BuiltinTypeKind::Weak
+            | BuiltinTypeKind::Mutex
+            | BuiltinTypeKind::RWLock => false,
+        }
+    }
+
+    /// **AXIS 3 — `unify` shared-variable coercion.** Is `W[T]` transparent to
+    /// `T` for unification, in both directions? A `shared` variable has type
+    /// `T` but may be passed where `Mutex[T]` / `Shared[T]` / `RWLock[T]` is
+    /// expected (spawned functions receive the raw wrapper), and vice versa.
+    ///
+    /// ⛔ `Box` IS FALSE, AND MUST STAY FALSE. `Box[Concrete]` → `Box[Trait]`
+    /// (D51's own subject) is a TRAIT-OBJECT upcast that wants a real
+    /// `TraitObject` arm in `unify`; making `Box` transparent here would make
+    /// `Box[int]` unify with `int` and every other type its inner unifies with.
+    /// D51 says adding `Box` to this list *"would make the symptom go away
+    /// while preserving the defect, and is not an acceptable fix"* — pinned by
+    /// `tests/fixtures/coercion_identity/box_not_coercion_transparent.gg`.
+    ///
+    /// ⛔ `Weak` IS FALSE while its field-access sibling `Mutex` is TRUE, on the
+    /// same `DerefWrapperKind::NonDerefContainer`. That disagreement is the
+    /// measured proof that this is a separate axis — pinned by
+    /// `tests/fixtures/coercion_identity/weak_not_coercion_transparent.gg`.
+    pub fn is_coercion_transparent(self) -> bool {
+        match self {
+            BuiltinTypeKind::Mutex | BuiltinTypeKind::Shared | BuiltinTypeKind::RWLock => true,
+            BuiltinTypeKind::Box
+            | BuiltinTypeKind::Guard
+            | BuiltinTypeKind::ReadGuard
+            | BuiltinTypeKind::WriteGuard
+            | BuiltinTypeKind::Weak
+            | BuiltinTypeKind::Option
+            | BuiltinTypeKind::Result
+            | BuiltinTypeKind::Vector
+            | BuiltinTypeKind::Deque
+            | BuiltinTypeKind::Set
+            | BuiltinTypeKind::HashSet
+            | BuiltinTypeKind::Dict
+            | BuiltinTypeKind::HashMap => false,
+        }
+    }
 }
 
 /// Metadata for a definition.
@@ -148,25 +300,52 @@ pub struct DefInfo {
     /// (layering rule 2). Mirrors ggdef's `tainted` set
     /// (spec/ggdef/src/elaborate/mod.rs:253-255, :458-487).
     pub is_drop_tainted: bool,
-    /// RV-A field-access soundness: `Some(kind)` iff this DefId is a BUILTIN
-    /// smart-pointer / guard wrapper whose `.field` disposition is `kind`
-    /// (see `DerefWrapperKind`); `None` = not a wrapper. Seeded ONCE at
-    /// registration (`BUILTIN_GENERIC_TYPES` imports + builtin-module structs)
-    /// via `DerefWrapperKind::for_builtin_name`; a USER struct that shadows the
-    /// name gets a distinct DefId with `None`, so it no longer escapes
-    /// `E_NoFieldFound` (the garbage-0 miscompile). `.is_some()` is the
-    /// is-a-wrapper predicate; the `Some(kind)` carries the 3-way split.
-    /// Retires the `is_field_deref_wrapper` name-match (layering rule 2).
-    pub deref_wrapper_kind: Option<DerefWrapperKind>,
-    /// D46 + rider: true iff this DefId is a BUILTIN aggregate whose `==` is
-    /// INTRINSIC structural equality gated on element comparability, rather
-    /// than a declarable type that must carry `@derive(Equatable)`. Seeded ONCE
-    /// at registration via `builtin_has_intrinsic_equality`
-    /// (`BUILTIN_GENERIC_TYPES` imports, the prelude `Option`/`Result` enums,
-    /// and builtin-module structs/enums); a USER type shadowing one of those
-    /// names gets a distinct DefId with `false`. Read through the typed flag at
-    /// the `==` gate — never re-derived from the name (layering rule 2).
-    pub has_intrinsic_equality: bool,
+    /// **D51's builtin-type IDENTITY.** `Some(kind)` iff this `DefId` IS the
+    /// builtin `kind`; `None` for every user definition, including one that
+    /// shadows a builtin name. Seeded ONCE at registration — three seed sites,
+    /// all in `src/semantic/resolve.rs`: the `BUILTIN_GENERIC_TYPES`
+    /// placeholder loop, the prelude `Option`/`Result` enums, and
+    /// builtin-module structs (`RWLock` / `ReadGuard` / `WriteGuard` reach the
+    /// identity ONLY through that third one) — plus the `DefKind::Import`
+    /// inherit in `define_with_mutability`, which carries it across
+    /// `from std.sync import Mutex`.
+    ///
+    /// ⛔ **NEVER READ THIS FIELD DIRECTLY TO ANSWER A SEMANTIC QUESTION, and
+    /// never through `.is_some()`** — `.is_some()` is *"is this any builtin at
+    /// all"*, which is not the question at any site. Go through the per-axis
+    /// accessors below: they are what keep `Weak` a non-coercing container and
+    /// `Mutex` a coercing one off the same seeded fact.
+    ///
+    /// A USER struct that shadows a builtin name gets a distinct `DefId` with
+    /// `None`, so it no longer escapes `E_NoFieldFound` (the garbage-0
+    /// miscompile) NOR the coercion arms in `unify` (the raw-pointer /
+    /// stack-buffer-overflow miscompile). That immunity is the whole point:
+    /// a `DefId`-keyed flag cannot be changed by an import; a string compare
+    /// never can be (layering rule 2).
+    pub builtin_kind: Option<BuiltinTypeKind>,
+}
+
+impl DefInfo {
+    /// AXIS 1 — RV-A field-access disposition; `None` if this def is not a
+    /// builtin field-access wrapper. See `DerefWrapperKind`.
+    pub fn deref_wrapper_kind(&self) -> Option<DerefWrapperKind> {
+        self.builtin_kind.and_then(BuiltinTypeKind::deref_wrapper_kind)
+    }
+
+    /// AXIS 2 — D46 + rider: is `==` on this def intrinsic structural equality
+    /// gated on element comparability, rather than a declarable type owing
+    /// `@derive(Equatable)`?
+    pub fn has_intrinsic_equality(&self) -> bool {
+        self.builtin_kind
+            .is_some_and(BuiltinTypeKind::has_intrinsic_equality)
+    }
+
+    /// AXIS 3 — is `W[T]` transparent to `T` in `unify`'s shared-variable
+    /// coercion arms?
+    pub fn is_coercion_transparent(&self) -> bool {
+        self.builtin_kind
+            .is_some_and(BuiltinTypeKind::is_coercion_transparent)
+    }
 }
 
 /// A lexical scope.
@@ -329,8 +508,7 @@ impl ScopeTable {
             field_types: None,
             variant_field_types: None,
             is_drop_tainted: false,
-            deref_wrapper_kind: None,
-            has_intrinsic_equality: false,
+            builtin_kind: None,
         });
         def_id
     }
@@ -393,45 +571,39 @@ impl ScopeTable {
             }
         }
 
-        // Track P (2026-07-28): when the user's `from std.sync import Mutex`
-        // creates a NEW def replacing the dummy-span builtin-wrapper
-        // placeholder (registered in `resolve.rs::collect_top_level` via
-        // `BUILTIN_GENERIC_TYPES` + `DerefWrapperKind::for_builtin_name`),
-        // inherit the `deref_wrapper_kind` so the imported alias keeps the
-        // typed metadata. Layering rule 3: resolve once, write through — one
-        // seed at the builtin, propagated at every user-import shadow.
+        // Track P (2026-07-28), generalised to the D51 identity: when the
+        // user's `from std.sync import Mutex` creates a NEW def alongside the
+        // dummy-span builtin placeholder (registered in
+        // `resolve.rs::collect_top_level` via `BuiltinTypeKind::for_builtin_name`),
+        // inherit the identity so the imported alias keeps the typed metadata
+        // on EVERY axis at once. Layering rule 3: resolve once, write through —
+        // one seed at the builtin, propagated at every user-import shadow.
+        //
+        // This is ONE inherit because there is ONE seeded fact. Before the
+        // identity it was two — a `find_map` for the wrapper kind and an `any`
+        // for the equality flag, gated identically and drifting independently;
+        // `deref_wrapper_kind` needed a second seed site added later for
+        // exactly this reason, and the patch that added it claimed parity
+        // without measuring it.
         //
         // Gated on `kind == DefKind::Import` so a USER `struct Guard` /
         // `struct Mutex` (shadowing the name with their own type) does NOT
-        // inherit the wrapper semantics — the typed-flag fix's whole point
-        // is that a USER struct with the same name gets `None` and stops
-        // escaping E_NoFieldFound (see `fieldaccess_user_guard_missing_field_reject`
-        // fixture + scope.rs::DerefWrapperKind::for_builtin_name doc-comment).
-        let inherited_deref_kind = if kind == DefKind::Import {
-            existing_ids
-                .iter()
-                .copied()
-                .flatten()
-                .find_map(|id| {
-                    let d = &self.definitions[id.0 as usize];
-                    if d.span == Span::dummy() {
-                        d.deref_wrapper_kind
-                    } else {
-                        None
-                    }
-                })
+        // inherit the builtin semantics — the typed-flag fix's whole point is
+        // that a USER struct with the same name gets `None` and stops escaping
+        // E_NoFieldFound (see `fieldaccess_user_guard_missing_field_reject`)
+        // and `unify`'s coercion arms (see `coercion_identity/`).
+        let inherited_builtin_kind = if kind == DefKind::Import {
+            existing_ids.iter().copied().flatten().find_map(|id| {
+                let d = &self.definitions[id.0 as usize];
+                if d.span == Span::dummy() {
+                    d.builtin_kind
+                } else {
+                    None
+                }
+            })
         } else {
             None
         };
-        // D46 + rider: the same inherit for the intrinsic-equality flag, on the
-        // same `DefKind::Import`-only gate and for the same reason — a user
-        // `from std.collections import Vector` must keep the builtin's typed
-        // metadata, while a USER `struct Dict` must not acquire it.
-        let inherited_intrinsic_eq = kind == DefKind::Import
-            && existing_ids.iter().copied().flatten().any(|id| {
-                let d = &self.definitions[id.0 as usize];
-                d.span == Span::dummy() && d.has_intrinsic_equality
-            });
         let def_id = DefId(self.definitions.len() as u32);
         self.name_index.entry(name.clone()).or_default().push(def_id);
         self.definitions.push(DefInfo {
@@ -447,8 +619,7 @@ impl ScopeTable {
             field_types: None,
             variant_field_types: None,
             is_drop_tainted: false,
-            deref_wrapper_kind: inherited_deref_kind,
-            has_intrinsic_equality: inherited_intrinsic_eq,
+            builtin_kind: inherited_builtin_kind,
         });
         let scope = &mut self.scopes[self.current.0 as usize];
         match ns {
@@ -1040,5 +1211,131 @@ mod tests {
         table.pop_scope();
         table.pop_scope();
         assert!(!table.is_in_loop()); // back in function
+    }
+
+    // ---------------------------------------------------------------------
+    // D51 identity — GUARD FORM 2: ACCESSOR-CONTENT PARITY.
+    //
+    // This is HALF of the guard, and it is the half that a program-resolving
+    // test cannot supply. Its sibling — GUARD FORM 1, in
+    // `src/semantic/resolve.rs`'s test module — resolves a real program and
+    // reads the flag off the `DefId`, which catches a broken or deleted SEED.
+    // ⛔ NEITHER FORM CATCHES THE OTHER'S CLASS, so both ship:
+    //
+    //   * A SEED break (delete the prelude re-point) is invisible HERE — these
+    //     are pure functions of the name and never touch a `ScopeTable` — and
+    //     reddens FORM 1.
+    //   * An ACCESSOR-CONTENT break (add `Box` to `is_coercion_transparent`,
+    //     the one-word edit D51 calls *"not an acceptable fix"*) is invisible
+    //     to FORM 1 — every `DefId` still carries exactly the identity it
+    //     should — and reddens the `is_coercion_transparent` rows HERE.
+    //
+    // The literal tables below are transcribed from the two predicates the
+    // identity REPLACED (`DerefWrapperKind::for_builtin_name` and
+    // `builtin_has_intrinsic_equality` as of the migration) plus the coercion
+    // list `unify` name-matched (`"Mutex" | "Shared" | "RWLock"`). They are the
+    // migration's parity baseline; changing one is changing the language.
+    // ---------------------------------------------------------------------
+
+    /// Every name the identity knows, plus names that must stay OUTSIDE it.
+    /// `Task`/`TaskGroup`/`Channel`/`Future`/`FxHasher` are in the builtin
+    /// registry and deliberately NOT in the identity (`todo/t1265`'s open
+    /// cell); `Pair`/`Mutexx` stand in for user types.
+    const IDENTITY_UNIVERSE: &[&str] = &[
+        "Box", "Guard", "ReadGuard", "WriteGuard", "Shared", "Weak", "Mutex", "RWLock",
+        "Option", "Result", "Vector", "Deque", "Set", "HashSet", "Dict", "HashMap",
+        "Task", "TaskGroup", "Channel", "Future", "FxHasher", "Pair", "Mutexx", "",
+    ];
+
+    #[test]
+    fn identity_membership_is_the_union_of_the_two_predicates_it_replaced() {
+        // The set is exactly 16 — the union of the deref-wrapper family and the
+        // intrinsic-equality family. Widening it (e.g. to the whole builtin
+        // registry) would decide `todo/t1265`'s unruled cell by accident.
+        let members: Vec<&str> = IDENTITY_UNIVERSE
+            .iter()
+            .copied()
+            .filter(|n| BuiltinTypeKind::for_builtin_name(n).is_some())
+            .collect();
+        assert_eq!(
+            members,
+            vec![
+                "Box", "Guard", "ReadGuard", "WriteGuard", "Shared", "Weak", "Mutex", "RWLock",
+                "Option", "Result", "Vector", "Deque", "Set", "HashSet", "Dict", "HashMap",
+            ],
+            "identity membership drifted from the union of the two predicates it replaced"
+        );
+    }
+
+    #[test]
+    fn axis1_deref_wrapper_kind_matches_the_premigration_literal_list() {
+        for name in IDENTITY_UNIVERSE {
+            // Verbatim `DerefWrapperKind::for_builtin_name`, pre-migration.
+            let expected = match *name {
+                "Box" => Some(DerefWrapperKind::DerefTarget),
+                "Guard" | "ReadGuard" | "WriteGuard" => Some(DerefWrapperKind::GuardAccept),
+                "Shared" | "Weak" | "Mutex" | "RWLock" => Some(DerefWrapperKind::NonDerefContainer),
+                _ => None,
+            };
+            let got = BuiltinTypeKind::for_builtin_name(name)
+                .and_then(BuiltinTypeKind::deref_wrapper_kind);
+            assert_eq!(got, expected, "axis 1 drifted for `{name}`");
+        }
+    }
+
+    #[test]
+    fn axis2_intrinsic_equality_matches_the_premigration_literal_list() {
+        for name in IDENTITY_UNIVERSE {
+            // Verbatim `builtin_has_intrinsic_equality`, pre-migration.
+            let expected = matches!(
+                *name,
+                "Option" | "Result" | "Vector" | "Deque" | "Set" | "HashSet" | "Dict" | "HashMap"
+            );
+            let got = BuiltinTypeKind::for_builtin_name(name)
+                .is_some_and(BuiltinTypeKind::has_intrinsic_equality);
+            assert_eq!(got, expected, "axis 2 drifted for `{name}`");
+        }
+    }
+
+    #[test]
+    fn axis3_coercion_transparency_matches_the_premigration_name_match() {
+        for name in IDENTITY_UNIVERSE {
+            // Verbatim `unify`'s retired name match, pre-migration:
+            //   name == "Mutex" || name == "Shared" || name == "RWLock"
+            let expected = matches!(*name, "Mutex" | "Shared" | "RWLock");
+            let got = BuiltinTypeKind::for_builtin_name(name)
+                .is_some_and(BuiltinTypeKind::is_coercion_transparent);
+            assert_eq!(got, expected, "axis 3 drifted for `{name}`");
+        }
+    }
+
+    #[test]
+    fn the_axes_disagree_where_they_must() {
+        // ⛔ These four assertions are the reason the identity is keyed PER
+        // NAME and not per axis-class. Each one falls to a plausible
+        // "simplification", and each such simplification is a semantic change:
+        let weak = BuiltinTypeKind::Weak;
+        let mutex = BuiltinTypeKind::Mutex;
+        let boxk = BuiltinTypeKind::Box;
+
+        // (a) `Weak` and `Mutex` share a field-access disposition …
+        assert_eq!(weak.deref_wrapper_kind(), mutex.deref_wrapper_kind());
+        // … and DISAGREE on coercion. Writing
+        // `is_coercion_transparent = deref_wrapper_kind() == Some(NonDerefContainer)`
+        // makes `Weak[int]` unify with `int`.
+        assert!(!weak.is_coercion_transparent());
+        assert!(mutex.is_coercion_transparent());
+
+        // (b) `Box` is a deref wrapper and is NOT coercion-transparent. D51:
+        // adding `Box` to that list *"would make the symptom go away while
+        // preserving the defect, and is not an acceptable fix."*
+        assert!(boxk.deref_wrapper_kind().is_some());
+        assert!(!boxk.is_coercion_transparent());
+
+        // (c) `.is_some()` is NOT the is-a-wrapper predicate: `Vector` is in
+        // the identity and is not a wrapper on any wrapper axis.
+        let vector = BuiltinTypeKind::Vector;
+        assert!(vector.deref_wrapper_kind().is_none());
+        assert!(!vector.is_coercion_transparent());
     }
 }

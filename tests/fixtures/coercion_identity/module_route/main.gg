@@ -1,0 +1,20 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# IMPORT ROUTE — the cell D51 exists for. `from mylib import Mutex` makes the
+# name `Mutex` resolve to a USER definition, and under a name-keyed decision
+# that silently changes what the program MEANS. Under the typed identity the
+# import changes only which `DefId` the name denotes, and that `DefId` carries
+# `builtin_kind = None`.
+#
+# ⛔ BEFORE THE TYPED FLAG THIS COMPILED and printed a raw heap pointer.
+# Asserted by `coercion_identity_module_route_rejects`.
+
+from mylib import Mutex
+
+int take_int(int x):
+    return x + 1
+
+void main():
+    Mutex[int] m = Mutex[int](7)
+    print(take_int(m))

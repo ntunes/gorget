@@ -116,14 +116,25 @@ the consolidation: *"Source of truth at the GIR/LIR boundary (D6: lifted from
 `func_state.local_ownership` directly onto Local)."* When you find two pieces of
 state answering the same question, pick one and delete the other.
 
-The same rule governs wrapper disposition. `DerefWrapperKind`
-(`src/semantic/scope.rs`) is the **SSoT** for BOTH field-access AND
-method-dispatch wrapper dispositions — read once at the checker to decide
-the D36 face split, written through to the IR lowering via
-`MethodResolution.auto_deref` (the extended value type on
-`method_resolutions`, D36 Q2). There is no parallel sidecar; the two
-downstream reads (field access + method dispatch) consult the same typed
-channel.
+The same rule governs builtin-type disposition, and it is the cleanest live
+illustration of the axis clause. `DefInfo.builtin_kind: Option<BuiltinTypeKind>`
+(`src/semantic/scope.rs`) is the **SSoT** for *which builtin a definition is* —
+one variant per builtin name, seeded once at registration. Every semantic
+question about a builtin is then a named accessor on that one seeded fact:
+field-access disposition (`DerefWrapperKind`, read once at the checker to decide
+the D36 face split and written through to the IR lowering via
+`MethodResolution.auto_deref`), intrinsic equality for D46, and `unify`'s
+coercion transparency.
+
+Rule 3 is what makes that shape mandatory rather than tidy. One flag per axis
+would be three parallel tables — three name lists, three seed sites, three
+inherit paths, drifting independently — and reusing ONE flag across two axes
+would be a single source of truth for two different questions, which is the same
+violation from the other side. An identity with per-axis accessors is the only
+arrangement that has one source of truth *per axis* while seeding once: the
+accessors are free to disagree (`Weak` and `Mutex` share a field-access
+disposition and differ on coercion) precisely because the fact underneath them
+does not.
 
 ### Rule 4 — Resolve once, write through
 

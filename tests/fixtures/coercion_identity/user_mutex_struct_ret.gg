@@ -1,0 +1,29 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# A USER type that happens to be spelled `Mutex` is NOT the builtin `Mutex`: it
+# gets its own `DefId` with `builtin_kind = None`, so it is not transparent for
+# coercion and this mismatch is a type error.
+#
+# ⛔ BEFORE THE TYPED FLAG THIS COMPILED, because `unify` asked
+# `name == "Mutex" || name == "Shared" || name == "RWLock"` — a question a USER
+# declaration answers `true`. So the checker unified `Mutex[int]` with `int` and
+# the program went on to build and run. MEASURED at the pre-fix compiler:
+# `gg check` OK, C emits `-Wint-conversion`, and the program RUNS and prints a
+# raw heap pointer where an `int` was expected (e.g. `187650505388705` — ⚠ A
+# POINTER VALUE, DIFFERENT ON EVERY RUN under ASLR; illustration, not a
+# reproducible constant).
+#
+#
+# Direction: `int` EXPECTED, builtin-named wrapper supplied (`unify` arm B).
+# Asserted by `coercion_identity_user_mutex_struct_ret_rejects`.
+
+struct Mutex[T]:
+    T value
+
+int take_int(int x):
+    return x + 1
+
+void main():
+    Mutex[int] w = Mutex[int](7)
+    print(take_int(w))

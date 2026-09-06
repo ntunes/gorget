@@ -1,0 +1,33 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# ⛔ THE TYPED AXIS IS THE THREE-NAME COERCION SET, AND EVERY REACHABILITY PATH
+# TO IT OWES ALL THREE NAMES. Pre-fix these were three separate string literals
+# (`name == "Mutex" || name == "Shared" || name == "RWLock"`), so a set that
+# samples one of them is an anecdote about a list of three. Measured: all three
+# change on BOTH routes and on BOTH questions — the product is real, not a
+# convention.
+#
+# MESSAGE cell, not a verdict cell: rc 1 on BOTH sides, and only the BLAME
+# moves. `RWLock(5)` cannot infer `T` — a pre-existing, name-independent gap — but
+# pre-fix the coercion arm answered `true` on the USER's `RWLock` and unwrapped the
+# annotation `RWLock[int]` to `int` before reporting, naming a type the author
+# never wrote:
+#
+#   pre-fix   error[E_TypeMismatch]: expected `int`,         found `RWLock`
+#   post-fix  error[E_TypeMismatch]: expected `RWLock[int]`, found `RWLock`
+#
+# Post-fix it matches the name-neutral control (`struct Wrap[T]` + `Wrap(5)`)
+# exactly, which is the proof the message is no longer a function of the
+# spelling. The forbidden string is the pre-fix spelling — ⚠ an rc sweep is
+# STRUCTURALLY BLIND to this cell, which is how the whole message half of the
+# axis went unpinned.
+#
+# Asserted by `coercion_identity_user_rwlock_ctor_blames_the_annotation`.
+
+struct RWLock[T]:
+    T value
+
+void main():
+    RWLock[int] m = RWLock(5)
+    print(1)

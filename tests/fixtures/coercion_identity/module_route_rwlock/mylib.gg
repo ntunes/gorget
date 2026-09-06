@@ -1,0 +1,4 @@
+# The user's own `RWLock`, in a module. See `main.gg` and `ctor_main.gg`.
+
+struct RWLock[T]:
+    T value

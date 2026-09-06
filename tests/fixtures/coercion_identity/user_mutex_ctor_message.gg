@@ -1,0 +1,34 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# THE ELEVENTH CHANGED CELL, AND THE ONLY ONE THAT IS A MESSAGE RATHER THAN A
+# VERDICT. `Mutex(5)` with a generic `struct Mutex[T]` in scope fails to infer
+# `T` from the constructor — a PRE-EXISTING, NAME-INDEPENDENT gap, which is why
+# the rejection itself does not move. What moves is the BLAME:
+#
+#   pre-fix   error[E_TypeMismatch]: expected `int`,        found `Mutex`
+#   post-fix  error[E_TypeMismatch]: expected `Mutex[int]`, found `Mutex`
+#
+# Pre-fix, the coercion arm answered `true` on the USER's `Mutex` and unwrapped
+# the annotation `Mutex[int]` to `int` before reporting, so the diagnostic named
+# a type the author never wrote. Post-fix it names the annotation, and matches
+# the name-neutral control (`struct Wrap[T]` + `Wrap(5)`) EXACTLY — which is the
+# proof that the message is no longer a function of the spelling.
+#
+# ⚠ THE PROBE THAT FIRST DISMISSED THIS CELL HAD NO `struct Mutex[T]` AT ALL —
+# it measured the BUILTIN path, where `Mutex[int] m = Mutex(5)` is rc 0 on both
+# sides, against a control that DID declare its struct. Not a matched pair. The
+# builtin observation is true and is exactly what made the mismatch invisible.
+#
+# The forbidden string is the pre-fix spelling, so this row fails if the arm
+# ever starts unwrapping a user type's annotation again — a regression a bare
+# exit-code sweep is structurally blind to.
+#
+# Asserted by `coercion_identity_user_mutex_ctor_blames_the_annotation`.
+
+struct Mutex[T]:
+    T value
+
+void main():
+    Mutex[int] m = Mutex(5)
+    print(1)

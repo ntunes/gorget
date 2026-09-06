@@ -113,10 +113,15 @@ The notable non-HM behaviours, all in `unify`:
   (`typecheck.rs:868-886`). Narrowing or sign changes require an explicit
   `as`.
 - **Transparent wrappers.** `Ref(T)`, `Owned(T)` unify through to `T`
-  (auto-deref / owned-is-transparent, `typecheck.rs:892-909`); the
-  shared-wrapper generics `Mutex`/`Shared`/`RWLock` unify through their single
-  arg (`typecheck.rs:913-946`); `cstr ↔ String` and `AtomicInt ↔ int` /
-  `AtomicBool ↔ bool` coerce (`typecheck.rs:887-891`, `947-985`).
+  (auto-deref / owned-is-transparent). The shared-wrapper generics
+  `Mutex`/`Shared`/`RWLock` unify through their single argument, in both
+  directions — a `shared` variable has type `T` and may be handed to something
+  expecting the raw wrapper. That transparency is a property of the BUILTIN
+  wrapper, not of the spelling: the arm asks
+  `DefInfo::is_coercion_transparent()`, the typed builtin identity, so a user
+  type that happens to be named `Mutex` is a different `DefId` with `None` and
+  is not transparent (D51). `cstr ↔ String` and `AtomicInt ↔ int` /
+  `AtomicBool ↔ bool` also coerce.
 - Anything else with unequal shapes is a `TypeMismatch` (`typecheck.rs:986`).
 
 `unify` is the *only* place `TypeMismatch` is raised for assignment/arg
@@ -211,12 +216,23 @@ set, and it recurses into the type arguments; clear, and it demands an
 `Equatable` impl; a `Defined` does the same, with a bare generic parameter
 exempt; inference, error and divergence types never cascade a second diagnostic.
 
-`has_intrinsic_equality` is seeded ONCE at registration from
-`builtin_has_intrinsic_equality` (`scope.rs`), the same one-allowed-name-match
-pattern `DerefWrapperKind::for_builtin_name` uses, and every read downstream is
-the typed flag. That is what lets `Vector[T]` and a user `Pair[T]` — which
-arrive on the same `ResolvedType::Generic` variant — take opposite dispositions
-without anyone matching on a name at the decision site.
+`has_intrinsic_equality` is not a flag of its own. It is one PER-AXIS ACCESSOR
+on the builtin-type IDENTITY — `DefInfo.builtin_kind: Option<BuiltinTypeKind>`
+(`scope.rs`), one variant per builtin NAME, seeded ONCE at registration by the
+single allowed registration-time name-match. The field-access disposition
+(`DerefWrapperKind`) and `unify`'s coercion transparency are the other two
+accessors, and every read downstream is the accessor, never the name. That is
+what lets `Vector[T]` and a user `Pair[T]` — which arrive on the same
+`ResolvedType::Generic` variant — take opposite dispositions without anyone
+matching on a name at the decision site.
+
+The identity carries one variant per NAME rather than per axis class, and the
+reason is that the axes disagree. `Weak` and `Mutex` share a field-access
+disposition and part company on coercion; `Box` is a deref target and is not
+coercion-transparent. Collapsing names into classes — or deriving one axis from
+another — would quietly move a name across an axis it was never meant to cross.
+Each accessor is an exhaustive match with no catch-all, so a new builtin cannot
+join the identity without a decision being made for it on every axis.
 
 `op_trait_and_method`, which the arithmetic gate consults, is EXHAUSTIVE over
 every `BinaryOp` variant with no catch-all arm. rustc's exhaustiveness check is

@@ -1,0 +1,38 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# ⛔ THE TYPED AXIS IS THE THREE-NAME COERCION SET, AND EVERY REACHABILITY PATH
+# TO IT OWES ALL THREE NAMES. Pre-fix these were three separate string literals
+# (`name == "Mutex" || name == "Shared" || name == "RWLock"`), so a set that
+# samples one of them is an anecdote about a list of three. Measured: all three
+# change on BOTH routes and on BOTH questions — the product is real, not a
+# convention.
+#
+# ROUTE: the user's type lives in a MODULE and is IMPORTED. This is not a
+# redundant spelling of the inline cell — it is the route D51 exists for, and it
+# additionally proves the `DefKind::Import` inherit does NOT hand a USER
+# module's type the builtin identity (a real hazard, since a dummy-span builtin
+# placeholder for this very name does exist).
+#
+# MESSAGE cell, not a verdict cell: rc 1 on BOTH sides, and only the BLAME
+# moves. `Mutex(5)` cannot infer `T` — a pre-existing, name-independent gap — but
+# pre-fix the coercion arm answered `true` on the USER's `Mutex` and unwrapped the
+# annotation `Mutex[int]` to `int` before reporting, naming a type the author
+# never wrote:
+#
+#   pre-fix   error[E_TypeMismatch]: expected `int`,         found `Mutex`
+#   post-fix  error[E_TypeMismatch]: expected `Mutex[int]`, found `Mutex`
+#
+# Post-fix it matches the name-neutral control (`struct Wrap[T]` + `Wrap(5)`)
+# exactly, which is the proof the message is no longer a function of the
+# spelling. The forbidden string is the pre-fix spelling — ⚠ an rc sweep is
+# STRUCTURALLY BLIND to this cell, which is how the whole message half of the
+# axis went unpinned.
+#
+# Asserted by `coercion_identity_module_route_mutex_ctor_blames_the_annotation`.
+
+from mylib import Mutex
+
+void main():
+    Mutex[int] m = Mutex(5)
+    print(1)

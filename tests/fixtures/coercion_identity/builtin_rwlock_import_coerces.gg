@@ -1,0 +1,28 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# ⛔ THIS ROW IS THE POINT OF THE WHOLE SET. Every reject row above passes if
+# the identity is NEVER SEEDED — a migration that wires the accessor and forgets
+# the seed rejects everything and looks perfect. These accept rows are what
+# distinguish "keyed on the typed flag" from "the flag is always `None`".
+#
+# ⚠ `check`-ONLY, DELIBERATELY. This shape is accepted and then MISCOMPILES:
+# the call passes the bare `int` where the callee's ABI wants a pointer
+# (`-Wint-conversion`) and the program SIGSEGVs. That is a PRE-EXISTING lowering
+# defect on the BUILTIN path — measured identical before and after this
+# migration, which touches no lowering — filed as `todo/t1527` with a
+# `known_gaps` repro. Do not promote these rows to `run_gg` until it is fixed.
+#
+# SEAM: seed site B — builtin-module structs. `RWLock` is declared in
+# `lib/std/sync.gg` and is NOT in `BUILTIN_GENERIC_TYPES`, so site B is its
+# ONLY seed and THIS ROW IS ITS ONLY FIXTURE-LEVEL PIN.
+# Asserted by `coercion_identity_builtin_rwlock_import_still_coerces`.
+
+from std.sync import RWLock
+
+void worker(RWLock[int] c):
+    print(1)
+
+void main():
+    shared int counter = 0
+    worker(counter)

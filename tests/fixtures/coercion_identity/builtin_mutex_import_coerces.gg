@@ -1,0 +1,29 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# ⛔ THIS ROW IS THE POINT OF THE WHOLE SET. Every reject row above passes if
+# the identity is NEVER SEEDED — a migration that wires the accessor and forgets
+# the seed rejects everything and looks perfect. These accept rows are what
+# distinguish "keyed on the typed flag" from "the flag is always `None`".
+#
+# ⚠ `check`-ONLY, DELIBERATELY. This shape is accepted and then MISCOMPILES:
+# the call passes the bare `int` where the callee's ABI wants a pointer
+# (`-Wint-conversion`) and the program SIGSEGVs. That is a PRE-EXISTING lowering
+# defect on the BUILTIN path — measured identical before and after this
+# migration, which touches no lowering — filed as `todo/t1527` with a
+# `known_gaps` repro. Do not promote these rows to `run_gg` until it is fixed.
+#
+# SEAM: the `DefKind::Import` INHERIT in `ScopeTable::define_with_mutability`.
+# `from std.sync import Mutex` creates a NEW def for the name; without the
+# inherit it carries no identity and this program stops compiling — an import
+# changing whether a program typechecks, which is exactly what D51 forbids.
+# Asserted by `coercion_identity_builtin_mutex_import_still_coerces`.
+
+from std.sync import Mutex
+
+void worker(Mutex[int] c):
+    print(1)
+
+void main():
+    shared int counter = 0
+    worker(counter)

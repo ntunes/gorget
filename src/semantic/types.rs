@@ -465,7 +465,7 @@ pub fn ast_type_to_resolved(
                                 // silently magicked. The predicate reads typed
                                 // metadata (`deref_wrapper_kind == NonDerefContainer`),
                                 // not the container name — layering rule 2.
-                                if def.deref_wrapper_kind
+                                if def.deref_wrapper_kind()
                                     == Some(DerefWrapperKind::NonDerefContainer)
                                     && resolved_args.len() == 1
                                 {

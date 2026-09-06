@@ -1,0 +1,29 @@
+# D51 / `todo/t0718` — `unify`'s smart-pointer coercion is keyed on the TYPED
+# builtin IDENTITY (`DefInfo.builtin_kind`), never on the definition's NAME.
+#
+# THE CELL AT THE INTERSECTION OF TWO AXES THE SET COVERED SEPARATELY:
+# declaration form `enum` (covered for arm A only) x `unify` arm B (covered
+# for `struct` only). It was CHANGED and pinned by nothing — found by
+# regenerating the whole product with
+# `scripts/coercion_identity_matrix.py` instead of enumerating by hand.
+#
+# A USER `enum Shared[T]` is not the builtin `Shared`: it gets its own `DefId`
+# with `builtin_kind = None`, so it is not transparent for coercion and
+# handing it to an `int` parameter is a type error.
+#
+# ⛔ BEFORE THE TYPED FLAG THIS COMPILED — `gg check` OK, then the variant
+# payload's storage was read as an `int`. Same accept-then-miscompile class
+# as its `struct` sibling `user_shared_struct_ret.gg`, which is what makes
+# this a row rather than a note.
+#
+# Asserted by `coercion_identity_user_shared_enum_ret_rejects`.
+
+enum Shared[T]:
+    Held(T)
+
+int take_int(int x):
+    return x + 1
+
+void main():
+    Shared[int] w = Shared.Held(7)
+    print(take_int(w))
