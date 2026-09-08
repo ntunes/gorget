@@ -170,3 +170,47 @@ symlink = scope.gg -> ../self_host_typechecker/scope.gg
 symlink = traits.gg -> ../self_host_typechecker/traits.gg
 symlink = typecheck.gg -> ../self_host_typechecker/typecheck.gg
 symlink = types.gg -> ../self_host_typechecker/types.gg
+
+# ── THE `.gg` MANIFEST — the workload, pinned by NAME ──────────────────────
+# `tests/lints.rs::clone_meter_closure_declares_the_symlink_seam` fails when the
+# directory and this list disagree, in either direction. A bare COUNT lived here
+# before: routine self-host growth moved a number and said nothing about WHICH
+# file arrived, and a file swapped for another did not move it at all.
+gg_file = ast.gg
+gg_file = derive.gg
+gg_file = diagnostic.gg
+gg_file = driver.gg
+gg_file = drop_elab.gg
+gg_file = format.gg
+gg_file = format_gir.gg
+gg_file = format_lir.gg
+gg_file = format_types.gg
+gg_file = gir.gg
+gg_file = ids.gg
+gg_file = infer.gg
+gg_file = lexer.gg
+gg_file = lir.gg
+gg_file = lir_codegen.gg
+gg_file = lir_lower.gg
+gg_file = lir_ssa.gg
+gg_file = loader.gg
+gg_file = lower.gg
+gg_file = lower_closures.gg
+gg_file = lower_cow.gg
+gg_file = lower_drops.gg
+gg_file = lower_expr.gg
+gg_file = lower_generics.gg
+gg_file = lower_liveness.gg
+gg_file = lower_loops.gg
+gg_file = lower_match.gg
+gg_file = lower_stmt.gg
+gg_file = lower_types.gg
+gg_file = meta.gg
+gg_file = parser.gg
+gg_file = reachability.gg
+gg_file = resolve.gg
+gg_file = scope.gg
+gg_file = traits.gg
+gg_file = typecheck.gg
+gg_file = types.gg
+gg_file = validate.gg

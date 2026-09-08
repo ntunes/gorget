@@ -1810,14 +1810,28 @@ fn function_body_prescans_are_centralised() {
     // `context.rs`: the `LoweringContext::new` initializer + the raw reset's
     // own assignment (which matches both halves of the pattern; counted once).
     const EXPECTED_FUNCTION_STATE_DEFAULTS: usize = 2;
-    // 11 body-lowering paths + 4 synthetic builders that lower no user AST:
-    // `traits.rs` `emit_via_forwarding_function` (vtable thunk) and
-    // `exprs/spawn.rs` x3 (method-spawn / spawn / shared-token wrappers).
-    const EXPECTED_FUNCTION_BUILDER_NEW: usize = 15;
+    // ⚠ THE THIRD COUNT IS NOW A CLASSIFICATION. `== 15` only forced a manual
+    // audit; it could not say WHICH site was new, and it made every blameless
+    // synthetic builder cost a hand edit. Each `FunctionBuilder::new(` site
+    // either calls `begin_function_body` right after — the body-lowering
+    // contract — or its enclosing function is declared SYNTHETIC here, with the
+    // reason it lowers no user AST and owes no prescan.
+    const SYNTHETIC_BUILDERS: &[(&str, &str)] = &[
+        ("emit_via_forwarding_function",
+         "the vtable forwarding thunk: built entirely from typed metadata \
+          (`vtable_method.param_types` + a ptr-cast of `self_void`), it lowers no \
+          user AST, so there is no body to prescan."),
+        ("build_method_spawn_wrapper", "a spawn wrapper synthesized around an \
+          already-lowered callee; it lowers no user AST of its own."),
+        ("build_spawn_wrapper", "as build_method_spawn_wrapper."),
+        ("build_shared_token_wrapper", "as build_method_spawn_wrapper."),
+    ];
 
     let mut raw = Vec::new();
     let mut defaults = Vec::new();
     let mut builders = Vec::new();
+    let mut synthetic_seen: Vec<String> = Vec::new();
+    let mut unclassified: Vec<String> = Vec::new();
     for entry in walkdir_rs("src") {
         let text = fs::read_to_string(&entry).unwrap();
         let lines: Vec<&str> = text.lines().collect();
@@ -1837,11 +1851,49 @@ fn function_body_prescans_are_centralised() {
             // Either spelling of a wholesale per-function-state replacement.
             // Matched per LINE so the raw reset's own
             // `self.func_state = FunctionState::default();` counts once.
-            if line.contains("FunctionState::default()") || line.contains("func_state = ") {
+            // ⚠ `func_state =` WITHOUT the trailing space too: the old needle
+            // was `"func_state = "`, and this test's own doc admitted a
+            // `func_state=` spelling walked straight past it.
+            if line.contains("FunctionState::default()")
+                || line.contains("func_state =") && !line.contains("func_state ==")
+            {
                 defaults.push(format!("{}:{}", entry.display(), n + 1));
             }
             if n < cut && line.contains("FunctionBuilder::new(") {
                 builders.push(format!("{}:{}", entry.display(), n + 1));
+                // The site's own window.
+                let window = lines[n..(n + 20).min(lines.len())].join("\n");
+                if !window.contains("begin_function_body") {
+                    // Find the enclosing COLUMN-0 fn name.
+                    let name = lines[..=n]
+                        .iter()
+                        .rev()
+                        .find_map(|l| {
+                            let r = l.strip_prefix("pub ").unwrap_or(l);
+                            let r = r.strip_prefix("pub(crate) ").unwrap_or(r);
+                            let r = if r.starts_with("pub(") {
+                                r.split_once(") ").map_or(r, |(_, a)| a)
+                            } else {
+                                r
+                            };
+                            let r = r.strip_prefix("fn ")?;
+                            Some(
+                                r.chars()
+                                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                                    .collect::<String>(),
+                            )
+                        })
+                        .unwrap_or_default();
+                    if SYNTHETIC_BUILDERS.iter().any(|(f, _)| *f == name) {
+                        synthetic_seen.push(name);
+                    } else {
+                        unclassified.push(format!(
+                            "{}:{} (in `{name}`)",
+                            entry.display(),
+                            n + 1
+                        ));
+                    }
+                }
             }
         }
     }
@@ -1867,22 +1919,40 @@ fn function_body_prescans_are_centralised() {
          literal, `std::mem::take`). Route it through \
          `functions::begin_function_body`.",
     );
-    assert_eq!(
+    assert!(
+        builders.len() > 8,
+        "non-test `FunctionBuilder::new(` sites: only {} found — the walk or the \
+         `#[cfg(test)]` cut broke, and the classification below asserts nothing.",
         builders.len(),
-        EXPECTED_FUNCTION_BUILDER_NEW,
-        "non-test `FunctionBuilder::new(` sites changed: {builders:#?}\n\n\
+    );
+    assert!(
+        unclassified.is_empty(),
+        "these `FunctionBuilder::new(` sites neither call `begin_function_body` \
+         nor sit in a declared SYNTHETIC builder:\n  {}\n\n\
          A new GIR function is being built. Classify it:\n  \
          (a) it lowers a USER BODY -> it MUST call \
-         `functions::begin_function_body(ctx, FnBodyAst::…)`, or its body lowers \
-         with empty CoW prescans and a reallocating mutator becomes a \
-         use-after-free;\n  \
-         (b) it is SYNTHETIC (built from typed metadata, lowers no user AST, like \
-         the vtable forwarding thunk and the spawn wrappers) -> no prescan is \
-         owed.\n\
-         Then bump this constant WITH the classification in a comment. The two \
-         reset-site counts above cannot see a path that never resets, which is \
-         why this third count exists.",
+         `functions::begin_function_body(ctx, FnBodyAst::…)` right after \
+         constructing the builder, or its body lowers with EMPTY CoW prescans and \
+         a reallocating mutator becomes a use-after-free (nine of eleven paths \
+         were missing them once, and a generic-equip `&self` mutator was exactly \
+         that);\n  \
+         (b) it is SYNTHETIC — built from typed metadata, lowering no user AST, \
+         like the vtable forwarding thunk and the spawn wrappers -> no prescan is \
+         owed, and it goes in SYNTHETIC_BUILDERS WITH ITS REASON.\n\
+         The two reset-site counts above cannot see a path that never resets, \
+         which is why this third check exists.",
+        unclassified.join("\n  "),
     );
+    for (name, why) in SYNTHETIC_BUILDERS {
+        assert!(
+            synthetic_seen.iter().any(|s| s == name),
+            "`{name}` is declared a SYNTHETIC builder here ({why}) but no longer \
+             constructs a `FunctionBuilder` without `begin_function_body`. Either \
+             it now lowers a user body — in which case strike the row — or it is \
+             gone; a declaration that outlives its site is a hole the next \
+             synthetic builder walks through.",
+        );
+    }
 }
 
 /// Ratchet: the number of container-literal arms in `infer_expr` must
@@ -30133,28 +30203,34 @@ fn clone_meter_instruments_read_the_declared_spec() {
 /// The workload's true closure is DECLARED, and the SYMLINK SEAM is visible in
 /// a diff rather than buried in a comment.
 ///
-/// ⚠ THE SEAM IS THE POINT. 15 of the 38 `.gg` files in `self_host_lowerer/`
-/// are symlinks into `self_host_typechecker/`. A change to one of them moves
-/// every clone meter while `git diff -- tests/fixtures/self_host_lowerer/`
-/// shows NOTHING. Pinning the manifest here means any change to the seam
-/// surfaces as a diff in `scripts/clone_meter.spec`.
+/// ⚠ THE SEAM IS THE POINT. Most of the `.gg` files in `self_host_lowerer/` are
+/// symlinks into `self_host_typechecker/`. A change to one of them moves every
+/// clone meter while `git diff -- tests/fixtures/self_host_lowerer/` shows
+/// NOTHING. Pinning the manifest here means any change to the seam surfaces as
+/// a diff in `scripts/clone_meter.spec`.
+///
+/// The WHOLE `.gg` manifest is declared the same way, by name. It used to be a
+/// bare count (`== 38`): routine self-host growth moved a number and said
+/// nothing about which file arrived, and a file swapped for another did not
+/// move it at all.
 #[test]
 fn clone_meter_closure_declares_the_symlink_seam() {
     let dir = Path::new("tests/fixtures/self_host_lowerer");
     let mut actual: Vec<String> = Vec::new();
-    let mut gg_files = 0usize;
+    let mut gg_files: Vec<String> = Vec::new();
     for entry in fs::read_dir(dir).expect("read self_host_lowerer") {
         let entry = entry.expect("dir entry");
         let name = entry.file_name().to_string_lossy().into_owned();
         if !name.ends_with(".gg") {
             continue;
         }
-        gg_files += 1;
+        gg_files.push(name.clone());
         if let Ok(target) = fs::read_link(entry.path()) {
             actual.push(format!("{name} -> {}", target.display()));
         }
     }
     actual.sort();
+    gg_files.sort();
     let mut declared = clone_meter_spec_values("symlink");
     declared.sort();
     assert_eq!(
@@ -30165,11 +30241,24 @@ fn clone_meter_closure_declares_the_symlink_seam() {
          declared. Update the `symlink =` lines in the spec (and re-measure: a workload change \
          moves the pins)."
     );
+    let mut declared_files = clone_meter_spec_values("gg_file");
+    declared_files.sort();
+    assert!(
+        declared_files.len() > 20,
+        "clone_meter_closure_declares_the_symlink_seam: only {} `gg_file =` row(s) \
+         in scripts/clone_meter.spec — the manifest is missing or the key changed, \
+         and the comparison below would report the whole directory as new.",
+        declared_files.len(),
+    );
     assert_eq!(
-        gg_files, 38,
-        "self_host_lowerer/ now has {gg_files} .gg files, not the 38 the spec's closure block \
-         records. Update `closure_gg_files`/the closure block in scripts/clone_meter.spec — the \
-         workload grew or shrank, and the pins moved with it."
+        gg_files, declared_files,
+        "the self_host_lowerer `.gg` manifest and its declaration in \
+         scripts/clone_meter.spec disagree.\n\
+         A file added to or removed from the workload MOVES THE CLONE PINS, and a \
+         file SWAPPED for another moves them while a count stays put — which is \
+         why the manifest is declared by NAME rather than counted. Update the \
+         `gg_file =` lines in the spec and RE-MEASURE: a workload change moves \
+         the pins with it."
     );
     for root in clone_meter_spec_values("closure_roots").pop().expect("closure_roots").split_whitespace() {
         assert!(
