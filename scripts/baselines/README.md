@@ -1,4 +1,21 @@
-# Self-host memory baselines
+# Baselines
+
+Two unrelated kinds of snapshot live here.
+
+## `debt_ledger.tsv` — the round-close debt ledger
+
+Auto-written by `scripts/convergence.sh --bless`, read by `scripts/convergence.sh
+--ledger` to turn each debt axis's current count into DISCOVERED / FIXED / CARRIED
+movements. It is one `<axis>\t<member key>` line per open row, so the movements are
+set differences rather than a net — a count alone could not tell ten rows burned and
+ten rows found from nothing happening at all.
+
+⛔ **Never hand-edit it.** It is last close's MEASUREMENT, not a target: editing a
+row does not fix a failure, it only makes the next round's delta a lie. It is not a
+gate either — nothing in the suite asserts a debt total (`AGENTS.md` Round lifecycle
+step 5; the owner retired the strict 2× convergence rule for penalising discovery).
+
+## Self-host memory baselines
 
 Each JSON snapshot captures the output of `scripts/self_host_mem_baseline.sh` at a
 specific point in the memory-optimization work. Compare against a baseline with:

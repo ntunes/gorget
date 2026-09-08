@@ -33690,3 +33690,123 @@ fn declared_param_sites_use_map_param_ast_type() {
         violations.join("\n"),
     );
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// ║ THE DEBT LEDGER (one contiguous block, appended at the file's end).      ║
+// ════════════════════════════════════════════════════════════════════════════
+
+/// The debt ledger's three parts must stay wired to each other: the rule in
+/// `AGENTS.md`, the axis table in `scripts/convergence.sh`, and the
+/// auto-written baseline the movements are diffed against.
+///
+/// WHY A GUARD AND NOT PROSE (Core #6). The ledger exists because a number
+/// LABELLED `known_gaps` in `scripts/convergence.sh` printed 17 while the tree
+/// carried 236 known `known_gaps` FAILURES, and the owner was misled by it. The
+/// two ways that returns are (a) the rule gets deleted — `AGENTS.md` is under a
+/// byte ceiling, so there is standing pressure to shorten it, which is the same
+/// pressure `agents_md_heading_inventory_is_pinned` exists to resist — and
+/// (b) an axis quietly leaves the script's table, so a debt stops being counted
+/// while the ledger still prints and still looks complete. A dropped row is
+/// invisible in exactly the way the original defect was.
+///
+/// ⛔ THIS GUARD PINS THE WIRING, NEVER A TOTAL. The ledger MEASURES and does
+/// not gate a close (the owner retired the strict 2x convergence rule in
+/// 2026-08 for penalising discovery, and the same reasoning binds one axis
+/// wider). There is deliberately no assertion here on any count, and adding one
+/// would re-create the rule the owner removed.
+///
+/// Regenerate the ledger:  `scripts/convergence.sh --ledger`
+/// Rebless the baseline:   `scripts/convergence.sh --bless`
+#[test]
+fn debt_ledger_rule_script_and_baseline_agree() {
+    let agents = fs::read_to_string("AGENTS.md").expect("AGENTS.md");
+    let script = fs::read_to_string("scripts/convergence.sh").expect("scripts/convergence.sh");
+
+    // ── (a) the RULE still says what it is for. Each phrase is load-bearing:
+    // the artifact, the two rates, the derivation rule, and the one distinction
+    // the ledger cannot make for itself.
+    let step5 = agents
+        .find("\n5. **Records + convergence RECORD.**")
+        .map(|i| {
+            let rest = &agents[i + 1..];
+            &rest[..rest.find("\n6. **").unwrap_or(rest.len())]
+        })
+        .expect(
+            "AGENTS.md's Round lifecycle no longer has step 5, which is where the debt \
+             ledger rule lives.",
+        );
+    for phrase in [
+        "DEBT LEDGER",
+        "DISCOVERED",
+        "INTRODUCED",
+        "--bless",
+        "never hand-edited",
+        "DERIVED, never pinned",
+    ] {
+        assert!(
+            step5.contains(phrase),
+            "AGENTS.md Round lifecycle step 5 no longer states {phrase:?}. The debt ledger \
+             rule is: every axis shows its ACTUAL count plus +found/-fixed, every figure is \
+             DERIVED, the baseline is auto-written by `scripts/convergence.sh --bless` and \
+             never hand-edited, a failure this round EXPOSED becomes KNOWN, and a failure \
+             this round INTRODUCED is fixed BEFORE close. Restore the clause rather than \
+             buying bytes with it — the war-story belongs in devbook/30, the rule does not.",
+        );
+    }
+
+    // ── (b) every axis in the baseline is still enumerated by the script.
+    // Direction matters: a NEW axis in the script is fine and shows up at the
+    // next `--bless`; an axis that has left the script while its rows sit in
+    // the baseline is a debt that stopped being counted.
+    let axes: Vec<&str> = script
+        .lines()
+        .skip_while(|l| !l.starts_with("LEDGER_AXES=("))
+        .skip(1)
+        .take_while(|l| !l.starts_with(')'))
+        .filter_map(|l| l.trim().strip_prefix('\''))
+        .filter_map(|l| l.split('|').next())
+        .collect();
+    assert!(
+        axes.len() >= 7,
+        "scripts/convergence.sh's LEDGER_AXES table parsed as {axes:?} — fewer rows than the \
+         ledger was ratified with. Either the table shrank (a debt stopped being counted) or \
+         this extractor no longer matches its shape; both are the guard's business.",
+    );
+    for required in [
+        "known_gaps_fail",
+        "ignored_tests",
+        "leak_allowlist",
+        "corruption_allowlist",
+        "open_criticals",
+        "lints_guard_constants",
+        "todo_items",
+    ] {
+        assert!(
+            axes.contains(&required),
+            "ledger axis {required:?} has left scripts/convergence.sh's LEDGER_AXES table \
+             (now {axes:?}). An axis only leaves when its debt is GONE — and then its row \
+             reads 0 forever, which costs nothing and proves it. Silently dropping the row \
+             makes the ledger look complete while a whole class stops being counted.",
+        );
+    }
+
+    let baseline = fs::read_to_string("scripts/baselines/debt_ledger.tsv")
+        .expect("scripts/baselines/debt_ledger.tsv is missing — regenerate it with \
+                 `scripts/convergence.sh --bless`; without it the ledger can report counts \
+                 but no movements at all.");
+    assert!(
+        baseline.contains("AUTO-GENERATED") && baseline.contains("NEVER HAND-EDIT"),
+        "scripts/baselines/debt_ledger.tsv has lost its auto-generated banner. That file is \
+         last close's MEASUREMENT, not a target: a hand-edited row does not fix a failure, it \
+         makes the next round's delta a lie. Regenerate with `scripts/convergence.sh --bless`.",
+    );
+    for line in baseline.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()) {
+        let axis = line.split('\t').next().unwrap_or("");
+        assert!(
+            axes.contains(&axis),
+            "scripts/baselines/debt_ledger.tsv carries rows for axis {axis:?}, which \
+             scripts/convergence.sh no longer enumerates ({axes:?}). Those rows can never \
+             move again — the ledger would print nothing for them and read as complete.",
+        );
+    }
+}

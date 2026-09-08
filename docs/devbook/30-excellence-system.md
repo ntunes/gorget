@@ -1978,3 +1978,127 @@ commit's own chore"*.
 
 That is the argument for binding a derived value to its provenance and guarding the
 binding, made by the system against the person who had just written it.
+
+## §22 — The receipts that were living inside the rules
+
+`AGENTS.md`'s own splitting rule says a lesson lands there as **one compact
+imperative** and its *"provenance, measurement and war-story"* lands here or in
+[Chapter 29](29-contributor-playbook.md). Several rules had grown their receipt
+inline instead — a dated measurement sitting in the middle of an imperative,
+where it costs bytes in the file that has a byte ceiling and buys nothing a
+reader of the *rule* needs. Those receipts are below, one per rule, each headed
+by the `AGENTS_MD_HEADING_INVENTORY` id of the rule it belongs to. **The rules
+themselves were not weakened or shortened in meaning — only their stories moved.**
+
+### MA-0b — a handover bullet that contradicted the file for two months
+
+*Rule: "Orchestrator is branch-agnostic. WORK ALWAYS LANDS ON THE WORKTREE
+CLAUDE WAS INVOKED FROM … a handover bullet contradicting a rule in this file is
+STALE BY CONSTRUCTION — this file wins."*
+
+`TODO.md`'s handover block is rewritten at every round close, by mandate. A
+bullet dated 2026-07-07 told the orchestrator to land work on `main`. It
+contradicted the branch-agnostic rule in `AGENTS.md` for **two months** and it
+misled R49's orchestrator, because a handover reads as *current session state*
+while `AGENTS.md` reads as *background*, and the more recent-looking document
+won. That is the asymmetry the rule corrects: recency of the file is not
+authority, and a rewritten-every-round document is the one more likely to have
+decayed, not less.
+
+### MA-3b — the id allocator that had no allocation of its own
+
+*Rule: "THE ORCHESTRATOR ALLOCATES `todo/` IDs; a track never picks its own …
+AND THE ALLOCATOR NEEDS AN ALLOCATION TOO — THIS RULE'S SUBJECT DID NOT COVER
+ITS OWN AUTHOR."*
+
+The first half's cost is measured: concurrent tracks were each told "the next
+free id is the same one", the collision was real, it forced a renumber, and it
+left `t0946` permanently unused (owner 2026-09-03).
+
+The second half is the more interesting failure, and it is a Question-4 case —
+*does this rule's SUBJECT actually cover the case?* The rule's subject was "a
+track". The orchestrator files findings too, took its ids off `max(id)+1`, and
+put **six** of them inside a block it had itself issued to a live track — doing
+precisely what the rule forbids a track to do, while remaining outside the
+rule's subject the whole time. No widening of "a track" fixes that; the fix is a
+second subject. A collided block is then retired **whole** and re-issued:
+reasoning about which half of it is still safe costs more than the ids do.
+
+### MA-8 — two whole-subtree overwrites with no prompt
+
+*Rule: "NEVER `git stash` in agents … AND NEVER `git checkout <ref> -- <path>`
+TO SET UP A REVERT — IT SILENTLY CLOBBERS UNCOMMITTED WORK UNDER THAT PATH …
+AND A WHOLE-FILE SNAPSHOT PRESCRIBED AS A FIX IS THE SAME FAMILY."*
+
+Measured in R50: `git checkout HEAD~1 -- src/`, run to set up a
+RED-verification, **ate two uncommitted edits**. Nothing prompted, nothing
+warned; the loss was caught only by a `grep -c` run before the commit for an
+unrelated reason. It is the same family as the stash prohibition — a
+whole-subtree overwrite with no confirmation — which is why the prescription is
+a patch you can re-apply (`git diff HEAD > /tmp/<agent-id>.patch`, break,
+measure, `git apply`) rather than a checkout.
+
+The snapshot sibling has its own number: a whole-file copy prescribed as a fix
+silently reverts whatever a concurrent track landed in that file, with **no
+conflict** to signal it. **Six gauntlet passes measured that artifact's CONTENT
+and not one measured its APPLICATION** — every pass checked that the file said
+the right thing, and none checked what applying it would destroy.
+
+### MA-9 — the prune test, and the process table as a shared `/tmp` filename
+
+*Rule: "Checkpoint scout prototypes to /tmp EARLY; run final gates FOREGROUND …
+THE PRUNE TEST IS *'DOES A LIVE CLAIM REST ON THIS'*, NOT *'DOES A LIVE FILE
+NAME IT'* … NAMESPACE EVERY `/tmp` ARTIFACT BY AGENT … ASK THE ARTIFACT, NOT THE
+PROCESS TABLE."*
+
+**The prune test.** A disk sweep reaped a reviewer's prototypes *mid-pass*. The
+sweep was not careless: it grepped the live briefs for the prototype PATH, found
+none, and concluded nothing referenced them. But a brief's **streak-resetting
+MEASUREMENT** rested on those files while naming only its own result. A file can
+be load-bearing without any live document spelling its name, which is why the
+test has to be about claims rather than about mentions.
+
+**The process table.** `pgrep -f '<shared script name>'` is a fixed `/tmp`
+filename by another name. A watchdog spinning on `until ! pgrep -f 'sweep.sh'`
+matches *every* agent's run of that script, so two agents each hold the other
+forever — measured **twice, in one round**. A status probe has the identical
+flaw with an extra twist: the shell running the probe embeds the pattern string
+in its own command line, so `pgrep` false-POSITIVES on your own waiter, and
+false-NEGATIVES the moment you filter `eval` out to fix that.
+
+Measured in R50, with the two failures compounding: a self-matching waiter
+reported a **2 h 47 m "sweep"** that was in fact 30 minutes old, and **nine
+orphaned wait-loops aged 12–19 HOURS** had accumulated behind predicates that
+were matching themselves. Hence: ask the ARTIFACT. A log's line-count growth, or
+its mtime, cannot be impersonated by another process — and reap the orphans at
+round close.
+
+### FOLD — precedence orders claims; it does not retract citations
+
+*Rule: "FOLD VERBATIM, NEVER SUMMARISED … AN ADDENDUM THAT REPLACES A *DESIGN*
+MUST STRIKE ITS ARTIFACT POINTERS **BY NAME** — PRECEDENCE ORDERS *CLAIMS*, IT
+DOES NOT RETRACT *CITATIONS*."*
+
+Measured: three stacked addenda replaced a brief's design, correctly, each with
+its precedence line. None of them struck the body's *"apply this patch"*
+pointer — and that patch **was** the rejected design. An executor obeying
+precedence for the prose and the pointer for the code would have rebuilt exactly
+what all three passes rejected, while following every stated rule. Prose and
+artifacts retract on different mechanisms; only the prose has a precedence
+order.
+
+### Q-2 — the silencing edit was inside the same brief
+
+*Rule: "Can this guard catch its OWN class? … AND THE SILENCING EDIT IS OFTEN
+INSIDE YOUR OWN BRIEF: a guard whose SUBJECT is the DECLARATION goes legitimately
+GREEN over a value that is still wrong. ⇒ APPLY EVERY OTHER IN-SCOPE EDIT, THEN
+RE-CHECK THE GUARD IS STILL RED."*
+
+Measured: a Core #14 dead-branch fix — scoped by the *same brief* — turned the
+guard green while the compiled program printed garbage at rc 0. Nothing was
+faked: the receiver ABI the guard's subject describes genuinely *was* fixed, and
+the miscompile was downstream of it. The guard's subject was the declaration,
+the defect had moved past the declaration, and green was the honest answer to
+the question the guard asked. That is why a `=fatal` landing only counts after
+every other in-scope edit is applied and the guard is re-checked RED; one that
+goes green earlier was made fatal over a live defect.

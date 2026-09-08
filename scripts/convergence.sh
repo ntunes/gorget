@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Regenerate the round-close convergence metric (AGENTS.md "Round lifecycle" step 5).
 #
-# WHY THIS IS A SCRIPT AND NOT AN INLINE grep: the metric is a GATE, and a
-# hand-run grep drifted twice. The naive `grep -cE '^- \*\*' TODO.md` counts the
+# WHY THIS IS A SCRIPT AND NOT AN INLINE grep: the metric is QUOTED IN THE
+# RECORD, and a hand-run grep drifted twice. The naive `grep -cE '^- \*\*' TODO.md` counts the
 # PROSE bullets above the topical sections — the handover's candidate-bundle
 # list, the hot-list, the operating invariants. Every round close REWRITES the
 # handover by mandate, so that count moves without a single work item opening or
@@ -11,9 +11,18 @@
 # the number reproducible.
 #
 # Usage:
-#   scripts/convergence.sh                              # current counts
+#   scripts/convergence.sh                              # current counts + debt ledger
 #   scripts/convergence.sh <prev_kg> <prev_todo>        # full `Convergence:` line
 #   scripts/convergence.sh <prev_kg> <prev_todo> <filed> # + filed/closed report
+#   scripts/convergence.sh --ledger                     # the DEBT LEDGER alone
+#   scripts/convergence.sh --ledger-diff [<axis>]       # NAME what moved on an axis
+#   scripts/convergence.sh --bless                      # rewrite the ledger baseline
+#
+# ⚠ THE FIRST NUMBER IS CALLED `uncited_gaps`, AND IT USED TO BE CALLED
+# `known_gaps`. It counts gap FIXTURES that no `todo/` item cites — NOT known
+# failures. Under the old label it printed 17 while the tree carried 236 known
+# `known_gaps` FAILURES, and the owner was misled by exactly that. The real
+# per-axis failure counts are the DEBT LEDGER at the bottom of this file.
 #
 # ── THIS SCRIPT MEASURES; IT NO LONGER GATES (owner 2026-08-23) ─────────────
 # Not prose in a DONE entry. A round that asserts compliance without quoting
@@ -98,15 +107,31 @@
 # Done in the interstitial, the one-time +(N−1) lands in the NEXT round's
 # BASELINE — which no round is claiming compliance against.
 #
-# Convention: net = Δknown_gaps + Δtodo_items. NEGATIVE is convergent. This
-# combined net is THE number the gate reads (AGENTS.md Round lifecycle step 5):
-# a `known_gaps` graduation counts as a closure, and "TODO alone fell" is a
-# different claim. Under the STRICT 2× RULE (owner 2026-08-02, binding from
-# Round XXVIII) net >= 0 does not close, full stop — the old "name the reason in
-# the DONE entry" exemption is RETIRED; add tracks until the net is negative.
+# Convention: net = Δuncited_gaps + Δtodo_items. NEGATIVE is convergent: an
+# uncited-gap graduation counts as a closure, and "TODO alone fell" is a
+# different claim.
+#
+# ⛔ THE STRICT 2× RULE IS RETIRED (owner 2026-08-23) AND NOTHING HERE GATES.
+# This header used to end "net >= 0 does not close, full stop"; that sentence
+# outlived its rule by rounds, which is exactly the decay the file below warns
+# about. `net >= 0` is a REPORT. Same for the debt ledger at the bottom.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# ── FLAGS, parsed out before the positional <prev_kg> <prev_todo> [filed] ────
+LEDGER_ONLY=0; BLESS=0; DIFF_MODE=0
+POS=()
+for arg in "$@"; do
+  case "$arg" in
+    --ledger) LEDGER_ONLY=1 ;;
+    --bless)  BLESS=1 ;;
+    --ledger-diff) LEDGER_ONLY=1; DIFF_MODE=1 ;;
+    -*) echo "convergence.sh: unknown flag: $arg" >&2; exit 2 ;;
+    *)  POS+=("$arg") ;;
+  esac
+done
+set -- ${POS+"${POS[@]}"}
 
 # Scratch for the known_gaps classification below; removed on every exit path.
 TMP_ALL=$(mktemp); TMP_STATUS=$(mktemp); TMP_IGN=$(mktemp)
@@ -275,14 +300,16 @@ known_gaps=$(
 # handover rewrite can move.
 todo_items=$(find todo -maxdepth 1 -name '*.md' -type f | wc -l | tr -d ' ')
 
-if [ $# -ge 2 ]; then
+if [ "$LEDGER_ONLY" = 1 ]; then
+  :
+elif [ $# -ge 2 ]; then
   prev_kg=$1
   prev_todo=$2
   filed=${3:-}
   net=$(( (known_gaps - prev_kg) + (todo_items - prev_todo) ))
   # Match the ledger's typography: U+2212 for negatives, explicit + otherwise.
   if [ "$net" -lt 0 ]; then net_str="−${net#-}"; else net_str="+${net}"; fi
-  printf 'Convergence: known_gaps %s→%s · TODO items %s→%s · net %s (regen: `scripts/convergence.sh %s %s%s`)\n' \
+  printf 'Convergence: uncited_gaps %s→%s · TODO items %s→%s · net %s (regen: `scripts/convergence.sh %s %s%s`)\n' \
     "$prev_kg" "$known_gaps" "$prev_todo" "$todo_items" "$net_str" "$prev_kg" "$prev_todo" \
     "${filed:+ $filed}"
 
@@ -310,6 +337,256 @@ if [ $# -ge 2 ]; then
     printf '  measured net %s (pass the round filing count as a 3rd arg to also report closed)\n' "$net_str"
   fi
 else
-  printf 'known_gaps=%s todo_items=%s\n' "$known_gaps" "$todo_items"
+  printf 'uncited_gaps=%s todo_items=%s\n' "$known_gaps" "$todo_items"
   echo "  (pass the previous round's two numbers + the round's filing count)"
 fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  THE DEBT LEDGER  (AGENTS.md Round lifecycle step 5)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# WHY IT EXISTS. The metric above answers ONE question — "did the filed-work
+# stock move?" — and its `uncited_gaps` row was, until this section landed,
+# LABELLED `known_gaps` while counting something else entirely: gap FIXTURES
+# that no `todo/` item cites. It read 17 while the actual number of known
+# `known_gaps` FAILURES was 236, and the owner was misled by it. A label that
+# names a bigger thing than it counts is worse than no number.
+#
+# So every axis now shows its OWN ACTUAL COUNT, and the three movements a debt
+# row can make: DISCOVERED (+found), FIXED (−fixed), CARRIED (neither). Both the
+# RATES and the STOCK, because a round can burn ten rows while ten more appear
+# and a net of zero hides all twenty.
+#
+# ⛔ IT MEASURES AND REPORTS. IT DOES NOT GATE A ROUND CLOSE. The owner retired
+# the strict 2× convergence rule in 2026-08 precisely because gating on inflow
+# penalised discovery; the same reasoning binds here, one axis wider. A row
+# moving the wrong way is NAMED in the round entry, never a blocker. There is
+# deliberately NO threshold, NO failing assertion on any total, and this script
+# still exits 0 on every path that reaches here.
+#
+# ⭐ DISCOVERED ≠ INTRODUCED, and the ledger cannot tell them apart — only the
+# round can. A failure this round EXPOSED (better instrument, honest probe)
+# becomes KNOWN: fix it this round, splitting the track if that is what it
+# takes, else file it. A failure this round INTRODUCED is fixed BEFORE close.
+# That is Core #9's "raising RUNTIME_DIFF_NONMATCH_CEILING for your own inflow
+# is forbidden", generalised from one axis to all of them.
+#
+# ── EVERY NUMBER IS DERIVED, NONE IS PINNED ────────────────────────────────
+# Layering rule 3 (one source of truth per axis) applied to the ledger: a
+# hard-coded count here would rebuild exactly the defect above. Each axis names
+# the command that regenerates it, and the enumerator emits MEMBER KEYS, not a
+# total — the total is `wc -l` of the keys, and the movements are set
+# differences. A scalar baseline could only ever report a NET.
+#
+#   known_gaps FAIL   `scripts/known_gaps_census.sh --list` roster MINUS the
+#                     rows in tests/gaps/PASSING_ALLOWLIST.txt. Exact by
+#                     construction whenever `--check` is green (a round-close
+#                     gate): `--check` asserts the measured PASS set EQUALS the
+#                     allowlist, so roster − allowlist IS the FAIL set. `--list`
+#                     runs nothing and costs ~0.05 s, which is why the ledger
+#                     can be the FIRST thing a round close runs (owner
+#                     2026-08-06) instead of a two-minute census.
+#   ignored tests     `#[ignore]` in ATTRIBUTE POSITION (start of line, modulo
+#                     indent) in tests/*.rs, attributed to the `fn` that
+#                     follows. ⚠ NOT the bare `grep -c '#\[ignore' `, which
+#                     reads 338 on tests/integration.rs alone because it counts
+#                     DOC-COMMENT MENTIONS of the attribute — the identical
+#                     defect this script's own header records fixing in 2026-08
+#                     (defect (2): "the ignore detector matched prose"), and
+#                     `scripts/known_gaps_census.sh` warns about in its
+#                     enumerator. Anchored, every hit is followed by a `fn`, so
+#                     the enumeration is total, not a sample.
+#   sanitize leaks    non-comment rows of tests/sanitize/LEAK_ALLOWLIST.txt —
+#   sanitize corrupt.  and of CORRUPTION_ALLOWLIST.txt. Same rows
+#                     `sanitize_allowlists_shrink_only` pins in tests/lints.rs,
+#                     read from the allowlist rather than from its constant, so
+#                     the ledger cannot inherit a stale pin.
+#   open CRITICALs    todo/ items whose front matter says severity = "CRITICAL".
+#   guard constants   `const NAME: <int> = <literal>;` in tests/lints.rs. THE
+#                     ONE AXIS THAT IS NOT DISCOVERY-SENSITIVE: nobody
+#                     "discovers" a guard constant, it is purely our own
+#                     artifact, so this row's honest target is 0 and a rise is
+#                     never excusable as discovery. Keys are scoped by the
+#                     enclosing `fn` because the bare names repeat (`EXPECTED`
+#                     many times over); the scope is for UNIQUENESS, not
+#                     semantics.
+#   todo/ items       CONTEXT, EXPLICITLY NOT A DEBT AXIS. A backlog is not a
+#                     failure count; trending it to zero would discourage
+#                     filing, and the cardinal rule REQUIRES filing. It is here
+#                     because the round entry quotes it, and for no other reason.
+#
+# ── THE BASELINE IS AUTO-WRITTEN, NEVER HAND-EDITED ────────────────────────
+# `scripts/convergence.sh --bless` rewrites scripts/baselines/debt_ledger.tsv
+# from the measured sets. Same write-back shape Core #6 ratified for pins: the
+# number descends without a human typing it, so it can never be quietly
+# "corrected" to whatever makes a round look good.
+#
+# ⚠ ONE DELIBERATE DIFFERENCE FROM A PIN'S `--bless`, AND IT IS NOT AN
+# OVERSIGHT: a PIN's write-back is LOWER-ONLY, because a pin is a CEILING and
+# accumulated slack is what rots. A BASELINE is not a ceiling — it is last
+# round's MEASUREMENT — and a refusal to record a rise would make the NEXT
+# round's delta a lie: discovery would show as +N forever, and the round that
+# actually burned five of those rows would read +5 instead of −5. Recording an
+# increase costs nothing here precisely because nothing gates on it. What
+# replaces lower-only is the NAMING obligation above, which is the owner's own
+# ruling on which direction a wrong-way row travels.
+
+LEDGER_BASELINE=scripts/baselines/debt_ledger.tsv
+
+# Axis table: id, label, kind (debt|context). Order is the print order.
+LEDGER_AXES=(
+  'known_gaps_fail|known_gaps FAIL|debt'
+  'ignored_tests|#[ignore]d tests|debt'
+  'leak_allowlist|sanitize leaks allowlisted|debt'
+  'corruption_allowlist|sanitize corruption allowlisted|debt'
+  'open_criticals|open CRITICALs|debt'
+  'lints_guard_constants|tests/lints.rs guard constants|debt'
+  'todo_items|todo/ items|context'
+)
+
+# Emit the MEMBER KEYS of one axis, one per line, unsorted.
+ledger_members() {
+  case "$1" in
+    known_gaps_fail)
+      local roster pass
+      roster=$(mktemp); pass=$(mktemp)
+      scripts/known_gaps_census.sh --list 2>/dev/null \
+        | awk -F'\t' '!/^#/ && NF { print $1 }' | sort -u > "$roster"
+      awk '!/^#/ && NF { print $1 }' tests/gaps/PASSING_ALLOWLIST.txt | sort -u > "$pass"
+      comm -23 "$roster" "$pass"
+      rm -f "$roster" "$pass"
+      ;;
+    ignored_tests)
+      # `#[ignore` only in ATTRIBUTE POSITION, attributed to the NEXT `fn`.
+      for f in tests/*.rs; do
+        awk -v F="$(basename "$f" .rs)" '
+          /^[[:space:]]*#\[ignore/ { ign = 1; next }
+          /^[[:space:]]*fn [A-Za-z0-9_]+/ {
+            if (ign) {
+              n = $0; sub(/^[[:space:]]*fn /, "", n); sub(/[(<].*$/, "", n)
+              printf "%s::%s\n", F, n
+            }
+            ign = 0
+          }
+        ' "$f"
+      done
+      ;;
+    leak_allowlist)
+      awk '!/^#/ && NF { print $1 }' tests/sanitize/LEAK_ALLOWLIST.txt ;;
+    corruption_allowlist)
+      awk '!/^#/ && NF { print $1 }' tests/sanitize/CORRUPTION_ALLOWLIST.txt ;;
+    open_criticals)
+      grep -l '^severity = "CRITICAL"' todo/*.md 2>/dev/null | sed 's|.*/||; s|\.md$||' || true ;;
+    lints_guard_constants)
+      # Scoped by the enclosing `fn` because the bare const names repeat; a
+      # third occurrence of the same key gets a `#N` suffix. Keys need only be
+      # STABLE and UNIQUE — they are diffed, not interpreted.
+      awk '
+        /^[[:space:]]*fn [A-Za-z0-9_]+/ {
+          s = $0; sub(/^[[:space:]]*fn /, "", s); sub(/[(<].*$/, "", s); scope = s
+        }
+        /^[[:space:]]*(pub )?const [A-Za-z_0-9]+[[:space:]]*:[^=]*=[[:space:]]*[0-9_]+[[:space:]]*;/ {
+          c = $0; sub(/^[[:space:]]*(pub )?const /, "", c); sub(/[[:space:]]*:.*$/, "", c)
+          k = (scope == "" ? "<module>" : scope) "::" c
+          seen[k]++
+          if (seen[k] > 1) k = k "#" seen[k]
+          print k
+        }
+      ' tests/lints.rs ;;
+    todo_items)
+      find todo -maxdepth 1 -name '*.md' -type f | sed 's|.*/||; s|\.md$||' ;;
+    *) echo "convergence.sh: unknown ledger axis: $1" >&2; exit 2 ;;
+  esac
+}
+
+LEDGER_NOW=$(mktemp); LEDGER_PREV=$(mktemp)
+LEDGER_A=$(mktemp); LEDGER_B=$(mktemp)
+trap 'rm -f "$TMP_ALL" "$TMP_STATUS" "$TMP_IGN" "$TMP_LIVE" "$TMP_NETS" "$TMP_CITED" "$TMP_EXEMPT" "$LEDGER_NOW" "$LEDGER_PREV" "$LEDGER_A" "$LEDGER_B"' EXIT
+
+: > "$LEDGER_NOW"
+for row in "${LEDGER_AXES[@]}"; do
+  axis=${row%%|*}
+  ledger_members "$axis" | sort -u | sed "s|^|$axis\t|" >> "$LEDGER_NOW"
+done
+
+if [ "$BLESS" = 1 ]; then
+  mkdir -p "$(dirname "$LEDGER_BASELINE")"
+  {
+    echo "# DEBT-LEDGER BASELINE — AUTO-GENERATED by \`scripts/convergence.sh --bless\`."
+    echo "# ⛔ NEVER HAND-EDIT. It is last close's MEASUREMENT, not a target: editing a row"
+    echo "#    here does not fix a failure, it only makes the next round's delta a lie."
+    echo "#    Regenerate at round close, after the records commit, with:"
+    echo "#      scripts/convergence.sh --bless"
+    echo "# blessed $(date -u +%Y-%m-%dT%H:%M:%SZ) at $(git rev-parse --short HEAD 2>/dev/null || echo '?')"
+    echo "# One <axis>\tmember key per line; the count is \`wc -l\`, the movements are set diffs."
+    cat "$LEDGER_NOW"
+  } > "$LEDGER_BASELINE"
+  echo "convergence.sh: blessed $LEDGER_BASELINE ($(grep -vc '^#' "$LEDGER_BASELINE") member key(s))"
+fi
+
+if [ -f "$LEDGER_BASELINE" ]; then
+  grep -v '^#' "$LEDGER_BASELINE" > "$LEDGER_PREV" || true
+  blessed_at=$(sed -n 's/^# blessed //p' "$LEDGER_BASELINE" | head -1)
+  have_prev=1
+else
+  : > "$LEDGER_PREV"
+  blessed_at=""
+  have_prev=0
+fi
+
+if [ "$DIFF_MODE" = 1 ]; then
+  # Name what moved, so a round entry can quote members instead of a delta.
+  want=${1:-}
+  for row in "${LEDGER_AXES[@]}"; do
+    axis=${row%%|*}; rest=${row#*|}; label=${rest%%|*}
+    if [ -n "$want" ] && [ "$want" != "$axis" ]; then continue; fi
+    awk -F'\t' -v a="$axis" '$1 == a { print $2 }' "$LEDGER_NOW"  | sort -u > "$LEDGER_A"
+    awk -F'\t' -v a="$axis" '$1 == a { print $2 }' "$LEDGER_PREV" | sort -u > "$LEDGER_B"
+    printf '%s (%s)\n' "$label" "$axis"
+    comm -23 "$LEDGER_A" "$LEDGER_B" | sed 's/^/  +found  /'
+    comm -13 "$LEDGER_A" "$LEDGER_B" | sed 's/^/  −fixed  /'
+  done
+  exit 0
+fi
+
+echo
+if [ "$have_prev" = 1 ]; then
+  printf 'Debt ledger (baseline %s, blessed %s)\n' "$LEDGER_BASELINE" "$blessed_at"
+else
+  printf 'Debt ledger (NO BASELINE YET — run `scripts/convergence.sh --bless`; movements unknown)\n'
+fi
+printf '  %-34s %6s %8s %10s\n' 'axis' 'now' '+found' '−fixed'
+
+wrong_way=""
+for row in "${LEDGER_AXES[@]}"; do
+  axis=${row%%|*}; rest=${row#*|}; label=${rest%%|*}; kind=${rest##*|}
+  awk -F'\t' -v a="$axis" '$1 == a { print $2 }' "$LEDGER_NOW"  | sort -u > "$LEDGER_A"
+  awk -F'\t' -v a="$axis" '$1 == a { print $2 }' "$LEDGER_PREV" | sort -u > "$LEDGER_B"
+  now=$(wc -l < "$LEDGER_A" | tr -d ' ')
+  if [ "$have_prev" = 1 ]; then
+    found=$(comm -23 "$LEDGER_A" "$LEDGER_B" | wc -l | tr -d ' ')
+    fixed=$(comm -13 "$LEDGER_A" "$LEDGER_B" | wc -l | tr -d ' ')
+    found_str="+$found"; fixed_str="−$fixed"
+  else
+    found_str="+?"; fixed_str="−?"; found=0; fixed=0
+  fi
+  if [ "$kind" = context ]; then
+    printf '  ── context, NOT a debt axis ──────────────────────────────────────\n'
+  fi
+  printf '  %-34s %6s %8s %10s\n' "$label" "$now" "$found_str" "$fixed_str"
+  if [ "$kind" = debt ] && [ "$found" -gt "$fixed" ]; then
+    wrong_way="$wrong_way $axis"
+  fi
+done
+
+if [ "$have_prev" = 1 ] && [ -n "$wrong_way" ]; then
+  echo
+  echo "  ⚠ ROW(S) MOVING THE WRONG WAY:$wrong_way"
+  echo "     NAME each one in the round entry, with its verdict — this is a report, not a blocker."
+  echo "     DISCOVERED (exposed by better instrumentation or honest work) ⇒ fix it this round,"
+  echo "     splitting the track if that is what it takes; otherwise file it for a future round."
+  echo "     INTRODUCED by this round's own changes ⇒ FIX IT BEFORE CLOSE. Introducing known"
+  echo "     issues is not allowed (Core #9's own-inflow clause, generalised to every axis)."
+  echo "     Names of what moved:  scripts/convergence.sh --ledger-diff <axis>"
+fi
+echo "  (regen: \`scripts/convergence.sh --ledger\` · rebless at close: \`scripts/convergence.sh --bless\`)"
