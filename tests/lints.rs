@@ -33766,12 +33766,12 @@ fn debt_ledger_rule_script_and_baseline_agree() {
         .filter_map(|l| l.trim().strip_prefix('\''))
         .filter_map(|l| l.split('|').next())
         .collect();
-    assert!(
-        axes.len() >= 7,
-        "scripts/convergence.sh's LEDGER_AXES table parsed as {axes:?} — fewer rows than the \
-         ledger was ratified with. Either the table shrank (a debt stopped being counted) or \
-         this extractor no longer matches its shape; both are the guard's business.",
-    );
+    // ⚠ NO COUNT ASSERTION HERE, DELIBERATELY. A `>=` row-count check would be
+    // a tolerance band — Core #6 rules "KEEP THE EXACT `==`; SLACK IS WHAT
+    // ROTS" — and it is implied anyway: the by-name loop below fires first, on
+    // whichever axis actually went missing, with a message that names it. A
+    // count cannot say WHICH row left, and this file's whole subject is a
+    // number that reports less than it claims.
     for required in [
         "known_gaps_fail",
         "ignored_tests",

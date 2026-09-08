@@ -379,10 +379,16 @@ fi
 # differences. A scalar baseline could only ever report a NET.
 #
 #   known_gaps FAIL   `scripts/known_gaps_census.sh --list` roster MINUS the
-#                     rows in tests/gaps/PASSING_ALLOWLIST.txt. Exact by
-#                     construction whenever `--check` is green (a round-close
-#                     gate): `--check` asserts the measured PASS set EQUALS the
-#                     allowlist, so roster − allowlist IS the FAIL set. `--list`
+#                     rows in tests/gaps/PASSING_ALLOWLIST.txt. Whenever
+#                     `--check` is green (a round-close gate) it asserts the
+#                     measured PASS set EQUALS the allowlist, so roster −
+#                     allowlist is the NON-PASSING set. ⚠ NOT EXACTLY THE FAIL
+#                     SET: the census also reports TIMEOUT / NOT_RUN /
+#                     NO_BINARY, which are neither PASS nor FAIL and land on
+#                     this side of the subtraction. It errs toward COUNTING
+#                     MORE DEBT, which is the safe direction for a debt row;
+#                     the census's own `roster N · PASS n · FAIL n` summary
+#                     line is the exact split when you need it. `--list`
 #                     runs nothing and costs ~0.05 s, which is why the ledger
 #                     can be the FIRST thing a round close runs (owner
 #                     2026-08-06) instead of a two-minute census.
@@ -537,6 +543,15 @@ fi
 if [ "$DIFF_MODE" = 1 ]; then
   # Name what moved, so a round entry can quote members instead of a delta.
   want=${1:-}
+  # An unknown axis name must NOT print an empty report at rc 0 — that reads as
+  # "nothing moved" and is the same succeed-with-empty failure the INSTRUMENT
+  # SUSPECT block below exists for. `ledger_members` already exits 2 on an
+  # unknown axis; this path has to agree with it.
+  if [ -n "$want" ] && ! printf '%s\n' "${LEDGER_AXES[@]}" | cut -d'|' -f1 | tr -d "'" | grep -qx "$want"; then
+    echo "convergence.sh: unknown ledger axis: $want" >&2
+    printf '%s\n' "${LEDGER_AXES[@]}" | cut -d'|' -f1 | tr -d "'" | sed 's/^/  /' >&2
+    exit 2
+  fi
   for row in "${LEDGER_AXES[@]}"; do
     axis=${row%%|*}; rest=${row#*|}; label=${rest%%|*}
     if [ -n "$want" ] && [ "$want" != "$axis" ]; then continue; fi
@@ -558,11 +573,13 @@ fi
 printf '  %-34s %6s %8s %10s\n' 'axis' 'now' '+found' '−fixed'
 
 wrong_way=""
+suspect=""
 for row in "${LEDGER_AXES[@]}"; do
   axis=${row%%|*}; rest=${row#*|}; label=${rest%%|*}; kind=${rest##*|}
   awk -F'\t' -v a="$axis" '$1 == a { print $2 }' "$LEDGER_NOW"  | sort -u > "$LEDGER_A"
   awk -F'\t' -v a="$axis" '$1 == a { print $2 }' "$LEDGER_PREV" | sort -u > "$LEDGER_B"
   now=$(wc -l < "$LEDGER_A" | tr -d ' ')
+  was=$(wc -l < "$LEDGER_B" | tr -d ' ')
   if [ "$have_prev" = 1 ]; then
     found=$(comm -23 "$LEDGER_A" "$LEDGER_B" | wc -l | tr -d ' ')
     fixed=$(comm -13 "$LEDGER_A" "$LEDGER_B" | wc -l | tr -d ' ')
@@ -577,6 +594,23 @@ for row in "${LEDGER_AXES[@]}"; do
   if [ "$kind" = debt ] && [ "$found" -gt "$fixed" ]; then
     wrong_way="$wrong_way $axis"
   fi
+  # ── A BROKEN ENUMERATOR REPORTS THE MAXIMUM POSSIBLE PROGRESS ────────────
+  # An enumerator that stops MATCHING succeeds with EMPTY output, and every
+  # remaining row then reads as fixed: measured, changing `^severity = ` to
+  # `^sev = ` reported `open CRITICALs 0 +0 −10` at rc 0, and mangling the
+  # `#[ignore` pattern reported `−295`. Both are the ledger's own subject —
+  # a number that names a bigger thing than it counts — occurring INSIDE the
+  # instrument, in the direction that flatters the round. Whole-axis collapse
+  # is the shape that failure always takes, and a real burn-down to zero is
+  # rare enough (and proud enough) to be worth saying out loud too.
+  # ⚠ ASYMMETRY FIXED HERE: a wrong-way row already got seven lines while an
+  # implausible right-way collapse got nothing.
+  # ⛔ STILL A MEASUREMENT: no threshold, no constant, no gate — it prints and
+  # the round entry adjudicates. A hard-FAILING enumerator aborts on its own
+  # (`set -e`); this covers only succeed-with-empty, which cannot.
+  if [ "$have_prev" = 1 ] && [ "$was" -gt 0 ] && [ "$now" -eq 0 ]; then
+    suspect="$suspect $axis:$was"
+  fi
 done
 
 if [ "$have_prev" = 1 ] && [ -n "$wrong_way" ]; then
@@ -588,5 +622,16 @@ if [ "$have_prev" = 1 ] && [ -n "$wrong_way" ]; then
   echo "     INTRODUCED by this round's own changes ⇒ FIX IT BEFORE CLOSE. Introducing known"
   echo "     issues is not allowed (Core #9's own-inflow clause, generalised to every axis)."
   echo "     Names of what moved:  scripts/convergence.sh --ledger-diff <axis>"
+fi
+
+if [ -n "$suspect" ]; then
+  echo
+  for s in $suspect; do
+    printf '  ⚠ INSTRUMENT SUSPECT — axis %s went from %s to 0.\n' "${s%%:*}" "${s##*:}"
+  done
+  echo "     A TERMINUS or a BROKEN ENUMERATOR — say WHICH in the round entry."
+  echo "     An enumerator that stops matching succeeds with empty output, and every row"
+  echo "     then reads as fixed; \`--bless\` would bake that into the baseline permanently."
+  echo "     Check the axis's own source before quoting the row:  scripts/convergence.sh --ledger-diff <axis>"
 fi
 echo "  (regen: \`scripts/convergence.sh --ledger\` · rebless at close: \`scripts/convergence.sh --bless\`)"

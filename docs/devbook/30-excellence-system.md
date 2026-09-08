@@ -1987,7 +1987,10 @@ imperative** and its *"provenance, measurement and war-story"* lands here or in
 inline instead — a dated measurement sitting in the middle of an imperative,
 where it costs bytes in the file that has a byte ceiling and buys nothing a
 reader of the *rule* needs. Those receipts are below, one per rule, each headed
-by the `AGENTS_MD_HEADING_INVENTORY` id of the rule it belongs to. **The rules
+by the rule's `AGENTS_MD_HEADING_INVENTORY` id **where it has one** — `MA-0b`,
+`MA-3b`, `MA-8`, `MA-9`, `Q-2` — and by a short name where the rule is a bold
+paragraph rather than a numbered heading, which the inventory does not pin
+(`FOLD`, for *"FOLD VERBATIM, NEVER SUMMARISED"* in § Review). **The rules
 themselves were not weakened or shortened in meaning — only their stories moved.**
 
 ### MA-0b — a handover bullet that contradicted the file for two months
