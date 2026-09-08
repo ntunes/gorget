@@ -5721,13 +5721,43 @@ fn self_host_drain_out_param_abi_pair() {
     let content =
         fs::read_to_string("tests/fixtures/self_host_lowerer/lir_lower.gg").unwrap_or_default();
 
-    // (fn_name, out-arg indices that must be tagged in BOTH ABI tables).
-    let required: &[(&str, &[usize])] =
-        &[("gorget_set_drain_entry", &[2]), ("gorget_map_drain_entry", &[2, 3])];
+    // (fn_name, out-arg indices) — READ OUT OF RUST GG's own table rather than
+    // hand-listed. `src/backend/c_lir/helpers.rs` maps each drain accessor to
+    // its `void*` out-arg indices; parsing it means a NEW drain sibling enrols
+    // itself here instead of waiting for someone to notice.
+    let rust_helpers = fs::read_to_string("src/backend/c_lir/helpers.rs")
+        .expect("read src/backend/c_lir/helpers.rs");
+    let required: Vec<(String, Vec<usize>)> = rust_helpers
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .filter_map(|l| {
+            let (head, tail) = l.split_once("=> &[")?;
+            let name: String = head
+                .split('"')
+                .nth(1)
+                .filter(|n| n.ends_with("_drain_entry"))?
+                .to_string();
+            let idx: Vec<usize> = tail
+                .split(']')
+                .next()?
+                .split(',')
+                .filter_map(|d| d.trim().parse().ok())
+                .collect();
+            (!idx.is_empty()).then_some((name, idx))
+        })
+        .collect();
+    assert!(
+        required.len() >= 2,
+        "self_host_drain_out_param_abi_pair: only {} `*_drain_entry` row(s) parsed \
+         out of `src/backend/c_lir/helpers.rs` — the Rust out-arg table moved, and \
+         with nothing to require the self-host check below asserts nothing. \
+         Regenerate: grep -n '_drain_entry\" =>' src/backend/c_lir/helpers.rs",
+        required.len(),
+    );
 
     let mut missing: Vec<String> = Vec::new();
-    for (fn_name, out_args) in required {
-        for &arg_idx in *out_args {
+    for (fn_name, out_args) in &required {
+        for &arg_idx in out_args {
             // The drain entries are written as
             //   `if fn_name == "gorget_map_drain_entry" and arg_idx == 2:`
             // (or an `(arg_idx == 2 or arg_idx == 3)` combined guard). Count a
@@ -5761,10 +5791,10 @@ fn self_host_drain_out_param_abi_pair() {
          `needs_ptr_arg` table (so the borrow operand is passed as `ISlotAddr`/`&slot` \
          instead of by-value NULL → `memcpy(NULL)` → SIGSEGV) AND the `out_param_arg` \
          table (the ABI_OUT_PTR tag that keeps the drained slot's drop alive). The SET \
-         drain (out arg 2) and MAP drain (out args 2 AND 3) are siblings — adding one \
-         and forgetting the other is the exact hole that crashed `dict_drain_basic`. \
-         Mirrors Rust gg `helpers.rs:699-700`. Re-add the missing entry, or extend this \
-         lint's `required` list if a new drain sibling landed.",
+         drain and MAP drain are siblings — adding one and forgetting the other is \
+         the exact hole that crashed `dict_drain_basic`. The required rows are READ \
+         from Rust gg's own out-arg table, so there is no list here to extend: \
+         regenerate with `grep -n \'_drain_entry\" =>\' src/backend/c_lir/helpers.rs`.",
         missing.join("\n  "),
     );
 }
@@ -5803,14 +5833,37 @@ fn self_host_vector_swap_abi_triple() {
     let ptr = self_host_fn_body_noncomment(&lir, "bool needs_ptr_arg(").join("\n");
     let ret = self_host_fn_body_noncomment(&types, "int infer_method_return_type(").join("\n");
 
-    // (method-name, runtime-symbol) siblings. The closing `"` in each needle
-    // keeps `"gorget_array_swap"` / `"swap"` from matching inside
-    // `"gorget_array_swap_remove"` / `"swap_remove"`.
-    let required: &[(&str, &str)] =
-        &[("swap", "gorget_array_swap"), ("swap_remove", "gorget_array_swap_remove")];
+    // (method-name, runtime-symbol) siblings — DERIVED from Rust gg's runtime
+    // registry (`src/lir/runtime.rs`), where the swap family is declared with
+    // its symbol, `arg0 = A::Ptr` and a `T::Void` return. The method name is
+    // the symbol minus the `gorget_array_` prefix. A new swap-family sibling
+    // added there enrols itself here.
+    let runtime = fs::read_to_string("src/lir/runtime.rs").expect("read src/lir/runtime.rs");
+    let required: Vec<(String, String)> = runtime
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .filter_map(|l| {
+            let sym = l.split('"').nth(1)?;
+            let method = sym.strip_prefix("gorget_array_")?;
+            // The swap family: mutating, void-returning, self by pointer.
+            (method.starts_with("swap")
+                && l.contains("(T::Ptr, A::Ptr)")
+                && l.contains("T::Void")
+                && l.contains("F::Mutates"))
+            .then(|| (method.to_string(), sym.to_string()))
+        })
+        .collect();
+    assert!(
+        required.len() >= 2,
+        "self_host_vector_swap_abi_triple: only {} swap-family row(s) derived from \
+         `src/lir/runtime.rs` — the registry's shape moved, and with nothing \
+         required the three table checks below assert nothing. Regenerate: \
+         grep -n \'gorget_array_swap\' src/lir/runtime.rs",
+        required.len(),
+    );
 
     let mut missing: Vec<String> = Vec::new();
-    for (method, sym) in required {
+    for (method, sym) in &required {
         // (1) callee table: method → runtime symbol (a `return "<sym>"`).
         if !callee.contains(&format!("\"{sym}\"")) {
             missing.push(format!("map_array_method: no `return \"{sym}\"` for `{method}`"));
@@ -5832,9 +5885,10 @@ fn self_host_vector_swap_abi_triple() {
          (`map_array_method` + `needs_ptr_arg` in lir_lower.gg, \
          `infer_method_return_type` in lower_types.gg). Adding one method — or \
          one table — and forgetting the rest is the desync that broke \
-         `vector_swap_fill` (R41). Mirrors Rust gg `src/lir/runtime.rs` \
-         ArraySwap/ArraySwapRemove. Re-add the missing entry, or extend the \
-         REQUIRED list if a new swap-family sibling landed.",
+         `vector_swap_fill` (R41). The required siblings are DERIVED from Rust gg's \
+         runtime registry (`src/lir/runtime.rs`: a `gorget_array_swap*` symbol with \
+         `arg0 = A::Ptr`, `T::Void`, `F::Mutates`), so there is no list here to \
+         extend — a new sibling declared there enrols itself.",
         missing.join("\n  "),
     );
 }
@@ -7760,15 +7814,56 @@ fn await_value_route_sibling_count() {
 ///
 /// **If this fails:** either a second hardcoded collection-base list crept back
 /// into `is_type_constructor` (route it through `is_builtin_collection_base`),
-/// or the helper's name set changed (update EXPECTED_BASES here with a
-/// justification). `Box` is intentionally NOT in the set — Box monos go through
-/// lir_lower's `BkRegularBox` arm, not the mono-record loop.
+/// or the helper's name set changed. `Box` is intentionally NOT in the set —
+/// Box monos go through lir_lower's `BkRegularBox` arm, not the mono-record
+/// loop; it is a pass-bodied `lib/std/collections.gg` struct all the same, which
+/// is why the roster below is derived from the RESOURCE REGISTRY rather than
+/// from the `: pass` shape.
+///
+/// ⚠ THE PROVENANCE SENTENCE THIS LINT USED TO CARRY WAS FALSE. It said the set
+/// was "the collection bases declared `: pass` in lib/std/collections.gg", and
+/// two of its seven rows are not: `Channel` is declared in `lib/std/channel.gg`,
+/// and `Box` IS declared there and is deliberately absent. Measured, the
+/// pass-bodied set across `lib/std/` is nineteen names — it includes the whole
+/// `sync.gg` family — so it was never the axis.
 #[test]
 fn collection_base_names_single_source() {
-    /// The collection bases declared `: pass` in lib/std/collections.gg whose
-    /// monos are runtime GorgetArray/GorgetMap/GorgetSet aliases. Box excluded.
-    const EXPECTED_BASES: &[&str] =
-        &["Vector", "Deque", "Channel", "Dict", "HashMap", "Set", "HashSet"];
+    // The collection bases, DERIVED from `compiler/data/resources.gg`: every
+    // `MkPrefix` row whose metadata declares a collection runtime, minus the
+    // runtime-form aliases (`GorgetArray__`, `GorgetDict__`, …), which are not
+    // surface base names.
+    let registry = resources_gg_families();
+    let mut bases: BTreeSet<String> = registry
+        .iter()
+        .filter(|(_, mp)| {
+            matches!(
+                mp.as_deref(),
+                Some("gorget_array") | Some("gorget_set") | Some("gorget_map")
+            )
+        })
+        .filter_map(|(p, _)| p.strip_suffix("__").map(str::to_string))
+        .filter(|b| !b.starts_with("Gorget"))
+        .collect();
+    // …plus the one member the registry does not classify as a collection.
+    const EXTRA: &[(&str, &str)] = &[
+        ("Channel", "declared `: pass` in lib/std/channel.gg and classified \
+          `CkNotCollection` in resources.gg — but its monos are runtime-backed \
+          handles all the same, so registering one as a user `type_info` emits \
+          the same unnamed-field C struct."),
+    ];
+    for (name, _) in EXTRA {
+        bases.insert((*name).to_string());
+    }
+    assert!(
+        bases.len() >= 5,
+        "collection_base_names_single_source: only {} collection base(s) derived \
+         from compiler/data/resources.gg — the registry read or the filter broke, \
+         and a short roster asserts nothing. Found: {bases:?}",
+        bases.len(),
+    );
+    let expected_bases: Vec<&str> = bases.iter().map(String::as_str).collect();
+    #[allow(non_snake_case)]
+    let EXPECTED_BASES = &expected_bases;
 
     // 1. The single source of truth must exist and list exactly EXPECTED_BASES.
     let lower = fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg")
@@ -7796,8 +7891,12 @@ fn collection_base_names_single_source() {
     for base in EXPECTED_BASES {
         assert!(
             body.contains(&format!("name == \"{base}\"")),
-            "is_builtin_collection_base is missing base name `{base}` — the EXPECTED_BASES \
-             list in this lint and the helper body must agree (one source of truth).",
+            "`is_builtin_collection_base` is missing base name `{base}`, which \
+             `compiler/data/resources.gg` declares as a collection family. \
+             Registering its bare template or a mono as a user `type_info` makes \
+             `emit_structs` emit an unnamed-field C struct \
+             (`struct __gg_Vector {{ uint8_t ; }}`) — a `pass` body is one \
+             EMPTY-name field. Add it to the helper.",
         );
     }
     // Reject any collection base NOT in EXPECTED_BASES (catches a silently-added
@@ -7810,9 +7909,12 @@ fn collection_base_names_single_source() {
                 let nm = &after[..end];
                 assert!(
                     EXPECTED_BASES.contains(&nm),
-                    "is_builtin_collection_base lists base name `{nm}` not in this lint's \
-                     EXPECTED_BASES — if it's a genuine GorgetArray-backed collection, add it \
-                     to EXPECTED_BASES with a justification; otherwise it does not belong here.",
+                    "`is_builtin_collection_base` lists base name `{nm}`, which \
+                     `compiler/data/resources.gg` does not declare as a collection \
+                     family (derived roster: {EXPECTED_BASES:?}). If it IS a genuine \
+                     GorgetArray/Map/Set-backed collection, give it a `MkPrefix` row \
+                     with its `method_prefix` there — that is the axis; otherwise it \
+                     does not belong in this helper.",
                 );
                 rest = &after[end + 1..];
             } else {
