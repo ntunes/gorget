@@ -295,6 +295,156 @@ fn assert_gg_walker_covers_ast(
     );
 }
 
+/// The RECEIVER-GATE CELLS — `(receiver base, method)` pairs the
+/// wrong-receiver combinator gate rejects — extracted per lane.
+///
+/// Returns `(rust, self_host)`. Both are DERIVED from the arms themselves, so
+/// the parity assertion needs no pinned number on either side; and they are
+/// CELLS rather than counts, so a cell substituted on one lane (one leaves,
+/// another arrives) still reds, which a `9 == 9` cannot see.
+fn receiver_gate_cells() -> (BTreeSet<(String, String)>, BTreeSet<(String, String)>) {
+    let rs = fs::read_to_string("src/semantic/typecheck.rs")
+        .expect("read src/semantic/typecheck.rs");
+    let mut rust: BTreeSet<(String, String)> = Default::default();
+    for line in rs.lines() {
+        if !line.contains("R26A_ARM_MARKER") {
+            continue;
+        }
+        // `("Result", "flat_map") => "Option-only", // R26A_ARM_MARKER`
+        let head = line.split("=>").next().unwrap_or("");
+        let mut parts = head.split('"').skip(1).step_by(2);
+        if let (Some(b), Some(m)) = (parts.next(), parts.next()) {
+            rust.insert((b.to_string(), m.to_string()));
+        }
+    }
+    let gg = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("read tests/fixtures/self_host_typechecker/typecheck.gg");
+    let lines: Vec<&str> = gg.lines().collect();
+    let mut sh: BTreeSet<(String, String)> = Default::default();
+    for (i, line) in lines.iter().enumerate() {
+        if !line.contains("R27C_ARM_MARKER") || i == 0 {
+            continue;
+        }
+        // The predicate is the line ABOVE the marker:
+        // `elif base_name == "Option" and method_name == "is_ok":`
+        let prev = lines[i - 1];
+        let base = prev
+            .split("base_name == \"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .map(str::to_string);
+        let method = prev
+            .split("method_name == \"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .map(str::to_string);
+        if let (Some(b), Some(m)) = (base, method) {
+            sh.insert((b, m));
+        }
+    }
+    (rust, sh)
+}
+
+/// The Option / Result method tables of `docs/language-reference.md` — the
+/// RATIFIED surface, and a witness neither implementation derives from.
+fn reference_option_result_methods() -> (BTreeSet<String>, BTreeSet<String>) {
+    let doc = fs::read_to_string("docs/language-reference.md")
+        .expect("read docs/language-reference.md");
+    let table = |head: &str| -> BTreeSet<String> {
+        let i = doc
+            .find(head)
+            .unwrap_or_else(|| panic!("the `{head}` section of docs/language-reference.md moved"));
+        let after = i + head.len();
+        let j = doc[after..].find("**`").map_or(doc.len(), |o| after + o);
+        doc[i..j]
+            .lines()
+            .filter_map(|l| l.strip_prefix("| `"))
+            .filter_map(|r| r.split('(').next())
+            .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+            .map(str::to_string)
+            .collect()
+    };
+    let opt = table("**`Option[T]`");
+    let res = table("**`Result[T, E]`");
+    assert!(
+        opt.len() >= 8 && res.len() >= 8,
+        "reference_option_result_methods: parsed {} Option and {} Result methods \
+         out of docs/language-reference.md — the table anchors moved, and a short \
+         roster makes the one-sidedness witness vacuous.",
+        opt.len(),
+        res.len(),
+    );
+    (opt, res)
+}
+
+/// Assert the receiver-gate cell sets agree ACROSS LANES and that every cell is
+/// genuinely one-sided in the ratified reference. Called from both lanes' lints
+/// so either name leads a reader to the whole picture.
+fn assert_receiver_gate_lanes_agree(from_lane: &str) {
+    let (rust, sh) = receiver_gate_cells();
+    assert!(
+        rust.len() >= 4,
+        "{from_lane}: only {} `R26A_ARM_MARKER` cells parsed out of \
+         src/semantic/typecheck.rs — the extraction broke, and a short set makes \
+         the parity assertion below vacuous.",
+        rust.len(),
+    );
+    assert_eq!(
+        rust, sh,
+        "the wrong-receiver combinator gate DIVERGED between lanes (Core #9: a \
+         semantic change lands on every lane in the same round).\n  \
+         Rust `R26A_ARM_MARKER` cells: {rust:?}\n  \
+         SH   `R27C_ARM_MARKER` cells: {sh:?}\n\n\
+         A cell present on one lane only is a program the two compilers disagree \
+         about. Wire ALL THREE lanes in the SAME round — the ggdef production \
+         receiver-gate (`spec/ggdef/src/elaborate/mod.rs::elaborate_method`), the \
+         Rust arm, and the SH mirror in \
+         `tests/fixtures/self_host_typechecker/typecheck.gg` — and land a \
+         `combinator_<recv>_<method>_rejected.gg` reject fixture (RED-verified \
+         per Core #12) plus its `check_gg_fails` Rust and \
+         `self_host_lowerer_driver_rejects_combinator_*` SH integration tests. \
+         Removing a cell moves the Option / Result method tables in \
+         `docs/language-reference.md` and the ggdef gate too.",
+    );
+
+    // Third witness: the ratified reference. A rejected cell must be a method
+    // the OTHER type carries and this one does not — that IS what "one-sided"
+    // means, and the reference is where it is ratified.
+    const NOT_IN_REFERENCE: &[(&str, &str, &str)] = &[
+        ("Result", "flat_map",
+         "an `and_then` alias the reference's Option table does not list; the \
+          gate still rejects it on Result because the Option surface accepts it. \
+          If the alias is ever documented, strike this row."),
+    ];
+    let (opt, res) = reference_option_result_methods();
+    let mut not_one_sided: Vec<String> = Vec::new();
+    for (recv, method) in &rust {
+        if NOT_IN_REFERENCE.iter().any(|(r, m, _)| r == recv && m == method) {
+            continue;
+        }
+        let (other, own) = if recv == "Result" { (&opt, &res) } else { (&res, &opt) };
+        if !other.contains(method) || own.contains(method) {
+            not_one_sided.push(format!(
+                "({recv}, {method}): present in the OTHER type's reference table = {}, \
+                 in its OWN = {}",
+                other.contains(method),
+                own.contains(method),
+            ));
+        }
+    }
+    assert!(
+        not_one_sided.is_empty(),
+        "receiver-gate cell(s) are not ONE-SIDED in `docs/language-reference.md`:\n  \
+         {}\n\n\
+         The gate rejects a method because the OTHER prelude type carries it and \
+         this one does not. If the reference now lists it on BOTH, the cell is a \
+         false reject and must be retired from all three lanes; if it lists it on \
+         NEITHER, the reference is behind — move it, or declare the cell in \
+         NOT_IN_REFERENCE with its reason.",
+        not_one_sided.join("\n  "),
+    );
+}
+
 /// The mangled-name family registry, read out of `compiler/data/resources.gg`:
 /// every `MkPrefix("X__")` row paired with the `method_prefix` its
 /// `ResourceMetadata` declares (`gorget_array` / `gorget_heap` / `gorget_set` /
@@ -9796,55 +9946,83 @@ fn cited_lint_names_resolve_to_real_tests() {
 /// a rewrite; if it ever reds after a pure-fmt change, join wrapped lines first.
 #[test]
 fn self_host_gorget_map_struct_size() {
-    const EXPECTED_SIZE: usize = 192;
     // ≥9 single-sourced size sites: 2 LirStructDef + 7 ResourceMetadata.
     const MIN_CONSTANT_USE_SITES: usize = 9;
 
-    let lir = fs::read_to_string("tests/fixtures/self_host_lowerer/lir.gg").unwrap_or_default();
-    let lower =
-        fs::read_to_string("tests/fixtures/self_host_lowerer/lir_lower.gg").unwrap_or_default();
-    let rust = fs::read_to_string("src/lir/lower/types.rs").unwrap_or_default();
+    let lir = fs::read_to_string("tests/fixtures/self_host_lowerer/lir.gg")
+        .expect("read tests/fixtures/self_host_lowerer/lir.gg");
+    let lower = fs::read_to_string("tests/fixtures/self_host_lowerer/lir_lower.gg")
+        .expect("read tests/fixtures/self_host_lowerer/lir_lower.gg");
+    let rust = fs::read_to_string("src/lir/lower/types.rs")
+        .expect("read src/lir/lower/types.rs");
 
-    // (a) Constant defined at the expected value in lir.gg.
-    let const_def = format!("const int GORGET_MAP_STRUCT_SIZE = {EXPECTED_SIZE}");
+    // (a) READ the size out of Rust gg — the cross-compiler source of truth
+    //     (both lanes follow `runtime_preamble.c`). Writing the number here as
+    //     well would be a THIRD copy, editable in isolation; the lanes are
+    //     compared instead.
+    const RUST_SITE: &str = "crate::lir::ResourceKind::GorgetMap | crate::lir::ResourceKind::GorgetSet => ";
+    let rust_size: usize = rust
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .find_map(|l| l.split(RUST_SITE).nth(1))
+        .and_then(|r| {
+            let d: String = r.chars().take_while(|c| c.is_ascii_digit()).collect();
+            d.parse().ok()
+        })
+        .expect(
+            "Rust gg (src/lir/lower/types.rs) no longer maps \
+             `ResourceKind::GorgetMap | ResourceKind::GorgetSet` to a byte size — \
+             re-anchor this lint; the SH size below has nothing to agree with.",
+        );
+    assert!(
+        rust_size >= 64 && rust_size % 8 == 0,
+        "Rust gg maps GorgetMap/GorgetSet to {rust_size} bytes, which is not a \
+         plausible 8-byte-field struct size — the extraction above is reading the \
+         wrong thing, and a nonsense size makes the SH agreement below meaningless.",
+    );
+
+    // (b) The self-host constant agrees with it, byte for byte.
+    let const_def = format!("const int GORGET_MAP_STRUCT_SIZE = {rust_size}");
     assert!(
         lir.lines().any(|l| l.trim_start().starts_with(&const_def)),
-        "self-host `GORGET_MAP_STRUCT_SIZE` is not defined as `{EXPECTED_SIZE}` in \
-         tests/fixtures/self_host_lowerer/lir.gg. The GorgetMap/GorgetSet runtime \
-         struct is 24 fields × 8 bytes = 192 (19 legacy + 5 D39 dense-mode fields \
-         appended at struct END; runtime_preamble.c). Do NOT change this to 184 \
-         (the stale 23-field over-count that overflowed gorget_array_push on the \
-         xml fixtures) or back to 152 (the pre-D39 legacy size — truncates the \
-         alloca so runtime stores to entries_keys/values/len/cap/indices walk into \
-         adjacent stack slots) without first changing the actual runtime struct \
-         AND Rust gg.",
+        "self-host `GORGET_MAP_STRUCT_SIZE` in \
+         tests/fixtures/self_host_lowerer/lir.gg disagrees with Rust gg, which \
+         maps GorgetMap/GorgetSet to {rust_size} bytes. The two lanes MUST stay in \
+         lock-step (both follow runtime_preamble.c: 24 fields × 8 bytes at the \
+         time of writing — 19 legacy + 5 D39 dense-mode fields appended at struct \
+         END). A too-small size truncates the alloca so runtime stores to \
+         entries_keys/values/len/cap/indices walk into adjacent stack slots; a \
+         too-large one overflowed gorget_array_push on the xml fixtures. If the \
+         runtime struct genuinely changed, move runtime_preamble.c, Rust \
+         types.rs, AND this constant together.",
     );
 
-    // (b) Rust gg agrees — the cross-compiler source of truth.
-    assert!(
-        rust.contains(&format!("GorgetMap | crate::lir::ResourceKind::GorgetSet => {EXPECTED_SIZE}"))
-            || rust.contains(&format!("\"GorgetMap\" | \"GorgetSet\" => {EXPECTED_SIZE}")),
-        "Rust gg (src/lir/lower/types.rs) no longer maps GorgetMap/GorgetSet to \
-         {EXPECTED_SIZE} bytes. The self-host and Rust struct sizes MUST stay in lock-step \
-         (both follow runtime_preamble.c). If the runtime struct genuinely changed size, \
-         update runtime_preamble.c, Rust types.rs, AND GORGET_MAP_STRUCT_SIZE together.",
-    );
-
-    // (c1) No bare `184` map/set literal smuggled back into the lowerer. Match a
-    // non-comment line that names GorgetMap/GorgetSet AND the digits 184.
+    // (c1) No bare size literal smuggled back into the lowerer. ⚠ The check used
+    //      to name ONE historical wrong value (`184`), so `152` — the other
+    //      value this defect actually took — and any future one were invisible.
+    //      The subject is now "a digit run at a map/set size site that is not
+    //      the named constant", whatever the digits say.
     let strays: Vec<&str> = lower
         .lines()
         .filter(|l| {
             let t = l.trim_start();
-            !t.starts_with('#')
-                && (t.contains("\"GorgetMap\"") || t.contains("\"GorgetSet\""))
-                && t.contains("184")
+            if t.starts_with('#')
+                || !(t.contains("\"GorgetMap\"") || t.contains("\"GorgetSet\""))
+                || t.contains("GORGET_MAP_STRUCT_SIZE")
+            {
+                return false;
+            }
+            // A bare multi-digit literal on a map/set line is a size.
+            let code = t.split('#').next().unwrap_or("");
+            code.split(|c: char| !c.is_ascii_digit())
+                .any(|d| d.len() >= 2 && d.parse::<usize>().map_or(false, |n| n >= 64))
         })
         .collect();
     assert!(
         strays.is_empty(),
-        "A raw `184` reappeared at a GorgetMap/GorgetSet size site in lir_lower.gg \
-         (must read `GORGET_MAP_STRUCT_SIZE`, the single source of truth = {EXPECTED_SIZE}):\n  {}",
+        "a raw size literal reappeared at a GorgetMap/GorgetSet site in \
+         lir_lower.gg (every one must read `GORGET_MAP_STRUCT_SIZE`, the single \
+         source of truth — {rust_size} today):\n  {}",
         strays.join("\n  "),
     );
 
@@ -16687,40 +16865,12 @@ fn move_suggestion_advice_absent_from_source() {
 /// too. Do NOT lower `EXPECTED` without matching all three lanes.
 #[test]
 fn reject_wrong_receiver_combinator_arms_count() {
-    let src = std::fs::read_to_string("src/semantic/typecheck.rs")
-        .expect("read src/semantic/typecheck.rs");
-    const MARKER: &str = "R26A_ARM_MARKER";
-    let arm_count = src.matches(MARKER).count();
-    // One MARKER PER cell in the reject fn: the 5 combinator cells
-    // (Result.{flat_map, filter, flatten} + Option.{map_err, unwrap_error})
-    // plus the 4 tag-check cells added by Round XXVIII Track A
-    // (Result.{is_some, is_none} + Option.{is_ok, is_error}) = 9. The doc
-    // reference in the fn's header uses the string "R26A_ARM_MARKER" only
-    // inside `assert!` / rustdoc — the marker appears exclusively as a
-    // trailing comment on each of the 9 match arms.
-    const EXPECTED: usize = 9;
-    assert_eq!(
-        arm_count, EXPECTED,
-        "Round XXVI Track A + Round XXVIII Track A class-guard: \
-         `R26A_ARM_MARKER` occurrences in `src/semantic/typecheck.rs` \
-         changed: {arm_count} vs expected {EXPECTED}. The 9 markers pin the \
-         Result.{{flat_map, filter, flatten, is_some, is_none}} + \
-         Option.{{map_err, unwrap_error, is_ok, is_error}} receiver-gate \
-         arms in `reject_wrong_receiver_combinator` (combinators + \
-         tag-checks). If you added a new one-sided cell, wire ALL THREE \
-         lanes in the SAME round (Core #9 all-lanes semantic change): the \
-         ggdef production receiver-gate \
-         (`spec/ggdef/src/elaborate/mod.rs::elaborate_method`), this Rust \
-         arm, AND the SH mirror at \
-         `tests/fixtures/self_host_typechecker/typecheck.gg::reject_wrong_receiver_combinator` \
-         (+ its `R27C_ARM_MARKER` arm-count lint). Land a \
-         `combinator_<recv>_<method>_rejected.gg` reject fixture \
-         (RED-verified per Core #12) plus its `check_gg_fails` Rust + \
-         `self_host_lowerer_driver_rejects_combinator_*` SH integration \
-         tests, and bump EXPECTED. If you removed one, move the reference \
-         table in `docs/language-reference.md:3861-3891` and the ggdef gate \
-         too — do NOT lower EXPECTED without all lanes moving with it.",
-    );
+    // ⚠ CELLS, not a count, and compared ACROSS LANES rather than to a pinned
+    // number. Two `EXPECTED = 9` constants — one here, one on the SH twin —
+    // could drift apart one lane at a time and each stay green; a count also
+    // cannot see a cell SUBSTITUTED for another. The parity assertion makes a
+    // one-lane bump impossible by construction (Core #9).
+    assert_receiver_gate_lanes_agree("reject_wrong_receiver_combinator_arms_count");
 }
 
 /// Round XXVII Track B class-retirement guard (Core #6 executable
@@ -16997,40 +17147,10 @@ fn fn_body_end(lines: &[&str], fn_start: usize) -> usize {
 /// `docs/language-reference.md:3861-3891` and both other lanes must move.
 #[test]
 fn sh_reject_wrong_receiver_combinator_arms_count() {
-    let src = std::fs::read_to_string(
-        "tests/fixtures/self_host_typechecker/typecheck.gg",
-    )
-    .expect("read tests/fixtures/self_host_typechecker/typecheck.gg");
-    const MARKER: &str = "R27C_ARM_MARKER";
-    let arm_count = src.matches(MARKER).count();
-    // One MARKER PER cell in the SH reject fn: the 5 combinator cells
-    // (Result.{flat_map, filter, flatten} + Option.{map_err, unwrap_error})
-    // plus the 4 tag-check cells added by Round XXVIII Track A
-    // (Result.{is_some, is_none} + Option.{is_ok, is_error}) = 9. The doc
-    // reference in the fn's header paraphrases (does NOT spell the marker
-    // string) so the count is unambiguous.
-    const EXPECTED: usize = 9;
-    assert_eq!(
-        arm_count, EXPECTED,
-        "Round XXVII Track C + Round XXVIII Track A SH-lane class-guard: \
-         `R27C_ARM_MARKER` occurrences in \
-         `tests/fixtures/self_host_typechecker/typecheck.gg` changed: \
-         {arm_count} vs expected {EXPECTED}. The 9 markers pin the \
-         Result.{{flat_map, filter, flatten, is_some, is_none}} + \
-         Option.{{map_err, unwrap_error, is_ok, is_error}} receiver-gate \
-         arms in the SH-lane `reject_wrong_receiver_combinator` \
-         (combinators + tag-checks). If you added a new one-sided cell, \
-         wire ALL THREE lanes in the SAME round (Core #9): Rust chokepoint \
-         (+`R26A_ARM_MARKER`, bump its lint), ggdef `elaborate_method`, \
-         and this SH arm — plus land a \
-         `combinator_<recv>_<method>_rejected.gg` fixture (RED-verified \
-         per Core #12) and a matching \
-         `self_host_lowerer_driver_rejects_combinator_*` integration test. \
-         If you removed one, move the reference table in \
-         `docs/language-reference.md:3861-3891` and the ggdef + Rust \
-         chokepoints too — do NOT lower EXPECTED without all lanes moving \
-         with it.",
-    );
+    // The SH half of the same parity assertion (see the Rust twin). Kept as its
+    // own `#[test]` so a failure names the lane a reader is looking at, but the
+    // COMPARISON is one — there is no separate SH number to bump.
+    assert_receiver_gate_lanes_agree("sh_reject_wrong_receiver_combinator_arms_count");
 }
 
 /// Round XXIX Track B — Core #6 executable guard for the METHOD SILENT-ACCEPT
@@ -19512,82 +19632,111 @@ fn assigns_compound_op_no_silent_fallthrough() {
 /// per-file count-off-by-one; restore restored green.
 #[test]
 fn d26_map_binop_arm_count_ratchet() {
-    let re = regex::Regex::new(
-        r"(AddFallible|SubFallible|MulFallible|DivFallible|RemFallible|ShlFallible|ShrFallible)",
-    )
-    .expect("d26 fallible-arm regex");
+    // Derived place 1 — the fallible-arith variant set, read out of the typed
+    // helper that DEFINES it. A roster hand-listed here could not see an 8th op.
+    let ast = fs::read_to_string("src/parser/ast.rs").expect("read src/parser/ast.rs");
+    let helper_start = ast
+        .find("pub fn is_fallible_arith(")
+        .expect("`is_fallible_arith` moved — re-anchor this lint");
+    let helper_end = ast[helper_start..]
+        .find("\n    }")
+        .map(|o| helper_start + o)
+        .expect("`is_fallible_arith` body close not found");
+    let variants: BTreeSet<String> = ast[helper_start..helper_end]
+        .match_indices("BinaryOp::")
+        .filter_map(|(k, m)| {
+            let rest = &ast[helper_start + k + m.len()..];
+            let n: String = rest.chars().take_while(|c| c.is_alphanumeric()).collect();
+            n.ends_with("Fallible").then_some(n)
+        })
+        .collect();
+    assert!(
+        variants.len() >= 5,
+        "d26_map_binop_arm_count_ratchet: only {} fallible-arith variants read out \
+         of `is_fallible_arith` — the extraction broke, and a short set makes the \
+         per-file coverage below vacuous. Found: {variants:?}",
+        variants.len(),
+    );
 
-    let expectations: &[(&str, usize, &str)] = &[
-        (
-            "src/parser/ast.rs",
-            14,
-            "BinaryOp enum definition (7) + is_fallible_arith() matches! (7)",
-        ),
-        (
-            "src/formatter/mod.rs",
-            14,
-            "formatter arm - 7 arms `Fallible => \"...!\"` in binary_op_str (7) + \
-             7 mentions in `binary_op_left_bp` precedence table (Round XXXVI FMT-A: \
-             2 shift fallibles at bp 25, 2 add fallibles at bp 27, 3 mul/div/rem \
-             fallibles at bp 29 = 7)",
-        ),
-        (
-            "src/semantic/typecheck.rs",
-            30,
-            "op_glyph_str (7) + op_display non-compound (7) + op_display compound (7) + \
-             shift-fallible Route-B reject guard matches! (2: ShlFallible|ShrFallible) + \
-             op_trait_and_method's EXHAUSTIVE fallible arm (7 — D46 deleted its \
-             `_ => None` catch-all so rustc exhaustiveness, not an arm count, is \
-             the guard that a new BinaryOp variant cannot go unmapped)",
-        ),
-        (
-            "src/parser/expr.rs",
-            7,
-            "Pratt infix-op map - 7 lex-token to InfixOp::Binary arms",
-        ),
-        (
-            "src/ir/lowering/exprs/operators.rs",
-            17,
-            "5-variant matches! dispatch + 5-arm base_op map + 7-arm fallback bin_op map",
-        ),
-        (
-            "spec/ggdef/src/elaborate/mod.rs",
-            12,
-            "map_binop - 5 arith arms (2 mentions each: B::X + BinOp::X) + 2 shift OOS reject",
-        ),
+    // The two MULTIPLICITY GROUPS. Members of a group are mentioned the same
+    // number of times in any given file — the arms come in whole families — so
+    // uniformity WITHIN a group replaces a pinned per-file total, and it is
+    // strictly sharper: a per-file count is green under substitution, while a
+    // single arm deleted for ONE variant breaks its group's uniformity.
+    const ARITH: &[&str] = &[
+        "AddFallible", "SubFallible", "MulFallible", "DivFallible", "RemFallible",
+    ];
+    const SHIFT: &[&str] = &["ShlFallible", "ShrFallible"];
+    let declared: BTreeSet<String> = ARITH
+        .iter()
+        .chain(SHIFT.iter())
+        .map(|s| (*s).to_string())
+        .collect();
+    assert_eq!(
+        declared, variants,
+        "the fallible-arith multiplicity groups here and `is_fallible_arith` in \
+         src/parser/ast.rs disagree.\n  groups: {declared:?}\n  helper: {variants:?}\n\n\
+         An 8th fallible-arith operator joins ARITH or SHIFT (they differ because \
+         the shift ops carry the Route-B reject guard and skip the lowering \
+         base_op map). A retired one leaves both.",
+    );
+
+    // Derived place 2 — every site that must carry the whole family.
+    const SITES: &[(&str, &str)] = &[
+        ("src/parser/ast.rs",
+         "the `BinaryOp` enum definition + the `is_fallible_arith()` typed helper"),
+        ("src/formatter/mod.rs",
+         "`binary_op_str`'s glyph arms + the `binary_op_left_bp` precedence table"),
+        ("src/semantic/typecheck.rs",
+         "`op_glyph_str` + `op_display` (non-compound and compound) + \
+          `op_trait_and_method`'s exhaustive fallible arm; the SHIFT group carries \
+          one extra mention each from the Route-B reject guard"),
+        ("src/parser/expr.rs", "the Pratt infix-op map"),
+        ("src/ir/lowering/exprs/operators.rs",
+         "`lower_fallible_arith_binop`'s dispatch + base_op map (ARITH only) and \
+          the fallback bin_op map (all seven)"),
+        ("spec/ggdef/src/elaborate/mod.rs",
+         "`map_binop` — the arith arms plus the shift out-of-subset rejects"),
     ];
 
-    let mut per_file_actual: Vec<(String, usize)> = Vec::new();
-    for (path, expected, why) in expectations {
-        let content = match fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => panic!("d26_map_binop_arm_count_ratchet: cannot read {path}: {e}"),
-        };
-        let count: usize = content
+    let mut problems: Vec<String> = Vec::new();
+    for (path, why) in SITES {
+        let content = fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("d26_map_binop_arm_count_ratchet: cannot read {path}: {e}"));
+        let code: Vec<&str> = content
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
-            .map(|l| re.find_iter(l).count())
-            .sum();
-        per_file_actual.push((path.to_string(), count));
-        assert_eq!(
-            count, *expected,
-            "d26_map_binop_arm_count_ratchet: `{path}` fallible-arith variant \
-             mentions {count} vs expected {expected} ({why}).\n\n\
-             If a new fallible-arith variant was added (an 8th op), it must land \
-             at every enumerated site (see doc comment). Bump each per-file count \
-             here after confirming the new op reaches: parser Pratt, ast helper, \
-             formatter, checker glyph table, lowerer dispatch + base_op map, \
-             lowerer fallback, ggdef elaborator, AND every SH-mirror site (which \
-             this Rust-only lint does NOT ratchet - the SH mirror lands in the \
-             same round per Core #9).",
-        );
+            .collect();
+        let count = |v: &str| -> usize { code.iter().map(|l| l.matches(v).count()).sum() };
+        let missing: Vec<&String> = variants.iter().filter(|v| count(v) == 0).collect();
+        if !missing.is_empty() {
+            problems.push(format!("{path}: never mentions {missing:?} ({why})"));
+            continue;
+        }
+        for (group, label) in [(ARITH, "ARITH"), (SHIFT, "SHIFT")] {
+            let counts: Vec<(String, usize)> =
+                group.iter().map(|v| ((*v).to_string(), count(v))).collect();
+            let first = counts[0].1;
+            if counts.iter().any(|(_, c)| *c != first) {
+                problems.push(format!(
+                    "{path}: the {label} group is not uniform — {counts:?} ({why})"
+                ));
+            }
+        }
     }
-    let total: usize = per_file_actual.iter().map(|(_, c)| c).sum();
-    let expected_total: usize = expectations.iter().map(|(_, c, _)| c).sum();
-    assert_eq!(
-        total, expected_total,
-        "d26 fallible-arm total {total} vs expected {expected_total} - per-file \
-         breakdown: {per_file_actual:?}",
+    assert!(
+        problems.is_empty(),
+        "D26 fallible-arith family coverage broke:\n  {}\n\n\
+         Every fallible-arith variant must reach EVERY site, and the members of a \
+         multiplicity group must reach each site the SAME number of times — the \
+         arms come in whole families, so an odd one out is an arm that was added \
+         or deleted for a single operator.\n\n\
+         If a NEW fallible-arith operator landed, it must reach: parser Pratt, the \
+         ast helper, the formatter, the checker glyph/display tables, the lowerer \
+         dispatch + base_op map, the lowerer fallback, the ggdef elaborator, AND \
+         every SH-mirror site — which this Rust-only lint does NOT ratchet; the SH \
+         mirror lands in the same round (Core #9).",
+        problems.join("\n  "),
     );
 }
 
