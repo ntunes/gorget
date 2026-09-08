@@ -7414,59 +7414,259 @@ fn term_uses_arms_count() {
     );
 }
 
-/// Sibling-site ratchet (CLAUDE.md rule 4 / "Sibling-site drift") over the
-/// self-host `Param(` AST-constructor call sites. P0 (default-arg support) added
-/// a 4th field `Option[SpannedExpr] default_value` to `struct Param` in all three
-/// distinct `ast.gg` copies — so EVERY `Param(...)` constructor must now supply
-/// the default (a captured `dflt` at the parse site, `None()` everywhere else).
-/// A NEW `Param(` site that forgets the field would either fail to compile
-/// (arity error) OR — worse, if someone "fixes" it by reordering — silently drop
-/// a parsed default. Pin the count so a new construction site is forced through
-/// the 4-field shape.
+/// Sibling-site guard (CLAUDE.md rule 4 / "Sibling-site drift") over the
+/// self-host `Param(` AST-constructor call sites, checked BY ARGUMENT rather
+/// than by count.
 ///
-/// `Param(` is matched case-sensitively, so the lowercase `parse_param(` /
-/// `parse_closure_param(` method calls do NOT collide. The `Param parse_param(`
-/// method-definition lines use `Param ` (with a space) and are also excluded.
+/// P0 (default-arg support) added a 4th field `Option[SpannedExpr]
+/// default_value` to `struct Param` in all three distinct `ast.gg` copies, so
+/// every `Param(...)` constructor must supply it — the captured default at the
+/// param-parse site, `None` everywhere else.
 ///
-/// Baseline 2026-06-12: 22 (parser 7 + resolver 7 + typechecker 8). Each capture
-/// site (one per copy: parser/resolver/typechecker `parse_param`) passes the
-/// captured `dflt`; the other 19 pass `None()`.
+/// ⚠ WHY THIS IS NOT A COUNT ANY MORE. Its predecessor pinned the number of
+/// `Param(` occurrences at 22 and its own docstring named the class it was
+/// there for: *"if someone 'fixes' [the arity error] by reordering, [it]
+/// silently drop[s] a parsed default"*. A reordering at an existing site keeps
+/// the site count at 22 — so the guard was GREEN over exactly the defect it
+/// described, while going RED on a blameless new site that was perfectly
+/// correct. Both directions were wrong. The arity half it *could* see is
+/// already a compile error, caught by the bootstrap that builds these files.
+///
+/// So the subject is each site's ARGUMENT LIST:
+///   * the argument count equals `struct Param`'s field count, read out of that
+///     copy's own `ast.gg` — no `4` written here;
+///   * the OWNERSHIP slot (field 3) holds an `OWN_*` constant or the parse
+///     site's `own` local — a reorder puts `None` or a name there and reds;
+///   * the DEFAULT slot (field 4) holds `None` at every site except the one
+///     capture site per copy, where it must NOT be `None` — which is the
+///     regression that silently drops every parsed default, and which no count
+///     of any kind can see;
+///   * each copy has exactly one capture site, so the capture cannot be
+///     duplicated into a second parse path or quietly deleted.
+///
+/// `Param(` is matched case-sensitively and only when it is not preceded by an
+/// identifier character, so `parse_param(` / `parse_closure_param(` and the
+/// `Param parse_param(` definition lines do not collide.
 #[test]
-fn self_host_param_ctor_site_count() {
-    const EXPECTED: usize = 22;
-
+fn self_host_param_ctor_sites_supply_the_default() {
     // The three DISTINCT parser.gg copies (check + lowerer SYMLINK typechecker,
-    // so they are not listed — counting them would double-count).
-    let files = [
-        "tests/fixtures/self_host_parser/parser.gg",
-        "tests/fixtures/self_host_resolver/parser.gg",
-        "tests/fixtures/self_host_typechecker/parser.gg",
-    ];
+    // so they are not listed — they would be the same file twice).
+    const COPIES: [&str; 3] = ["self_host_parser", "self_host_resolver", "self_host_typechecker"];
 
-    let mut count = 0usize;
-    for f in &files {
-        let content = fs::read_to_string(f).unwrap_or_default();
-        for line in content.lines() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with('#') {
-                continue; // .gg comments
+    // Split a balanced argument list at top-level commas.
+    fn split_args(s: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let (mut depth, mut cur, mut in_str) = (0i32, String::new(), false);
+        for ch in s.chars() {
+            match ch {
+                '"' => {
+                    in_str = !in_str;
+                    cur.push(ch);
+                }
+                '(' | '[' if !in_str => {
+                    depth += 1;
+                    cur.push(ch);
+                }
+                ')' | ']' if !in_str => {
+                    depth -= 1;
+                    cur.push(ch);
+                }
+                ',' if !in_str && depth == 0 => {
+                    out.push(cur.trim().to_string());
+                    cur.clear();
+                }
+                _ => cur.push(ch),
             }
-            count += line.matches("Param(").count();
+        }
+        if !cur.trim().is_empty() {
+            out.push(cur.trim().to_string());
+        }
+        out
+    }
+
+    let mut problems: Vec<String> = Vec::new();
+
+    for copy in COPIES {
+        // The field roster, read from the struct that DEFINES it. A 5th field
+        // enrols itself here; nothing in this test says "4".
+        let ast_path = format!("tests/fixtures/{copy}/ast.gg");
+        let ast = fs::read_to_string(&ast_path)
+            .unwrap_or_else(|e| panic!("cannot read {ast_path}: {e}"));
+        let decl = ast
+            .find("\nstruct Param:\n")
+            .unwrap_or_else(|| panic!("`struct Param:` not found in {ast_path}"));
+        let mut fields: Vec<(String, String)> = Vec::new();
+        for line in ast[decl + 1..].lines().skip(1) {
+            if !line.starts_with("    ") || line.trim().is_empty() {
+                break;
+            }
+            let t = line.trim();
+            if t.starts_with('#') {
+                continue;
+            }
+            let (ty, name) = t.rsplit_once(' ').unwrap_or(("", t));
+            fields.push((ty.trim().to_string(), name.trim().to_string()));
+        }
+        assert!(
+            fields.len() >= 4 && fields.last().is_some_and(|(_, n)| n == "default_value"),
+            "{ast_path}: `struct Param` no longer ends in `default_value` \
+             (read: {fields:?}). This guard keys the default slot on being the \
+             LAST field; re-anchor it, do not delete it."
+        );
+        assert!(
+            fields.iter().all(|(t, _)| !t.is_empty()),
+            "{ast_path}: a `struct Param` field line has no type: {fields:?}. The \
+             per-position checks below are driven by the declared TYPES; without \
+             them this guard degrades to an arity check."
+        );
+        let n_fields = fields.len();
+
+        let path = format!("tests/fixtures/{copy}/parser.gg");
+        let src =
+            fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+        let mut capture_sites: Vec<usize> = Vec::new();
+        let mut sites = 0usize;
+
+        for (lineno, line) in src.lines().enumerate() {
+            if line.trim_start().starts_with('#') {
+                continue; // .gg comment
+            }
+            let bytes = line.as_bytes();
+            let mut from = 0usize;
+            while let Some(rel) = line[from..].find("Param(") {
+                let at = from + rel;
+                from = at + "Param(".len();
+                // Not preceded by an identifier char: excludes `parse_param(`
+                // (lowercase, so already excluded) and any `*Param(` suffix.
+                if at > 0 && (bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_') {
+                    continue;
+                }
+                // Balanced argument list starting after the `(`.
+                let rest = &line[from..];
+                let (mut depth, mut end, mut in_str) = (0i32, None, false);
+                for (i, ch) in rest.char_indices() {
+                    match ch {
+                        '"' => in_str = !in_str,
+                        '(' | '[' if !in_str => depth += 1,
+                        ']' if !in_str => depth -= 1,
+                        ')' if !in_str => {
+                            if depth == 0 {
+                                end = Some(i);
+                                break;
+                            }
+                            depth -= 1;
+                        }
+                        _ => {}
+                    }
+                }
+                let Some(end) = end else {
+                    problems.push(format!(
+                        "{path}:{}: `Param(` argument list does not close on its own line — \
+                         this guard reads one line per site; keep the constructor on one line \
+                         or teach the scan to join continuations.",
+                        lineno + 1
+                    ));
+                    continue;
+                };
+                let args = split_args(&rest[..end]);
+                sites += 1;
+
+                if args.len() != n_fields {
+                    problems.push(format!(
+                        "{path}:{}: `Param(` passes {} argument(s), `struct Param` in \
+                         {ast_path} has {n_fields} field(s) {fields:?}: {}",
+                        lineno + 1,
+                        args.len(),
+                        line.trim()
+                    ));
+                    continue;
+                }
+
+                // EVERY POSITION IS TYPE-CHECKED AGAINST ITS FIELD. This is
+                // what makes a REORDER visible: the arguments still number
+                // `n_fields`, the file still compiles, but a name whose
+                // declared type belongs to a different field is now sitting in
+                // this slot. Each argument is classified from its own spelling
+                // and matched to the field type read out of `ast.gg` above —
+                // no per-field name list is written here.
+                let mut misplaced: Vec<String> = Vec::new();
+                for (i, arg) in args.iter().enumerate() {
+                    let (fty, fname) = &fields[i];
+                    let ok = if arg == "None" || arg == "None()" || arg.starts_with("Some(") {
+                        fty.starts_with("Option[")
+                    } else if arg.starts_with('"') {
+                        fty == "String"
+                    } else if arg.starts_with("OWN_") {
+                        fty == "int"
+                    } else if arg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        && !arg.is_empty()
+                    {
+                        // A bare local / parameter: it must be DECLARED with
+                        // this field's type somewhere in the same file. That
+                        // declaration is what a reorder cannot fake.
+                        src.contains(&format!("{fty} {arg}"))
+                    } else {
+                        // A call or a more complex expression — not typeable
+                        // here, and not the reorder shape. Left to the compiler.
+                        true
+                    };
+                    if !ok {
+                        misplaced.push(format!(
+                            "position {i} (`{fname}: {fty}`) holds {arg:?}"
+                        ));
+                    }
+                }
+                if !misplaced.is_empty() {
+                    problems.push(format!(
+                        "{path}:{}: `Param(` arguments do not match `struct Param`'s field \
+                         order — {}: {}\n    The arity is unchanged, so this COMPILES and a \
+                         site count stays green while the parsed default is written into the \
+                         wrong field.",
+                        lineno + 1,
+                        misplaced.join("; "),
+                        line.trim()
+                    ));
+                    continue;
+                }
+
+                // The DEFAULT slot — one capture per copy, checked below.
+                let dflt = args.last().expect("checked arity above");
+                if dflt != "None" && dflt != "None()" {
+                    capture_sites.push(lineno + 1);
+                }
+            }
+        }
+
+        assert!(
+            sites > 0,
+            "{path}: the `Param(` scan found NO construction sites. The scan is broken, \
+             not the parser — a census that cannot see its subject passes every check below."
+        );
+        if capture_sites.len() != 1 {
+            problems.push(format!(
+                "{path}: expected EXACTLY ONE `Param(` site that forwards a captured \
+                 default (the `parse_param` path); found {} at {capture_sites:?}. ZERO means \
+                 the capture regressed to `None` and every `int x = 5` default is now \
+                 silently dropped — the arity is still 4, so a site COUNT stays green. More \
+                 than one means a second parse path grew its own capture and the two can \
+                 disagree.",
+                capture_sites.len()
+            ));
         }
     }
 
-    assert_eq!(
-        count, EXPECTED,
-        "Self-host `Param(` constructor-call count changed: {count} vs {EXPECTED}.\n\n\
-         `struct Param` carries a 4th field `Option[SpannedExpr] default_value` \
-         (P0 default-arg support). EVERY `Param(...)` site must supply it — the \
-         per-copy `parse_param` capture site passes the parsed `dflt`, all others \
-         pass `None()`. If you added a construction site, give it the default \
-         (capture the `= expr` if it's the param-parse path, else `None()`) and \
-         bump EXPECTED. If you removed one, lower EXPECTED. Never reorder the \
-         fields to dodge the arity — that silently drops parsed defaults.",
+    assert!(
+        problems.is_empty(),
+        "self-host `Param(` construction sites are not all supplying the default \
+         correctly:\n{}\n\n\
+         Every `Param(...)` must pass `struct Param`'s fields in declaration order: the \
+         param-parse path forwards the captured default expression, every other site passes \
+         `None`. Never reorder the arguments to dodge an arity error — that compiles and \
+         silently drops parsed defaults.",
+        problems.join("\n")
     );
 }
+
 
 /// Sibling-site ratchet (CLAUDE.md rule 4) over the self-host VALUE-CALLEE
 /// dispatch, plus the Core #10 lower-or-reject guard at the same match.
@@ -11978,12 +12178,6 @@ fn docs_plans_removed_and_define_gorget_is_ledger_only() {
     );
 }
 
-/// AGENTS.md size ratchet (Core #6 applied to the instructions file itself).
-/// The header's split rule: a new lesson lands in AGENTS.md as a compact rule;
-/// the evidence/war-story goes to docs/devbook/29 (engineering) or
-/// docs/devbook/30 (excellence system). Compacted 2026-07-25 from 64.6KB.
-/// The ceiling only ever ratchets DOWN (a further compaction re-seeds it);
-/// raising it requires owner sign-off.
 /// The sanitize sweep's allowlists are SHRINK-ONLY, and every corruption row
 /// carries a justification.
 ///
@@ -11999,6 +12193,36 @@ fn docs_plans_removed_and_define_gorget_is_ledger_only() {
 /// leaks are resource debt. A single merged list would let a use-after-free hide
 /// behind 316 leaks — which is not hypothetical, it is how a `Set[String]`
 /// double free sat filed as a MED *leak* for three weeks in R42.
+///
+/// ⛔ **AND WHY THE SIX TOTALS BELOW ARE NOT REDUNDANT WITH THE SWEEP —
+/// MEASURED, BECAUSE THE OPPOSITE WAS PROPOSED.** A guard-apparatus audit read
+/// `scripts/sanitize_sweep.sh` as already answering these pins ("fatal on a
+/// cited class that stops leaking, plus a per-row TIGHTEN/DELETE advisory") and
+/// classed them removable churn. It is fatal in that direction for CITED rows
+/// ONLY — `adjudicate_leaks` puts a shed class into `retire_due` only when
+/// `anycite`/`cited` holds for it — and the cited population is a small
+/// minority of the pairs. Regenerate the split with:
+///
+/// ```text
+/// awk -F'\t' '!/^#/ && NF>0 && $1!="" {
+///     n=split($2,A,","); for(i=1;i<=n;i++){ split(A[i],kv,"*");
+///       if(kv[1]!=""&&kv[1]!="-") pairs++ }
+///     nc=split($3,C,","); for(ci=1;ci<=nc;ci++){ e=C[ci];
+///       gsub(/^[ \t]+|[ \t]+$/,"",e); pe=index(e,"=");
+///       if(pe>0){ s=substr(e,1,pe-1); gsub(/^[ \t]+|[ \t]+$/,"",s);
+///                 if(s!="") cited[$1 SUBSEP s]=1 } } }
+///   END { c=0; for(k in cited) c++; print pairs" pairs, "c" cited" }' \
+///   tests/sanitize/LEAK_ALLOWLIST.txt
+/// ```
+///
+/// Everything the sweep cannot see is exactly what these pins are for: a row
+/// ADDED (the sweep goes green — admitting the leak is how you silence it), a
+/// class added to an existing row, a `*N+` marker added (which switches that
+/// row's count check OFF inside the sweep), and the UNCITED total, whose live
+/// value the sweep's own header defers to as "the one spelling of that figure".
+/// The sweep is the shrink direction for cited rows; these are the grow
+/// direction for everything. Neither subsumes the other — do not delete one
+/// because the other exists.
 #[test]
 fn sanitize_allowlists_shrink_only() {
     // 2 -> 1 (R44): `sh_gg_run_propagates_signal_death`'s
@@ -13922,6 +14146,18 @@ fn round_close_battery_covers_ci_steps() {
 /// inventory so a compaction cannot delete a rule to hit this target.
 const AGENTS_MD_SIZE_CEILING: u64 = 49_400;
 
+/// AGENTS.md size ratchet (Core #6 applied to the instructions file itself).
+/// The header's split rule: a new lesson lands in AGENTS.md as a compact rule;
+/// the evidence/war-story goes to docs/devbook/29 (engineering) or
+/// docs/devbook/30 (excellence system). Compacted 2026-07-25 from 64.6KB.
+/// The ceiling only ever ratchets DOWN (a further compaction re-seeds it);
+/// raising it requires owner sign-off.
+///
+/// ⚠ This doc block spent several rounds stranded 1,900 lines up the file,
+/// directly above `sanitize_allowlists_shrink_only` — so one guard carried a
+/// docstring about a different guard and this one carried none at all. A
+/// doc-comment has no anchor but adjacency; when you move a `#[test]`, move
+/// its `///` block with it.
 #[test]
 fn agents_md_size_ratchet() {
     // The evidence home the header and this message promise must actually exist.
@@ -18504,17 +18740,18 @@ fn advice_diagnostic_registration() {
         ("ThrowInNonThrowingFunction", ""),
         ("PartialMove", ""),
     ];
-    const EXPECTED_TOTAL: usize = 20;
-
-    assert_eq!(
-        FIX_IT_ADVICE_ROWS.len(),
-        EXPECTED_TOTAL,
-        "FIX_IT_ADVICE_ROWS length ({}) diverged from pinned EXPECTED_TOTAL ({}). \
-         Both must move together — this pair encodes the total known fix-it-advice \
-         message count; bump both when adding a new row, decrement both when \
-         retiring one.",
-        FIX_IT_ADVICE_ROWS.len(),
-        EXPECTED_TOTAL,
+    // ⚠ NO `EXPECTED_TOTAL`. There was one, pinned at 20, asserted against
+    // `FIX_IT_ADVICE_ROWS.len()` — a compile-time literal compared with a
+    // compile-time literal declared three lines above it, in the same block.
+    // Nothing outside this function could ever move either side, so adding a
+    // row and bumping the number were one edit and the assert was green by
+    // construction. The rows earn their keep below, where each is checked
+    // against `src/semantic/errors.rs`; the total earned nothing.
+    assert!(
+        !FIX_IT_ADVICE_ROWS.is_empty(),
+        "FIX_IT_ADVICE_ROWS is empty — the per-variant scan below would then \
+         pass over nothing, which is the vacuous-green shape this guard exists \
+         to avoid."
     );
 
     // Grep-verify each variant name appears at least once in the errors.rs
@@ -21796,10 +22033,15 @@ fn formatter_dedent_close_census() {
         (ClosureRouting, 2),
         (Bracketed, 1),
     ];
-    /// Every `dedent()` in the file is one of the classes above.
-    /// Was 46/Routed 30; D50 (2026-08-28) deleted the `Stmt::Unsafe`
-    /// formatter arm, taking one Routed close with it.
-    const EXPECTED_TOTAL: usize = 45;
+    // ⚠ NO `EXPECTED_TOTAL`. There was one, pinned at 45. Every `dedent()` in
+    // the file is one of the seven classes above (`unknown.is_empty()` below
+    // forces that), and every one of the seven has its own `assert_eq!` — so
+    // the total was the sum of seven numbers this test already checks. It could
+    // not fail unless one of them failed first, and it cost a second hand edit
+    // on every legitimate formatter change. The per-class rows are the
+    // instrument; the sum was bookkeeping.
+    // (History for the table: was 46/Routed 30; D50 deleted the `Stmt::Unsafe`
+    // formatter arm, taking one Routed close with it.)
 
     let content =
         fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
@@ -21906,13 +22148,11 @@ fn formatter_dedent_close_census() {
         unknown.join("\n")
     );
 
-    assert_eq!(
-        rows.len(),
-        EXPECTED_TOTAL,
-        "the formatter's `dedent()` count moved ({} vs {EXPECTED_TOTAL}). That \
-         is fine — but the per-class table below must move with it, and the new \
-         row needs a class.",
-        rows.len()
+    assert!(
+        !rows.is_empty(),
+        "the `dedent()` scan over src/formatter/mod.rs found NO rows. The scan \
+         is broken, not the formatter — a census that cannot see its subject \
+         greens every per-class assert below."
     );
 
     for (class, want) in EXPECTED {
@@ -21925,6 +22165,25 @@ fn formatter_dedent_close_census() {
              `cargo test --test lints formatter_dedent_close_census -- --nocapture`."
         );
     }
+
+    // The per-class rows above only reach classes that appear in `EXPECTED`. A
+    // NEW `Class` variant with rows and no `EXPECTED` entry passes the
+    // `unknown.is_empty()` limb (it is not `Unknown`) and is counted by nothing
+    // — so the table's coverage is asserted here, DERIVED, with no pinned total:
+    // the per-class counts must account for every row scanned.
+    let accounted: usize = EXPECTED
+        .iter()
+        .map(|(class, _)| rows.iter().filter(|(_, _, c)| c == class).count())
+        .sum();
+    assert_eq!(
+        accounted,
+        rows.len(),
+        "the per-class table does not cover every scanned `dedent()` row \
+         ({accounted} accounted for, {} scanned). A `Class` variant grew rows \
+         with no `EXPECTED` entry, so those closes are checked by nothing. Give \
+         the class a row in `EXPECTED`.",
+        rows.len()
+    );
 }
 
 /// THE CLAIM-SITE CENSUS. `Formatter::comment_cursor` advances at exactly ONE
@@ -29862,8 +30121,8 @@ fn is_race_class_warning(kind: &gorget::semantic::errors::SemanticWarningKind) -
 /// Census members that emit a race-class warning yet legitimately need NO
 /// scheduler pin, each with the measurement that says so. ⚠ An entry here is
 /// not a waiver, it is a CLAIM that the fixture's stdout is a function of the
-/// program on every interleaving — and the budget below makes adding one a
-/// visible, deliberate ratchet raise rather than a way out of a red test.
+/// program on every interleaving — and the guard reads the measurement, so an
+/// entry without a run count behind it is a red test, not a way out of one.
 const RACE_WARNED_NO_PIN_NEEDED: &[(&str, &str)] = &[(
     "shared_spawn_with_tracked",
     "prints a by-VALUE copy of the shared int taken inside the `with` block, so \
@@ -29872,10 +30131,14 @@ const RACE_WARNED_NO_PIN_NEEDED: &[(&str, &str)] = &[(
      landing commit, one pinned release binary, 16-way parallel: 1000/1000 `42`.",
 )];
 
-/// Growing this is a ratchet raise: state the measurement in the entry above,
-/// then move this number. Shrinking it (a fixture that acquires a scheduler
-/// pin, or stops warning) needs no ceremony.
-const RACE_WARNED_NO_PIN_BUDGET: usize = 1;
+// ⚠ NO BUDGET CONSTANT. There was one — `RACE_WARNED_NO_PIN_BUDGET: usize = 1`
+// — asserted against `RACE_WARNED_NO_PIN_NEEDED.len()` twelve lines below its
+// own declaration. Two compile-time literals in one file: adding an entry and
+// bumping the budget were a single edit, and no state of the tree could make
+// them disagree. What actually makes an entry deliberate is the second element
+// of each tuple — the measurement — and NOTHING read it. It is checked below
+// now, which is a thing the budget could never see: an entry with a bare
+// "looks fine" rationale bumped the number just as happily as a measured one.
 
 /// Thirteen top-level fixtures declare `directive scheduler=<mode>` — eleven
 /// `=single`, one `=inline`, one `=thread` — and the self-host lowerer's
@@ -30003,14 +30266,25 @@ fn race_warned_fixtures_pin_their_scheduler() {
     );
 
     let allowed: Vec<&str> = RACE_WARNED_NO_PIN_NEEDED.iter().map(|(s, _)| *s).collect();
-    assert_eq!(
-        RACE_WARNED_NO_PIN_NEEDED.len(),
-        RACE_WARNED_NO_PIN_BUDGET,
-        "no-pin list size changed ({} vs budget {RACE_WARNED_NO_PIN_BUDGET}). Every entry \
-         claims a fixture's stdout is scheduler-INDEPENDENT; move the budget only with the \
-         measurement that backs the claim.",
-        RACE_WARNED_NO_PIN_NEEDED.len(),
-    );
+
+    // Every no-pin entry claims a fixture's stdout is scheduler-INDEPENDENT.
+    // The claim is only worth something with a RUN COUNT behind it, so that is
+    // what is asserted — not the list's length. A `N/M` or `N of M` run tally
+    // is the shape the standing entry uses and the shape the message asks for.
+    for (stem, why) in RACE_WARNED_NO_PIN_NEEDED {
+        let has_run_count = why
+            .split(|c: char| !c.is_ascii_digit())
+            .filter(|t| !t.is_empty())
+            .any(|t| t.parse::<u32>().is_ok_and(|n| n >= 100));
+        assert!(
+            why.len() > 80 && has_run_count,
+            "the no-pin entry for `{stem}` does not carry a measurement: {why:?}\n\n\
+             An entry here is not a waiver, it is a CLAIM that the fixture's stdout is \
+             the same on every interleaving. Back it with a repeated run — state the \
+             tally (e.g. `1000/1000 `42``, ≥100 runs) and what was held fixed. Without \
+             one this list is a way out of a red test rather than a measured exemption."
+        );
+    }
 
     let offenders: Vec<&String> =
         unpinned.iter().filter(|s| !allowed.contains(&s.as_str())).collect();
@@ -32806,6 +33080,14 @@ fn figures_db_axes_are_occupied() {
          has collapsed into one axis — in which case the header's orthogonality paragraph in \
          scripts/figures.db is the thing to fix, not this assert. Map: {by_pol:?}"
     );
+    // ⚠ THIS ONE IS CURRENTLY FORCED BY PIGEONHOLE, AND SAYING SO IS THE POINT
+    // (Core #14: an invariant-asserting line that nothing can falsify is rot
+    // unless its reader knows it). With 4 polarities and 3 provenances all
+    // occupied — which the two loops above already require — some provenance
+    // must carry two polarities. It becomes load-bearing the moment a FOURTH
+    // provenance is declared, which is why it stays rather than being deleted:
+    // its sibling above is NOT a tautology (4 polarities can each carry one
+    // provenance and still occupy all 3), so the pair is not symmetric.
     assert!(
         by_prov.values().any(|s| s.len() >= 2),
         "no provenance carries two different polarities, so provenance now DETERMINES polarity. \
