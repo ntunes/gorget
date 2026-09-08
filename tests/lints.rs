@@ -3239,12 +3239,21 @@ fn collection_elem_drop_routes_through_type_drop_fns() {
 ///
 /// Two structural assertions:
 ///  1. The consuming-mutator name list (`"push" | "add" | "extend" | "send" |
-///     "push_back" | "push_front"`) appears exactly THREE times — the value-arg
-///     type-hint arm, the consuming-position arm, and the trait-object pack's
-///     destination arm. A new collection-mutator name (or a copy of the arm)
-///     forces an audit: is it a value-position HINT only (like
-///     `fill`/`get_or_put`, which must NOT consume), or a true consume? — then
-///     re-pin.
+///     "push_back" | "push_front"`) appears in exactly THREE arms — the
+///     value-arg type-hint arm, the consuming-position arm, and the
+///     trait-object pack's destination arm — and every one of the three carries
+///     the SAME roster, read as a SET. A new collection-mutator name (or a copy
+///     of the arm) forces an audit: is it a value-position HINT only (like
+///     `get_or_put`, which must NOT consume), a HINT *and* a consume (like
+///     `fill`, whose last arg IS an ownership boundary — `gorget_array_fill`
+///     gives ONE slot the caller's value and clones the other n-1), or a true
+///     whole-arg consume? — then re-pin.
+///     ⚠ Read the arms as SETS, never as an occurrence count of one exact
+///     alternation spelling: APPENDING a name leaves the old spelling standing
+///     as a PREFIX of the longer alternation, so a count stays put and the
+///     audit above never happens. (`fill` was described here as hint-only for
+///     as long as the count shape held; it has carried its own consuming arm
+///     since, and nothing noticed.)
 ///
 ///     AUDIT OF THE THIRD ARM (`pack_dest`, added 2026-09-04 by the R49 M2
 ///     output-review fold): **HINT ONLY, never a consume decision.** It answers
@@ -3282,19 +3291,143 @@ fn consuming_position_name_match_is_gir_gated() {
     let src = fs::read_to_string("src/ir/lowering/exprs/methods.rs")
         .expect("read src/ir/lowering/exprs/methods.rs");
 
-    // (1) The consuming-mutator name list appears in exactly two arms:
-    //     the value-arg type-hint arm + the consuming-position arm.
+    let lines: Vec<&str> = src.lines().collect();
+
+    // (1) The consuming-mutator name list appears in exactly three arms:
+    //     the value-arg type-hint arm, the consuming-position arm, and the
+    //     trait-object pack's destination arm.
+    //
+    // ⚠ Read as a SET per arm, never as an occurrence count of ONE exact
+    // spelling. The count shape is green over this lint's own class: APPENDING
+    // a mutator name leaves the pinned spelling standing as a PREFIX of the
+    // longer alternation, so the count stays at 3 and the hint-vs-consume
+    // audit the docstring promises never happens.
     const EXPECTED_ARMS: usize = 3;
-    let arms = src
-        .matches("\"push\" | \"add\" | \"extend\" | \"send\" | \"push_back\" | \"push_front\"")
-        .count();
+    let push_arms: Vec<(usize, BTreeSet<String>)> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| !l.trim_start().starts_with("//") && l.contains("\"push\" |"))
+        .map(|(i, l)| (i + 1, quoted_words(l)))
+        .collect();
     assert_eq!(
-        arms, EXPECTED_ARMS,
+        push_arms.len(),
+        EXPECTED_ARMS,
         "consuming-mutator name-list arm count in `lower_method_call` changed: \
-         {arms} vs expected {EXPECTED_ARMS}. A new collection-mutator name (or a \
-         duplicated arm) needs a hint-vs-consume audit (see the \
-         `value_arg_idx_for_method` notes in methods.rs) and a re-pin here.",
+         {} vs expected {EXPECTED_ARMS} (at {:?}). A duplicated arm needs a \
+         hint-vs-consume audit (see the `value_arg_idx_for_method` notes in \
+         methods.rs) and a re-pin here.",
+        push_arms.len(),
+        push_arms.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
     );
+    // The roster, declared once here and compared against EVERY arm — so an
+    // added or removed name names ITSELF in the failure rather than moving a
+    // number, and a name added to one arm only is a cross-arm drift.
+    const CONSUMING_MUTATORS: [&str; 6] =
+        ["push", "add", "extend", "send", "push_back", "push_front"];
+    let roster: BTreeSet<String> =
+        CONSUMING_MUTATORS.iter().map(|s| (*s).to_string()).collect();
+    for (line_no, names) in &push_arms {
+        assert_eq!(
+            names, &roster,
+            "the consuming-mutator name list at \
+             `src/ir/lowering/exprs/methods.rs:{line_no}` no longer carries the \
+             pinned roster.\n  arm : {names:?}\n  pinned: {roster:?}\n\n\
+             A NEW collection-mutator name needs a hint-vs-consume audit: is it a \
+             value-position HINT only (like `fill`/`get_or_put`, which must NOT \
+             consume), or a true consume? Answer that, put the name in EVERY one \
+             of the {EXPECTED_ARMS} arms it belongs in, and re-pin \
+             CONSUMING_MUTATORS.",
+        );
+    }
+
+    // (1b) `get_or_put` is a value-position type HINT and nothing else: it
+    //      appears in the two hint arms and must never reach the CONSUMING
+    //      match, where it would force-clone the call-site temp — the
+    //      gorget-arena snag #2 shape, one family over. `fill` is NOT in that
+    //      class: it carries its own consuming arm (only the VALUE slot, the
+    //      last arg, consumes; see the `fill(n, v)` comment in methods.rs), so
+    //      it is required in BOTH places. This was prose in the docstring and
+    //      checked by nothing.
+    const HINT_ONLY: [&str; 1] = ["get_or_put"];
+    const HINT_AND_CONSUME: [&str; 1] = ["fill"];
+    let gate_line = lines
+        .iter()
+        .position(|l| {
+            l.contains("let consuming_positions_by_name: Vec<usize> = if is_gir_method")
+        })
+        .expect("the `consuming_positions_by_name` anchor moved — re-anchor this lint");
+    // The consuming match runs from that binding to the `};` that closes it.
+    let close = lines
+        .iter()
+        .enumerate()
+        .skip(gate_line + 1)
+        .find(|(_, l)| l.trim_end() == "        };")
+        .map(|(i, _)| i)
+        .expect("the `consuming_positions_by_name` binding's `};` moved — re-anchor");
+    let consuming_region: String = lines[gate_line..=close].join("\n");
+    assert!(
+        consuming_region.contains("\"push\" |") && consuming_region.contains("\"put\" |"),
+        "consuming_position_name_match_is_gir_gated: the consuming region \
+         (methods.rs:{}..{}) no longer holds the mutator match — the check \
+         below would pass vacuously. Re-anchor it.",
+        gate_line + 1,
+        close + 1,
+    );
+    for n in HINT_ONLY {
+        assert!(
+            !consuming_region.contains(&format!("\"{n}\"")),
+            "HINT-ONLY method `{n}` reached the CONSUMING match at \
+             `src/ir/lowering/exprs/methods.rs:{}..{}`. It answers only 'what \
+             type does this value slot hold'; consuming it force-clones the \
+             call-site temp (gorget-arena snag #2, one family over).",
+            gate_line + 1,
+            close + 1,
+        );
+    }
+    for n in HINT_AND_CONSUME {
+        assert!(
+            consuming_region.contains(&format!("\"{n}\"")),
+            "`{n}` LEFT the consuming match at \
+             `src/ir/lowering/exprs/methods.rs:{}..{}`. Its value slot is a real \
+             ownership boundary (`gorget_array_fill` gives ONE slot the caller's \
+             value and clones the other n-1), so dropping the arm silently \
+             borrows where the runtime takes ownership. Restore it.",
+            gate_line + 1,
+            close + 1,
+        );
+    }
+    // Both names are value-arg type HINTS, so both must also be in the hint
+    // arms ABOVE the gate — without the hint the slot's type is unknown and
+    // the arg lowers against the wrong destination type.
+    let hint_arms: Vec<(usize, BTreeSet<String>)> = lines
+        .iter()
+        .enumerate()
+        .take(gate_line)
+        .filter(|(_, l)| !l.trim_start().starts_with("//") && l.contains("\"put\" |"))
+        .map(|(i, l)| (i + 1, quoted_words(l)))
+        .collect();
+    assert!(
+        !hint_arms.is_empty(),
+        "consuming_position_name_match_is_gir_gated: no `put`/`set`/`insert` \
+         HINT arm found above the gate — the check below would pass vacuously.",
+    );
+    for (line_no, names) in &hint_arms {
+        let missing: Vec<&str> = HINT_ONLY
+            .iter()
+            .chain(HINT_AND_CONSUME.iter())
+            .copied()
+            .filter(|n| !names.contains(*n))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the value-arg type-HINT arm at \
+             `src/ir/lowering/exprs/methods.rs:{line_no}` lost {missing:?} \
+             (arm: {names:?}). Without the hint the value slot's type is \
+             unknown and the arg lowers against the wrong destination type — \
+             restore it, or retire the name from HINT_ONLY / HINT_AND_CONSUME \
+             here in the same commit.",
+        );
+    }
 
     // (2) The consuming-position match MUST be gated on the typed callee
     //     identity `is_gir_method` — NOT the method name (Core #2). Dropping the
@@ -17232,8 +17365,21 @@ fn for_loop_fast_path_method_names_arms_count() {
 /// **Discovery method:** variant-enumeration walk of `SemanticErrorKind`
 /// Display arms (per brief §2c). NOT the earlier grep pattern rejected as
 /// noisy — that returned 67 (any backticked-variable diagnostic), catching
-/// unrelated new diagnostics. This pin is authored from a manual read of
-/// each Display arm; the count is the trip-point.
+/// unrelated new diagnostics. The advice rows are authored from a manual read
+/// of each Display arm.
+///
+/// **Both directions.** The rows → Display walk only proves each row names a
+/// real variant; on its own it is green over this lint's own class, because a
+/// NEW advice-emitting variant in `errors.rs` is simply absent from the list
+/// and nothing looks for it. The Display → rows direction is therefore made
+/// TOTAL: every variant is either an advice row or a declared
+/// `NO_FIX_IT_ADVICE` row, and rustc's exhaustiveness over
+/// `SemanticErrorKind` is the witness that no variant can dodge the Display
+/// impl. A new diagnostic lands in neither list and names itself.
+/// (There is no mechanical marker for "this arm tells the user what to
+/// write": the best candidate needle, ``use `` `, recalls 4 of 14 advice
+/// variants and drags in 6 non-advice ones — measured. Totality is the only
+/// honest instrument.)
 ///
 /// **Sub-case granularity note (Core #15(e) Q2):** some variants (notably
 /// `MoveWithoutOperator` with `shape: MoveShape` + `write_through_available:
@@ -17319,6 +17465,147 @@ fn advice_diagnostic_registration() {
              `Display` scope-detection above is stale."
         );
     }
+
+    // ⚠ REVERSE DIRECTION. The walk above is rows -> Display only: it proves
+    // every row here names a real variant, and says NOTHING about a variant in
+    // errors.rs that emits advice and was never added here — which is the class
+    // this lint exists to close. There is no mechanical marker for "this arm
+    // tells the user what to write" (measured: the best candidate needle,
+    // "use `", recalls 4 of 14 advice variants and drags in 6 non-advice ones),
+    // so totality is the only honest instrument: EVERY variant named in the
+    // Display impl is either an advice row above or a declared no-advice row
+    // below. A new diagnostic lands in neither and names itself here.
+    const NO_FIX_IT_ADVICE: &[&str] = &[
+        "AmpInOperandPosition", "AssignmentToConst", "AutoDerefConsumingThroughGuard",
+        "AwaitNonFuture", "AwaitOutsideAsync", "BorrowAcrossAwait", "BorrowConflict",
+        "BreakOutsideLoop", "CannotInferType", "ClosureEscapesScope",
+        "ClosureKindMismatch", "ContinueOutsideLoop", "DanglingReturn",
+        "DefaultOpNonOptional", "DefaultOpRhsTypeMismatch", "DerefCoercionUnimplemented",
+        "DerefNonBox", "DeriveFromRequiresSingleField", "DoubleAwait", "DoubleMove",
+        "DuplicateDefinition", "DuplicateImpl", "DuplicateNamedArg",
+        "DuplicateStructField", "DuplicateStructFieldDecl", "DuplicateSuiteBlock",
+        "FallibleArithmeticOnNonInt", "FallibleOpInConst", "FieldMissingDerivedTrait",
+        "InferredThrowsUnsupported", "InvalidAssignTarget", "InvalidFnTraitArg",
+        "InvalidParameterMode", "LocalBorrowBind", "MainThrowsNonInt", "MetaEvalError",
+        "MethodGenericInferenceFailed", "MethodSignatureMismatch", "MissingRequiredArg",
+        "MissingReturn", "MissingTraitMethod", "MoveInLoop", "MoveInOperandPosition",
+        "MutationWhileBorrowed", "MutexDoubleLock", "NoFieldFound", "NoMethodFound",
+        "NonDerefContainerBareTrait", "NonExhaustiveMatch", "NonPrintableInterpolation",
+        "NoreturnBodyReturns", "NoreturnWithThrows", "NotAFunction", "NotAStruct",
+        "NotAType", "NotIndexable", "NotIndexableMut", "OnErrorInNonThrowingFunction",
+        "OrPatternBindingMismatch", "OrphanImpl", "PositionalAfterNamed",
+        "PrimitiveTraitImpl", "PrivateImport", "PrivateTypeInPublicSignature",
+        "ReadWhileMutCaptured", "RecursiveTypeNeedsBox", "RequiredAfterDefault",
+        "RethrowInNonThrowingFunction", "ReturnOutsideFunction", "SelectOutsideAsync",
+        "ShiftFallibleRouteBNotYetImplemented", "SpawnClosureCaptureBorrowed",
+        "SpawnClosureCaptureMutable", "SpawnNonFuture", "SpawnWithBorrowedRef",
+        "StringIndexAssign", "TemporaryBorrow", "TraitCycle", "TupleIndexOutOfBounds",
+        "TypeInValuePosition", "TypeMismatch", "TypeMismatchInPow",
+        "UnconvertibleErrorPropagation", "UndefinedName", "UnderivableTrait",
+        "UnknownDirective", "UnknownNamedArg", "UnresolvedBorrowOrigin",
+        "UnresolvedImport", "UnsatisfiedTraitBound", "UnsupportedOperator",
+        "UnwrapOnNonOptional", "UseAfterMove", "UseAfterSourceMoved", "ValueOutOfRange",
+        "ViaFieldNotFound", "ViaFieldTypeMissingTrait", "ViaWithoutTrait",
+        "WriteWhileMutCaptured", "WrongArgCount", "WrongFieldCount",
+    ];
+
+    // Comment-stripped: a `// SemanticErrorKind::Foo` note is prose, not an arm.
+    let display_code: String = display_scope
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut display_variants: BTreeSet<String> = Default::default();
+    for (i, m) in display_code.match_indices("SemanticErrorKind::") {
+        let rest = &display_code[i + m.len()..];
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            display_variants.insert(name);
+        }
+    }
+    assert!(
+        display_variants.len() > 50,
+        "advice_diagnostic_registration: only {} variants parsed out of the \
+         Display impl — the scope detection broke, and a short list would make \
+         the classification below look total when it is not.",
+        display_variants.len(),
+    );
+    // …and the enumeration is TOTAL because rustc says so: the Display `match`
+    // is exhaustive over `SemanticErrorKind`, so a new variant CANNOT reach the
+    // tree without an arm here. rustc is the independent witness; this
+    // assertion is what makes that guarantee readable from the lint.
+    let enum_variants: BTreeSet<String> = {
+        let es = errors_src
+            .find("pub enum SemanticErrorKind {")
+            .expect("`pub enum SemanticErrorKind` moved — re-anchor this lint");
+        let open = errors_src[es..].find('{').expect("enum body open");
+        let mut depth: i32 = 0;
+        let mut close = None;
+        for (i, c) in errors_src[es..].char_indices().skip(open) {
+            if c == '{' { depth += 1; }
+            if c == '}' {
+                depth -= 1;
+                if depth == 0 { close = Some(i + 1); break; }
+            }
+        }
+        errors_src[es..es + close.expect("enum body close")]
+            .lines()
+            .filter_map(|l| {
+                let t = l.strip_prefix("    ")?;
+                if t.starts_with(char::is_whitespace) || t.starts_with("//") {
+                    return None;
+                }
+                let name: String = t
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                let sep = t[name.len()..].chars().next()?;
+                if name.starts_with(char::is_uppercase) && matches!(sep, '{' | '(' | ',' | ' ') {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    };
+    assert_eq!(
+        display_variants, enum_variants,
+        "the `Display` arm set and the `SemanticErrorKind` variant set disagree \
+         in `src/semantic/errors.rs`. rustc's exhaustiveness makes these equal by \
+         construction, so a difference means one of the two EXTRACTIONS above is \
+         broken — and a broken extraction is what makes the classification below \
+         pass vacuously. Fix the parse, do not relax the assertion.",
+    );
+    let classified: BTreeSet<String> = FIX_IT_ADVICE_ROWS
+        .iter()
+        .map(|(v, _)| (*v).to_string())
+        .chain(NO_FIX_IT_ADVICE.iter().map(|v| (*v).to_string()))
+        .collect();
+    let unclassified: Vec<&String> = display_variants.difference(&classified).collect();
+    assert!(
+        unclassified.is_empty(),
+        "these `SemanticErrorKind` variants have a `Display` arm in \
+         `src/semantic/errors.rs` and are in NEITHER list here: {unclassified:?}\n\n\
+         Read the arm and classify it. If it tells the user something concrete \
+         to WRITE (a snippet, a call to add, a sigil to insert), add it to \
+         FIX_IT_ADVICE_ROWS and pair it with a before/after fixture in \
+         `tests/integration.rs::advice_fixtures_have_working_remedy` (or list \
+         it in OK_UNPAIRED with a filed follow-up). If it only DESCRIBES what \
+         is wrong, add it to NO_FIX_IT_ADVICE. Leaving it out is the one thing \
+         that is not allowed: it is how a fix-it advice that does not compile \
+         ships unnoticed.",
+    );
+    let stale: Vec<&String> = classified.difference(&display_variants).collect();
+    assert!(
+        stale.is_empty(),
+        "these names are classified here but have NO `Display` arm in \
+         `src/semantic/errors.rs`: {stale:?}. The variant was renamed or \
+         removed — drop the row in the same commit, or the classification \
+         above stops being total without anyone noticing.",
+    );
 
     // Round XXIX Track C output-review fold — step 4 cross-lint.
     // Every FIX_IT_ADVICE_ROWS entry MUST be EITHER paired with a
