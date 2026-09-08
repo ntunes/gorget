@@ -10229,32 +10229,106 @@ fn self_host_body_finalize_single_assembly_site() {
 /// its shape (invisible to stdout + ASan — a spurious clone is output-identical
 /// and only leaks silently under a pool allocator). Call
 /// `maybe_move_owning_param_ctor_temp(builder, &operand, span)` before the
-/// `clone_fn_for_ptr` clone, then bump `EXPECTED_CALL_SITES`.
+/// `clone_fn_for_ptr` clone, then declare the new site below.
+///
+/// ⚠ **The subject is the CLONE SITE, not the helper call.** Counting calls TO
+/// the helper is green over this lint's own class: the defect it exists to
+/// catch is a new ctor clone site with NO call, which adds nothing to a
+/// call-count. So the enumeration runs the other way — every function in the
+/// two scoped files that reaches `clone_fn_for_ptr` is classified, either as a
+/// ctor/boundary site that MUST offer the move first, or as a declared
+/// non-ctor site with its reason. A new cloning function lands in neither and
+/// names itself.
 #[test]
 fn owning_param_ctor_move_helper_site_count() {
     const HELPER_FN: &str = "fn maybe_move_owning_param_ctor_temp";
     const HELPER_CALL: &str = "maybe_move_owning_param_ctor_temp(";
-    const EXPECTED_CALL_SITES: usize = 3;
+    const CLONE_CALL: &str = "clone_fn_for_ptr(";
+
+    // The enumerated class — the three by-value ctor / boundary clone sites.
+    // Each MUST offer the move before it clones.
+    const CTOR_BOUNDARY_CLONE_FNS: &[&str] = &[
+        "clone_resource_args_for_init",  // 1. enum-variant init
+        "ensure_owned_at_boundary",      // 2. struct-boundary, Case 2
+        "clone_multi_use_resource_args", // 3. user-literal by-value
+    ];
+    // Every OTHER function in the two files that reaches `clone_fn_for_ptr`,
+    // with the reason it is NOT a ctor/boundary consuming position. A function
+    // that leaves this list without joining the class above reddens.
+    const NOT_A_CTOR_BOUNDARY: &[(&str, &str)] = &[
+        ("warn_implicit_clone",
+         "diagnostic/meter — derives the runtime fn NAME for the warning text; emits no clone."),
+        ("clone_live_staging_source",
+         "the consuming-ARG staging clone, taken only when the source is LIVE past the \
+          call — a live source has no move to offer."),
+        ("ptr_materialization_kind",
+         "a CLASSIFIER returning `PtrMaterialization::Clone(..)`; it emits nothing, and \
+          its callers are the sites that do."),
+        ("ensure_owned_at_consuming_arg",
+         "the call-ARG face of snag #1, which carries its OWN owning-param move path \
+          (`owning_param_move_src` + `move_zero_and_mark`) directly above the clone."),
+        ("cow_materialize_view_lazy_in_place",
+         "CoW: the source is a VIEW being made owned in place, never an owning-param temp."),
+        ("cow_materialize_view", "CoW view materialization — as above."),
+        ("cow_materialize_alias", "CoW alias materialization — as above."),
+        ("cow_materialize_collection_ref", "CoW collection-ref materialization — as above."),
+        ("lower_expr_inner",
+         "two reads, neither a ctor field-init: the `*box` deref CoW read, and the clone \
+          of a BORROWED match scrutinee."),
+    ];
 
     let files = [
         "src/ir/lowering/context.rs",
         "src/ir/lowering/exprs/mod.rs",
     ];
 
+    // `fn NAME(` with any visibility spelling (`pub(in crate::ir::lowering) fn`
+    // included) — `fn_name_of_decl` above only knows `pub` / `pub(crate)`.
+    fn enclosing_fn(line: &str) -> Option<String> {
+        let t = line.trim_start();
+        let rest = match t.strip_prefix("pub") {
+            Some(r) => r.strip_prefix('(').map_or(r, |r| r.split_once(')').map_or(r, |(_, a)| a)),
+            None => t,
+        };
+        let rest = rest.trim_start();
+        let rest = rest.strip_prefix("unsafe ").unwrap_or(rest);
+        let rest = rest.strip_prefix("fn ")?;
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() || !rest[name.len()..].starts_with(['(', '<']) {
+            return None;
+        }
+        Some(name)
+    }
+
     let mut helper_defs = 0usize;
-    let mut call_sites = 0usize;
+    // The two DERIVED places: which functions clone, and which offer the move.
+    let mut cloning_fns: BTreeSet<String> = Default::default();
+    let mut offering_fns: BTreeSet<String> = Default::default();
     for f in files {
-        let content = fs::read_to_string(f).unwrap_or_default();
+        let content = fs::read_to_string(f)
+            .unwrap_or_else(|_| panic!("owning_param_ctor_move_helper_site_count: cannot read {f}"));
+        let mut cur = String::new();
         for line in content.lines() {
+            if let Some(n) = enclosing_fn(line) {
+                cur = n;
+            }
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") || trimmed.starts_with("///") {
-                continue; // prose / anchor comments mention the helper by name
+                continue; // prose / anchor comments mention both names
             }
             if line.contains(HELPER_FN) {
                 helper_defs += 1;
                 continue; // the definition line is not a call site
             }
-            call_sites += line.matches(HELPER_CALL).count();
+            if line.contains(CLONE_CALL) && !line.contains("fn clone_fn_for_ptr") {
+                cloning_fns.insert(cur.clone());
+            }
+            if line.contains(HELPER_CALL) {
+                offering_fns.insert(cur.clone());
+            }
         }
     }
 
@@ -10262,15 +10336,50 @@ fn owning_param_ctor_move_helper_site_count() {
         helper_defs, 1,
         "Expected exactly one `maybe_move_owning_param_ctor_temp` definition, found {helper_defs}.",
     );
+    assert!(
+        cloning_fns.len() >= 8,
+        "owning_param_ctor_move_helper_site_count: only {} cloning functions found in \
+         {files:?} — the enclosing-fn walk broke, and a short list would make the \
+         classification below look total when it is not.",
+        cloning_fns.len(),
+    );
+
+    let ctor: BTreeSet<String> =
+        CTOR_BOUNDARY_CLONE_FNS.iter().map(|s| (*s).to_string()).collect();
+    let declared: BTreeSet<String> = ctor
+        .iter()
+        .cloned()
+        .chain(NOT_A_CTOR_BOUNDARY.iter().map(|(n, _)| (*n).to_string()))
+        .collect();
+
+    let unclassified: Vec<&String> = cloning_fns.difference(&declared).collect();
+    assert!(
+        unclassified.is_empty(),
+        "these functions in {files:?} emit a `clone_fn_for_ptr` clone and are declared \
+         NEITHER as a ctor/boundary site nor as a non-ctor one: {unclassified:?}\n\n\
+         Classify it. If it clones at a struct/enum ctor field-init or a boundary \
+         consuming position, call `maybe_move_owning_param_ctor_temp(builder, &operand, \
+         span)` BEFORE the clone and add it to CTOR_BOUNDARY_CLONE_FNS — a site that \
+         clones directly re-opens the `^`-move-is-zero-cost regression for its shape \
+         (invisible to stdout AND to ASan: a spurious clone is output-identical and \
+         only leaks under a pool allocator). Otherwise add it to NOT_A_CTOR_BOUNDARY \
+         WITH ITS REASON.",
+    );
+    let stale: Vec<&String> = declared.difference(&cloning_fns).collect();
+    assert!(
+        stale.is_empty(),
+        "these functions are declared here but no longer clone through \
+         `clone_fn_for_ptr` in {files:?}: {stale:?}. Drop the row in the same commit \
+         the site moves, or the classification stops being total silently.",
+    );
     assert_eq!(
-        call_sites, EXPECTED_CALL_SITES,
-        "owning-`!`-param ctor-move helper call-site count changed: {call_sites} vs \
-         {EXPECTED_CALL_SITES}.\n\n\
-         The move-vs-clone decision at a struct/enum ctor field-init must be \
-         centralized in `maybe_move_owning_param_ctor_temp` (Core #4). A new \
-         by-value clone site that doesn't call it before `clone_fn_for_ptr` re-opens \
-         the `!`-move-is-zero-cost regression (snag #1's 8th consuming category). \
-         Route the new site through the shared helper, then bump EXPECTED_CALL_SITES.",
+        offering_fns, ctor,
+        "the set of functions calling `maybe_move_owning_param_ctor_temp` is not the \
+         declared ctor/boundary class.\n  calls the helper : {offering_fns:?}\n  \
+         declared class  : {ctor:?}\n\n\
+         A missing member clones without offering the move (the regression); an extra \
+         one means the class grew without its row — declare it in \
+         CTOR_BOUNDARY_CLONE_FNS.",
     );
 }
 
@@ -31624,6 +31733,15 @@ fn done_md_round_close_shapes_are_pinned() {
 /// TypeDef with `is_closure_env: true` and no `ClosurePack` emitted — and it is
 /// unbuilt.
 ///
+/// **This lint therefore cannot catch its own class, and no rewrite of it at
+/// the source-text layer can** — the missing call leaves no trace to read. What
+/// IS enforced here instead of merely stated: (a) the three artifacts that
+/// carry the blind spot must still EXIST, so the cover cannot be deleted while
+/// the paragraph above goes on claiming it (Core #14); (b) every call site
+/// carries its own `A1M-PACK-SITE` marker, checked per SITE rather than as a
+/// second total, so the marker count is derived from the call set instead of
+/// being a parallel pin that can drift against it.
+///
 /// **If this fails because the count went UP:** a new site was added. Confirm it
 /// passes the DESTINATION's declared TypeId (never the source's inferred type),
 /// give it an `A1M-PACK-SITE (n/N)` marker, and bump both constants with the
@@ -31633,17 +31751,40 @@ fn done_md_round_close_shapes_are_pinned() {
 /// which site went away.
 #[test]
 fn closure_pack_at_dest_type_call_sites() {
-    /// Baseline 2026-09-03 (R49 Track A1-M): 6 call sites, 6 markers.
-    /// 5 -> 6 the same day, on the output review's B1: `return <closure literal>`
-    /// from a `throws` function was a live, unfiled member of the class.
+    /// Baseline 2026-09-03 (R49 Track A1-M): 6 call sites, each carrying its
+    /// own marker. 5 -> 6 the same day, on the output review's B1:
+    /// `return <closure literal>` from a `throws` function was a live, unfiled
+    /// member of the class.
     const EXPECTED_CALLS: usize = 6;
-    const EXPECTED_MARKERS: usize = 6;
+
+    // (0) The blind spot's cover, enforced rather than described. The paragraph
+    //     above says two live unpacked positions are pinned by these artifacts;
+    //     Core #14 — an invariant-asserting comment needs an enforcing guard, or
+    //     it rots. Deleting any of them silently removes the only thing standing
+    //     where this lint cannot look.
+    for cover in [
+        "tests/fixtures/known_gaps/callable_literal_in_container_literal.gg",
+        "todo/t0873.md",
+        "todo/t0681.md",
+    ] {
+        assert!(
+            Path::new(cover).exists(),
+            "`{cover}` is gone. It is one of the artifacts covering the two \
+             consuming positions this lint CANNOT see (it counts calls, and an \
+             unpacked position makes no call). If the gap was genuinely closed, \
+             the position now calls `pack_closure_at_dest_type` — bump \
+             EXPECTED_CALLS, mark the new site, and strike the artifact from this \
+             list and from the docstring above IN THE SAME COMMIT.",
+        );
+    }
 
     let mut calls: Vec<String> = Vec::new();
+    let mut unmarked: Vec<String> = Vec::new();
     let mut markers: Vec<String> = Vec::new();
     for path in walkdir_rs("src") {
         let Ok(text) = fs::read_to_string(&path) else { continue };
-        for (i, line) in text.lines().enumerate() {
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") || trimmed.starts_with("///") {
                 if trimmed.contains("A1M-PACK-SITE (") {
@@ -31654,10 +31795,39 @@ fn closure_pack_at_dest_type_call_sites() {
             // The definition itself is `fn pack_closure_at_dest_type(`.
             if line.contains("pack_closure_at_dest_type(") && !line.contains("fn pack_closure_at_dest_type(") {
                 calls.push(format!("{}:{}", path.display(), i + 1));
+                // The marker belongs to THIS site: look for it in the 24 code
+                // lines above (the widest real gap today is 17, at the `throws`
+                // return wrap). A second total pinned separately can drift
+                // against the call set; a per-site lookup cannot.
+                let lo = i.saturating_sub(24);
+                if !lines[lo..i].iter().any(|l| l.contains("A1M-PACK-SITE (")) {
+                    unmarked.push(format!("{}:{}", path.display(), i + 1));
+                }
             }
         }
     }
 
+    assert!(
+        unmarked.is_empty(),
+        "these `pack_closure_at_dest_type` call sites carry no `A1M-PACK-SITE (n/N)` \
+         marker within the 24 lines above them:\n  {}\n\n\
+         The marker is how a reader tells WHICH position moved when the count below \
+         trips. Add one naming the consuming position.",
+        unmarked.join("\n  "),
+    );
+    assert_eq!(
+        markers.len(),
+        calls.len(),
+        "`A1M-PACK-SITE` marker count ({}) and `pack_closure_at_dest_type` call-site \
+         count ({}) disagree.\n  markers:\n  {}\n  calls:\n  {}\n\n\
+         Exactly one marker per call site. A spare marker is a site that was deleted \
+         and left its comment behind — which is how the enumeration in the docstring \
+         above starts describing a tree that no longer exists.",
+        markers.len(),
+        calls.len(),
+        markers.join("\n  "),
+        calls.join("\n  "),
+    );
     assert_eq!(
         calls.len(),
         EXPECTED_CALLS,
@@ -31669,16 +31839,6 @@ fn closure_pack_at_dest_type_call_sites() {
          reopening. Find the removed site; do NOT lower the constant to match.",
         calls.len(),
         calls.join("\n  "),
-    );
-    assert_eq!(
-        markers.len(),
-        EXPECTED_MARKERS,
-        "`A1M-PACK-SITE` marker count changed: {} vs expected {EXPECTED_MARKERS}.\n\
-         Markers found:\n  {}\n\n\
-         Every call site carries one so a reader can tell WHICH position moved when the count \
-         above trips.",
-        markers.len(),
-        markers.join("\n  "),
     );
 }
 
@@ -31710,14 +31870,21 @@ mod sanitize_corpus_manifest_lint {
 //   |--------------------------------------------------|--------------|--------------|
 //   | before the typed carriers                        | RED (7028)   | at budget    |
 //   | with the typed carriers                          | GREEN (7063) | at budget    |
-//   | carriers + a one-line `const CALL_MARK` hoist    | RED (7028)   | at budget    |
+//   | carriers + a one-line `const CALL_MARK` hoist    | RED (7028)   | RED (+1) *   |
 //
-// The third row is the point: a name-match respelled through a `const` (e.g.
-// `const CALL_MARK: &str = concat!("__", "call");`) is invisible to every
-// textual census, so this counter is IDENTICAL in the correct state and in the
-// broken one. Only a BEHAVIOURAL guard discriminates them, and that guard is
-// the `closure_arg_user_method_named_call*` fixture family, which asserts
-// STDOUT — a fix validated on exit codes greens the loud cells and leaves the
+// The third row WAS the point, and `*` is what changed: the counter now also
+// counts the HOIST itself — a binding of one of the literals below, bare or
+// reassembled through `concat!`, with nothing concatenated onto it — so moving
+// a spelling out of the predicate's argument costs the same budget as leaving
+// it there. RED-verified both ways at this HEAD (`const CALL_MARK: &str =
+// concat!("__", "call");` and the plain-literal form, each appended to
+// `src/ir/lowering/context.rs` and each taking the count to 20).
+//
+// That closes the RESPELLING evasion, not the class. A name-match assembled at
+// RUNTIME, or read out of a table, is still invisible to any textual census.
+// Only a BEHAVIOURAL guard discriminates those, and that guard is the
+// `closure_arg_user_method_named_call*` fixture family, which asserts STDOUT —
+// a fix validated on exit codes greens the loud cells and leaves the
 // silent-wrong-output one live.
 //
 // What this ratchet IS for: making a NEW textual name-match on a closure- or
@@ -31772,6 +31939,18 @@ const CLOSURE_IDENTITY_LITERALS: &[&str] = &[
 /// Covers all five string predicates plus `==` / `!=` against a literal that
 /// contains one of [`CLOSURE_IDENTITY_LITERALS`]. Comment lines are skipped so
 /// prose about a retired site does not count as a site.
+///
+/// ⚠ AND THE HOIST. A1-IDENTITY measured that a one-line
+/// `const CALL_MARK: &str = concat!("__", "call");` moves the literal out of
+/// the predicate's argument and leaves an identical textual counter fully
+/// green with the miscompile live. So a BINDING of one of these literals — as
+/// a bare literal or reassembled through `concat!`, with nothing concatenated
+/// onto it — counts as a site too: hoisting the spelling now costs the same
+/// budget as leaving it in place. Measured at this HEAD: 0 such bindings in
+/// `src/` and 0 across `tests/fixtures/self_host_*`, so this arm changes
+/// neither budget. ⊕ A binding that APPENDS (`"__adapt_" + tname`) is a MINT,
+/// not a decode — 18 of those live on the self-host lane, they are a different
+/// class, and the trailing `;`/`,`/`)`/end-of-line anchor excludes them.
 fn count_closure_identity_name_matches(root: &str, ext: &str) -> usize {
     let alternation = CLOSURE_IDENTITY_LITERALS
         .iter()
@@ -31786,6 +31965,19 @@ fn count_closure_identity_name_matches(root: &str, ext: &str) -> usize {
         r#"[!=]=\s*"[^"]*(?:{alternation})[^"]*""#
     ))
     .unwrap();
+    // The hoist: `<name> = "…__call…"` / `<name> = "…__call…";`. The leading
+    // char class is a stand-in for a look-behind (the `regex` crate has none) —
+    // it excludes `==`, `!=`, `<=`, `>=` and the compound assignments, so the
+    // `eq` arm above keeps its own hits. The trailing anchor is what separates
+    // a hoisted DECODE from a MINT that concatenates onto the prefix.
+    let bind = regex::Regex::new(&format!(
+        r#"[^!=<>+*/-]=\s*"[^"]*(?:{alternation})[^"]*"\s*(?:;|,|\)|$)"#
+    ))
+    .unwrap();
+    // …and the same hoist written through `concat!`, which no literal-scan
+    // sees because the spelling exists only after macro expansion.
+    let concat = regex::Regex::new(r#"[^!=<>+*/-]=\s*concat!\(([^)]*)\)"#).unwrap();
+    let piece = regex::Regex::new(r#""([^"]*)""#).unwrap();
     let mut count = 0;
     visit(root, &mut |path| {
         if path.extension().map_or(true, |e| e != ext) {
@@ -31802,6 +31994,16 @@ fn count_closure_identity_name_matches(root: &str, ext: &str) -> usize {
             }
             count += pred.find_iter(line).count();
             count += eq.find_iter(line).count();
+            count += bind.find_iter(line).count();
+            for c in concat.captures_iter(line) {
+                let joined: String = piece
+                    .captures_iter(&c[1])
+                    .map(|p| p[1].to_string())
+                    .collect();
+                if CLOSURE_IDENTITY_LITERALS.iter().any(|l| joined.contains(l)) {
+                    count += 1;
+                }
+            }
         }
     });
     count
@@ -31818,8 +32020,10 @@ fn count_closure_identity_name_matches(root: &str, ext: &str) -> usize {
 ///
 /// ⚠ THE 11 RETIRED OCCURRENCES ARE STILL BOOKKEEPING, NOT THE CLASS
 /// RETIREMENT. This counter is textual: A1-IDENTITY measured that a one-line
-/// `const CALL_MARK: &str = concat!("__", "call");` hoist restores a
-/// miscompile with this lint fully green. What retires convention 2 is that
+/// `const CALL_MARK: &str = concat!("__", "call");` hoist restored a
+/// miscompile with this lint fully green — that particular evasion is now
+/// counted (see `count_closure_identity_name_matches`), but a textual census
+/// still cannot see a name assembled at runtime. What retires convention 2 is that
 /// after A2-alpha there is NO NAME TO MINT — a runtime-resolved callee's
 /// identity is a typed field on the instruction — and the behavioural guard
 /// for it is the `collide_*` / `sibling*` fixture family in
@@ -31874,8 +32078,9 @@ fn no_growth_in_closure_identity_name_matching() {
 ///
 /// ⚠ WHY THE MINT AND NOT THE DECODE. `no_growth_in_closure_identity_name_matching`
 /// counts the READ sites, and A1-IDENTITY measured that a one-line
-/// `const CALL_MARK: &str = concat!("__", "call");` hoist evades an identical
-/// textual counter while the defect is live. The MINT is different: an arm that
+/// `const CALL_MARK: &str = concat!("__", "call");` hoist evaded an identical
+/// textual counter while the defect was live (that hoist shape is counted
+/// now; a runtime-assembled name still is not). The MINT is different: an arm that
 /// dispatches by name must PRODUCE the name, and the prefix has to appear
 /// somewhere for the emitted symbol to match the decode.
 ///
