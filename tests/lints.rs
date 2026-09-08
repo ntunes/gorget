@@ -9,8 +9,136 @@
 //!
 //! See `docs/devbook/25-structural-guards.md` §3a for the full design.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Slice a Rust `match` arm by its REAL extent — from its head to the first
+/// `},` at the head's own indentation.
+///
+/// ⚠ Use this instead of a fixed `&src[at..at + N]` window. A character window
+/// is wrong in both directions and silently: too small and the arm's tail is
+/// invisible to whatever the caller asserts about it (measured — a `+3000`
+/// window over a 4,303-char arm left 1,300 chars unchecked), too large and the
+/// NEIGHBOURING arm answers for this one.
+fn rust_match_arm_extent<'a>(src: &'a str, head: &str, what: &str) -> &'a str {
+    let at = src
+        .find(head)
+        .unwrap_or_else(|| panic!("{what} moved — re-anchor this lint (looked for `{head}`)"));
+    let line_start = src[..at].rfind('\n').map_or(0, |p| p + 1);
+    let indent = &src[line_start..at];
+    assert!(
+        indent.chars().all(|c| c == ' '),
+        "{what}: `{head}` is not at the start of its own line — re-anchor this lint",
+    );
+    let closer = format!("\n{indent}}},");
+    let end = at
+        + head.len()
+        + src[at + head.len()..]
+            .find(&closer)
+            .unwrap_or_else(|| panic!("{what}: no `}},` at the arm's own indentation"));
+    &src[at + head.len()..end]
+}
+
+/// Every identifier-shaped double-quoted literal in `src`, deduplicated.
+/// Used to DERIVE a name roster from the source of truth rather than
+/// hand-listing a copy of it in this file.
+fn quoted_words(src: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+    while let Some(off) = src[i..].find('"') {
+        let start = i + off + 1;
+        let Some(len) = src[start..].find('"') else { break };
+        let word = &src[start..start + len];
+        if !word.is_empty()
+            && word
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !word.starts_with(|c: char| c.is_ascii_digit())
+        {
+            out.insert(word.to_string());
+        }
+        i = start + len + 1;
+        if i >= bytes.len() {
+            break;
+        }
+    }
+    out
+}
+
+// ⚠ For a top-level Gorget (`.gg`) fn body, use `gg_fn_body_required` (below)
+// rather than a whole-file `contains`: a name that also appears in a SIBLING
+// function answers for a row deleted from the one under test.
+
+/// The mangled-name family registry, read out of `compiler/data/resources.gg`:
+/// every `MkPrefix("X__")` row paired with the `method_prefix` its
+/// `ResourceMetadata` declares (`gorget_array` / `gorget_heap` / `gorget_set` /
+/// `gorget_map` / `gorget_string`), or `None` where the row declares none.
+///
+/// This is the INDEPENDENT witness for "which collection families exist".
+/// A guard that instead sums occurrences over a prefix list hand-written in
+/// THIS file is green over its own class: a brand-new family's arm is not on
+/// the list, so it contributes zero and the sum never moves.
+fn resources_gg_families() -> std::collections::BTreeMap<String, Option<String>> {
+    let src = fs::read_to_string("compiler/data/resources.gg")
+        .expect("read compiler/data/resources.gg");
+    let mut out: std::collections::BTreeMap<String, Option<String>> = Default::default();
+    for entry in src.split("ResourceEntry(").skip(1) {
+        let (head, meta) = match entry.find("ResourceMetadata(") {
+            Some(i) => (&entry[..i], &entry[i..]),
+            None => continue,
+        };
+        // Entries are blank-line separated; bound the metadata scan there so
+        // the LAST entry does not absorb the trailing file prose.
+        let meta = meta.split("\n\n").next().unwrap_or(meta);
+        // `method_prefix` is the `Some("gorget_<word>")` with no further `_`;
+        // `Some("gorget_array_free")` / `_clone` are the drop/clone fns.
+        let mut method_prefix: Option<String> = None;
+        for (i, m) in meta.match_indices("Some(\"gorget_") {
+            let rest = &meta[i + m.len()..];
+            let Some(e) = rest.find('"') else { continue };
+            let word = &rest[..e];
+            if !word.is_empty() && !word.contains('_') {
+                method_prefix = Some(format!("gorget_{word}"));
+                break;
+            }
+        }
+        for (i, m) in head.match_indices("MkPrefix(\"") {
+            let rest = &head[i + m.len()..];
+            let Some(e) = rest.find('"') else { continue };
+            out.insert(rest[..e].to_string(), method_prefix.clone());
+        }
+    }
+    assert!(
+        out.len() >= 20,
+        "resources_gg_families: only {} `MkPrefix` rows parsed out of \
+         compiler/data/resources.gg — the extraction broke, and a short \
+         registry would make every derived roster below look complete.",
+        out.len(),
+    );
+    out
+}
+
+/// The SET of `X__` family prefixes a (comment-stripped) function body reaches
+/// via `.strip_prefix("X__")`.
+///
+/// ⚠ A SET, deliberately, not a count: the sum-over-a-hand-written-list shape
+/// this replaces cannot see a NEW family's arm at all (it is not on the list,
+/// so it adds zero), which is the exact direction those guards' docstrings
+/// claim to catch.
+fn strip_prefix_families(body: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (i, m) in body.match_indices(".strip_prefix(\"") {
+        let rest = &body[i + m.len()..];
+        let Some(e) = rest.find('"') else { continue };
+        let word = &rest[..e];
+        if word.ends_with("__") {
+            out.insert(word.to_string());
+        }
+    }
+    out
+}
 
 /// Every mangled monomorphized-type prefix the compiler emits. Adding a new
 /// builtin protocol with a `base_name: "X"` requires adding `X` here so the
@@ -8989,42 +9117,75 @@ fn todo_cites_paths_resolve() {
 /// instead. The direction that matters most is the `uint8` arm: the self-host
 /// lexer calls these on a `byte` on the BOOTSTRAP path, so a missed name is a
 /// false reject of the compiler's own source.
+///
+/// The uint8 roster is **derived from Rust's own arm**, not hand-listed here,
+/// and compared to the self-host table as a SET in BOTH directions. A
+/// hand-listed copy in this file would be a third parallel table (Layering
+/// rule 3), and a name added on one side only would be invisible to it.
+/// ⚠ The self-host side is scoped to `uint8_prim_method_admitted`'s own body:
+/// a file-wide `contains` is GREEN over this lint's own class, because
+/// `to_upper`/`to_lower` also live in `string_prim_method_admitted` and would
+/// answer for a row deleted from the uint8 table.
 #[test]
 fn sh_primitive_method_tables_mirror_rust() {
     let rust = fs::read_to_string("src/semantic/typecheck.rs").expect("typecheck.rs");
     let sh = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
         .expect("self-host typecheck.gg");
 
-    let uint8_at = rust
-        .find("\"uint8\" => match method {")
-        .expect("the `\"uint8\"` arm of builtin_method_type moved — re-anchor this lint");
-    let uint8_arm = &rust[uint8_at..(uint8_at + 600).min(rust.len())];
-    for n in [
-        "is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
-        "is_upper", "is_lower", "is_hex_digit", "is_ascii",
-        "to_upper", "to_lower",
-    ] {
-        assert!(
-            uint8_arm.contains(&format!("\"{n}\"")),
-            "`{n}` is in the self-host's uint8 table but NOT in Rust's `\"uint8\"` arm. One of \
-             the two moved; reconcile them rather than letting the reject drift."
-        );
-        assert!(
-            sh.contains(&format!("method_name == \"{n}\"")),
-            "Rust's `\"uint8\"` arm admits `{n}` but the self-host's \
-             `uint8_prim_method_admitted` does not. A `byte` receiver calling `{n}` would be \
-             REFUSED by `reject_no_method_on_primitive` although Rust ACCEPTS it — a false \
-             reject, and the self-host LEXER calls these on the bootstrap path."
-        );
-    }
+    let uint8_arm = rust_match_arm_extent(
+        &rust,
+        "\"uint8\" => match method {",
+        "the `\"uint8\"` arm of builtin_method_type",
+    );
+    let rust_uint8: BTreeSet<String> = quoted_words(uint8_arm);
+    assert!(
+        rust_uint8.len() >= 8,
+        "sh_primitive_method_tables_mirror_rust: only {} names parsed out of Rust's \
+         `\"uint8\"` arm — the extraction broke, and a short roster would make the \
+         self-host table look complete no matter what it holds.\n{uint8_arm}",
+        rust_uint8.len(),
+    );
+    let sh_uint8_body = gg_fn_body_required(
+        &sh,
+        "bool uint8_prim_method_admitted(String method_name):",
+        "sh_primitive_method_tables_mirror_rust: self-host `uint8_prim_method_admitted`",
+    );
+    let sh_uint8: BTreeSet<String> = sh_uint8_body
+        .match_indices("method_name == \"")
+        .filter_map(|(i, m)| {
+            let rest = &sh_uint8_body[i + m.len()..];
+            rest.find('"').map(|e| rest[..e].to_string())
+        })
+        .collect();
+
+    let missing_in_sh: Vec<&String> = rust_uint8.difference(&sh_uint8).collect();
+    assert!(
+        missing_in_sh.is_empty(),
+        "Rust's `\"uint8\"` arm admits {missing_in_sh:?} but the self-host's \
+         `uint8_prim_method_admitted` does not. A `byte` receiver calling one of \
+         those would be REFUSED by `reject_no_method_on_primitive` although Rust \
+         ACCEPTS it — a false reject, and the self-host LEXER calls these on the \
+         bootstrap path.",
+    );
+    let missing_in_rust: Vec<&String> = sh_uint8.difference(&rust_uint8).collect();
+    assert!(
+        missing_in_rust.is_empty(),
+        "{missing_in_rust:?} are in the self-host's `uint8_prim_method_admitted` but \
+         NOT in Rust's `\"uint8\"` arm. One of the two moved; reconcile them rather \
+         than letting the reject drift.",
+    );
 
     // The five names R47 Track D1 dropped BECAUSE they are in neither Rust's
     // oracle nor the IR GORGET_STRING_VIEW protocol. If one reappears in Rust's
     // String arm, the self-host must mirror it and the reject fixtures flip.
-    let str_at = rust
-        .find("\"str\" | \"String\" => match method {")
-        .expect("the `\"str\" | \"String\"` arm moved — re-anchor this lint");
-    let str_arm = &rust[str_at..(str_at + 3000).min(rust.len())];
+    // ⚠ Sliced by the arm's real EXTENT: the `+3000`-char window this used to
+    // take stopped 1,300 chars short of the arm's end, so a name reappearing in
+    // its tail was invisible to the check below.
+    let str_arm = rust_match_arm_extent(
+        &rust,
+        "\"str\" | \"String\" => match method {",
+        "the `\"str\" | \"String\"` arm of builtin_method_type",
+    );
     for n in ["to_string", "to_str", "concat", "trim_start", "trim_end"] {
         assert!(
             !str_arm.contains(&format!("\"{n}\"")),
@@ -15228,26 +15389,83 @@ fn infer_collection_element_type_arms_count() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // 7 arms: Vector__ · Deque__ · Dict__ · Map__ · HashMap__ · Set__ ·
-    // HashSet__. Each spelled as a `.strip_prefix("<Prefix>__")` call in the
-    // fn body; count the literal appearances of the prefixes (each MUST
-    // appear exactly once).
-    const EXPECTED: usize = 7;
-    let count: usize = ["Vector__", "Deque__", "Dict__", "Map__", "HashMap__", "Set__", "HashSet__"]
+    // The ARM SET, extracted from the fn body — derived place 1.
+    let arms = strip_prefix_families(&body);
+    // The family registry in `compiler/data/resources.gg` — derived place 2,
+    // written by a different author for a different reason.
+    let registry = resources_gg_families();
+
+    // Rows the registry declares that deliberately have NO arm here, each
+    // with the reason it is exempt. A row leaving this list without gaining
+    // an arm reddens the comparison below; so does a new registry family.
+    const NO_ARM_BY_DESIGN: &[(&str, &str)] = &[
+        ("GorgetArray__", "runtime-form alias — the mangled TYPE name a user \
+          collection reaches this fn under is always the surface spelling \
+          (`Vector__T`); the runtime form appears only at the C-emit boundary."),
+        ("GorgetDict__", "runtime-form alias, as GorgetArray__ above."),
+        ("GorgetMap__", "runtime-form alias, as GorgetArray__ above."),
+        ("GorgetSet__", "runtime-form alias, as GorgetArray__ above."),
+        ("Heap__", "Heap is the FACTORY constructor shape \
+          (`typed_constructor=false` in resources.gg, `Heap.new()`), so the \
+          empty-literal size-derivation path that drives the Set/HashSet arms \
+          has no Heap form to reach this fn with, and Heap has no positional \
+          index. If Heap ever gains a literal form, this row flips to an arm."),
+    ];
+    // Arms with no registry row, each with the reason it is spelled here.
+    const ARM_WITHOUT_REGISTRY_ROW: &[(&str, &str)] = &[
+        ("Map__", "an alias spelling with NO `MkPrefix` row in resources.gg \
+          and no producer elsewhere in `src/` — kept as a declared row so its \
+          orphan status stays visible rather than silently summing to 1."),
+    ];
+
+    let exempt: BTreeSet<String> =
+        NO_ARM_BY_DESIGN.iter().map(|(p, _)| p.to_string()).collect();
+    let extra_ok: BTreeSet<String> =
+        ARM_WITHOUT_REGISTRY_ROW.iter().map(|(p, _)| p.to_string()).collect();
+    // The collection families: every registry row that declares a collection
+    // runtime `method_prefix`.
+    let required: BTreeSet<String> = registry
         .iter()
-        .map(|p| body.matches(&format!(".strip_prefix(\"{p}\")")).count())
-        .sum();
-    assert_eq!(
-        count, EXPECTED,
-        "`infer_collection_element_type` arm count changed: {count} vs \
-         expected {EXPECTED}. Admitted-collection member set at Round XXIV \
-         Track E close: {{Vector, Deque, Dict, Map, HashMap, Set, HashSet}}. \
-         If a family was ADDED, verify the `try_resolve_index_element_ptr` \
-         kind-gate at `src/ir/lowering/exprs/mod.rs` also admits its \
-         CollectionKind (or that the family stays index-rejected like \
-         Set/HashSet — size-derivation only), then bump EXPECTED. If REMOVED, \
-         RESTORE the arm — the family now silently falls to `I64_TYPE` (a \
-         gg-check-clean SIGSEGV / llc-reject / C-emit-type-mismatch class).",
+        .filter(|(_, mp)| {
+            matches!(
+                mp.as_deref(),
+                Some("gorget_array") | Some("gorget_heap") | Some("gorget_set") | Some("gorget_map")
+            )
+        })
+        .map(|(p, _)| p.clone())
+        .filter(|p| !exempt.contains(p))
+        .collect();
+    assert!(
+        required.len() >= 4,
+        "infer_collection_element_type_arms_count: only {} collection \
+         families derived from resources.gg — the extraction or the exemption \
+         list broke, and a short roster asserts nothing.",
+        required.len(),
+    );
+
+    let missing: Vec<&String> = required.difference(&arms).collect();
+    let unexpected: Vec<&String> = arms
+        .difference(&required)
+        .filter(|p| !extra_ok.contains(*p))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "`infer_collection_element_type` has NO arm for {missing:?}, which \
+         `compiler/data/resources.gg` declares as collection families. The \
+         family now silently falls to `I64_TYPE` — a gg-check-clean SIGSEGV / \
+         llc-reject / C-emit-type-mismatch class. RESTORE the arm; if the \
+         family is genuinely exempt, add it to NO_ARM_BY_DESIGN WITH ITS \
+         REASON rather than deleting the row.",
+    );
+    assert!(
+        unexpected.is_empty(),
+        "`infer_collection_element_type` gained an arm for {unexpected:?}, a \
+         family `compiler/data/resources.gg` does not declare. Verify the \
+         `try_resolve_index_element_ptr` kind-gate at \
+         `src/ir/lowering/exprs/mod.rs` also admits its CollectionKind (or \
+         that the family stays index-rejected like Set/HashSet — \
+         size-derivation only), then give it a `MkPrefix` row in resources.gg \
+         or a declared ARM_WITHOUT_REGISTRY_ROW entry.",
     );
 }
 
@@ -15300,27 +15518,62 @@ fn elem_size_from_monomorphized_arms_count() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // 5 arms in the array-family: Vector__ · Deque__ · Set__ · HashSet__ ·
-    // Heap__. Each spelled as a `.strip_prefix("<Prefix>__")` call in the
-    // fn body; count the literal appearances of the prefixes (each MUST
-    // appear exactly once). Dict/HashMap constructors take the sibling
-    // dict_elem_sizes_from_monomorphized path and are counted there.
-    const EXPECTED: usize = 5;
-    let count: usize = ["Vector__", "Deque__", "Set__", "HashSet__", "Heap__"]
+    // The ARM SET, extracted from the fn body — derived place 1. Dict/HashMap
+    // constructors take the sibling `dict_elem_sizes_from_monomorphized` path
+    // (two element sizes, not one) and are excluded below.
+    let arms = strip_prefix_families(&body);
+    // The family registry in `compiler/data/resources.gg` — derived place 2.
+    let registry = resources_gg_families();
+
+    const NO_ARM_BY_DESIGN: &[(&str, &str)] = &[
+        ("GorgetArray__", "runtime-form alias — a monomorphized CONSTRUCTOR \
+          name is always the surface spelling (`Vector__T__new`)."),
+        ("GorgetSet__", "runtime-form alias, as GorgetArray__ above."),
+    ];
+    let exempt: BTreeSet<String> =
+        NO_ARM_BY_DESIGN.iter().map(|(p, _)| p.to_string()).collect();
+    // The SINGLE-element collection families: the three collection runtimes
+    // that carry one element size. `gorget_map` is the two-element runtime and
+    // goes through `dict_elem_sizes_from_monomorphized`.
+    let required: BTreeSet<String> = registry
         .iter()
-        .map(|p| body.matches(&format!(".strip_prefix(\"{p}\")")).count())
-        .sum();
-    assert_eq!(
-        count, EXPECTED,
-        "`elem_size_from_monomorphized` arm count changed: {count} vs \
-         expected {EXPECTED}. Array-family constructor member set at Round \
-         XXVI Track D close: {{Vector, Deque, Set, HashSet, Heap}}. If a \
-         family was ADDED, verify it belongs to the gorget_array family (via \
-         `compiler/data/resources.gg`'s `method_prefix`) and bump EXPECTED. \
-         If REMOVED, RESTORE the arm — the family now returns `None` and \
-         `unwrap_or(8)` at `insts.rs:3857` truncates every element of \
-         `Family[S]` where `sizeof(S)` != 8 on both C and LLVM \
-         (Round XXVI Track D bug class).",
+        .filter(|(_, mp)| {
+            matches!(
+                mp.as_deref(),
+                Some("gorget_array") | Some("gorget_heap") | Some("gorget_set")
+            )
+        })
+        .map(|(p, _)| p.clone())
+        .filter(|p| !exempt.contains(p))
+        .collect();
+    assert!(
+        required.len() >= 4,
+        "elem_size_from_monomorphized_arms_count: only {} single-element \
+         collection families derived from resources.gg — the extraction or \
+         the exemption list broke, and a short roster asserts nothing.",
+        required.len(),
+    );
+
+    let missing: Vec<&String> = required.difference(&arms).collect();
+    let unexpected: Vec<&String> = arms.difference(&required).collect();
+    assert!(
+        missing.is_empty(),
+        "`elem_size_from_monomorphized` has NO arm for {missing:?}, which \
+         `compiler/data/resources.gg` declares as single-element collection \
+         families (`method_prefix` gorget_array / gorget_heap / gorget_set). \
+         The helper now returns `None` and `unwrap_or(8)` at \
+         `insts.rs:3857` truncates every element of `Family[S]` where \
+         `sizeof(S)` != 8 on both C and LLVM (Round XXVI Track D bug class). \
+         RESTORE the arm; if the family is genuinely exempt, add it to \
+         NO_ARM_BY_DESIGN WITH ITS REASON.",
+    );
+    assert!(
+        unexpected.is_empty(),
+        "`elem_size_from_monomorphized` gained an arm for {unexpected:?}, \
+         which is not a single-element collection family in \
+         `compiler/data/resources.gg`. A two-element (`gorget_map`) family \
+         belongs in `dict_elem_sizes_from_monomorphized`; a new family needs \
+         its `MkPrefix` row and its `method_prefix` in resources.gg first.",
     );
 }
 
@@ -18727,7 +18980,9 @@ fn fmt_precedence_check_arm_count() {
 /// canonical) and never regress to `!` (retired; `!` is now the D26/D29
 /// error channel exclusively). This lint pins the emit-site COUNT on
 /// both sides so a new arm that emits the sigil without joining the
-/// class trips the count.
+/// class trips the count — **and inspects the GLYPH each arm actually
+/// writes**, because a count over arm HEADS is green over its own class
+/// (an arm flipping `^`→`!` keeps its head and leaves the count at 7).
 ///
 /// **Rust arms (7 sites, `src/formatter/mod.rs`):**
 ///   `Ownership::Move =>`     — 4 arms:
@@ -18754,21 +19009,69 @@ fn fmt_move_sigil_emit_arm_count() {
     const EXPECTED_RUST: usize = 7;
     const EXPECTED_SH: usize = 6;
 
+    // The D27 canonical glyph and the retired spelling it must never
+    // regress to, as each appears inside an emitted STRING LITERAL.
+    const OK_EMITS: [&str; 3] = ["\"^\"", "\" ^\"", "\"^self\""];
+    const BAD_EMITS: [&str; 3] = ["\"!\"", "\" !\"", "\"!self\""];
+
     let rust = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
     // Skip pure-comment lines so a `// TODO Ownership::Move …` note
     // doesn't spuriously trip the count. Only real code arms count.
+    let rust_lines: Vec<&str> = rust.lines().collect();
     let mut rust_count = 0usize;
-    for line in rust.lines() {
+    // ⚠ The COUNT alone is green over this lint's own class: an arm that
+    // flips `^` back to `!` keeps its head, so the head census never moves.
+    // Each arm head therefore also has its own EMIT WINDOW inspected — the
+    // head line plus the next five code lines, comments stripped.
+    let mut rust_glyphless: Vec<String> = Vec::new();
+    let mut rust_regressed: Vec<String> = Vec::new();
+    for (i, line) in rust_lines.iter().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("//") {
             continue;
         }
-        rust_count += line.matches("Ownership::Move =>").count();
-        rust_count += line.matches("Type::Owned(inner) =>").count();
-        rust_count += line.matches("Expr::Move { expr } =>").count();
-        rust_count += line.matches("if *is_move {").count();
+        let heads = line.matches("Ownership::Move =>").count()
+            + line.matches("Type::Owned(inner) =>").count()
+            + line.matches("Expr::Move { expr } =>").count()
+            + line.matches("if *is_move {").count();
+        if heads == 0 {
+            continue;
+        }
+        rust_count += heads;
+        let window: String = rust_lines[i..(i + 6).min(rust_lines.len())]
+            .iter()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n");
+        if BAD_EMITS.iter().any(|n| window.contains(n)) {
+            rust_regressed
+                .push(format!("src/formatter/mod.rs:{} — {trimmed}", i + 1));
+        } else if !OK_EMITS.iter().any(|n| window.contains(n)) {
+            rust_glyphless
+                .push(format!("src/formatter/mod.rs:{} — {trimmed}", i + 1));
+        }
     }
+    assert!(
+        rust_regressed.is_empty(),
+        "D27 Round A REGRESSION: a Move-sigil emit arm in \
+         `src/formatter/mod.rs` writes the retired `!` spelling.\n{}\n\n\
+         `!` is now the D26/D29 error channel exclusively; the move sigil \
+         is `^` (D27 Round A). Restore the `^` emit in the arm above.",
+        rust_regressed.join("\n"),
+    );
+    assert!(
+        rust_glyphless.is_empty(),
+        "D27 Round A: a Move-sigil arm head in `src/formatter/mod.rs` has \
+         no recognisable sigil emit in its own window.\n{}\n\n\
+         Every arm matched by this lint must write one of {OK_EMITS:?} \
+         within its head line + 5 following code lines. If the arm \
+         legitimately emits through a helper, route it through \
+         `format_ownership_prefix` (the named-param chokepoint) so the \
+         glyph stays in one place — do NOT widen the window.",
+        rust_glyphless.join("\n"),
+    );
     assert_eq!(
         rust_count, EXPECTED_RUST,
         "D27 Round A emit-site count in `src/formatter/mod.rs` changed: \
@@ -18783,26 +19086,73 @@ fn fmt_move_sigil_emit_arm_count() {
         "tests/fixtures/self_host_resolver/format.gg",
         "tests/fixtures/self_host_typechecker/format.gg",
     ];
+    // SH sigil spellings: `"^" + …` (parser/resolver) and `f"^{…}"`
+    // (typechecker). The retired spellings are the same with `!`.
+    const SH_OK: [&str; 2] = ["\"^\"", "f\"^"];
+    const SH_BAD: [&str; 2] = ["\"!\"", "f\"!"];
     let mut sh_count = 0usize;
+    let mut sh_glyphless: Vec<String> = Vec::new();
+    let mut sh_regressed: Vec<String> = Vec::new();
     for f in sh_files {
         let src = fs::read_to_string(f)
             .unwrap_or_else(|_| panic!("cannot read {f}"));
         // Skip `#`-comment lines so notes mentioning `EMove` / `^self`
         // in prose don't spuriously trip the count.
-        for line in src.lines() {
+        let lines: Vec<&str> = src.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
             let t = line.trim_start();
             if t.starts_with('#') {
                 continue;
             }
             if t.starts_with("case EMove(inner):") {
                 sh_count += 1;
+                // ⚠ Same class blindness as the Rust half: the arm HEAD
+                // survives a `^`→`!` flip untouched. Scope a body window
+                // to this arm — the sibling `case EPropagate(inner):`
+                // legitimately emits `!`, so the window MUST stop at the
+                // next `case`.
+                let mut body: Vec<&str> = Vec::new();
+                for next in lines.iter().skip(i + 1) {
+                    let nt = next.trim_start();
+                    if nt.starts_with("case ") || nt.starts_with("else:") {
+                        break;
+                    }
+                    if nt.starts_with('#') || nt.is_empty() {
+                        continue;
+                    }
+                    body.push(next);
+                }
+                let body = body.join("\n");
+                if SH_BAD.iter().any(|n| body.contains(n)) {
+                    sh_regressed.push(format!("{f}:{} — case EMove", i + 1));
+                } else if !SH_OK.iter().any(|n| body.contains(n)) {
+                    sh_glyphless.push(format!("{f}:{} — case EMove", i + 1));
+                }
             }
             // `^self` emit: only lines that are the actual concat site.
             if t.starts_with("result = result +") && t.contains("\"^self\"") {
                 sh_count += 1;
             }
+            // …and its regressed twin, which the count above cannot see.
+            if t.starts_with("result = result +") && t.contains("\"!self\"") {
+                sh_regressed.push(format!("{f}:{} — `!self` emit", i + 1));
+            }
         }
     }
+    assert!(
+        sh_regressed.is_empty(),
+        "D27 Round A REGRESSION on the SH lane: a Move-sigil emit writes \
+         the retired `!` spelling.\n{}\n\n\
+         Core #9 — the SH formatters emit `^` alongside the Rust reference.",
+        sh_regressed.join("\n"),
+    );
+    assert!(
+        sh_glyphless.is_empty(),
+        "D27 Round A: a SH `case EMove(inner):` arm has no recognisable \
+         sigil emit in its body.\n{}\n\n\
+         The arm must emit one of {SH_OK:?} before the next `case`.",
+        sh_glyphless.join("\n"),
+    );
     assert_eq!(
         sh_count, EXPECTED_SH,
         "D27 Round A SH emit-site count in `self_host_*/format.gg` changed: \
