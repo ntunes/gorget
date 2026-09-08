@@ -505,6 +505,191 @@ ledger_members() {
   esac
 }
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  THE SECOND WITNESS — because a count from ONE extraction has no control
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The INSTRUMENT SUSPECT warning below catches an enumerator that goes SILENT
+# (N → 0). It does NOT catch one that is merely MAIMED, and that is the more
+# likely failure by far: a pattern drifts, it does not stop matching. Measured
+# on this very script — narrowing the `ignored_tests` pattern to a bare
+# `#[ignore]` drops the 288 `#[ignore = "reason"]` forms and reports
+# `295 → 7, −288` at rc 0, with no warning and 97% "progress".
+#
+# ⛔ NOT FIXED WITH A THRESHOLD. "A drop of more than X% is suspect" needs a
+# constant, and Core #6 plus this whole file is about REMOVING constants, not
+# adding one to the newest gate. A threshold is also wrong in both directions:
+# it green-lights a small real break and reds a large real burn-down.
+#
+# ⭐ THE FIX IS THE REPO'S OWN DERIVE PATTERN: give each axis a SECOND,
+# INDEPENDENT extraction of the same fact and compare. Two extractions that
+# disagree name a broken instrument immediately, at ANY breakage size, with
+# ZERO constants. Disagreement is a HARD FAILURE (rc 3) — if two derivations of
+# one number disagree, one of them is broken and no round should quote either.
+# It runs BEFORE `--bless`, so a broken enumerator can never be written into the
+# baseline.
+#
+# ⛔ THIS IS A GATE ON INSTRUMENT AGREEMENT, NOT ON ANY DEBT TOTAL. Nothing here
+# asserts a count is low, falling, or bounded; discovery is not penalised.
+#
+# THE WITNESSES:
+#   ignored_tests         CONTAINMENT against `known_gaps_census.sh --list`.
+#                         Every roster row is BY DEFINITION an `#[ignore]`d
+#                         test, enumerated by a different script written by a
+#                         different author, so the roster must be a SUBSET of
+#                         this axis. 242 of the 295 rows are covered, which is
+#                         what makes the measured 295→7 break fire.
+#   known_gaps_fail       THREE partial witnesses, none of them complete:
+#                         (i) CONTAINMENT — every FAIL row must appear as an
+#                         `#[ignore]`d test in the independent enumerator above;
+#                         (ii) SENTINEL — every PASSING_ALLOWLIST.txt row must
+#                         still be IN the census roster (an allowlisted row IS a
+#                         roster row), which catches a narrowed census
+#                         enumerator; (iii) COUNT on the SUBTRAHEND — allowlist
+#                         rows against `tests/lints.rs`'s pin, which
+#                         `known_gaps_passing_allowlist_shrink_only` holds equal.
+#   leak_allowlist        COUNT against `tests/lints.rs::LEAK_CEILING`.
+#   corruption_allowlist  COUNT against `tests/lints.rs::CORRUPTION_CEILING`.
+#                         Both pins are hand-maintained and held equal to the
+#                         file by `sanitize_allowlists_shrink_only`, so they can
+#                         never legitimately diverge from a correct row count.
+#   open_criticals        COUNT against `TODO.md`'s GENERATED index, produced by
+#   todo_items            `scripts/todo_index.py` from the same front matter by
+#                         a different tool in a different language, and held
+#                         current by the `todo_index_is_current` lint.
+#
+# ⚠ WHAT IS *NOT* WITNESSED, NAMED RATHER THAN PAPERED OVER. A named omission is
+# durable content; leaving it in a commit message would lose it.
+# SINGLE-WITNESS: lints_guard_constants — a second regex over the same file is
+#   not an independent extraction, it is the same reading twice. There is no
+#   other source for "how many pinned guard values does tests/lints.rs hold".
+#   `todo/t1618` records the related under-count (an INLINE guard value has no
+#   declaration and is invisible to this axis at all).
+# SINGLE-WITNESS: known_gaps_fail — PARTIALLY witnessed only. Its membership and
+#   its six allowlisted SENTINELS are checked; its MAGNITUDE is not. A narrowing
+#   of the census's own enumerator that happens to SPARE all six sentinels
+#   shrinks the roster undetected, because the survivors are still all ignored
+#   tests and containment stays green. Six of 242 rows is a net, not a proof.
+#   The exact second reading is `known_gaps_census.sh --check`'s own
+#   `roster N · PASS n · FAIL n` line — which pays the ~90 s `driver.gg` build
+#   plus the row runs (`time scripts/known_gaps_census.sh` regenerates the cost;
+#   this comment quotes no figure deliberately). That is too much for a script
+#   whose whole point is to run FIRST, in a second, before ~30 min of sweeps
+#   (owner 2026-08-06). `--check` is a round-close battery step in its own
+#   right, so the exact number IS read every close — just not here.
+
+# Read a numeric pin out of ONE guard body in tests/lints.rs. Scoped to the fn
+# because `CEILING` is a local name reused across guards; an unscoped grep would
+# read a different guard's number and call it agreement.
+lints_pin() {
+  awk -v fnsig="fn $1(" -v cn="$2" '
+    index($0, fnsig) == 1 { inb = 1 }
+    inb && $0 ~ ("^[[:space:]]*const " cn "[[:space:]]*:[[:space:]]*usize[[:space:]]*=") {
+      sub(/^.*=[[:space:]]*/, ""); sub(/[^0-9].*$/, ""); print; exit
+    }
+  ' tests/lints.rs
+}
+
+# The census roster as `<test file stem>::<fn>` keys — the INDEPENDENT
+# enumeration this file's `ignored_tests` arm is checked against.
+census_roster_keys() {
+  scripts/known_gaps_census.sh --list 2>/dev/null \
+    | awk -F'\t' '!/^#/ && NF {
+        f = $2; sub(/:.*$/, "", f); sub(/^.*\//, "", f); sub(/\.rs$/, "", f)
+        printf "%s::%s\n", f, $1
+      }' | sort -u
+}
+
+# $1 axis · $2 measured count · $3 file of measured member keys.
+# Prints ONE line per disagreement; silence means the two readings agree.
+# ALWAYS returns 0 — the caller decides what a disagreement costs.
+ledger_witness() {
+  axis=$1; wnow=$2; wmembers=$3
+  case "$axis" in
+    ignored_tests)
+      wtmp=$(mktemp)
+      census_roster_keys > "$wtmp"
+      wmiss=$(comm -23 "$wtmp" "$wmembers" | wc -l | tr -d ' ')
+      wros=$(wc -l < "$wtmp" | tr -d ' ')
+      rm -f "$wtmp"
+      if [ "$wmiss" -ne 0 ]; then
+        printf '  ignored_tests: %s of the census roster'"'"'s %s ignored tests are ABSENT from this axis'"'"'s %s member(s).\n' \
+          "$wmiss" "$wros" "$wnow"
+        printf '     Second reading: `scripts/known_gaps_census.sh --list` (an independent enumerator).\n'
+        printf '     Every roster row IS an `#[ignore]`d test, so this axis cannot be missing one.\n'
+      fi
+      ;;
+    known_gaps_fail)
+      wtmp=$(mktemp); wign=$(mktemp)
+      census_roster_keys | sed 's|^[^:]*::||' | sort -u > "$wtmp"
+      ledger_members ignored_tests | sed 's|^[^:]*::||' | sort -u > "$wign"
+      wmiss=$(comm -23 "$wmembers" "$wign" | wc -l | tr -d ' ')
+      rm -f "$wtmp" "$wign"
+      if [ "$wmiss" -ne 0 ]; then
+        printf '  known_gaps_fail: %s of %s FAIL row(s) are not `#[ignore]`d tests in the independent enumeration.\n' \
+          "$wmiss" "$wnow"
+      fi
+      # SENTINEL witness on the ROSTER itself: every allowlisted row is by
+      # definition a roster row (it is a roster row that PASSes), and the
+      # allowlist is maintained in a different file by a different hand. If the
+      # census's OWN enumerator narrows, these six drop out of the roster and
+      # this fires. Measured: breaking the census's ignore detector collapses
+      # the roster to 1 row and all 6 sentinels go missing.
+      wtmp=$(mktemp); wal=$(mktemp)
+      scripts/known_gaps_census.sh --list 2>/dev/null \
+        | awk -F'\t' '!/^#/ && NF { print $1 }' | sort -u > "$wtmp"
+      awk '!/^#/ && NF { print $1 }' tests/gaps/PASSING_ALLOWLIST.txt | sort -u > "$wal"
+      wgone=$(comm -23 "$wal" "$wtmp" | wc -l | tr -d ' ')
+      wallow=$(wc -l < "$wal" | tr -d ' ')
+      rm -f "$wtmp" "$wal"
+      if [ "$wgone" -ne 0 ]; then
+        printf '  known_gaps_fail: %s of the %s PASSING_ALLOWLIST.txt row(s) are ABSENT from the census roster.\n' \
+          "$wgone" "$wallow"
+        printf '     An allowlisted row IS a roster row — the census enumerator has narrowed.\n'
+      fi
+      wpin=$(lints_pin known_gaps_passing_allowlist_shrink_only CEILING)
+      if [ -n "$wpin" ] && [ "$wallow" != "$wpin" ]; then
+        printf '  known_gaps_fail: the SUBTRAHEND disagrees — PASSING_ALLOWLIST.txt has %s row(s), tests/lints.rs pins %s.\n' \
+          "$wallow" "$wpin"
+      elif [ -z "$wpin" ]; then
+        printf '  known_gaps_fail: could not read the allowlist pin out of tests/lints.rs — the witness itself is broken.\n'
+      fi
+      ;;
+    leak_allowlist)
+      wpin=$(lints_pin sanitize_allowlists_shrink_only LEAK_CEILING)
+      if [ -z "$wpin" ]; then
+        printf '  leak_allowlist: could not read LEAK_CEILING out of tests/lints.rs — the witness itself is broken.\n'
+      elif [ "$wnow" != "$wpin" ]; then
+        printf '  leak_allowlist: %s row(s) measured, tests/lints.rs::LEAK_CEILING pins %s.\n' "$wnow" "$wpin"
+      fi
+      ;;
+    corruption_allowlist)
+      wpin=$(lints_pin sanitize_allowlists_shrink_only CORRUPTION_CEILING)
+      if [ -z "$wpin" ]; then
+        printf '  corruption_allowlist: could not read CORRUPTION_CEILING out of tests/lints.rs — the witness itself is broken.\n'
+      elif [ "$wnow" != "$wpin" ]; then
+        printf '  corruption_allowlist: %s row(s) measured, tests/lints.rs::CORRUPTION_CEILING pins %s.\n' "$wnow" "$wpin"
+      fi
+      ;;
+    open_criticals)
+      wix=$(grep -cE '^- \[`t[0-9]+`\]\(todo/t[0-9]+\.md\) \*\*CRITICAL\*\*' TODO.md || true)
+      if [ "$wnow" != "$wix" ]; then
+        printf '  open_criticals: %s item(s) measured from todo/ front matter, TODO.md'"'"'s generated index lists %s.\n' \
+          "$wnow" "$wix"
+      fi
+      ;;
+    todo_items)
+      wix=$(grep -cE '^- \[`t[0-9]+`\]\(todo/t[0-9]+\.md\)' TODO.md || true)
+      if [ "$wnow" != "$wix" ]; then
+        printf '  todo_items: %s file(s) measured, TODO.md'"'"'s generated index lists %s pointer(s).\n' "$wnow" "$wix"
+      fi
+      ;;
+    lints_guard_constants) : ;;   # SINGLE-WITNESS by design — see the header.
+    *) printf '  %s: no witness arm and no SINGLE-WITNESS declaration.\n' "$axis" ;;
+  esac
+  return 0
+}
+
 LEDGER_NOW=$(mktemp); LEDGER_PREV=$(mktemp)
 LEDGER_A=$(mktemp); LEDGER_B=$(mktemp)
 trap 'rm -f "$TMP_ALL" "$TMP_STATUS" "$TMP_IGN" "$TMP_LIVE" "$TMP_NETS" "$TMP_CITED" "$TMP_EXEMPT" "$LEDGER_NOW" "$LEDGER_PREV" "$LEDGER_A" "$LEDGER_B"' EXIT
@@ -514,6 +699,27 @@ for row in "${LEDGER_AXES[@]}"; do
   axis=${row%%|*}
   ledger_members "$axis" | sort -u | sed "s|^|$axis\t|" >> "$LEDGER_NOW"
 done
+
+# ── Run the witnesses BEFORE anything reads or writes the ledger ────────────
+witness_fail=""
+for row in "${LEDGER_AXES[@]}"; do
+  waxis=${row%%|*}
+  awk -F'\t' -v a="$waxis" '$1 == a { print $2 }' "$LEDGER_NOW" | sort -u > "$LEDGER_A"
+  wcount=$(wc -l < "$LEDGER_A" | tr -d ' ')
+  wmsg=$(ledger_witness "$waxis" "$wcount" "$LEDGER_A")
+  if [ -n "$wmsg" ]; then witness_fail="$witness_fail$wmsg"$'\n'; fi
+done
+if [ -n "$witness_fail" ]; then
+  {
+    echo "convergence.sh: ⛔ THE DEBT LEDGER'S INSTRUMENTS DISAGREE — nothing below is quotable."
+    printf '%s' "$witness_fail"
+    echo "  Two independent readings of one number disagree, so ONE OF THEM IS BROKEN."
+    echo "  This is a gate on INSTRUMENT AGREEMENT, never on a debt total: no count here is"
+    echo "  asserted low, falling or bounded. Fix the enumerator (or the pin it is read"
+    echo "  against) and re-run; do NOT \`--bless\` until this is silent."
+  } >&2
+  exit 3
+fi
 
 if [ "$BLESS" = 1 ]; then
   mkdir -p "$(dirname "$LEDGER_BASELINE")"

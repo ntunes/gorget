@@ -1988,9 +1988,11 @@ inline instead — a dated measurement sitting in the middle of an imperative,
 where it costs bytes in the file that has a byte ceiling and buys nothing a
 reader of the *rule* needs. Those receipts are below, one per rule, each headed
 by the rule's `AGENTS_MD_HEADING_INVENTORY` id **where it has one** — `MA-0b`,
-`MA-3b`, `MA-8`, `MA-9`, `Q-2` — and by a short name where the rule is a bold
-paragraph rather than a numbered heading, which the inventory does not pin
-(`FOLD`, for *"FOLD VERBATIM, NEVER SUMMARISED"* in § Review). **The rules
+`MA-3b`, `MA-8`, `MA-9`, `Q-2` — and by a short name where the rule is a bullet
+or a bold paragraph rather than a numbered heading, which the inventory does not
+pin: `FOLD` (*"FOLD VERBATIM, NEVER SUMMARISED"*, § Review), `OWNER-ASK`
+(*"BEFORE ANY OWNER ASK — THE LEDGER FIRST, THEN A PROBE"*, § Solution Quality)
+and `FILE` (*"GREP `todo/` BEFORE YOU FILE"*, § Task Continuity). **The rules
 themselves were not weakened or shortened in meaning — only their stories moved.**
 
 ### MA-0b — a handover bullet that contradicted the file for two months
@@ -2105,3 +2107,37 @@ the defect had moved past the declaration, and green was the honest answer to
 the question the guard asked. That is why a `=fatal` landing only counts after
 every other in-scope edit is applied and the guard is re-checked RED; one that
 goes green earlier was made fatal over a live defect.
+
+### OWNER-ASK — both R50 asks dissolved before they were sent
+
+*Rule (§ Solution Quality): "BEFORE ANY OWNER ASK — THE LEDGER FIRST, THEN A
+PROBE … a claim of the form 'the ratified X forbids Y' is not checkable by
+reading X — check whether Y ONCE EXISTED AND WAS DELIBERATELY REMOVED, and
+whether a general rule is overridden by a carve-out."*
+
+Both of R50's owner asks dissolved on exactly this check, and neither needed the
+owner's time. The first was answered by a **two-line probe** showing that a
+sibling position already rejects the shape the ask wanted ruled on — the
+question was about a behaviour the compiler already had. The second was answered
+by **a single line in the ratified ledger that collapsed the very distinction
+the ask proposed to add** — the design it asked to introduce had already been
+considered and had already been folded away.
+
+Neither is findable by reading the rule the ask cited: one required probing the
+implementation, the other required searching the ledger for the *inverse* of the
+question. That is why the rule names both moves and not just "read the record".
+
+### FILE — a duplicate born of one source report is invisible to a symptom grep
+
+*Rule (§ Task Continuity): "GREP `todo/` BEFORE YOU FILE — the symptom AND the
+mechanism AND the CITED SOURCE FILES … A DUPLICATE BORN OF ONE SOURCE REPORT IS
+INVISIBLE TO A SYMPTOM GREP."*
+
+Measured: **two filings of one probe's finding, four hours apart, by the same
+author.** Both drew their wording from that probe's own report, so both used the
+same phrases for the same symptom — and a symptom grep run before the second
+filing would have had to match the first one's text to fire, which it did,
+except that the two readers of that grep were the same person reading their own
+words back. The overlap that actually distinguishes the pair is the `cites`
+list: two items citing the same source files are a duplicate long before their
+prose looks alike.

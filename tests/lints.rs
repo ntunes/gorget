@@ -33742,6 +33742,8 @@ fn debt_ledger_rule_script_and_baseline_agree() {
         "--bless",
         "never hand-edited",
         "DERIVED, never pinned",
+        "SECOND INDEPENDENT WITNESS",
+        "single-witness",
     ] {
         assert!(
             step5.contains(phrase),
@@ -33787,6 +33789,25 @@ fn debt_ledger_rule_script_and_baseline_agree() {
              (now {axes:?}). An axis only leaves when its debt is GONE — and then its row \
              reads 0 forever, which costs nothing and proves it. Silently dropping the row \
              makes the ledger look complete while a whole class stops being counted.",
+        );
+    }
+
+    // ── (b2) the SECOND-WITNESS layer is still wired.
+    // The per-axis coverage needs no lint: `ledger_members`'s `*)` arm exits 2
+    // for an axis with no enumerator, and `ledger_witness`'s `*)` arm reports
+    // "no witness arm" and exits 3 for an axis with no witness — both verified
+    // by breaking them. What a lint has to hold is that the LAYER still exists
+    // at all, because deleting it restores the defect that motivated it: a
+    // maimed enumerator (as opposed to a silent one) reports the maximum
+    // possible progress and nothing notices.
+    for marker in ["ledger_witness()", "INSTRUMENT SUSPECT", "exit 3", "SINGLE-WITNESS:"] {
+        assert!(
+            script.contains(marker),
+            "scripts/convergence.sh no longer contains {marker:?}. The ledger's second-witness \
+             layer is what makes a PARTIAL enumerator break visible — measured: narrowing the \
+             `#[ignore` pattern reported `295 -> 7, -288` at rc 0 before it existed. \
+             `SINGLE-WITNESS:` marks the axes that have no second reading; deleting those \
+             declarations leaves an unwitnessed axis looking verified.",
         );
     }
 
