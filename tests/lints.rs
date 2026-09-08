@@ -1084,6 +1084,13 @@ fn d29_propagate_walker_arm_coverage() {
     // 2026-07-17 after the full `Expr::Move` sibling sweep. Counts include
     // pattern arms and constructions alike — the pin is on coverage presence,
     // not arm shape.
+    //
+    // ⚠ CODE LINES ONLY. This scan used to count RAW file text, and
+    // `src/semantic/typecheck.rs` was pinned at 7 where only 4 are arms — the
+    // other 3 were `///` prose naming the variant. That is green over its own
+    // class in both directions at once: editing a doc comment reddens it, and
+    // DELETING AN ARM while adding a prose mention keeps it green. Comment
+    // lines are skipped now and the pin is the measured code count.
     const EXPECTED: &[(&str, usize)] = &[
         // R41 T-FMT-A (2026-08-11): 1 → 2. `emits_leading_ownership_sigil`
         // adds a SECOND `Expr::Propagate` arm — the parse-order paren
@@ -1140,11 +1147,57 @@ fn d29_propagate_walker_arm_coverage() {
         // goes RED if it ever stops calling the chokepoint. Do not restore an
         // arm here; that would re-open the hole this closed.
         ("src/semantic/safety/validation.rs", 0),
-        ("src/semantic/typecheck.rs", 7),
+        // 2026-09-08: 7 -> 4 with NO source change — the three lost occurrences
+        // are `///` prose mentions the raw-text scan was counting as arms.
+        // Regenerate: grep -c 'Expr::Propagate' over the file's non-`//` lines.
+        ("src/semantic/typecheck.rs", 4),
     ];
+    // Files that mention the variant and are deliberately NOT walkers.
+    const NOT_A_WALKER: &[(&str, &str)] = &[
+        ("src/parser/tests.rs", "parser unit tests — they CONSTRUCT the node to \
+          assert the parse, and have no recursion obligation."),
+    ];
+
+    // Code-only occurrence count for one file.
+    let code_count = |file: &str| -> usize {
+        fs::read_to_string(file)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| l.matches("Expr::Propagate").count())
+            .sum()
+    };
+
+    // The table must be TOTAL over `src/`: a NEW walker in a NEW file is
+    // exactly the drift this pins, and a per-file table that only looks at the
+    // files already in it cannot see one.
+    let listed: BTreeSet<String> = EXPECTED
+        .iter()
+        .map(|(f, _)| (*f).to_string())
+        .chain(NOT_A_WALKER.iter().map(|(f, _)| (*f).to_string()))
+        .collect();
+    let mut unlisted: Vec<String> = Vec::new();
+    for path in walkdir_rs("src") {
+        let p = path.to_string_lossy().to_string();
+        if listed.contains(&p) {
+            continue;
+        }
+        if code_count(&p) > 0 {
+            unlisted.push(p);
+        }
+    }
+    assert!(
+        unlisted.is_empty(),
+        "these `src/` files reach `Expr::Propagate` in CODE and are in neither \
+         table: {unlisted:?}\n\n\
+         If the file holds an AST walker, add it to EXPECTED with its count and \
+         confirm the walker sees THROUGH the D29 transparent wrapper. If it \
+         merely constructs or matches the node with no recursion obligation, \
+         add it to NOT_A_WALKER WITH ITS REASON.",
+    );
+
     for (file, expected) in EXPECTED {
-        let content = fs::read_to_string(file).unwrap_or_default();
-        let count = content.matches("Expr::Propagate").count();
+        let count = code_count(file);
         assert_eq!(
             count, *expected,
             "`Expr::Propagate` arm coverage changed in {file}: {count} vs              {expected}.\n\n             The D29 mark is a TRANSPARENT wrapper: every AST walker that has a              `Expr::Move`/wrapper group must see THROUGH it, and `_ => {{}}`              catch-alls make a missing arm silent (missed use → conservative              clone; lost generic instance → undefined symbol; silent              under-capture).\n\n             ⚠ A DROP IS NOT AUTOMATICALLY A REGRESSION, and 'restore the              arm' is the WRONG remedy when the walker was ROUTED. Ask which              of these happened:\n             (a) The walker now DELEGATES its recursion to the child-enumeration              chokepoint `parser::visitor::visit_expr_children`. Then it has MORE              coverage, not less — the wrapper arm lives once, in              `src/parser/visitor.rs`, under rustc exhaustiveness. Lower this              file's count to match and let              `expr_stmt_walker_population_is_pinned` hold the routing: it              computes the `[ROUTED]` disposition from the walker's own body,              so the drop stays machine-checked rather than justified in prose.              Do NOT re-add an arm — that re-opens the hole the routing closed.\n             (b) An arm was genuinely deleted from a still-hand-rolled walker.              Restore it.\n             (c) The WHOLE WALKER was deleted, because the construct it existed              to find no longer exists in the language. Then there is no arm to              restore and nothing to route: lower the count and say WHICH walker              went, so the next reader can tell (c) from (b) — they have the              same shape in a diff and opposite remedies.\n\n             If you are adding a NEW wrapper Expr variant, extend the wrapper              group in EVERY file in this table (the sibling-sweep obligation),              then bump the counts.",
@@ -22117,7 +22170,14 @@ fn fmt_no_new_move_bang_in_migrated_corpora() {
 /// in `roots`, skip any path with a `self_host_` segment, strip strings
 /// then comments per line, and count `!name` / `!(` matches. Also
 /// exercised by the unit tests below.
-fn count_bang_move_in_code(roots: &[&str]) -> usize {
+/// The three patterns `count_bang_move_in_code` runs, in ONE place.
+///
+/// ⚠ Every test of this lint's behaviour MUST come through here. The
+/// positive control below used to RE-DECLARE all three inline, so it verified
+/// a COPY: an edit to the patterns the lint actually runs left the control
+/// green, which is precisely the assurance a positive control exists to
+/// refuse to give.
+fn bang_move_regexes() -> (regex::Regex, regex::Regex, regex::Regex) {
     let string_re = regex::Regex::new(
         // Triple-quoted (any [fFrRbBcC] prefix, non-greedy `.*?`) OR
         // single-line double-quoted (any prefix) OR single-line
@@ -22128,6 +22188,11 @@ fn count_bang_move_in_code(roots: &[&str]) -> usize {
     .expect("string regex compiles");
     let comment_re = regex::Regex::new(r"#.*$").expect("comment regex compiles");
     let move_re = regex::Regex::new(r"(^|[^!])!([A-Za-z_]|\()").expect("move regex compiles");
+    (string_re, comment_re, move_re)
+}
+
+fn count_bang_move_in_code(roots: &[&str]) -> usize {
+    let (string_re, comment_re, move_re) = bang_move_regexes();
 
     let mut total = 0usize;
     for root in roots {
@@ -22192,7 +22257,8 @@ fn walk_gg_files(dir: &Path, cb: &mut dyn FnMut(&Path)) {
 /// or `x! + y`.
 #[test]
 fn fmt_bang_move_regex_matches() {
-    let move_re = regex::Regex::new(r"(^|[^!])!([A-Za-z_]|\()").expect("regex compiles");
+    // The lint's OWN pattern, not a retyped copy of it.
+    let (_, _, move_re) = bang_move_regexes();
 
     // MATCH cases — real `!name`-move sites and move-closure.
     let matches: &[&str] = &[
@@ -22222,40 +22288,57 @@ fn fmt_bang_move_regex_matches() {
     }
 }
 
-/// Positive-control for the strip logic: verify that `!x` inside a
-/// STRING or a COMMENT does NOT count as a real site (else the lint
-/// false-positives on `code = "if !flag"` or `# no !move here`).
+/// Positive-control for the strip logic: `!x` inside a STRING or a COMMENT
+/// must NOT count as a real site (else the lint false-positives on
+/// `code = "if !flag"` or `# no !move here`) — and `!x` in CODE must.
+///
+/// ⚠ BOTH HALVES, AND THROUGH `count_bang_move_in_code` ITSELF. This control
+/// used to re-declare the three regexes inline and assert only the zero, so it
+/// (a) verified a copy of the lint rather than the lint, and (b) was satisfied
+/// by a pattern that matches NOTHING AT ALL — a strip that swallowed the whole
+/// line, or a move regex that never fires, both score 0 here and would take
+/// `fmt_no_new_move_bang_in_migrated_corpora` permanently, silently green.
 #[test]
 fn fmt_bang_move_strip_ignores_strings_and_comments() {
     use std::io::Write;
     let tmp = tempfile::tempdir().expect("tempdir");
-    let fixture_path = tmp.path().join("probe.gg");
-    let mut f = std::fs::File::create(&fixture_path).unwrap();
-    // These lines contain `!x` but ALL are in string or comment context.
+
+    // (a) NEGATIVE: every `!x` here is in string or comment context.
+    let quiet = tmp.path().join("quiet");
+    std::fs::create_dir(&quiet).unwrap();
+    let mut f = std::fs::File::create(quiet.join("probe.gg")).unwrap();
     writeln!(f, "String s = \"contains !x literal\"").unwrap();
     writeln!(f, "# comment mentioning !x").unwrap();
     writeln!(f, "String r = r\"raw with !y\"").unwrap();
     writeln!(f, "String fs = f\"fstr with !z\"").unwrap();
     drop(f);
 
-    // Re-apply the strip logic here (avoids running the full walk).
-    let string_re = regex::Regex::new(
-        r#"(?s)([fFrRbBcC]?"""(?:.*?)""")|([fFrRbBcC]?"(?:[^"\\\n]|\\.)*")|('(?:[^'\\\n]|\\.)*')"#,
-    )
-    .unwrap();
-    let comment_re = regex::Regex::new(r"#.*$").unwrap();
-    let move_re = regex::Regex::new(r"(^|[^!])!([A-Za-z_]|\()").unwrap();
+    // (b) POSITIVE: three real `!name`-move sites in CODE, plus the shapes the
+    //     pattern must keep ignoring, so a match-nothing regex cannot pass.
+    let loud = tmp.path().join("loud");
+    std::fs::create_dir(&loud).unwrap();
+    let mut f = std::fs::File::create(loud.join("probe.gg")).unwrap();
+    writeln!(f, "void f(Message !msg):").unwrap();
+    writeln!(f, "    take(!p)").unwrap();
+    writeln!(f, "    Callable c = !(x): x").unwrap();
+    writeln!(f, "    if a != b:            # inequality, not a move").unwrap();
+    writeln!(f, "        return boom(x)!!  # D29 double-mark, not a move").unwrap();
+    drop(f);
 
-    let src = std::fs::read_to_string(&fixture_path).unwrap();
-    let mut count = 0;
-    for line in src.lines() {
-        let stripped = string_re.replace_all(line, "\"\"");
-        let stripped = comment_re.replace_all(&stripped, "");
-        count += move_re.find_iter(&stripped).count();
-    }
+    let quiet_s = quiet.to_string_lossy().to_string();
+    let loud_s = loud.to_string_lossy().to_string();
     assert_eq!(
-        count, 0,
-        "strip logic false-positive: `!x` in string/comment must not count"
+        count_bang_move_in_code(&[quiet_s.as_str()]),
+        0,
+        "strip logic false-positive: `!x` in string/comment must not count",
+    );
+    assert_eq!(
+        count_bang_move_in_code(&[loud_s.as_str()]),
+        3,
+        "strip logic false-NEGATIVE: the three real `!name`-move sites \
+         (`Message !msg`, `take(!p)`, `!(x): x`) must count, and `!=` / `!!` \
+         must not. A pattern that scores 0 on BOTH probes takes \
+         `fmt_no_new_move_bang_in_migrated_corpora` green forever.",
     );
 }
 
@@ -26324,13 +26407,17 @@ fn known_gaps_passing_allowlist_shrink_only() {
         })
         .collect();
 
-    // EXACT, not `<=`. A ceiling counts rows; it does not identify them, so a
-    // contributor could delete a genuinely-graduated row and add an
-    // unadjudicated one in the same commit and stay green — a ratchet notch
-    // lost with no signal. Equality forces every removal to lower the constant
-    // and every addition to raise it, VISIBLY IN THE DIFF, which is what the
-    // message below actually promises (Core #14: an invariant asserted in an
-    // error string and enforced nowhere is rot).
+    // EXACT, not `<=`: equality forces every removal to lower the constant and
+    // every addition to raise it, VISIBLY IN THE DIFF.
+    //
+    // ⛔ BUT THE COUNT DOES NOT DO WHAT THIS COMMENT USED TO CLAIM. It said
+    // equality stops "delete a genuinely-graduated row and add an unadjudicated
+    // one in the same commit". It does not: 6 - 1 + 1 = 6, and the lint is
+    // green on exactly that swap — the class it was written to catch. A count
+    // counts rows; it never identifies them. The ADJUDICATED-BY-NAME assertion
+    // further down is what actually closes it (Core #14: the file's header
+    // promises every row carries "here is why that is NOT a graduation", and
+    // nothing was enforcing it).
     assert_eq!(
         rows.len(),
         CEILING,
@@ -26352,6 +26439,53 @@ fn known_gaps_passing_allowlist_shrink_only() {
              {CODES:?}. A bare name is how an allowlist becomes a parking lot (Core #14)."
         );
     }
+
+    // …and every row carries exactly one `# ADJUDICATED <name>: <why>` line, in
+    // BIJECTION with the rows. This is the half the row COUNT cannot do: a swap
+    // keeps the count at CEILING, so identity has to come from somewhere.
+    //
+    // ⚠ A LOOSER FORM WAS TRIED AND MEASURED INSUFFICIENT: "the name appears
+    // somewhere in the file's prose" is satisfied by an INCIDENTAL mention —
+    // swapping in `shared_spawn_grow_vector`, an ignored known_gaps test the
+    // CELL-BLIND paragraph already cites as a SIBLING, passed both that check
+    // and the `stale` check below. The marker has to be a line written FOR the
+    // row.
+    let adjudicated: BTreeSet<String> = body
+        .lines()
+        .filter_map(|l| l.trim_start().strip_prefix("# ADJUDICATED "))
+        .filter_map(|r| r.split_once(':'))
+        .map(|(n, _)| n.trim().to_string())
+        .collect();
+    let row_names: BTreeSet<String> = rows.iter().map(|(n, _)| n.clone()).collect();
+    assert_eq!(
+        adjudicated, row_names,
+        "the `# ADJUDICATED <name>:` lines and the rows of \
+         `tests/gaps/PASSING_ALLOWLIST.txt` are not in bijection.\n\n\
+         A ROW WITHOUT ONE is a graduation parked instead of adjudicated — write the \
+         line saying why the test passing is NOT a graduation. A LINE WITHOUT A ROW is \
+         a retired row whose paragraph outlived it — delete it in the same commit. \
+         ⚠ This is the assertion that sees a SWAP: the row count is green on \
+         `6 - 1 + 1 = 6`, so a deleted row plus an unadjudicated new one costs the \
+         ratchet a notch with no other signal.",
+    );
+
+    // …and the half that DOES identify rows lives in CI, not here: the census
+    // reconciles this file against the MEASURED pass set. Core #14 — this lint
+    // points at that guard, so it must assert the guard is still wired, or the
+    // sentence above becomes a claim about a step somebody deleted.
+    let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))
+        .expect("cannot read .github/workflows/ci.yml");
+    assert!(
+        ci.lines().any(|l| {
+            let t = l.trim_start();
+            !t.starts_with('#') && t.contains("scripts/known_gaps_census.sh") && t.contains("--check")
+        }),
+        "`scripts/known_gaps_census.sh --check` is no longer a CI step. That census is \
+         what actually IDENTIFIES the rows of tests/gaps/PASSING_ALLOWLIST.txt — it \
+         compares the file against the MEASURED pass set, which is the half this lint \
+         cannot do from source text alone. Without it, a row swapped for another \
+         ignored-and-passing test is caught by nothing.",
+    );
 
     // Derive the live roster from source and reconcile. This is what makes the
     // ratchet SELF-CLEANING: graduating a test (or deleting it) leaves a row

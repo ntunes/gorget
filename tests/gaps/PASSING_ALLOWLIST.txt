@@ -26,8 +26,13 @@
 #                    semantics are ratified — it is an owner ask.
 #
 # ⚠ SHRINK-ONLY and EXACT, enforced by `known_gaps_passing_allowlist_shrink_only`
-# in tests/lints.rs (`assert_eq!` on the row count, so a row cannot be swapped
-# for another silently) and by `known_gaps_census.sh --check` (set equality
+# in tests/lints.rs (`assert_eq!` on the row count — which counts rows and does
+# NOT identify them, so the count ALONE is green on a swap: 6 - 1 + 1 = 6. What
+# closes that is the companion assertion in the same lint: every row must have
+# exactly one `# ADJUDICATED <name>: <why this is not a graduation>` line in
+# this file, and every such line must have a row — a bijection, so a swapped-in
+# row cannot arrive without its adjudication being written)
+# and by `known_gaps_census.sh --check` (set equality
 # against the measured PASS set, so neither a new passer nor a stale row slips
 # through). Removing a row is the normal outcome — the test graduated, or its
 # assertion was rewired so it goes red again. ADDING one means an ignored test
@@ -81,6 +86,11 @@
 # `shared_spawn_grow_vector` (SH prints 1, want 3), `shared_spawn_amp_param`
 # (rc 134, double free), `shared_spawn_async_bump` (rc 134). Retire these two
 # rows when the SH op_consume follow-up lands and all five graduate together.
+#
+# ADJUDICATED shared_vector_ctor_init: constructs a shared Vector and reads it
+#   back. No spawn, so "drop the sharing entirely" prints the same answer.
+# ADJUDICATED shared_rwlock_call_init: builds a shared RWLock and calls through
+#   it. No spawn, same reason.
 shared_vector_ctor_init CELL-BLIND
 shared_rwlock_call_init CELL-BLIND
 
@@ -91,8 +101,10 @@ shared_rwlock_call_init CELL-BLIND
 # before or after a fix. The pathology is LIVE at HEAD; measured with
 # `gg build --clones=stats <fixture>` then running the binary and reading the
 # `[clone-stats] array_clone=N` line it prints at exit:
-#   mutable_borrow_move_callee_recursive       array_clone=3   (linear in depth)
-#   mutable_borrow_projected_root_recursive    array_clone=15  (superlinear)
+# ADJUDICATED mutable_borrow_move_callee_recursive: array_clone=3, linear in
+#   depth; the body asserts stdout, which the pathology does not change.
+# ADJUDICATED mutable_borrow_projected_root_recursive: array_clone=15,
+#   superlinear; same stdout-only assertion.
 # Retire each row by asserting a clone-count floor instead of stdout.
 mutable_borrow_move_callee_recursive BLIND-PERF
 mutable_borrow_projected_root_recursive BLIND-PERF
@@ -102,8 +114,13 @@ mutable_borrow_projected_root_recursive BLIND-PERF
 # `public`. Both tests assert what the compiler does TODAY — the negative gets
 # `E_PrivateImport`, the positive works with `public` — so both are green and
 # both would need REWRITING, not un-ignoring, if the semantics changed. The
-# open question is whether module-level ints should be public by default; the
-# filing calls it a spec ambiguity, and `docs/language-reference.md` was written
+# open question is whether module-level ints should be public by default.
+# ADJUDICATED snag58_private_int_import_fails: asserts TODAY's reject
+#   (`E_PrivateImport`); it would need REWRITING, not un-ignoring, if the
+#   semantics changed.
+# ADJUDICATED snag58_public_int_import_ok: asserts TODAY's accept with
+#   `public`; same disposition.
+# The filing calls it a spec ambiguity, and `docs/language-reference.md` was written
 # after the implementation, so a reference-vs-code conflict here is an OWNER
 # ASK, never a scout's or an executor's guess (AGENTS.md "Scout before you
 # brief"). ⚠ These two are the tree's only durable repros that assert CURRENT
