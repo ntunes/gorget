@@ -9,8 +9,557 @@
 //!
 //! See `docs/devbook/25-structural-guards.md` §3a for the full design.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Slice a Rust `match` arm by its REAL extent — from its head to the first
+/// `},` at the head's own indentation.
+///
+/// ⚠ Use this instead of a fixed `&src[at..at + N]` window. A character window
+/// is wrong in both directions and silently: too small and the arm's tail is
+/// invisible to whatever the caller asserts about it (measured — a `+3000`
+/// window over a 4,303-char arm left 1,300 chars unchecked), too large and the
+/// NEIGHBOURING arm answers for this one.
+fn rust_match_arm_extent<'a>(src: &'a str, head: &str, what: &str) -> &'a str {
+    let at = src
+        .find(head)
+        .unwrap_or_else(|| panic!("{what} moved — re-anchor this lint (looked for `{head}`)"));
+    let line_start = src[..at].rfind('\n').map_or(0, |p| p + 1);
+    let indent = &src[line_start..at];
+    assert!(
+        indent.chars().all(|c| c == ' '),
+        "{what}: `{head}` is not at the start of its own line — re-anchor this lint",
+    );
+    let closer = format!("\n{indent}}},");
+    let end = at
+        + head.len()
+        + src[at + head.len()..]
+            .find(&closer)
+            .unwrap_or_else(|| panic!("{what}: no `}},` at the arm's own indentation"));
+    &src[at + head.len()..end]
+}
+
+/// Every identifier-shaped double-quoted literal in `src`, deduplicated.
+/// Used to DERIVE a name roster from the source of truth rather than
+/// hand-listing a copy of it in this file.
+fn quoted_words(src: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+    while let Some(off) = src[i..].find('"') {
+        let start = i + off + 1;
+        let Some(len) = src[start..].find('"') else { break };
+        let word = &src[start..start + len];
+        if !word.is_empty()
+            && word
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !word.starts_with(|c: char| c.is_ascii_digit())
+        {
+            out.insert(word.to_string());
+        }
+        i = start + len + 1;
+        if i >= bytes.len() {
+            break;
+        }
+    }
+    out
+}
+
+// ⚠ For a top-level Gorget (`.gg`) fn body, use `gg_fn_body_required` (below)
+// rather than a whole-file `contains`: a name that also appears in a SIBLING
+// function answers for a row deleted from the one under test.
+
+/// The variants of a `pub enum <NAME>` in a Rust source file, in declaration
+/// order, each paired with the text that follows its name on the declaration
+/// line (`(Vec<Spanned<Expr>>, …)`, `{`, `,`, …).
+///
+/// This is the INDEPENDENT witness for "which variants exist", and rustc keeps
+/// it honest: a variant cannot be added without appearing here. Use it instead
+/// of hand-listing an arm roster in this file — a hand list cannot see a NEW
+/// variant, which is the direction most arm-count guards claim to catch.
+fn rust_enum_variants(path: &str, enum_name: &str) -> Vec<(String, String)> {
+    let s = fs::read_to_string(path)
+        .unwrap_or_else(|_| panic!("rust_enum_variants: cannot read {path}"));
+    let head = format!("pub enum {enum_name} {{");
+    let es = s
+        .find(&head)
+        .unwrap_or_else(|| panic!("rust_enum_variants: `{head}` not found in {path}"));
+    let open = s[es..].find('{').expect("enum body open");
+    let mut depth: i32 = 0;
+    let mut close = None;
+    for (i, c) in s[es..].char_indices().skip(open) {
+        if c == '{' { depth += 1; }
+        if c == '}' {
+            depth -= 1;
+            if depth == 0 { close = Some(i + 1); break; }
+        }
+    }
+    let body = &s[es..es + close.expect("enum body close")];
+    let mut out = Vec::new();
+    for line in body.lines() {
+        // Exactly one indent level: a variant declaration, never a field of a
+        // struct variant and never a nested type.
+        let Some(t) = line.strip_prefix("    ") else { continue };
+        if t.starts_with(' ') || !t.starts_with(char::is_uppercase) {
+            continue;
+        }
+        let name: String = t
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() {
+            continue;
+        }
+        out.push((name.clone(), t[name.len()..].to_string()));
+    }
+    assert!(
+        out.len() >= 5,
+        "rust_enum_variants: only {} variants parsed out of `{enum_name}` in {path} — \
+         the extraction broke, and a short roster makes every derived comparison \
+         below look complete when it is not.",
+        out.len(),
+    );
+    out
+}
+
+/// The variants of an `enum <NAME>:` in a self-host `.gg` source, in
+/// declaration order, each paired with the text that follows its name.
+///
+/// The `.gg` twin of [`rust_enum_variants`], and the same reason for existing:
+/// a walker's arm roster hand-listed in THIS file cannot see a new variant, so
+/// derive the roster from the AST that declares it.
+fn gg_enum_variants(path: &str, enum_name: &str) -> Vec<(String, String)> {
+    let s = fs::read_to_string(path)
+        .unwrap_or_else(|_| panic!("gg_enum_variants: cannot read {path}"));
+    let head = format!("enum {enum_name}:");
+    let mut out = Vec::new();
+    let mut inside = false;
+    for line in s.lines() {
+        if line.trim_end() == head {
+            inside = true;
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        // Gorget is indentation-based: the declaration ends at the first
+        // non-blank line back at column 0.
+        if !line.is_empty() && !line.starts_with(' ') && !line.starts_with('\t') {
+            break;
+        }
+        let t = line.trim_start();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let name: String = t
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() || !name.starts_with(char::is_uppercase) {
+            continue;
+        }
+        out.push((name.clone(), t[name.len()..].to_string()));
+    }
+    assert!(
+        out.len() >= 5,
+        "gg_enum_variants: only {} variants parsed out of `enum {enum_name}` in \
+         {path} — the extraction broke, and a short roster makes every derived \
+         comparison below look complete when it is not.",
+        out.len(),
+    );
+    out
+}
+
+/// A self-host walker's TOP-LEVEL `case <Variant>…` arms inside `window`, at
+/// exactly `indent` spaces, as variant name -> that arm's comment-stripped
+/// body.
+///
+/// ⚠ A MAP, not a count. A count is green under SUBSTITUTION — one arm leaves,
+/// another arrives — which is precisely the sibling-site drift these walkers
+/// are pinned against, and it cannot say WHICH arm vanished. The bodies come
+/// back too, because an arm that exists and does not RECURSE is the same defect
+/// as no arm at all, and a count sees neither.
+fn gg_walker_arms(
+    window: &str,
+    indent: usize,
+    first_char: char,
+) -> std::collections::BTreeMap<String, String> {
+    let pre = format!("{}case ", " ".repeat(indent));
+    let lines: Vec<&str> = window.lines().collect();
+    let mut heads: Vec<(usize, Vec<String>)> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let Some(rest) = l.strip_prefix(&pre) else { continue };
+        // Exactly this indent: a deeper-nested `case` has more leading space.
+        if rest.starts_with(' ') {
+            continue;
+        }
+        let names: Vec<String> = rest
+            .split('|')
+            .filter_map(|p| {
+                let p = p.trim_start();
+                let n: String = p
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                (!n.is_empty() && n.starts_with(first_char)).then_some(n)
+            })
+            .collect();
+        if !names.is_empty() {
+            heads.push((i, names));
+        }
+    }
+    let mut out: std::collections::BTreeMap<String, String> = Default::default();
+    for (k, (i, names)) in heads.iter().enumerate() {
+        let j = heads.get(k + 1).map_or(lines.len(), |(n, _)| *n);
+        let body: String = lines[*i..j]
+            .iter()
+            .map(|l| l.split('#').next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for n in names {
+            out.insert(n.clone(), body.clone());
+        }
+    }
+    out
+}
+
+/// Reconcile one self-host AST walker against the AST that declares its
+/// variants: the arm SET must equal (all variants − the declared exemptions),
+/// and every payload-bearing arm must RECURSE through the walker family.
+fn assert_gg_walker_covers_ast(
+    what: &str,
+    ast_path: &str,
+    enum_name: &str,
+    exempt: &[(&str, &str)],
+    arms: &std::collections::BTreeMap<String, String>,
+    recurse_needle: &str,
+) {
+    let variants = gg_enum_variants(ast_path, enum_name);
+    let exempt_set: BTreeSet<String> =
+        exempt.iter().map(|(n, _)| (*n).to_string()).collect();
+    let unknown: Vec<&String> = exempt_set
+        .iter()
+        .filter(|n| !variants.iter().any(|(v, _)| v == *n))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "{what}: exemption row(s) {unknown:?} name no variant of `enum {enum_name}` in \
+         {ast_path}. A row that outlives its variant makes the roster below stop \
+         describing the tree — strike it in the same commit the variant goes.",
+    );
+    let required: BTreeSet<String> = variants
+        .iter()
+        .map(|(n, _)| n.clone())
+        .filter(|n| !exempt_set.contains(n))
+        .collect();
+    assert!(
+        required.len() >= 10,
+        "{what}: only {} required variants derived from `enum {enum_name}` — the \
+         extraction or the exemption roster broke.",
+        required.len(),
+    );
+    let have: BTreeSet<String> = arms.keys().cloned().collect();
+    let missing: Vec<&String> = required.difference(&have).collect();
+    assert!(
+        missing.is_empty(),
+        "{what}: NO arm for {missing:?}, which `enum {enum_name}` in {ast_path} \
+         declares. A variant left in `else: pass` is NEVER walked. Give it an arm \
+         that recurses into its sub-nodes; if it genuinely carries none, add it to \
+         the exemption roster WITH ITS REASON.",
+    );
+    let extra: Vec<&String> = have.difference(&required).collect();
+    assert!(
+        extra.is_empty(),
+        "{what}: arm(s) {extra:?} match no non-exempt variant of `enum {enum_name}` \
+         in {ast_path} — either the variant was renamed/retired (drop the arm) or \
+         it is on the exemption roster and should not have one.",
+    );
+    // An arm that exists and does not recurse is the same defect as no arm.
+    // Payload-less variants have nothing to walk into and are exempt from this.
+    let inert: Vec<String> = variants
+        .iter()
+        .filter(|(n, rest)| {
+            required.contains(n) && rest.starts_with('(') && {
+                arms.get(n).map_or(false, |b| !b.contains(recurse_needle))
+            }
+        })
+        .map(|(n, _)| n.clone())
+        .collect();
+    assert!(
+        inert.is_empty(),
+        "{what}: arm(s) {inert:?} carry a payload but never call `{recurse_needle}…`, \
+         so the walk stops there. An arm that exists and does not RECURSE hides \
+         exactly what a missing arm hides — and an arm COUNT sees neither.",
+    );
+}
+
+/// The RECEIVER-GATE CELLS — `(receiver base, method)` pairs the
+/// wrong-receiver combinator gate rejects — extracted per lane.
+///
+/// Returns `(rust, self_host)`. Both are DERIVED from the arms themselves, so
+/// the parity assertion needs no pinned number on either side; and they are
+/// CELLS rather than counts, so a cell substituted on one lane (one leaves,
+/// another arrives) still reds, which a `9 == 9` cannot see.
+fn receiver_gate_cells() -> (BTreeSet<(String, String)>, BTreeSet<(String, String)>) {
+    let rs = fs::read_to_string("src/semantic/typecheck.rs")
+        .expect("read src/semantic/typecheck.rs");
+    let mut rust: BTreeSet<(String, String)> = Default::default();
+    for line in rs.lines() {
+        if !line.contains("R26A_ARM_MARKER") {
+            continue;
+        }
+        // `("Result", "flat_map") => "Option-only", // R26A_ARM_MARKER`
+        let head = line.split("=>").next().unwrap_or("");
+        let mut parts = head.split('"').skip(1).step_by(2);
+        if let (Some(b), Some(m)) = (parts.next(), parts.next()) {
+            rust.insert((b.to_string(), m.to_string()));
+        }
+    }
+    let gg = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("read tests/fixtures/self_host_typechecker/typecheck.gg");
+    let lines: Vec<&str> = gg.lines().collect();
+    let mut sh: BTreeSet<(String, String)> = Default::default();
+    for (i, line) in lines.iter().enumerate() {
+        if !line.contains("R27C_ARM_MARKER") || i == 0 {
+            continue;
+        }
+        // The predicate is the line ABOVE the marker:
+        // `elif base_name == "Option" and method_name == "is_ok":`
+        let prev = lines[i - 1];
+        let base = prev
+            .split("base_name == \"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .map(str::to_string);
+        let method = prev
+            .split("method_name == \"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .map(str::to_string);
+        if let (Some(b), Some(m)) = (base, method) {
+            sh.insert((b, m));
+        }
+    }
+    (rust, sh)
+}
+
+/// The Option / Result method tables of `docs/language-reference.md` — the
+/// RATIFIED surface, and a witness neither implementation derives from.
+fn reference_option_result_methods() -> (BTreeSet<String>, BTreeSet<String>) {
+    let doc = fs::read_to_string("docs/language-reference.md")
+        .expect("read docs/language-reference.md");
+    let table = |head: &str| -> BTreeSet<String> {
+        let i = doc
+            .find(head)
+            .unwrap_or_else(|| panic!("the `{head}` section of docs/language-reference.md moved"));
+        let after = i + head.len();
+        let j = doc[after..].find("**`").map_or(doc.len(), |o| after + o);
+        doc[i..j]
+            .lines()
+            .filter_map(|l| l.strip_prefix("| `"))
+            .filter_map(|r| r.split('(').next())
+            .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+            .map(str::to_string)
+            .collect()
+    };
+    let opt = table("**`Option[T]`");
+    let res = table("**`Result[T, E]`");
+    assert!(
+        opt.len() >= 8 && res.len() >= 8,
+        "reference_option_result_methods: parsed {} Option and {} Result methods \
+         out of docs/language-reference.md — the table anchors moved, and a short \
+         roster makes the one-sidedness witness vacuous.",
+        opt.len(),
+        res.len(),
+    );
+    (opt, res)
+}
+
+/// Assert the receiver-gate cell sets agree ACROSS LANES and that every cell is
+/// genuinely one-sided in the ratified reference. Called from both lanes' lints
+/// so either name leads a reader to the whole picture.
+fn assert_receiver_gate_lanes_agree(from_lane: &str) {
+    let (rust, sh) = receiver_gate_cells();
+    assert!(
+        rust.len() >= 4,
+        "{from_lane}: only {} `R26A_ARM_MARKER` cells parsed out of \
+         src/semantic/typecheck.rs — the extraction broke, and a short set makes \
+         the parity assertion below vacuous.",
+        rust.len(),
+    );
+    assert_eq!(
+        rust, sh,
+        "the wrong-receiver combinator gate DIVERGED between lanes (Core #9: a \
+         semantic change lands on every lane in the same round).\n  \
+         Rust `R26A_ARM_MARKER` cells: {rust:?}\n  \
+         SH   `R27C_ARM_MARKER` cells: {sh:?}\n\n\
+         A cell present on one lane only is a program the two compilers disagree \
+         about. Wire ALL THREE lanes in the SAME round — the ggdef production \
+         receiver-gate (`spec/ggdef/src/elaborate/mod.rs::elaborate_method`), the \
+         Rust arm, and the SH mirror in \
+         `tests/fixtures/self_host_typechecker/typecheck.gg` — and land a \
+         `combinator_<recv>_<method>_rejected.gg` reject fixture (RED-verified \
+         per Core #12) plus its `check_gg_fails` Rust and \
+         `self_host_lowerer_driver_rejects_combinator_*` SH integration tests. \
+         Removing a cell moves the Option / Result method tables in \
+         `docs/language-reference.md` and the ggdef gate too.",
+    );
+
+    // Third witness: the ratified reference. A rejected cell must be a method
+    // the OTHER type carries and this one does not — that IS what "one-sided"
+    // means, and the reference is where it is ratified.
+    const NOT_IN_REFERENCE: &[(&str, &str, &str)] = &[
+        ("Result", "flat_map",
+         "an `and_then` alias the reference's Option table does not list; the \
+          gate still rejects it on Result because the Option surface accepts it. \
+          If the alias is ever documented, strike this row."),
+    ];
+    let (opt, res) = reference_option_result_methods();
+    let mut not_one_sided: Vec<String> = Vec::new();
+    for (recv, method) in &rust {
+        if NOT_IN_REFERENCE.iter().any(|(r, m, _)| r == recv && m == method) {
+            continue;
+        }
+        let (other, own) = if recv == "Result" { (&opt, &res) } else { (&res, &opt) };
+        if !other.contains(method) || own.contains(method) {
+            not_one_sided.push(format!(
+                "({recv}, {method}): present in the OTHER type's reference table = {}, \
+                 in its OWN = {}",
+                other.contains(method),
+                own.contains(method),
+            ));
+        }
+    }
+    assert!(
+        not_one_sided.is_empty(),
+        "receiver-gate cell(s) are not ONE-SIDED in `docs/language-reference.md`:\n  \
+         {}\n\n\
+         The gate rejects a method because the OTHER prelude type carries it and \
+         this one does not. If the reference now lists it on BOTH, the cell is a \
+         false reject and must be retired from all three lanes; if it lists it on \
+         NEITHER, the reference is behind — move it, or declare the cell in \
+         NOT_IN_REFERENCE with its reason.",
+        not_one_sided.join("\n  "),
+    );
+}
+
+/// `lower_compound_assign`'s TARGET-SHAPE arms — the `if let Expr::<V> … =
+/// &target.node` chain — as variant name -> that arm's comment-stripped body.
+///
+/// ⚠ Per-ARM, deliberately. A count of prologue calls across the whole function
+/// is green under SUBSTITUTION: one arm loses its call while another gains a
+/// second, and the total never moves — which is the exact drift these guards
+/// exist to catch.
+fn compound_assign_target_arms() -> std::collections::BTreeMap<String, String> {
+    let src = fs::read_to_string("src/ir/lowering/stmts/assigns.rs")
+        .expect("read src/ir/lowering/stmts/assigns.rs");
+    let sig = "pub(super) fn lower_compound_assign(";
+    let start = src.find(sig).expect("locate lower_compound_assign");
+    let after = start + sig.len();
+    let end = src[after..].find("\nfn ").map_or(src.len(), |i| after + i);
+    // Comment lines are BLANKED, not dropped, so arm bodies keep their shape.
+    let lines: Vec<&str> = src[start..end]
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect();
+    let mut heads: Vec<(usize, String)> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let t = l.strip_prefix("    ").unwrap_or("");
+        let t = t.strip_prefix("} else ").unwrap_or(t);
+        let Some(rest) = t.strip_prefix("if let Expr::") else { continue };
+        let n: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !n.is_empty() {
+            heads.push((i, n));
+        }
+    }
+    assert!(
+        heads.len() >= 4,
+        "compound_assign_target_arms: only {} target-shape arm(s) found in \
+         `lower_compound_assign` — the `if let Expr::… = &target.node` chain \
+         moved, and every per-arm check below would be vacuous.",
+        heads.len(),
+    );
+    let mut out: std::collections::BTreeMap<String, String> = Default::default();
+    for (k, (i, name)) in heads.iter().enumerate() {
+        let j = heads.get(k + 1).map_or(lines.len(), |(n, _)| *n);
+        out.insert(name.clone(), lines[*i..j].join("\n"));
+    }
+    out
+}
+
+/// The mangled-name family registry, read out of `compiler/data/resources.gg`:
+/// every `MkPrefix("X__")` row paired with the `method_prefix` its
+/// `ResourceMetadata` declares (`gorget_array` / `gorget_heap` / `gorget_set` /
+/// `gorget_map` / `gorget_string`), or `None` where the row declares none.
+///
+/// This is the INDEPENDENT witness for "which collection families exist".
+/// A guard that instead sums occurrences over a prefix list hand-written in
+/// THIS file is green over its own class: a brand-new family's arm is not on
+/// the list, so it contributes zero and the sum never moves.
+fn resources_gg_families() -> std::collections::BTreeMap<String, Option<String>> {
+    let src = fs::read_to_string("compiler/data/resources.gg")
+        .expect("read compiler/data/resources.gg");
+    let mut out: std::collections::BTreeMap<String, Option<String>> = Default::default();
+    for entry in src.split("ResourceEntry(").skip(1) {
+        let (head, meta) = match entry.find("ResourceMetadata(") {
+            Some(i) => (&entry[..i], &entry[i..]),
+            None => continue,
+        };
+        // Entries are blank-line separated; bound the metadata scan there so
+        // the LAST entry does not absorb the trailing file prose.
+        let meta = meta.split("\n\n").next().unwrap_or(meta);
+        // `method_prefix` is the `Some("gorget_<word>")` with no further `_`;
+        // `Some("gorget_array_free")` / `_clone` are the drop/clone fns.
+        let mut method_prefix: Option<String> = None;
+        for (i, m) in meta.match_indices("Some(\"gorget_") {
+            let rest = &meta[i + m.len()..];
+            let Some(e) = rest.find('"') else { continue };
+            let word = &rest[..e];
+            if !word.is_empty() && !word.contains('_') {
+                method_prefix = Some(format!("gorget_{word}"));
+                break;
+            }
+        }
+        for (i, m) in head.match_indices("MkPrefix(\"") {
+            let rest = &head[i + m.len()..];
+            let Some(e) = rest.find('"') else { continue };
+            out.insert(rest[..e].to_string(), method_prefix.clone());
+        }
+    }
+    assert!(
+        out.len() >= 20,
+        "resources_gg_families: only {} `MkPrefix` rows parsed out of \
+         compiler/data/resources.gg — the extraction broke, and a short \
+         registry would make every derived roster below look complete.",
+        out.len(),
+    );
+    out
+}
+
+/// The SET of `X__` family prefixes a (comment-stripped) function body reaches
+/// via `.strip_prefix("X__")`.
+///
+/// ⚠ A SET, deliberately, not a count: the sum-over-a-hand-written-list shape
+/// this replaces cannot see a NEW family's arm at all (it is not on the list,
+/// so it adds zero), which is the exact direction those guards' docstrings
+/// claim to catch.
+fn strip_prefix_families(body: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (i, m) in body.match_indices(".strip_prefix(\"") {
+        let rest = &body[i + m.len()..];
+        let Some(e) = rest.find('"') else { continue };
+        let word = &rest[..e];
+        if word.ends_with("__") {
+            out.insert(word.to_string());
+        }
+    }
+    out
+}
 
 /// Every mangled monomorphized-type prefix the compiler emits. Adding a new
 /// builtin protocol with a `base_name: "X"` requires adding `X` here so the
@@ -740,50 +1289,67 @@ fn no_growth_in_phase_d_proxy_reads() {
 /// Baseline 2026-05-12: 3 (ArrayLiteral, TupleLiteral, DictLiteral).
 /// SetLiteral shares ArrayLiteral's AST node (parser convention; see
 /// `src/parser/expr.rs:1663`).
-fn count_container_literal_arms() -> usize {
-    let content = match fs::read_to_string("src/semantic/typecheck.rs") {
-        Ok(s) => s,
-        Err(_) => return 0,
-    };
-    // Scope the count to the `infer_expr` fn so unrelated match arms
-    // (resolver, rewrite, etc.) don't inflate it. infer_expr's literal
-    // arms are stable patterns at lines ~2212-2270 today.
-    let mut in_infer_expr = false;
-    let mut depth = 0;
-    let mut count = 0;
-    let arm_patterns = [
-        "Expr::ArrayLiteral(",
-        "Expr::TupleLiteral(",
-        "Expr::DictLiteral(",
-        "Expr::SetComprehension {",
-        "Expr::DictComprehension {",
-    ];
-    for line in content.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("//") {
-            continue;
-        }
-        if trimmed.starts_with("fn infer_expr(") {
-            in_infer_expr = true;
-            depth = 0;
-        }
-        if !in_infer_expr {
-            continue;
-        }
-        depth += line.matches('{').count() as i32;
-        depth -= line.matches('}').count() as i32;
-        if depth <= 0 && !trimmed.starts_with("fn infer_expr(") {
-            in_infer_expr = false;
-            continue;
-        }
-        for pat in &arm_patterns {
-            if trimmed.starts_with(pat) {
-                count += 1;
-                break;
-            }
+/// `Expr::<Variant>` -> that variant's ARM SOURCE inside `infer_expr`, for the
+/// arms at the outer `match`'s own indentation.
+///
+/// ⚠ The arm SET alone is vacuous here: `infer_expr`'s outer match has NO
+/// catch-all, so rustc already forces one arm per `Expr` variant and comparing
+/// the two sets would compare a thing to itself. What is NOT forced — and what
+/// this guard is about — is whether the arm PROPAGATES `decl_type_hint` into
+/// its nested `infer_expr` calls, so the bodies are what get returned.
+fn infer_expr_arm_bodies() -> std::collections::BTreeMap<String, String> {
+    let content = fs::read_to_string("src/semantic/typecheck.rs")
+        .expect("infer_expr_arm_bodies: cannot read src/semantic/typecheck.rs");
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("fn infer_expr("))
+        .expect("infer_expr_arm_bodies: `fn infer_expr(` moved — re-anchor this lint");
+    let mut depth: i32 = 0;
+    let mut end = lines.len();
+    for (i, l) in lines.iter().enumerate().skip(start) {
+        depth += l.matches('{').count() as i32;
+        depth -= l.matches('}').count() as i32;
+        if depth <= 0 && i > start {
+            end = i;
+            break;
         }
     }
-    count
+    // Arm heads sit at the outer match's own indentation.
+    const ARM_INDENT: &str = "            Expr::";
+    let mut heads: Vec<(usize, String)> = Vec::new();
+    for (i, l) in lines.iter().enumerate().take(end).skip(start) {
+        let Some(rest) = l.strip_prefix(ARM_INDENT) else { continue };
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            heads.push((i, name));
+        }
+    }
+    assert!(
+        heads.len() > 20,
+        "infer_expr_arm_bodies: only {} arm heads found — the indentation anchor \
+         broke, and a short arm map makes every disposition below look absent.",
+        heads.len(),
+    );
+    let mut out: std::collections::BTreeMap<String, String> = Default::default();
+    for (k, (i, name)) in heads.iter().enumerate() {
+        let j = heads.get(k + 1).map_or(end, |(n, _)| *n);
+        // ⚠ COMMENT-STRIPPED. The arm bodies here are read for what the CODE
+        // does; the TupleLiteral arm's own comment says the words
+        // `decl_type_hint`, so a raw body is green over a deleted propagation
+        // (measured: stripping the propagation left the guard passing).
+        let body: String = lines[*i..j]
+            .iter()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.insert(name.clone(), body);
+    }
+    out
 }
 
 /// Snag #11 sibling-guard ratchet (CLAUDE.md rule 4). Every auto-propagation
@@ -956,6 +1522,13 @@ fn d29_propagate_walker_arm_coverage() {
     // 2026-07-17 after the full `Expr::Move` sibling sweep. Counts include
     // pattern arms and constructions alike — the pin is on coverage presence,
     // not arm shape.
+    //
+    // ⚠ CODE LINES ONLY. This scan used to count RAW file text, and
+    // `src/semantic/typecheck.rs` was pinned at 7 where only 4 are arms — the
+    // other 3 were `///` prose naming the variant. That is green over its own
+    // class in both directions at once: editing a doc comment reddens it, and
+    // DELETING AN ARM while adding a prose mention keeps it green. Comment
+    // lines are skipped now and the pin is the measured code count.
     const EXPECTED: &[(&str, usize)] = &[
         // R41 T-FMT-A (2026-08-11): 1 → 2. `emits_leading_ownership_sigil`
         // adds a SECOND `Expr::Propagate` arm — the parse-order paren
@@ -1012,11 +1585,57 @@ fn d29_propagate_walker_arm_coverage() {
         // goes RED if it ever stops calling the chokepoint. Do not restore an
         // arm here; that would re-open the hole this closed.
         ("src/semantic/safety/validation.rs", 0),
-        ("src/semantic/typecheck.rs", 7),
+        // 2026-09-08: 7 -> 4 with NO source change — the three lost occurrences
+        // are `///` prose mentions the raw-text scan was counting as arms.
+        // Regenerate: grep -c 'Expr::Propagate' over the file's non-`//` lines.
+        ("src/semantic/typecheck.rs", 4),
     ];
+    // Files that mention the variant and are deliberately NOT walkers.
+    const NOT_A_WALKER: &[(&str, &str)] = &[
+        ("src/parser/tests.rs", "parser unit tests — they CONSTRUCT the node to \
+          assert the parse, and have no recursion obligation."),
+    ];
+
+    // Code-only occurrence count for one file.
+    let code_count = |file: &str| -> usize {
+        fs::read_to_string(file)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| l.matches("Expr::Propagate").count())
+            .sum()
+    };
+
+    // The table must be TOTAL over `src/`: a NEW walker in a NEW file is
+    // exactly the drift this pins, and a per-file table that only looks at the
+    // files already in it cannot see one.
+    let listed: BTreeSet<String> = EXPECTED
+        .iter()
+        .map(|(f, _)| (*f).to_string())
+        .chain(NOT_A_WALKER.iter().map(|(f, _)| (*f).to_string()))
+        .collect();
+    let mut unlisted: Vec<String> = Vec::new();
+    for path in walkdir_rs("src") {
+        let p = path.to_string_lossy().to_string();
+        if listed.contains(&p) {
+            continue;
+        }
+        if code_count(&p) > 0 {
+            unlisted.push(p);
+        }
+    }
+    assert!(
+        unlisted.is_empty(),
+        "these `src/` files reach `Expr::Propagate` in CODE and are in neither \
+         table: {unlisted:?}\n\n\
+         If the file holds an AST walker, add it to EXPECTED with its count and \
+         confirm the walker sees THROUGH the D29 transparent wrapper. If it \
+         merely constructs or matches the node with no recursion obligation, \
+         add it to NOT_A_WALKER WITH ITS REASON.",
+    );
+
     for (file, expected) in EXPECTED {
-        let content = fs::read_to_string(file).unwrap_or_default();
-        let count = content.matches("Expr::Propagate").count();
+        let count = code_count(file);
         assert_eq!(
             count, *expected,
             "`Expr::Propagate` arm coverage changed in {file}: {count} vs              {expected}.\n\n             The D29 mark is a TRANSPARENT wrapper: every AST walker that has a              `Expr::Move`/wrapper group must see THROUGH it, and `_ => {{}}`              catch-alls make a missing arm silent (missed use → conservative              clone; lost generic instance → undefined symbol; silent              under-capture).\n\n             ⚠ A DROP IS NOT AUTOMATICALLY A REGRESSION, and 'restore the              arm' is the WRONG remedy when the walker was ROUTED. Ask which              of these happened:\n             (a) The walker now DELEGATES its recursion to the child-enumeration              chokepoint `parser::visitor::visit_expr_children`. Then it has MORE              coverage, not less — the wrapper arm lives once, in              `src/parser/visitor.rs`, under rustc exhaustiveness. Lower this              file's count to match and let              `expr_stmt_walker_population_is_pinned` hold the routing: it              computes the `[ROUTED]` disposition from the walker's own body,              so the drop stays machine-checked rather than justified in prose.              Do NOT re-add an arm — that re-opens the hole the routing closed.\n             (b) An arm was genuinely deleted from a still-hand-rolled walker.              Restore it.\n             (c) The WHOLE WALKER was deleted, because the construct it existed              to find no longer exists in the language. Then there is no arm to              restore and nothing to route: lower the count and say WHICH walker              went, so the next reader can tell (c) from (b) — they have the              same shape in a diff and opposite remedies.\n\n             If you are adding a NEW wrapper Expr variant, extend the wrapper              group in EVERY file in this table (the sibling-sweep obligation),              then bump the counts.",
@@ -1191,14 +1810,28 @@ fn function_body_prescans_are_centralised() {
     // `context.rs`: the `LoweringContext::new` initializer + the raw reset's
     // own assignment (which matches both halves of the pattern; counted once).
     const EXPECTED_FUNCTION_STATE_DEFAULTS: usize = 2;
-    // 11 body-lowering paths + 4 synthetic builders that lower no user AST:
-    // `traits.rs` `emit_via_forwarding_function` (vtable thunk) and
-    // `exprs/spawn.rs` x3 (method-spawn / spawn / shared-token wrappers).
-    const EXPECTED_FUNCTION_BUILDER_NEW: usize = 15;
+    // ⚠ THE THIRD COUNT IS NOW A CLASSIFICATION. `== 15` only forced a manual
+    // audit; it could not say WHICH site was new, and it made every blameless
+    // synthetic builder cost a hand edit. Each `FunctionBuilder::new(` site
+    // either calls `begin_function_body` right after — the body-lowering
+    // contract — or its enclosing function is declared SYNTHETIC here, with the
+    // reason it lowers no user AST and owes no prescan.
+    const SYNTHETIC_BUILDERS: &[(&str, &str)] = &[
+        ("emit_via_forwarding_function",
+         "the vtable forwarding thunk: built entirely from typed metadata \
+          (`vtable_method.param_types` + a ptr-cast of `self_void`), it lowers no \
+          user AST, so there is no body to prescan."),
+        ("build_method_spawn_wrapper", "a spawn wrapper synthesized around an \
+          already-lowered callee; it lowers no user AST of its own."),
+        ("build_spawn_wrapper", "as build_method_spawn_wrapper."),
+        ("build_shared_token_wrapper", "as build_method_spawn_wrapper."),
+    ];
 
     let mut raw = Vec::new();
     let mut defaults = Vec::new();
     let mut builders = Vec::new();
+    let mut synthetic_seen: Vec<String> = Vec::new();
+    let mut unclassified: Vec<String> = Vec::new();
     for entry in walkdir_rs("src") {
         let text = fs::read_to_string(&entry).unwrap();
         let lines: Vec<&str> = text.lines().collect();
@@ -1218,11 +1851,49 @@ fn function_body_prescans_are_centralised() {
             // Either spelling of a wholesale per-function-state replacement.
             // Matched per LINE so the raw reset's own
             // `self.func_state = FunctionState::default();` counts once.
-            if line.contains("FunctionState::default()") || line.contains("func_state = ") {
+            // ⚠ `func_state =` WITHOUT the trailing space too: the old needle
+            // was `"func_state = "`, and this test's own doc admitted a
+            // `func_state=` spelling walked straight past it.
+            if line.contains("FunctionState::default()")
+                || line.contains("func_state =") && !line.contains("func_state ==")
+            {
                 defaults.push(format!("{}:{}", entry.display(), n + 1));
             }
             if n < cut && line.contains("FunctionBuilder::new(") {
                 builders.push(format!("{}:{}", entry.display(), n + 1));
+                // The site's own window.
+                let window = lines[n..(n + 20).min(lines.len())].join("\n");
+                if !window.contains("begin_function_body") {
+                    // Find the enclosing COLUMN-0 fn name.
+                    let name = lines[..=n]
+                        .iter()
+                        .rev()
+                        .find_map(|l| {
+                            let r = l.strip_prefix("pub ").unwrap_or(l);
+                            let r = r.strip_prefix("pub(crate) ").unwrap_or(r);
+                            let r = if r.starts_with("pub(") {
+                                r.split_once(") ").map_or(r, |(_, a)| a)
+                            } else {
+                                r
+                            };
+                            let r = r.strip_prefix("fn ")?;
+                            Some(
+                                r.chars()
+                                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                                    .collect::<String>(),
+                            )
+                        })
+                        .unwrap_or_default();
+                    if SYNTHETIC_BUILDERS.iter().any(|(f, _)| *f == name) {
+                        synthetic_seen.push(name);
+                    } else {
+                        unclassified.push(format!(
+                            "{}:{} (in `{name}`)",
+                            entry.display(),
+                            n + 1
+                        ));
+                    }
+                }
             }
         }
     }
@@ -1248,22 +1919,40 @@ fn function_body_prescans_are_centralised() {
          literal, `std::mem::take`). Route it through \
          `functions::begin_function_body`.",
     );
-    assert_eq!(
+    assert!(
+        builders.len() > 8,
+        "non-test `FunctionBuilder::new(` sites: only {} found — the walk or the \
+         `#[cfg(test)]` cut broke, and the classification below asserts nothing.",
         builders.len(),
-        EXPECTED_FUNCTION_BUILDER_NEW,
-        "non-test `FunctionBuilder::new(` sites changed: {builders:#?}\n\n\
+    );
+    assert!(
+        unclassified.is_empty(),
+        "these `FunctionBuilder::new(` sites neither call `begin_function_body` \
+         nor sit in a declared SYNTHETIC builder:\n  {}\n\n\
          A new GIR function is being built. Classify it:\n  \
          (a) it lowers a USER BODY -> it MUST call \
-         `functions::begin_function_body(ctx, FnBodyAst::…)`, or its body lowers \
-         with empty CoW prescans and a reallocating mutator becomes a \
-         use-after-free;\n  \
-         (b) it is SYNTHETIC (built from typed metadata, lowers no user AST, like \
-         the vtable forwarding thunk and the spawn wrappers) -> no prescan is \
-         owed.\n\
-         Then bump this constant WITH the classification in a comment. The two \
-         reset-site counts above cannot see a path that never resets, which is \
-         why this third count exists.",
+         `functions::begin_function_body(ctx, FnBodyAst::…)` right after \
+         constructing the builder, or its body lowers with EMPTY CoW prescans and \
+         a reallocating mutator becomes a use-after-free (nine of eleven paths \
+         were missing them once, and a generic-equip `&self` mutator was exactly \
+         that);\n  \
+         (b) it is SYNTHETIC — built from typed metadata, lowering no user AST, \
+         like the vtable forwarding thunk and the spawn wrappers -> no prescan is \
+         owed, and it goes in SYNTHETIC_BUILDERS WITH ITS REASON.\n\
+         The two reset-site counts above cannot see a path that never resets, \
+         which is why this third check exists.",
+        unclassified.join("\n  "),
     );
+    for (name, why) in SYNTHETIC_BUILDERS {
+        assert!(
+            synthetic_seen.iter().any(|s| s == name),
+            "`{name}` is declared a SYNTHETIC builder here ({why}) but no longer \
+             constructs a `FunctionBuilder` without `begin_function_body`. Either \
+             it now lowers a user body — in which case strike the row — or it is \
+             gone; a declaration that outlives its site is a hole the next \
+             synthetic builder walks through.",
+        );
+    }
 }
 
 /// Ratchet: the number of container-literal arms in `infer_expr` must
@@ -1478,27 +2167,92 @@ fn closure_shape_rows_have_a_callback_witness() {
 /// **If the count went DOWN:** lower BUDGET to lock the new floor.
 #[test]
 fn container_literal_arms_count() {
-    /// Expected container-literal-like arms in infer_expr:
-    /// - ArrayLiteral (includes set-shape `{a, b, c}` via parser convention)
-    /// - TupleLiteral
-    /// - DictLiteral
-    /// - DictComprehension
-    /// - SetComprehension
-    /// ListComprehension is intentionally excluded from the lint scope —
-    /// it's range-only today and doesn't admit nested-collection-literal
-    /// element expressions in practice.
-    /// Baseline 2026-05-12: 5.
-    const EXPECTED: usize = 5;
+    // Derived place 1 — the AST's own container/comprehension family:
+    // every `*Comprehension` variant, plus every `*Literal` whose payload
+    // opens with a `Vec<` of elements (`ArrayLiteral` — which carries the
+    // set-shape `{a, b, c}` too, by parser convention — `TupleLiteral`,
+    // `DictLiteral`). `StringLiteral`'s first field is the token, and
+    // `StructLiteral` is a struct variant, so neither is in the family.
+    let family: BTreeSet<String> = rust_enum_variants("src/parser/ast.rs", "Expr")
+        .into_iter()
+        .filter(|(n, rest)| {
+            n.ends_with("Comprehension") || (n.ends_with("Literal") && rest.starts_with("(Vec<"))
+        })
+        .map(|(n, _)| n)
+        .collect();
+    assert!(
+        family.len() >= 4,
+        "container_literal_arms_count: only {} container variants derived from \
+         `enum Expr` — the family predicate broke, and a short family asserts \
+         nothing. Found: {family:?}",
+        family.len(),
+    );
 
-    let count = count_container_literal_arms();
+    // The DISPOSITION table: does this arm propagate `decl_type_hint` into its
+    // nested `infer_expr` calls? The `false` rows carry their reason; the
+    // `true` rows are checked, not trusted.
+    //
+    // ⚠ The old shape pinned `EXPECTED = 5` against a five-entry pattern list
+    // in this file — `arm_patterns.len()`, so it compared a list to itself. And
+    // an arm-SET comparison would be vacuous the other way: `infer_expr`'s
+    // outer match has no catch-all, so rustc already forces an arm per variant.
+    // The propagation decision is the thing nothing else forces.
+    const HINT_PROPAGATION: &[(&str, bool, &str)] = &[
+        ("ArrayLiteral", false,
+         "the var-decl unify site's `is_collection_assignment` permissiveness \
+          coerces the element type, so the arm needs no hint of its own."),
+        ("TupleLiteral", true, ""),
+        ("DictLiteral", true, ""),
+        ("ListComprehension", false,
+         "range-only today: the element expression is derived from the range, so \
+          there is no literal here awaiting an expected type."),
+        ("DictComprehension", false,
+         "the K/V expressions are computed from the iterable, not literals \
+          awaiting a hint. If a nested collection literal ever needs coercing \
+          here, this row flips to `true`."),
+        ("SetComprehension", false, "as DictComprehension above."),
+    ];
+
+    let declared: BTreeSet<String> =
+        HINT_PROPAGATION.iter().map(|(n, _, _)| (*n).to_string()).collect();
     assert_eq!(
-        count, EXPECTED,
-        "Container-literal arm count in `infer_expr` changed: {count} vs expected {EXPECTED}.\n\n\
-         If a new arm was added, audit it for `decl_type_hint` propagation \
-         (DictLiteral / TupleLiteral pattern). If unneeded (e.g., outer var-decl \
-         `is_collection_assignment` permissiveness coerces), document the \
-         exception in the bump comment.\n\n\
-         If an arm was removed, lower EXPECTED in tests/lints.rs.",
+        declared, family,
+        "the container/comprehension family in `src/parser/ast.rs` and the \
+         disposition table in this lint disagree.\n\n\
+         A NEW container variant needs a row saying whether its `infer_expr` arm \
+         propagates `decl_type_hint` to its nested element expressions — rustc \
+         forces the ARM to exist (the outer match has no catch-all) but nothing \
+         forces that decision, and getting it wrong is a nested collection \
+         literal that silently fails to coerce. A RETIRED variant leaves a row \
+         behind; strike it in the same commit.",
+    );
+
+    // Derived place 2 — what the arms actually do.
+    let bodies = infer_expr_arm_bodies();
+    let mut wrong: Vec<String> = Vec::new();
+    for (variant, propagates, _reason) in HINT_PROPAGATION {
+        let body = bodies.get(*variant).unwrap_or_else(|| {
+            panic!(
+                "`infer_expr` has no arm for `Expr::{variant}` — rustc should have \
+                 refused that, so the arm-body extraction is what broke."
+            )
+        });
+        let actual = body.contains("decl_type_hint");
+        if actual != *propagates {
+            wrong.push(format!(
+                "Expr::{variant}: declared propagates={propagates}, measured={actual}"
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "`infer_expr` container-arm hint propagation disagrees with the declared \
+         disposition:\n  {}\n\n\
+         MEASURED TRUE, DECLARED FALSE: the arm gained propagation — flip the row \
+         and drop its reason. MEASURED FALSE, DECLARED TRUE: the arm LOST it, and \
+         a nested collection literal in that position now infers without its \
+         expected type. Restore the propagation; do not flip the row to match.",
+        wrong.join("\n  "),
     );
 }
 
@@ -2278,7 +3032,23 @@ fn sh_amp_operand_reject_sites_count() {
          (Core #10).",
     );
 
-    const EXPECTED_STRIP: usize = 4;
+    // The ITERABLE POSITIONS, derived from the AST that declares them: the
+    // `SFor` statement plus every comprehension expression. A pinned `4` here
+    // could not see a NEW comprehension form arriving, which is the case the
+    // guard is for.
+    let iterable_positions: BTreeSet<String> =
+        gg_enum_variants("tests/fixtures/self_host_typechecker/ast.gg", "Expr")
+            .into_iter()
+            .map(|(n, _)| n)
+            .filter(|n| n.ends_with("Comp"))
+            .chain(std::iter::once("SFor".to_string()))
+            .collect();
+    assert!(
+        iterable_positions.len() >= 3,
+        "sh_amp_operand_reject_sites_count: only {} iterable position(s) derived \
+         from ast.gg — the extraction broke. Found: {iterable_positions:?}",
+        iterable_positions.len(),
+    );
     // Count call sites (`check_iterable_maybe_amp(`) but EXCLUDE the definition
     // line (`void check_iterable_maybe_amp(`).
     let strip_calls = body
@@ -2287,14 +3057,15 @@ fn sh_amp_operand_reject_sites_count() {
         .filter(|l| !l.trim_start().starts_with("void check_iterable_maybe_amp("))
         .count();
     assert_eq!(
-        strip_calls, EXPECTED_STRIP,
-        "SH `check_iterable_maybe_amp` call-site count changed: {strip_calls} vs \
-         expected {EXPECTED_STRIP}. Every iterable position (SFor + 3 comprehension \
-         arms) must route through this ONE helper — a new iterable site that walks \
-         its iterable inline (bypassing the strip) would false-flag a legit \
-         `&`-BOUNDARY iterable as an operand-position reject. If a legitimate new \
-         iterable arm was added, wire it through the helper and bump EXPECTED. If \
-         an arm was removed, lower EXPECTED — do NOT inline the strip.",
+        strip_calls,
+        iterable_positions.len(),
+        "SH `check_iterable_maybe_amp` call-site count is {strip_calls}, but \
+         `ast.gg` declares {} iterable positions ({iterable_positions:?}).\n\n\
+         Every iterable position must route through this ONE helper — a new \
+         iterable site that walks its iterable inline (bypassing the strip) \
+         false-flags a legit `&`-BOUNDARY iterable as an operand-position reject. \
+         Wire the new arm through the helper; do NOT inline the strip.",
+        iterable_positions.len(),
     );
 }
 
@@ -2584,39 +3355,55 @@ fn self_host_safety_place_probes_are_structural() {
 ///     re-opened; restore the call, do not lower EXPECTED.
 #[test]
 fn compound_assign_root_materialize_arms_count() {
-    let src = fs::read_to_string("src/ir/lowering/stmts/assigns.rs")
-        .expect("read src/ir/lowering/stmts/assigns.rs");
-    let sig = "pub(super) fn lower_compound_assign(";
-    let start = src.find(sig).expect("locate lower_compound_assign");
-    // Body ends at the next top-level `fn ` (compound_op_to_gir).
-    let after_sig = start + sig.len();
-    let end = src[after_sig..]
-        .find("\nfn ")
-        .map(|i| after_sig + i)
-        .unwrap_or(src.len());
-    // Strip line comments so the ratchet reasons about EXECUTABLE code only —
-    // the arm comments legitimately mention the helper name in prose.
-    let body: String = src[start..end]
-        .lines()
-        .map(|l| l.split("//").next().unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join("\n");
+    // The PROJECTED-mutation arms: the target names a place INSIDE a root, so
+    // the root must be materialized FIRST or the write goes THROUGH the
+    // caller's storage (matcluster #1). The other shapes ARE their own root.
+    const PROJECTED: &[(&str, &str)] = &[
+        ("FieldAccess", "`obj.field OP= x`"),
+        ("Index", "`obj[i] OP= x`"),
+        ("TupleFieldAccess", "`t.0 OP= x` — a tuple field is a projection like a struct field"),
+    ];
+    const NOT_PROJECTED: &[(&str, &str)] = &[
+        ("Identifier", "the target IS the root; there is nothing to materialize."),
+        ("Deref", "`*p OP= x` writes THROUGH the pointer by design — the pointee \
+          is not a private copy, and materializing the root would break that."),
+    ];
 
-    // One call per projected-mutation arm: FieldAccess + Index + TupleFieldAccess
-    // = 3 (the TupleFieldAccess arm `t.0 OP= v` was added with Target-2; a tuple
-    // field is a projected mutation exactly like a struct field, so it too must
-    // materialize the root FIRST on a bare-value-param / alias root).
-    const EXPECTED: usize = 3;
-    let calls = body.matches("materialize_assign_target_root(").count();
+    let arms = compound_assign_target_arms();
+    let declared: BTreeSet<String> = PROJECTED
+        .iter()
+        .chain(NOT_PROJECTED.iter())
+        .map(|(n, _)| (*n).to_string())
+        .collect();
+    let have: BTreeSet<String> = arms.keys().cloned().collect();
     assert_eq!(
-        calls, EXPECTED,
-        "`materialize_assign_target_root` call count in `lower_compound_assign` \
-         changed: {calls} vs expected {EXPECTED}. Every PROJECTED-mutation compound \
-         arm (`obj.field OP= x`, `obj[i] OP= x`) must materialize the root FIRST so \
-         a bare-value-param / alias / element root gets a private owned copy instead \
-         of writing THROUGH the caller (matcluster #1). If you added a legitimate \
-         new projected arm, add the prologue and bump EXPECTED with a justification; \
-         if a prologue was removed, RESTORE it — do not lower EXPECTED.",
+        declared, have,
+        "`lower_compound_assign`'s target-shape arms and the classification here \
+         disagree.\n  declared: {declared:?}\n  in source: {have:?}\n\n\
+         A NEW target shape must be classified: does it name a place INSIDE a \
+         root (then it needs the `materialize_assign_target_root` prologue) or is \
+         it its own root? Getting that wrong writes through the caller's storage.",
+    );
+
+    let mut wrong: Vec<String> = Vec::new();
+    for (variant, what) in PROJECTED {
+        if !arms[*variant].contains("materialize_assign_target_root(") {
+            wrong.push(format!("{variant} ({what}) has NO root prologue"));
+        }
+    }
+    for (variant, why) in NOT_PROJECTED {
+        if arms[*variant].contains("materialize_assign_target_root(") {
+            wrong.push(format!("{variant} materializes a root, but {why}"));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "`lower_compound_assign` root-materialization is wrong per arm:\n  {}\n\n\
+         Every PROJECTED-mutation arm must materialize the root FIRST, so a \
+         bare-value-param / alias / element root gets a private owned copy \
+         instead of writing THROUGH the caller (matcluster #1). RESTORE a missing \
+         prologue — do not reclassify the arm to make this pass.",
+        wrong.join("\n  "),
     );
 }
 
@@ -2754,18 +3541,59 @@ fn compound_assign_resource_read_centralized() {
         "emit_compound_place_rmw must be defined exactly once (the shared \
          resource-safe compound read-modify-write); found {def_count}.",
     );
-    // All four place-based compound arms call it with the `(ctx, builder, …)`
-    // shape; the definition uses `(\n    ctx,` so it is not counted here.
-    let call_count = src.matches("emit_compound_place_rmw(ctx, builder,").count();
+
+    // ⚠ PER ARM, not a total. The old shape pinned 4 and matched the exact
+    // prefix `emit_compound_place_rmw(ctx, builder,`, so a REFORMATTED call
+    // vanished from the census silently, and a total is green under
+    // substitution anyway.
+    const ROUTES_THROUGH_HELPER: &[(&str, &str)] = &[
+        ("FieldAccess", "the resolved-place arm AND its `.get()`-Ref None-fallback"),
+        ("TupleFieldAccess", "the tuple-field place arm"),
+        ("Deref", "the pointee place arm"),
+    ];
+    const OWN_PATH: &[(&str, &str)] = &[
+        ("Identifier", "a whole-local compound assign — no place to read through."),
+        ("Index", "resolves and writes the element place itself, on the \
+          index-lowering path; it does not take the shared field-place route."),
+    ];
+
+    let arms = compound_assign_target_arms();
+    let declared: BTreeSet<String> = ROUTES_THROUGH_HELPER
+        .iter()
+        .chain(OWN_PATH.iter())
+        .map(|(n, _)| (*n).to_string())
+        .collect();
+    let have: BTreeSet<String> = arms.keys().cloned().collect();
     assert_eq!(
-        call_count, 4,
-        "expected EXACTLY 4 callers of emit_compound_place_rmw (the FieldAccess \
-         Some arm, the `.get()`-Ref None-fallback, the TupleFieldAccess arm, and \
-         the Deref arm), found {call_count}. A place-based compound-assign arm \
-         must NOT re-open-code the current-value read — a resource field read via \
-         an intermediate `assign(cur, Copy(field_place))` trips the resource-move \
-         validator (\"shallow copy of resource\"), the R-STRING ICE. Route the arm \
-         through emit_compound_place_rmw (Core #4, one fix all siblings).",
+        declared, have,
+        "`lower_compound_assign`'s target-shape arms and the routing \
+         classification here disagree.\n  declared: {declared:?}\n  \
+         in source: {have:?}\n\n\
+         A NEW place-based arm must NOT re-open-code the current-value read: a \
+         resource field read via an intermediate `assign(cur, Copy(field_place))` \
+         trips the resource-move validator (\"shallow copy of resource\"), the \
+         R-STRING ICE. Route it through `emit_compound_place_rmw` (Core #4).",
+    );
+
+    let mut wrong: Vec<String> = Vec::new();
+    for (variant, what) in ROUTES_THROUGH_HELPER {
+        if !arms[*variant].contains("emit_compound_place_rmw(") {
+            wrong.push(format!("{variant} ({what}) no longer calls the helper"));
+        }
+    }
+    for (variant, why) in OWN_PATH {
+        if arms[*variant].contains("emit_compound_place_rmw(") {
+            wrong.push(format!(
+                "{variant} now calls the helper, but is declared as its own path: {why}"
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "`lower_compound_assign` resource-read routing is wrong per arm:\n  {}\n\n\
+         A place-based compound-assign arm must not open-code the \
+         read-modify-write; route it through `emit_compound_place_rmw`.",
+        wrong.join("\n  "),
     );
 }
 
@@ -3111,12 +3939,21 @@ fn collection_elem_drop_routes_through_type_drop_fns() {
 ///
 /// Two structural assertions:
 ///  1. The consuming-mutator name list (`"push" | "add" | "extend" | "send" |
-///     "push_back" | "push_front"`) appears exactly THREE times — the value-arg
-///     type-hint arm, the consuming-position arm, and the trait-object pack's
-///     destination arm. A new collection-mutator name (or a copy of the arm)
-///     forces an audit: is it a value-position HINT only (like
-///     `fill`/`get_or_put`, which must NOT consume), or a true consume? — then
-///     re-pin.
+///     "push_back" | "push_front"`) appears in exactly THREE arms — the
+///     value-arg type-hint arm, the consuming-position arm, and the
+///     trait-object pack's destination arm — and every one of the three carries
+///     the SAME roster, read as a SET. A new collection-mutator name (or a copy
+///     of the arm) forces an audit: is it a value-position HINT only (like
+///     `get_or_put`, which must NOT consume), a HINT *and* a consume (like
+///     `fill`, whose last arg IS an ownership boundary — `gorget_array_fill`
+///     gives ONE slot the caller's value and clones the other n-1), or a true
+///     whole-arg consume? — then re-pin.
+///     ⚠ Read the arms as SETS, never as an occurrence count of one exact
+///     alternation spelling: APPENDING a name leaves the old spelling standing
+///     as a PREFIX of the longer alternation, so a count stays put and the
+///     audit above never happens. (`fill` was described here as hint-only for
+///     as long as the count shape held; it has carried its own consuming arm
+///     since, and nothing noticed.)
 ///
 ///     AUDIT OF THE THIRD ARM (`pack_dest`, added 2026-09-04 by the R49 M2
 ///     output-review fold): **HINT ONLY, never a consume decision.** It answers
@@ -3154,19 +3991,143 @@ fn consuming_position_name_match_is_gir_gated() {
     let src = fs::read_to_string("src/ir/lowering/exprs/methods.rs")
         .expect("read src/ir/lowering/exprs/methods.rs");
 
-    // (1) The consuming-mutator name list appears in exactly two arms:
-    //     the value-arg type-hint arm + the consuming-position arm.
+    let lines: Vec<&str> = src.lines().collect();
+
+    // (1) The consuming-mutator name list appears in exactly three arms:
+    //     the value-arg type-hint arm, the consuming-position arm, and the
+    //     trait-object pack's destination arm.
+    //
+    // ⚠ Read as a SET per arm, never as an occurrence count of ONE exact
+    // spelling. The count shape is green over this lint's own class: APPENDING
+    // a mutator name leaves the pinned spelling standing as a PREFIX of the
+    // longer alternation, so the count stays at 3 and the hint-vs-consume
+    // audit the docstring promises never happens.
     const EXPECTED_ARMS: usize = 3;
-    let arms = src
-        .matches("\"push\" | \"add\" | \"extend\" | \"send\" | \"push_back\" | \"push_front\"")
-        .count();
+    let push_arms: Vec<(usize, BTreeSet<String>)> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| !l.trim_start().starts_with("//") && l.contains("\"push\" |"))
+        .map(|(i, l)| (i + 1, quoted_words(l)))
+        .collect();
     assert_eq!(
-        arms, EXPECTED_ARMS,
+        push_arms.len(),
+        EXPECTED_ARMS,
         "consuming-mutator name-list arm count in `lower_method_call` changed: \
-         {arms} vs expected {EXPECTED_ARMS}. A new collection-mutator name (or a \
-         duplicated arm) needs a hint-vs-consume audit (see the \
-         `value_arg_idx_for_method` notes in methods.rs) and a re-pin here.",
+         {} vs expected {EXPECTED_ARMS} (at {:?}). A duplicated arm needs a \
+         hint-vs-consume audit (see the `value_arg_idx_for_method` notes in \
+         methods.rs) and a re-pin here.",
+        push_arms.len(),
+        push_arms.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
     );
+    // The roster, declared once here and compared against EVERY arm — so an
+    // added or removed name names ITSELF in the failure rather than moving a
+    // number, and a name added to one arm only is a cross-arm drift.
+    const CONSUMING_MUTATORS: [&str; 6] =
+        ["push", "add", "extend", "send", "push_back", "push_front"];
+    let roster: BTreeSet<String> =
+        CONSUMING_MUTATORS.iter().map(|s| (*s).to_string()).collect();
+    for (line_no, names) in &push_arms {
+        assert_eq!(
+            names, &roster,
+            "the consuming-mutator name list at \
+             `src/ir/lowering/exprs/methods.rs:{line_no}` no longer carries the \
+             pinned roster.\n  arm : {names:?}\n  pinned: {roster:?}\n\n\
+             A NEW collection-mutator name needs a hint-vs-consume audit: is it a \
+             value-position HINT only (like `fill`/`get_or_put`, which must NOT \
+             consume), or a true consume? Answer that, put the name in EVERY one \
+             of the {EXPECTED_ARMS} arms it belongs in, and re-pin \
+             CONSUMING_MUTATORS.",
+        );
+    }
+
+    // (1b) `get_or_put` is a value-position type HINT and nothing else: it
+    //      appears in the two hint arms and must never reach the CONSUMING
+    //      match, where it would force-clone the call-site temp — the
+    //      gorget-arena snag #2 shape, one family over. `fill` is NOT in that
+    //      class: it carries its own consuming arm (only the VALUE slot, the
+    //      last arg, consumes; see the `fill(n, v)` comment in methods.rs), so
+    //      it is required in BOTH places. This was prose in the docstring and
+    //      checked by nothing.
+    const HINT_ONLY: [&str; 1] = ["get_or_put"];
+    const HINT_AND_CONSUME: [&str; 1] = ["fill"];
+    let gate_line = lines
+        .iter()
+        .position(|l| {
+            l.contains("let consuming_positions_by_name: Vec<usize> = if is_gir_method")
+        })
+        .expect("the `consuming_positions_by_name` anchor moved — re-anchor this lint");
+    // The consuming match runs from that binding to the `};` that closes it.
+    let close = lines
+        .iter()
+        .enumerate()
+        .skip(gate_line + 1)
+        .find(|(_, l)| l.trim_end() == "        };")
+        .map(|(i, _)| i)
+        .expect("the `consuming_positions_by_name` binding's `};` moved — re-anchor");
+    let consuming_region: String = lines[gate_line..=close].join("\n");
+    assert!(
+        consuming_region.contains("\"push\" |") && consuming_region.contains("\"put\" |"),
+        "consuming_position_name_match_is_gir_gated: the consuming region \
+         (methods.rs:{}..{}) no longer holds the mutator match — the check \
+         below would pass vacuously. Re-anchor it.",
+        gate_line + 1,
+        close + 1,
+    );
+    for n in HINT_ONLY {
+        assert!(
+            !consuming_region.contains(&format!("\"{n}\"")),
+            "HINT-ONLY method `{n}` reached the CONSUMING match at \
+             `src/ir/lowering/exprs/methods.rs:{}..{}`. It answers only 'what \
+             type does this value slot hold'; consuming it force-clones the \
+             call-site temp (gorget-arena snag #2, one family over).",
+            gate_line + 1,
+            close + 1,
+        );
+    }
+    for n in HINT_AND_CONSUME {
+        assert!(
+            consuming_region.contains(&format!("\"{n}\"")),
+            "`{n}` LEFT the consuming match at \
+             `src/ir/lowering/exprs/methods.rs:{}..{}`. Its value slot is a real \
+             ownership boundary (`gorget_array_fill` gives ONE slot the caller's \
+             value and clones the other n-1), so dropping the arm silently \
+             borrows where the runtime takes ownership. Restore it.",
+            gate_line + 1,
+            close + 1,
+        );
+    }
+    // Both names are value-arg type HINTS, so both must also be in the hint
+    // arms ABOVE the gate — without the hint the slot's type is unknown and
+    // the arg lowers against the wrong destination type.
+    let hint_arms: Vec<(usize, BTreeSet<String>)> = lines
+        .iter()
+        .enumerate()
+        .take(gate_line)
+        .filter(|(_, l)| !l.trim_start().starts_with("//") && l.contains("\"put\" |"))
+        .map(|(i, l)| (i + 1, quoted_words(l)))
+        .collect();
+    assert!(
+        !hint_arms.is_empty(),
+        "consuming_position_name_match_is_gir_gated: no `put`/`set`/`insert` \
+         HINT arm found above the gate — the check below would pass vacuously.",
+    );
+    for (line_no, names) in &hint_arms {
+        let missing: Vec<&str> = HINT_ONLY
+            .iter()
+            .chain(HINT_AND_CONSUME.iter())
+            .copied()
+            .filter(|n| !names.contains(*n))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the value-arg type-HINT arm at \
+             `src/ir/lowering/exprs/methods.rs:{line_no}` lost {missing:?} \
+             (arm: {names:?}). Without the hint the value slot's type is \
+             unknown and the arg lowers against the wrong destination type — \
+             restore it, or retire the name from HINT_ONLY / HINT_AND_CONSUME \
+             here in the same commit.",
+        );
+    }
 
     // (2) The consuming-position match MUST be gated on the typed callee
     //     identity `is_gir_method` — NOT the method name (Core #2). Dropping the
@@ -3862,40 +4823,54 @@ fn visit_rs_files(dir: &Path, f: &mut dyn FnMut(&Path)) {
 /// **If an arm was removed:** lower EXPECTED to lock the new floor.
 #[test]
 fn self_host_comprehension_dispatch_arms_count() {
-    /// Baseline 2026-06-14: 3 (EListComp + ESetComp + EDictComp).
-    const EXPECTED: usize = 3;
+    // Derived place 1 — the comprehension variants the SH AST declares.
+    // (`enum Expr` in ast.gg; the `E*Comp` family.)
+    let family: BTreeSet<String> =
+        gg_enum_variants("tests/fixtures/self_host_lowerer/ast.gg", "Expr")
+            .into_iter()
+            .map(|(n, _)| n)
+            .filter(|n| n.ends_with("Comp"))
+            .collect();
+    assert!(
+        family.len() >= 2,
+        "self_host_comprehension_dispatch_arms_count: only {} `E*Comp` variants \
+         derived from ast.gg's `enum Expr` — the extraction broke, and a short \
+         family asserts nothing. Found: {family:?}",
+        family.len(),
+    );
 
+    // Derived place 2 — the arms lower_expr.gg actually dispatches.
     // lower_expr.gg lives ONLY in self_host_lowerer (real file, not symlinked),
     // so no double-count guard is needed.
-    let content =
-        fs::read_to_string("tests/fixtures/self_host_lowerer/lower_expr.gg").unwrap_or_default();
-    let mut arms = 0usize;
+    let content = fs::read_to_string("tests/fixtures/self_host_lowerer/lower_expr.gg")
+        .expect("cannot read tests/fixtures/self_host_lowerer/lower_expr.gg");
+    let mut arms: BTreeSet<String> = Default::default();
     for line in content.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with('#') {
             continue; // .gg comments
         }
-        if trimmed.starts_with("case EListComp(")
-            || trimmed.starts_with("case ESetComp(")
-            || trimmed.starts_with("case EDictComp(")
-        {
-            arms += 1;
+        let Some(rest) = trimmed.strip_prefix("case E") else { continue };
+        let name: String = std::iter::once('E')
+            .chain(rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_'))
+            .collect();
+        if rest[name.len() - 1..].starts_with(['(', ':']) {
+            arms.insert(name);
         }
     }
 
-    assert_eq!(
-        arms, EXPECTED,
-        "Self-host `lower_expr_inner` comprehension dispatch-arm count changed: \
-         {arms} vs {EXPECTED}.\n\n\
-         The comprehension dispatch (EListComp/ESetComp/EDictComp) is an enumerated \
-         class. A new `E…Comp` variant MUST route through a shared \
-         `lower_*_comprehension` helper — NOT fall into the `else:` Unit stub (which \
-         silently miscompiles to a Unit local and CRASHES the comp through the \
-         self-host). Routing through the helper is also what makes the new arm's \
-         accumulator mint from the MATERIALIZED RESULT ELEMENT (`comp_open` … \
-         `comp_close` → `comp_mint_tid`/`comp_mint_ctor`) instead of from the \
-         source element or a scalar default. \
-         Bump EXPECTED with a justification, or lower it if an arm was removed.",
+    let missing: Vec<&String> = family.difference(&arms).collect();
+    assert!(
+        missing.is_empty(),
+        "Self-host `lower_expr_inner` has NO dispatch arm for the comprehension \
+         variant(s) {missing:?}, which ast.gg's `enum Expr` declares.\n\n\
+         The comprehension dispatch is an enumerated class. A new `E…Comp` variant \
+         MUST route through a shared `lower_*_comprehension` helper — NOT fall into \
+         the `else:` Unit stub, which silently miscompiles to a Unit local and \
+         CRASHES the comp through the self-host. Routing through the helper is also \
+         what makes the new arm's accumulator mint from the MATERIALIZED RESULT \
+         ELEMENT (`comp_open` … `comp_close` → `comp_mint_tid`/`comp_mint_ctor`) \
+         instead of from the source element or a scalar default.",
     );
 }
 
@@ -4256,24 +5231,17 @@ fn self_host_accumulator_producer_sets() {
 /// the new floor.
 #[test]
 fn self_host_generic_discovery_expr_arms_count() {
-    /// Baseline 2026-07-03 (R37-T2): 35 top-level `case E…` arms in
-    /// `discover_generic_calls_expr` — the complete sub-expr-bearing self-host
-    /// `Expr` set. Counts the function's TOP-LEVEL match arms only (8-space
-    /// indent); the nested `case EIdentifier` (inside the ECall arm) and the
-    /// `case Some|None` sub-matches are deeper-indented and excluded.
-    // 2026-07-17 (D29): 35 → 36 — the `EPropagate` transparent wrapper arm
-    // (recurses into its inner; the mark carries no semantics of its own).
-    // 2026-08-07 (D25 Round XXXIV Track C2): 36 → 35 — the `EFaultCatch` arm
-    // vanished when the lexical fault-catch form was removed.
-    // 2026-09-03 (R49 Track E): 35 → 34 — the `EImplicitClosure` arm vanished
-    // with the implicit-`it` closure keyword. `EIt` was a LEAF (`else: pass`),
-    // so only one arm went, and the leaf set shrank from 9 to 8.
-    const EXPECTED: usize = 34;
+    // The 8 LEAF variants: no sub-node to walk into, so `else: pass` is right.
+    const LEAF_EXPRS: &[(&str, &str)] = &[
+        ("EIntLiteral", "leaf"), ("EFloatLiteral", "leaf"), ("EBoolLiteral", "leaf"),
+        ("EStringLiteral", "leaf"), ("ECharLiteral", "leaf"), ("ENoneLiteral", "leaf"),
+        ("EIdentifier", "leaf"), ("ESelfExpr", "leaf"),
+    ];
 
     // lower_generics.gg lives ONLY in self_host_lowerer (real file, not
     // symlinked), so no double-count guard is needed.
-    let content =
-        fs::read_to_string("tests/fixtures/self_host_lowerer/lower_generics.gg").unwrap_or_default();
+    let content = fs::read_to_string("tests/fixtures/self_host_lowerer/lower_generics.gg")
+        .expect("cannot read tests/fixtures/self_host_lowerer/lower_generics.gg");
 
     // Scope to the `discover_generic_calls_expr` fn body: from its signature to
     // the next top-level `void ` definition (`discover_generic_calls_type`).
@@ -4284,34 +5252,17 @@ fn self_host_generic_discovery_expr_arms_count() {
         .find("\nvoid discover_generic_calls_type(")
         .map(|o| start + o)
         .expect("self_host_generic_discovery_expr_arms_count: end of discover_generic_calls_expr not found");
-    let window = &content[start..end];
-
-    let mut arms = 0usize;
-    for line in window.lines() {
-        if line.trim_start().starts_with('#') {
-            continue; // .gg comments
-        }
-        // Top-level match arms are indented EXACTLY 8 spaces. `strip_prefix`
-        // with the 8-space prefix rejects the deeper-indented nested arms
-        // (`case EIdentifier` at 20 spaces, `case Some|None` at 12 spaces).
-        if line.strip_prefix("        case E").is_some() {
-            arms += 1;
-        }
-    }
-
-    assert_eq!(
-        arms, EXPECTED,
-        "Self-host `discover_generic_calls_expr` arm count changed: \
-         {arms} vs {EXPECTED}.\n\n\
-         The generic-instance discovery walker must visit EVERY \
-         sub-expression-bearing `Expr` variant — a variant left in `else: pass` \
-         is never walked, so a generic-struct ctor nested inside it is never \
-         discovered → an empty `{{char __pad}}` mono struct → `[bug] I64(0)` on \
-         a later field read. A new arm MUST recurse into its sub-exprs (and scan \
-         any type-args via the shared `discover_generic_calls_type` walker) — \
-         never register from a non-type-arg field (`EStructLiteral`'s middle \
-         `Vector[String]` is FIELD NAMES). Bump EXPECTED with a justification, \
-         or lower it if an arm was removed.",
+    // Top-level match arms are indented EXACTLY 8 spaces; the nested
+    // `case EIdentifier` (inside the ECall arm, 20 spaces) and the
+    // `case Some|None` sub-matches (12 spaces) are deeper and excluded.
+    let arms = gg_walker_arms(&content[start..end], 8, 'E');
+    assert_gg_walker_covers_ast(
+        "self-host `discover_generic_calls_expr`",
+        "tests/fixtures/self_host_lowerer/ast.gg",
+        "Expr",
+        LEAF_EXPRS,
+        &arms,
+        "discover_generic_calls_",
     );
 }
 
@@ -4342,25 +5293,17 @@ fn self_host_generic_discovery_expr_arms_count() {
 /// **If an arm was removed:** lower EXPECTED to lock the new floor.
 #[test]
 fn self_host_mutinf_scan_expr_arms_count() {
-    /// Baseline 2026-07-04 (R38-T-B): 35 top-level `case E…` arms in
-    /// `mutinf_scan_expr` — the complete sub-expr-bearing self-host `Expr` set,
-    /// identical to `discover_generic_calls_expr`. Counts the function's
-    /// TOP-LEVEL match arms only (8-space indent); the nested `case ESelfExpr`
-    /// (inside the EMethodCall receiver sub-matches, 20-space indent) and the
-    /// `case Some|None` sub-matches (12-space indent) are excluded.
-    // 2026-07-17 (D29): 35 → 36 — the `EPropagate` transparent wrapper arm
-    // (recurses into its inner; the mark carries no semantics of its own).
-    // 2026-08-07 (D25 Round XXXIV Track C2): 36 → 35 — the `EFaultCatch` arm
-    // vanished when the lexical fault-catch form was removed.
-    // 2026-09-03 (R49 Track E): 35 → 34 — the `EImplicitClosure` arm vanished
-    // with the implicit-`it` closure keyword. `EIt` was a LEAF (`else: pass`),
-    // so only one arm went, and the leaf set shrank from 9 to 8.
-    const EXPECTED: usize = 34;
+    // The 8 LEAF variants: no sub-node to walk into, so `else: pass` is right.
+    const LEAF_EXPRS: &[(&str, &str)] = &[
+        ("EIntLiteral", "leaf"), ("EFloatLiteral", "leaf"), ("EBoolLiteral", "leaf"),
+        ("EStringLiteral", "leaf"), ("ECharLiteral", "leaf"), ("ENoneLiteral", "leaf"),
+        ("EIdentifier", "leaf"), ("ESelfExpr", "leaf"),
+    ];
 
     // lower.gg lives ONLY in self_host_lowerer (real file, not symlinked), so
     // no double-count guard is needed.
-    let content =
-        fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg").unwrap_or_default();
+    let content = fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg")
+        .expect("cannot read tests/fixtures/self_host_lowerer/lower.gg");
 
     // Scope to the `mutinf_scan_expr` fn body: from its signature to the next
     // top-level `bool ` definition (`mutinf_scan_stmts`).
@@ -4371,30 +5314,16 @@ fn self_host_mutinf_scan_expr_arms_count() {
         .find("\nbool mutinf_scan_stmts(")
         .map(|o| start + o)
         .expect("self_host_mutinf_scan_expr_arms_count: end of mutinf_scan_expr not found");
-    let window = &content[start..end];
-
-    let mut arms = 0usize;
-    for line in window.lines() {
-        if line.trim_start().starts_with('#') {
-            continue; // .gg comments
-        }
-        // Top-level match arms are indented EXACTLY 8 spaces; deeper-indented
-        // nested `case E…` arms are rejected by the 8-space prefix.
-        if line.strip_prefix("        case E").is_some() {
-            arms += 1;
-        }
-    }
-
-    assert_eq!(
-        arms, EXPECTED,
-        "Self-host `mutinf_scan_expr` arm count changed: {arms} vs {EXPECTED}.\n\n\
-         The `&self` mutation-inference walker must visit EVERY \
-         sub-expression-bearing `Expr` variant — a variant left in `else: pass` \
-         is never walked, so a self-mutation hiding inside it is never detected \
-         → the method is mis-classified read-only → the named-receiver CoW gate \
-         under-materializes → a write-through divergence from Rust. A new arm \
-         MUST recurse into its sub-exprs. Bump EXPECTED with a justification, or \
-         lower it if an arm was removed.",
+    // 8-space indent = the top-level match; the nested `case ESelfExpr` inside
+    // the EMethodCall receiver sub-matches (20 spaces) is deeper and excluded.
+    let arms = gg_walker_arms(&content[start..end], 8, 'E');
+    assert_gg_walker_covers_ast(
+        "self-host `mutinf_scan_expr`",
+        "tests/fixtures/self_host_lowerer/ast.gg",
+        "Expr",
+        LEAF_EXPRS,
+        &arms,
+        "mutinf_scan_",
     );
 }
 
@@ -4426,17 +5355,25 @@ fn self_host_mutinf_scan_expr_arms_count() {
 /// lower EXPECTED to lock the new floor.
 #[test]
 fn self_host_mutinf_scan_stmts_arms_count() {
-    /// Baseline 2026-07-04 (R38-T-B): 19 top-level `case S…` arms in
-    /// `mutinf_scan_stmts`. Counts the function's TOP-LEVEL match arms only
-    /// (12-space indent — one level deeper than mutinf_scan_expr because the
-    /// `match st:` sits inside `for st in stmts:`); the nested `case Some|None`
-    /// / `case SORecv|SOSend` sub-matches are deeper-indented and excluded.
-    const EXPECTED: usize = 19;
+    // Exempt from the walk, each with the reason it carries no self-write.
+    const NOT_WALKED: &[(&str, &str)] = &[
+        ("SContinue", "leaf — no sub-nodes."),
+        ("SPass", "leaf — no sub-nodes."),
+        ("SItem", "a nested item DEFINITION never captures the enclosing `self`."),
+        ("SMeta", "compile-time: meta.gg expands it BEFORE lowering, so it is \
+          absent from a method body reaching `compute_method_mutates_self`."),
+        ("SMetaFor", "compile-time, as SMeta."),
+        ("SMetaIf", "compile-time, as SMeta."),
+        ("SMetaConst", "compile-time, as SMeta."),
+        ("SMetaForMatch", "compile-time, as SMeta."),
+        ("SMetaMatch", "compile-time, as SMeta."),
+        ("SMetaWhile", "compile-time, as SMeta."),
+    ];
 
     // lower.gg lives ONLY in self_host_lowerer (real file, not symlinked), so
     // no double-count guard is needed.
-    let content =
-        fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg").unwrap_or_default();
+    let content = fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg")
+        .expect("cannot read tests/fixtures/self_host_lowerer/lower.gg");
 
     // Scope to the `mutinf_scan_stmts` fn body: from its signature to the next
     // top-level `void ` definition (`compute_method_mutates_self`).
@@ -4447,30 +5384,17 @@ fn self_host_mutinf_scan_stmts_arms_count() {
         .find("\nvoid compute_method_mutates_self(")
         .map(|o| start + o)
         .expect("self_host_mutinf_scan_stmts_arms_count: end of mutinf_scan_stmts not found");
-    let window = &content[start..end];
-
-    let mut arms = 0usize;
-    for line in window.lines() {
-        if line.trim_start().starts_with('#') {
-            continue; // .gg comments
-        }
-        // Top-level match arms are indented EXACTLY 12 spaces; deeper-indented
-        // nested `case S…` arms (the SSelect `case SORecv|SOSend`, 20 spaces)
-        // are rejected by the 12-space prefix.
-        if line.strip_prefix("            case S").is_some() {
-            arms += 1;
-        }
-    }
-
-    assert_eq!(
-        arms, EXPECTED,
-        "Self-host `mutinf_scan_stmts` arm count changed: {arms} vs {EXPECTED}.\n\n\
-         Statements are the PRIMARY self-mutation carriers — a variant left in \
-         `else: pass` hides a direct `self.f = x` / `self.f += x` → the method \
-         is mis-classified read-only → the named-receiver CoW gate \
-         under-materializes → a write-through divergence from Rust. A new arm \
-         MUST scan its sub-exprs and flag a self-rooted assign lhs. Bump \
-         EXPECTED with a justification, or lower it if an arm was removed.",
+    // 12-space indent — one level deeper than `mutinf_scan_expr`, because the
+    // `match st:` sits inside `for st in stmts:`; the nested `case Some|None`
+    // and `case SORecv|SOSend` sub-matches are deeper still and excluded.
+    let arms = gg_walker_arms(&content[start..end], 12, 'S');
+    assert_gg_walker_covers_ast(
+        "self-host `mutinf_scan_stmts`",
+        "tests/fixtures/self_host_lowerer/ast.gg",
+        "Stmt",
+        NOT_WALKED,
+        &arms,
+        "mutinf_scan_",
     );
 }
 
@@ -4867,13 +5791,43 @@ fn self_host_drain_out_param_abi_pair() {
     let content =
         fs::read_to_string("tests/fixtures/self_host_lowerer/lir_lower.gg").unwrap_or_default();
 
-    // (fn_name, out-arg indices that must be tagged in BOTH ABI tables).
-    let required: &[(&str, &[usize])] =
-        &[("gorget_set_drain_entry", &[2]), ("gorget_map_drain_entry", &[2, 3])];
+    // (fn_name, out-arg indices) — READ OUT OF RUST GG's own table rather than
+    // hand-listed. `src/backend/c_lir/helpers.rs` maps each drain accessor to
+    // its `void*` out-arg indices; parsing it means a NEW drain sibling enrols
+    // itself here instead of waiting for someone to notice.
+    let rust_helpers = fs::read_to_string("src/backend/c_lir/helpers.rs")
+        .expect("read src/backend/c_lir/helpers.rs");
+    let required: Vec<(String, Vec<usize>)> = rust_helpers
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .filter_map(|l| {
+            let (head, tail) = l.split_once("=> &[")?;
+            let name: String = head
+                .split('"')
+                .nth(1)
+                .filter(|n| n.ends_with("_drain_entry"))?
+                .to_string();
+            let idx: Vec<usize> = tail
+                .split(']')
+                .next()?
+                .split(',')
+                .filter_map(|d| d.trim().parse().ok())
+                .collect();
+            (!idx.is_empty()).then_some((name, idx))
+        })
+        .collect();
+    assert!(
+        required.len() >= 2,
+        "self_host_drain_out_param_abi_pair: only {} `*_drain_entry` row(s) parsed \
+         out of `src/backend/c_lir/helpers.rs` — the Rust out-arg table moved, and \
+         with nothing to require the self-host check below asserts nothing. \
+         Regenerate: grep -n '_drain_entry\" =>' src/backend/c_lir/helpers.rs",
+        required.len(),
+    );
 
     let mut missing: Vec<String> = Vec::new();
-    for (fn_name, out_args) in required {
-        for &arg_idx in *out_args {
+    for (fn_name, out_args) in &required {
+        for &arg_idx in out_args {
             // The drain entries are written as
             //   `if fn_name == "gorget_map_drain_entry" and arg_idx == 2:`
             // (or an `(arg_idx == 2 or arg_idx == 3)` combined guard). Count a
@@ -4907,10 +5861,10 @@ fn self_host_drain_out_param_abi_pair() {
          `needs_ptr_arg` table (so the borrow operand is passed as `ISlotAddr`/`&slot` \
          instead of by-value NULL → `memcpy(NULL)` → SIGSEGV) AND the `out_param_arg` \
          table (the ABI_OUT_PTR tag that keeps the drained slot's drop alive). The SET \
-         drain (out arg 2) and MAP drain (out args 2 AND 3) are siblings — adding one \
-         and forgetting the other is the exact hole that crashed `dict_drain_basic`. \
-         Mirrors Rust gg `helpers.rs:699-700`. Re-add the missing entry, or extend this \
-         lint's `required` list if a new drain sibling landed.",
+         drain and MAP drain are siblings — adding one and forgetting the other is \
+         the exact hole that crashed `dict_drain_basic`. The required rows are READ \
+         from Rust gg's own out-arg table, so there is no list here to extend: \
+         regenerate with `grep -n \'_drain_entry\" =>\' src/backend/c_lir/helpers.rs`.",
         missing.join("\n  "),
     );
 }
@@ -4949,14 +5903,37 @@ fn self_host_vector_swap_abi_triple() {
     let ptr = self_host_fn_body_noncomment(&lir, "bool needs_ptr_arg(").join("\n");
     let ret = self_host_fn_body_noncomment(&types, "int infer_method_return_type(").join("\n");
 
-    // (method-name, runtime-symbol) siblings. The closing `"` in each needle
-    // keeps `"gorget_array_swap"` / `"swap"` from matching inside
-    // `"gorget_array_swap_remove"` / `"swap_remove"`.
-    let required: &[(&str, &str)] =
-        &[("swap", "gorget_array_swap"), ("swap_remove", "gorget_array_swap_remove")];
+    // (method-name, runtime-symbol) siblings — DERIVED from Rust gg's runtime
+    // registry (`src/lir/runtime.rs`), where the swap family is declared with
+    // its symbol, `arg0 = A::Ptr` and a `T::Void` return. The method name is
+    // the symbol minus the `gorget_array_` prefix. A new swap-family sibling
+    // added there enrols itself here.
+    let runtime = fs::read_to_string("src/lir/runtime.rs").expect("read src/lir/runtime.rs");
+    let required: Vec<(String, String)> = runtime
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .filter_map(|l| {
+            let sym = l.split('"').nth(1)?;
+            let method = sym.strip_prefix("gorget_array_")?;
+            // The swap family: mutating, void-returning, self by pointer.
+            (method.starts_with("swap")
+                && l.contains("(T::Ptr, A::Ptr)")
+                && l.contains("T::Void")
+                && l.contains("F::Mutates"))
+            .then(|| (method.to_string(), sym.to_string()))
+        })
+        .collect();
+    assert!(
+        required.len() >= 2,
+        "self_host_vector_swap_abi_triple: only {} swap-family row(s) derived from \
+         `src/lir/runtime.rs` — the registry's shape moved, and with nothing \
+         required the three table checks below assert nothing. Regenerate: \
+         grep -n \'gorget_array_swap\' src/lir/runtime.rs",
+        required.len(),
+    );
 
     let mut missing: Vec<String> = Vec::new();
-    for (method, sym) in required {
+    for (method, sym) in &required {
         // (1) callee table: method → runtime symbol (a `return "<sym>"`).
         if !callee.contains(&format!("\"{sym}\"")) {
             missing.push(format!("map_array_method: no `return \"{sym}\"` for `{method}`"));
@@ -4978,9 +5955,10 @@ fn self_host_vector_swap_abi_triple() {
          (`map_array_method` + `needs_ptr_arg` in lir_lower.gg, \
          `infer_method_return_type` in lower_types.gg). Adding one method — or \
          one table — and forgetting the rest is the desync that broke \
-         `vector_swap_fill` (R41). Mirrors Rust gg `src/lir/runtime.rs` \
-         ArraySwap/ArraySwapRemove. Re-add the missing entry, or extend the \
-         REQUIRED list if a new swap-family sibling landed.",
+         `vector_swap_fill` (R41). The required siblings are DERIVED from Rust gg's \
+         runtime registry (`src/lir/runtime.rs`: a `gorget_array_swap*` symbol with \
+         `arg0 = A::Ptr`, `T::Void`, `F::Mutates`), so there is no list here to \
+         extend — a new sibling declared there enrols itself.",
         missing.join("\n  "),
     );
 }
@@ -6075,13 +7053,66 @@ fn no_growth_in_runtime_c_direct_view_manufacture() {
 /// lowering (`src/ir/lowering/stmts/mod.rs:331-337` — they emit nothing if they
 /// survive), so they never reach the prescan's statement stream.
 ///
-/// Keep this list in sync with the block-bearing variants of `enum Stmt`
-/// (`src/parser/ast.rs`). The companion lint below fails if any of these is
-/// dropped to the `_ => {}` arm.
-const COW_PRESCAN_BLOCK_BEARING_STMTS: &[&str] = &[
-    "OnError", "For", "While", "Loop", "If", "Match", "Select", "With",
-    "NamedScope",
-];
+/// ⚠ DERIVED, not hand-listed: every `enum Stmt` variant whose declaration
+/// names a `Block`, minus the `Meta*` forms. A hand list is exactly what cannot
+/// see a NEW block-bearing variant, which is the case this guard exists for.
+fn cow_prescan_block_bearing_stmts() -> BTreeSet<String> {
+    let ast = fs::read_to_string("src/parser/ast.rs").expect("read src/parser/ast.rs");
+    let es = ast
+        .find("pub enum Stmt {")
+        .expect("`pub enum Stmt` moved — re-anchor this lint");
+    let open = ast[es..].find('{').expect("enum body open");
+    let mut depth: i32 = 0;
+    let mut close = None;
+    for (i, c) in ast[es..].char_indices().skip(open) {
+        if c == '{' { depth += 1; }
+        if c == '}' {
+            depth -= 1;
+            if depth == 0 { close = Some(i + 1); break; }
+        }
+    }
+    let body = &ast[es..es + close.expect("enum body close")];
+    let mut out: BTreeSet<String> = Default::default();
+    let mut cur: Option<String> = None;
+    let mut buf = String::new();
+    let flush = |cur: &mut Option<String>, buf: &mut String, out: &mut BTreeSet<String>| {
+        if let Some(name) = cur.take() {
+            // `Meta*` forms are evaluated and removed before GIR lowering
+            // (`src/ir/lowering/stmts/mod.rs` — they emit nothing if they
+            // survive), so they never reach the prescan's statement stream.
+            if !name.starts_with("Meta") && buf.contains("Block") {
+                out.insert(name);
+            }
+        }
+        buf.clear();
+    };
+    for line in body.lines() {
+        let code = line.split("//").next().unwrap_or("");
+        if let Some(t) = line.strip_prefix("    ") {
+            if !t.starts_with(' ') && t.starts_with(char::is_uppercase) {
+                flush(&mut cur, &mut buf, &mut out);
+                cur = Some(
+                    t.chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect(),
+                );
+            }
+        }
+        if cur.is_some() {
+            buf.push_str(code);
+            buf.push('\n');
+        }
+    }
+    flush(&mut cur, &mut buf, &mut out);
+    assert!(
+        out.len() >= 6,
+        "cow_prescan_block_bearing_stmts: only {} block-bearing `Stmt` variants \
+         derived from src/parser/ast.rs — the extraction broke, and a short roster \
+         makes the coverage check vacuous. Found: {out:?}",
+        out.len(),
+    );
+    out
+}
 
 /// Extract the source of `fn cow_after_stmt` from functions.rs (brace-depth
 /// scoped, comment lines skipped) so we only inspect that match.
@@ -6141,27 +7172,78 @@ fn cow_after_stmt_covers_block_bearing_variants() {
         "could not locate `fn cow_after_stmt` in src/ir/lowering/functions.rs — \
          did it move or get renamed? Update cow_after_stmt_source().",
     );
+    // ⚠ COMMENT-STRIPPED, and the check is on the ARM'S BODY, not on the
+    // variant name appearing anywhere.
+    //
+    // `cow_after_stmt`'s match is EXHAUSTIVE (no `_ => {}`), so rustc already
+    // forces an arm per variant — which makes a bare `contains("Stmt::V")`
+    // green over the real defect: a block-bearing variant swept into the
+    // "Nothing to walk" no-op arm still CONTAINS its own name. The arm must
+    // recurse through `cow_after_block`; that is what the prescan needs and
+    // what nothing else forces.
+    let lines: Vec<&str> = src
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect();
+    // Arm heads sit at the match's own indentation.
+    const ARM_INDENT: &str = "        Stmt::";
+    let mut heads: Vec<(usize, Vec<String>)> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        if l.strip_prefix(ARM_INDENT).is_none_or(|r| r.starts_with(' ')) {
+            continue;
+        }
+        let names: Vec<String> = l
+            .split("Stmt::")
+            .skip(1)
+            .map(|p| {
+                p.chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect::<String>()
+            })
+            .filter(|n| !n.is_empty())
+            .collect();
+        if !names.is_empty() {
+            heads.push((i, names));
+        }
+    }
+    assert!(
+        heads.len() > 10,
+        "cow_after_stmt_covers_block_bearing_variants: only {} arm heads found \
+         in `cow_after_stmt` — the indentation anchor broke, and the coverage \
+         check below would report every variant missing (or none).",
+        heads.len(),
+    );
+    let mut arm_of: std::collections::BTreeMap<String, String> = Default::default();
+    for (k, (i, names)) in heads.iter().enumerate() {
+        let j = heads.get(k + 1).map_or(lines.len(), |(n, _)| *n);
+        let body = lines[*i..j].join("\n");
+        for n in names {
+            arm_of.insert(n.clone(), body.clone());
+        }
+    }
     let mut missing = Vec::new();
-    for variant in COW_PRESCAN_BLOCK_BEARING_STMTS {
-        // An arm matches the variant if the body references `Stmt::Variant`
-        // (the match patterns are `Stmt::Loop { .. }`, `Stmt::With { .. }`,
-        // combined `A | B`, etc.). A bare `_ => {}` does not.
-        let pat = format!("Stmt::{variant}");
-        if !src.contains(&pat) {
-            missing.push(*variant);
+    for variant in cow_prescan_block_bearing_stmts() {
+        match arm_of.get(&variant) {
+            None => missing.push(format!("{variant} (no arm)")),
+            Some(body) if !body.contains("cow_after_block(") => {
+                missing.push(format!("{variant} (arm never calls `cow_after_block`)"))
+            }
+            Some(_) => {}
         }
     }
     assert!(
         missing.is_empty(),
-        "`cow_after_stmt` (src/ir/lowering/functions.rs) is missing arms for \
+        "`cow_after_stmt` (src/ir/lowering/functions.rs) does not walk the body of \
          block-bearing Stmt variant(s): {missing:?}.\n\n\
-         These fell through to `_ => {{}}`, so a source-collection mutation inside \
+         These reach no `cow_after_block`, so a source-collection mutation inside \
          such a block body is invisible to the CoW reassignment prescan — a live \
          element borrow taken before it would dangle (docs/devbook/11-copy-on-write.md \
          §\"Mutation severs the alias\"; CLAUDE.md #4).\n\n\
          Add an arm recursing into the body via `cow_after_block` (mirror the \
-         With/Match/Select arms). If you instead REMOVED a variant from `enum Stmt`, \
-         drop it from COW_PRESCAN_BLOCK_BEARING_STMTS in this file.",
+         With/Match/Select arms). The roster is DERIVED from `enum Stmt`, so \
+         there is no list here to edit: a variant that genuinely carries no \
+         runtime block should not name `Block` in its declaration.",
     );
 }
 
@@ -6425,13 +7507,24 @@ fn self_host_param_ctor_site_count() {
 ///    is `todo/t0958`.
 #[test]
 fn self_host_value_callee_producer_is_the_only_dispatch() {
-    // The identifier-bound-callable arm, the EFieldAccess (method-style) arm,
-    // the immediately-invoked closure literal, `None()`, and the three
-    // non-identifier value-callee shapes (EIndex, ECall result, EMethodCall
-    // result). Five of the seven dispatch through the producer; EFieldAccess
-    // and ENoneLiteral do not (they route to `lower_call` or return unit).
-    const EXPECTED_ARMS: usize = 7;
-    const EXPECTED_CONSUMERS: usize = 5;
+    // ⚠ PER ARM, not two counts. `EXPECTED_ARMS = 7` and
+    // `EXPECTED_CONSUMERS = 5` were a pair whose own failure text admitted the
+    // problem — "if this number moved and EXPECTED_CONSUMERS did not, the new
+    // arm is OPEN-CODING the dispatch". That inference is only available to a
+    // reader; asserting it PER ARM makes it the machine's.
+    //
+    // Every callee shape is declared: does it evaluate to a callable VALUE (and
+    // therefore route through `lower_callable_value_call`) or not, and why.
+    const CALLEE_ARMS: &[(&str, bool, &str)] = &[
+        ("EIdentifier", true, "an identifier bound to a callable value"),
+        ("EFieldAccess", false,
+         "method-style `a.b(…)` — routes to `lower_call`, not a value callee"),
+        ("EClosure", true, "an immediately-invoked closure literal"),
+        ("ENoneLiteral", false, "`None()` — returns unit, there is nothing to call"),
+        ("EIndex", true, "`fs[0](21)` — the element is the callable value"),
+        ("ECall", true, "`f()(x)` — the inner call's RESULT is the callable value"),
+        ("EMethodCall", true, "`c.clone()(1)` — the method's RESULT is the callable"),
+    ];
 
     let path = "tests/fixtures/self_host_lowerer/lower_expr.gg";
     let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
@@ -6449,28 +7542,74 @@ fn self_host_value_callee_producer_is_the_only_dispatch() {
         )
     });
     let rest = &content[open + CALLEE_MATCH_OPEN.len()..];
-    let mut arms = 0usize;
-    for line in rest.lines() {
+    let all: Vec<&str> = rest.lines().collect();
+    let mut heads: Vec<(usize, String)> = Vec::new();
+    let mut stop = all.len();
+    for (i, line) in all.iter().enumerate() {
         // Stop at the next arm of the OUTER match (8-space `case `/`else:`).
         let t = line.trim_start();
         let indent = line.len() - t.len();
         if indent == 8 && (t.starts_with("case ") || t.starts_with("else:")) {
+            stop = i;
             break;
         }
-        if line.starts_with(CALLEE_ARM_INDENT) {
-            arms += 1;
+        if let Some(r) = line.strip_prefix(CALLEE_ARM_INDENT) {
+            let n: String = r
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !n.is_empty() {
+                heads.push((i, n));
+            }
         }
     }
-    assert_eq!(
-        arms, EXPECTED_ARMS,
-        "The `ECall` callee match now has {arms} `case` arms, the pinned count is \
-         {EXPECTED_ARMS}.\n\n\
-         A new CALLEE SHAPE is a semantic addition: route it through \
-         `lower_callable_value_call` if it evaluates to a callable value (and bump \
-         EXPECTED_CONSUMERS with it), or give it a real lowering of its own. Then bump \
-         this number. If you removed an arm, lower both. ⚠ If this number moved and \
-         EXPECTED_CONSUMERS did not, the new arm is OPEN-CODING the dispatch — that is \
-         the drift that let `fs[0](21)` and `c.clone()(1)` be silently discarded."
+    let mut found: BTreeSet<String> = Default::default();
+    let mut problems: Vec<String> = Vec::new();
+    for (k, (i, name)) in heads.iter().enumerate() {
+        let j = heads.get(k + 1).map_or(stop, |(n, _)| *n);
+        let body: String = all[*i..j]
+            .iter()
+            .map(|l| l.split('#').next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        found.insert(name.clone());
+        let Some((_, routes, why)) = CALLEE_ARMS.iter().find(|(n, _, _)| n == name) else {
+            problems.push(format!(
+                "`case {name}` is a callee shape this lint does not declare"
+            ));
+            continue;
+        };
+        let actual = body.contains("lower_callable_value_call(");
+        if actual != *routes {
+            problems.push(format!(
+                "`case {name}` ({why}): declared routes-through-producer={routes}, \
+                 measured={actual}"
+            ));
+        }
+    }
+    let declared: BTreeSet<String> =
+        CALLEE_ARMS.iter().map(|(n, _, _)| (*n).to_string()).collect();
+    for gone in declared.difference(&found) {
+        problems.push(format!("`case {gone}` is declared here but the match has no such arm"));
+    }
+    assert!(
+        found.len() >= 5,
+        "self_host_value_callee_producer_is_the_only_dispatch: only {} callee arm(s) \
+         found — the indent anchor broke, and every check below is vacuous.",
+        found.len(),
+    );
+    assert!(
+        problems.is_empty(),
+        "the `ECall` callee dispatch changed:\n  {}\n\n\
+         A new CALLEE SHAPE is a semantic addition. If it evaluates to a callable \
+         VALUE it routes through `lower_callable_value_call` — closure value as \
+         arg-0, args borrowed, `__callable_<arity>`, and the typed return-type \
+         ladder; otherwise it needs a real lowering of its own. Either way it gets \
+         a row here WITH its reason. ⚠ An arm that OPEN-CODES the dispatch is the \
+         drift that let `fs[0](21)` and `c.clone()(1)` be silently discarded, and \
+         it is exactly what a pair of totals could not see: they moved together \
+         and a reader had to notice.",
+        problems.join("\n  "),
     );
 
     let mut defs = 0usize;
@@ -6488,17 +7627,13 @@ fn self_host_value_callee_producer_is_the_only_dispatch() {
     }
 
     assert_eq!(defs, 1, "expected exactly ONE `lower_callable_value_call` definition in {path}, found {defs}");
-    assert_eq!(
-        calls, EXPECTED_CONSUMERS,
-        "Self-host value-callee dispatch call-site count changed: {calls} vs \
-         {EXPECTED_CONSUMERS}.\n\n\
-         Every callee shape that evaluates to a callable VALUE routes through \
-         `lower_callable_value_call` — closure value as arg-0, args borrowed, \
-         `__callable_<arity>`, and the typed return-type ladder. A DROP here means \
-         a shape that used to go through the producer no longer does. If you added \
-         a callee shape, CALL the producer and bump this with EXPECTED_ARMS. ⚠ This \
-         count alone cannot see an arm that open-codes the dispatch — the arm count \
-         above is what catches that, which is why both are asserted.",
+    let want_calls = CALLEE_ARMS.iter().filter(|(_, r, _)| *r).count();
+    assert!(
+        calls >= want_calls,
+        "`lower_callable_value_call` has {calls} call site(s) in {path}, fewer than \
+         the {want_calls} callee arms declared to route through it. A DROP means a \
+         shape that used to reach the producer no longer does — the per-arm check \
+         above names which.",
     );
 
     // The `ECall` callee match must lower-or-REJECT (Core #10). Find the arm's
@@ -6702,8 +7837,10 @@ fn cstr_return_registry_single_source() {
 /// update this to assert the single call site.
 #[test]
 fn await_value_route_sibling_count() {
-    const EXPECTED: usize = 2;
-
+    // ⚠ THE PAIRING IS THE INVARIANT, and it DERIVES: every value-route call
+    // must zero its receiver, so `zero_after == call_sites` needs no pin. The
+    // anti-deletion half is a FLOOR, not an equality — a legitimate third await
+    // form can land without a hand edit, while losing one still reds.
     let files = [
         "src/ir/lowering/exprs/methods.rs",
         "src/ir/lowering/exprs/mod.rs",
@@ -6753,26 +7890,25 @@ fn await_value_route_sibling_count() {
         }
     }
 
-    assert_eq!(
-        call_sites, EXPECTED,
-        "Await value-route `Task__void__await` call-site count changed: \
-         {call_sites} vs {EXPECTED}.\n\n\
+    assert!(
+        call_sites >= 2,
+        "Await value-route `Task__void__await` call sites dropped to \
+         {call_sites} (floor 2).\n\n\
          The `.await()` dispatcher has two hand-synced forms (postfix \
          methods.rs + prefix Expr::Await mod.rs). BOTH must fall through to the \
          `Task__void__await` value-route when the named `__gorget_await_<fn>` \
          path can't resolve a single producer fn — else a collection-sourced \
-         Task[void] silently drops its await. If you added a third await form, \
-         route it through the same value-route fallback and bump EXPECTED. If \
-         you CENTRALIZED the two into one shared helper, set EXPECTED = 1.",
+         Task[void] silently drops its await. If you CENTRALIZED the two into \
+         one shared helper, lower this floor and say which helper.",
     );
     assert_eq!(
-        zero_after, EXPECTED,
-        "Await value-route `move_zero_and_mark` double-join guard count changed: \
-         {zero_after} vs {EXPECTED} (call sites = {call_sites}).\n\n\
-         Every `Task__void__await` value-route call MUST zero the receiver local \
-         (`move_zero_and_mark`) right after, so scope-end `Task__void__drop` is a \
-         no-op and the task isn't joined twice. A value-route site missing the \
-         zero re-opens the double-free. Keep every fallback paired with its zero.",
+        zero_after, call_sites,
+        "{zero_after} of the {call_sites} `Task__void__await` value-route calls \
+         zero their receiver.\n\n\
+         Every one MUST zero it (`move_zero_and_mark`) right after, so scope-end \
+         `Task__void__drop` is a no-op and the task isn't joined twice. A \
+         value-route site missing the zero re-opens the double-free. This is a \
+         PAIRING, so a new await form that carries its zero needs no edit here.",
     );
 }
 
@@ -6801,15 +7937,56 @@ fn await_value_route_sibling_count() {
 ///
 /// **If this fails:** either a second hardcoded collection-base list crept back
 /// into `is_type_constructor` (route it through `is_builtin_collection_base`),
-/// or the helper's name set changed (update EXPECTED_BASES here with a
-/// justification). `Box` is intentionally NOT in the set — Box monos go through
-/// lir_lower's `BkRegularBox` arm, not the mono-record loop.
+/// or the helper's name set changed. `Box` is intentionally NOT in the set —
+/// Box monos go through lir_lower's `BkRegularBox` arm, not the mono-record
+/// loop; it is a pass-bodied `lib/std/collections.gg` struct all the same, which
+/// is why the roster below is derived from the RESOURCE REGISTRY rather than
+/// from the `: pass` shape.
+///
+/// ⚠ THE PROVENANCE SENTENCE THIS LINT USED TO CARRY WAS FALSE. It said the set
+/// was "the collection bases declared `: pass` in lib/std/collections.gg", and
+/// two of its seven rows are not: `Channel` is declared in `lib/std/channel.gg`,
+/// and `Box` IS declared there and is deliberately absent. Measured, the
+/// pass-bodied set across `lib/std/` is nineteen names — it includes the whole
+/// `sync.gg` family — so it was never the axis.
 #[test]
 fn collection_base_names_single_source() {
-    /// The collection bases declared `: pass` in lib/std/collections.gg whose
-    /// monos are runtime GorgetArray/GorgetMap/GorgetSet aliases. Box excluded.
-    const EXPECTED_BASES: &[&str] =
-        &["Vector", "Deque", "Channel", "Dict", "HashMap", "Set", "HashSet"];
+    // The collection bases, DERIVED from `compiler/data/resources.gg`: every
+    // `MkPrefix` row whose metadata declares a collection runtime, minus the
+    // runtime-form aliases (`GorgetArray__`, `GorgetDict__`, …), which are not
+    // surface base names.
+    let registry = resources_gg_families();
+    let mut bases: BTreeSet<String> = registry
+        .iter()
+        .filter(|(_, mp)| {
+            matches!(
+                mp.as_deref(),
+                Some("gorget_array") | Some("gorget_set") | Some("gorget_map")
+            )
+        })
+        .filter_map(|(p, _)| p.strip_suffix("__").map(str::to_string))
+        .filter(|b| !b.starts_with("Gorget"))
+        .collect();
+    // …plus the one member the registry does not classify as a collection.
+    const EXTRA: &[(&str, &str)] = &[
+        ("Channel", "declared `: pass` in lib/std/channel.gg and classified \
+          `CkNotCollection` in resources.gg — but its monos are runtime-backed \
+          handles all the same, so registering one as a user `type_info` emits \
+          the same unnamed-field C struct."),
+    ];
+    for (name, _) in EXTRA {
+        bases.insert((*name).to_string());
+    }
+    assert!(
+        bases.len() >= 5,
+        "collection_base_names_single_source: only {} collection base(s) derived \
+         from compiler/data/resources.gg — the registry read or the filter broke, \
+         and a short roster asserts nothing. Found: {bases:?}",
+        bases.len(),
+    );
+    let expected_bases: Vec<&str> = bases.iter().map(String::as_str).collect();
+    #[allow(non_snake_case)]
+    let EXPECTED_BASES = &expected_bases;
 
     // 1. The single source of truth must exist and list exactly EXPECTED_BASES.
     let lower = fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg")
@@ -6837,8 +8014,12 @@ fn collection_base_names_single_source() {
     for base in EXPECTED_BASES {
         assert!(
             body.contains(&format!("name == \"{base}\"")),
-            "is_builtin_collection_base is missing base name `{base}` — the EXPECTED_BASES \
-             list in this lint and the helper body must agree (one source of truth).",
+            "`is_builtin_collection_base` is missing base name `{base}`, which \
+             `compiler/data/resources.gg` declares as a collection family. \
+             Registering its bare template or a mono as a user `type_info` makes \
+             `emit_structs` emit an unnamed-field C struct \
+             (`struct __gg_Vector {{ uint8_t ; }}`) — a `pass` body is one \
+             EMPTY-name field. Add it to the helper.",
         );
     }
     // Reject any collection base NOT in EXPECTED_BASES (catches a silently-added
@@ -6851,9 +8032,12 @@ fn collection_base_names_single_source() {
                 let nm = &after[..end];
                 assert!(
                     EXPECTED_BASES.contains(&nm),
-                    "is_builtin_collection_base lists base name `{nm}` not in this lint's \
-                     EXPECTED_BASES — if it's a genuine GorgetArray-backed collection, add it \
-                     to EXPECTED_BASES with a justification; otherwise it does not belong here.",
+                    "`is_builtin_collection_base` lists base name `{nm}`, which \
+                     `compiler/data/resources.gg` does not declare as a collection \
+                     family (derived roster: {EXPECTED_BASES:?}). If it IS a genuine \
+                     GorgetArray/Map/Set-backed collection, give it a `MkPrefix` row \
+                     with its `method_prefix` there — that is the axis; otherwise it \
+                     does not belong in this helper.",
                 );
                 rest = &after[end + 1..];
             } else {
@@ -8989,42 +10173,75 @@ fn todo_cites_paths_resolve() {
 /// instead. The direction that matters most is the `uint8` arm: the self-host
 /// lexer calls these on a `byte` on the BOOTSTRAP path, so a missed name is a
 /// false reject of the compiler's own source.
+///
+/// The uint8 roster is **derived from Rust's own arm**, not hand-listed here,
+/// and compared to the self-host table as a SET in BOTH directions. A
+/// hand-listed copy in this file would be a third parallel table (Layering
+/// rule 3), and a name added on one side only would be invisible to it.
+/// ⚠ The self-host side is scoped to `uint8_prim_method_admitted`'s own body:
+/// a file-wide `contains` is GREEN over this lint's own class, because
+/// `to_upper`/`to_lower` also live in `string_prim_method_admitted` and would
+/// answer for a row deleted from the uint8 table.
 #[test]
 fn sh_primitive_method_tables_mirror_rust() {
     let rust = fs::read_to_string("src/semantic/typecheck.rs").expect("typecheck.rs");
     let sh = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
         .expect("self-host typecheck.gg");
 
-    let uint8_at = rust
-        .find("\"uint8\" => match method {")
-        .expect("the `\"uint8\"` arm of builtin_method_type moved — re-anchor this lint");
-    let uint8_arm = &rust[uint8_at..(uint8_at + 600).min(rust.len())];
-    for n in [
-        "is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
-        "is_upper", "is_lower", "is_hex_digit", "is_ascii",
-        "to_upper", "to_lower",
-    ] {
-        assert!(
-            uint8_arm.contains(&format!("\"{n}\"")),
-            "`{n}` is in the self-host's uint8 table but NOT in Rust's `\"uint8\"` arm. One of \
-             the two moved; reconcile them rather than letting the reject drift."
-        );
-        assert!(
-            sh.contains(&format!("method_name == \"{n}\"")),
-            "Rust's `\"uint8\"` arm admits `{n}` but the self-host's \
-             `uint8_prim_method_admitted` does not. A `byte` receiver calling `{n}` would be \
-             REFUSED by `reject_no_method_on_primitive` although Rust ACCEPTS it — a false \
-             reject, and the self-host LEXER calls these on the bootstrap path."
-        );
-    }
+    let uint8_arm = rust_match_arm_extent(
+        &rust,
+        "\"uint8\" => match method {",
+        "the `\"uint8\"` arm of builtin_method_type",
+    );
+    let rust_uint8: BTreeSet<String> = quoted_words(uint8_arm);
+    assert!(
+        rust_uint8.len() >= 8,
+        "sh_primitive_method_tables_mirror_rust: only {} names parsed out of Rust's \
+         `\"uint8\"` arm — the extraction broke, and a short roster would make the \
+         self-host table look complete no matter what it holds.\n{uint8_arm}",
+        rust_uint8.len(),
+    );
+    let sh_uint8_body = gg_fn_body_required(
+        &sh,
+        "bool uint8_prim_method_admitted(String method_name):",
+        "sh_primitive_method_tables_mirror_rust: self-host `uint8_prim_method_admitted`",
+    );
+    let sh_uint8: BTreeSet<String> = sh_uint8_body
+        .match_indices("method_name == \"")
+        .filter_map(|(i, m)| {
+            let rest = &sh_uint8_body[i + m.len()..];
+            rest.find('"').map(|e| rest[..e].to_string())
+        })
+        .collect();
+
+    let missing_in_sh: Vec<&String> = rust_uint8.difference(&sh_uint8).collect();
+    assert!(
+        missing_in_sh.is_empty(),
+        "Rust's `\"uint8\"` arm admits {missing_in_sh:?} but the self-host's \
+         `uint8_prim_method_admitted` does not. A `byte` receiver calling one of \
+         those would be REFUSED by `reject_no_method_on_primitive` although Rust \
+         ACCEPTS it — a false reject, and the self-host LEXER calls these on the \
+         bootstrap path.",
+    );
+    let missing_in_rust: Vec<&String> = sh_uint8.difference(&rust_uint8).collect();
+    assert!(
+        missing_in_rust.is_empty(),
+        "{missing_in_rust:?} are in the self-host's `uint8_prim_method_admitted` but \
+         NOT in Rust's `\"uint8\"` arm. One of the two moved; reconcile them rather \
+         than letting the reject drift.",
+    );
 
     // The five names R47 Track D1 dropped BECAUSE they are in neither Rust's
     // oracle nor the IR GORGET_STRING_VIEW protocol. If one reappears in Rust's
     // String arm, the self-host must mirror it and the reject fixtures flip.
-    let str_at = rust
-        .find("\"str\" | \"String\" => match method {")
-        .expect("the `\"str\" | \"String\"` arm moved — re-anchor this lint");
-    let str_arm = &rust[str_at..(str_at + 3000).min(rust.len())];
+    // ⚠ Sliced by the arm's real EXTENT: the `+3000`-char window this used to
+    // take stopped 1,300 chars short of the arm's end, so a name reappearing in
+    // its tail was invisible to the check below.
+    let str_arm = rust_match_arm_extent(
+        &rust,
+        "\"str\" | \"String\" => match method {",
+        "the `\"str\" | \"String\"` arm of builtin_method_type",
+    );
     for n in ["to_string", "to_str", "concat", "trim_start", "trim_end"] {
         assert!(
             !str_arm.contains(&format!("\"{n}\"")),
@@ -9179,55 +10396,83 @@ fn cited_lint_names_resolve_to_real_tests() {
 /// a rewrite; if it ever reds after a pure-fmt change, join wrapped lines first.
 #[test]
 fn self_host_gorget_map_struct_size() {
-    const EXPECTED_SIZE: usize = 192;
     // ≥9 single-sourced size sites: 2 LirStructDef + 7 ResourceMetadata.
     const MIN_CONSTANT_USE_SITES: usize = 9;
 
-    let lir = fs::read_to_string("tests/fixtures/self_host_lowerer/lir.gg").unwrap_or_default();
-    let lower =
-        fs::read_to_string("tests/fixtures/self_host_lowerer/lir_lower.gg").unwrap_or_default();
-    let rust = fs::read_to_string("src/lir/lower/types.rs").unwrap_or_default();
+    let lir = fs::read_to_string("tests/fixtures/self_host_lowerer/lir.gg")
+        .expect("read tests/fixtures/self_host_lowerer/lir.gg");
+    let lower = fs::read_to_string("tests/fixtures/self_host_lowerer/lir_lower.gg")
+        .expect("read tests/fixtures/self_host_lowerer/lir_lower.gg");
+    let rust = fs::read_to_string("src/lir/lower/types.rs")
+        .expect("read src/lir/lower/types.rs");
 
-    // (a) Constant defined at the expected value in lir.gg.
-    let const_def = format!("const int GORGET_MAP_STRUCT_SIZE = {EXPECTED_SIZE}");
+    // (a) READ the size out of Rust gg — the cross-compiler source of truth
+    //     (both lanes follow `runtime_preamble.c`). Writing the number here as
+    //     well would be a THIRD copy, editable in isolation; the lanes are
+    //     compared instead.
+    const RUST_SITE: &str = "crate::lir::ResourceKind::GorgetMap | crate::lir::ResourceKind::GorgetSet => ";
+    let rust_size: usize = rust
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .find_map(|l| l.split(RUST_SITE).nth(1))
+        .and_then(|r| {
+            let d: String = r.chars().take_while(|c| c.is_ascii_digit()).collect();
+            d.parse().ok()
+        })
+        .expect(
+            "Rust gg (src/lir/lower/types.rs) no longer maps \
+             `ResourceKind::GorgetMap | ResourceKind::GorgetSet` to a byte size — \
+             re-anchor this lint; the SH size below has nothing to agree with.",
+        );
+    assert!(
+        rust_size >= 64 && rust_size % 8 == 0,
+        "Rust gg maps GorgetMap/GorgetSet to {rust_size} bytes, which is not a \
+         plausible 8-byte-field struct size — the extraction above is reading the \
+         wrong thing, and a nonsense size makes the SH agreement below meaningless.",
+    );
+
+    // (b) The self-host constant agrees with it, byte for byte.
+    let const_def = format!("const int GORGET_MAP_STRUCT_SIZE = {rust_size}");
     assert!(
         lir.lines().any(|l| l.trim_start().starts_with(&const_def)),
-        "self-host `GORGET_MAP_STRUCT_SIZE` is not defined as `{EXPECTED_SIZE}` in \
-         tests/fixtures/self_host_lowerer/lir.gg. The GorgetMap/GorgetSet runtime \
-         struct is 24 fields × 8 bytes = 192 (19 legacy + 5 D39 dense-mode fields \
-         appended at struct END; runtime_preamble.c). Do NOT change this to 184 \
-         (the stale 23-field over-count that overflowed gorget_array_push on the \
-         xml fixtures) or back to 152 (the pre-D39 legacy size — truncates the \
-         alloca so runtime stores to entries_keys/values/len/cap/indices walk into \
-         adjacent stack slots) without first changing the actual runtime struct \
-         AND Rust gg.",
+        "self-host `GORGET_MAP_STRUCT_SIZE` in \
+         tests/fixtures/self_host_lowerer/lir.gg disagrees with Rust gg, which \
+         maps GorgetMap/GorgetSet to {rust_size} bytes. The two lanes MUST stay in \
+         lock-step (both follow runtime_preamble.c: 24 fields × 8 bytes at the \
+         time of writing — 19 legacy + 5 D39 dense-mode fields appended at struct \
+         END). A too-small size truncates the alloca so runtime stores to \
+         entries_keys/values/len/cap/indices walk into adjacent stack slots; a \
+         too-large one overflowed gorget_array_push on the xml fixtures. If the \
+         runtime struct genuinely changed, move runtime_preamble.c, Rust \
+         types.rs, AND this constant together.",
     );
 
-    // (b) Rust gg agrees — the cross-compiler source of truth.
-    assert!(
-        rust.contains(&format!("GorgetMap | crate::lir::ResourceKind::GorgetSet => {EXPECTED_SIZE}"))
-            || rust.contains(&format!("\"GorgetMap\" | \"GorgetSet\" => {EXPECTED_SIZE}")),
-        "Rust gg (src/lir/lower/types.rs) no longer maps GorgetMap/GorgetSet to \
-         {EXPECTED_SIZE} bytes. The self-host and Rust struct sizes MUST stay in lock-step \
-         (both follow runtime_preamble.c). If the runtime struct genuinely changed size, \
-         update runtime_preamble.c, Rust types.rs, AND GORGET_MAP_STRUCT_SIZE together.",
-    );
-
-    // (c1) No bare `184` map/set literal smuggled back into the lowerer. Match a
-    // non-comment line that names GorgetMap/GorgetSet AND the digits 184.
+    // (c1) No bare size literal smuggled back into the lowerer. ⚠ The check used
+    //      to name ONE historical wrong value (`184`), so `152` — the other
+    //      value this defect actually took — and any future one were invisible.
+    //      The subject is now "a digit run at a map/set size site that is not
+    //      the named constant", whatever the digits say.
     let strays: Vec<&str> = lower
         .lines()
         .filter(|l| {
             let t = l.trim_start();
-            !t.starts_with('#')
-                && (t.contains("\"GorgetMap\"") || t.contains("\"GorgetSet\""))
-                && t.contains("184")
+            if t.starts_with('#')
+                || !(t.contains("\"GorgetMap\"") || t.contains("\"GorgetSet\""))
+                || t.contains("GORGET_MAP_STRUCT_SIZE")
+            {
+                return false;
+            }
+            // A bare multi-digit literal on a map/set line is a size.
+            let code = t.split('#').next().unwrap_or("");
+            code.split(|c: char| !c.is_ascii_digit())
+                .any(|d| d.len() >= 2 && d.parse::<usize>().map_or(false, |n| n >= 64))
         })
         .collect();
     assert!(
         strays.is_empty(),
-        "A raw `184` reappeared at a GorgetMap/GorgetSet size site in lir_lower.gg \
-         (must read `GORGET_MAP_STRUCT_SIZE`, the single source of truth = {EXPECTED_SIZE}):\n  {}",
+        "a raw size literal reappeared at a GorgetMap/GorgetSet site in \
+         lir_lower.gg (every one must read `GORGET_MAP_STRUCT_SIZE`, the single \
+         source of truth — {rust_size} today):\n  {}",
         strays.join("\n  "),
     );
 
@@ -9370,10 +10615,24 @@ fn no_type_variable_name_shape_heuristic() {
 /// helper), lower the budget in the same commit.
 #[test]
 fn clone_warn_hit_pairing() {
-    // (file, bare `.warn_implicit_clone(` budget, `.emit_clone_site_hit(` budget)
-    let allowlist: &[(&str, usize, usize)] = &[
-        ("src/ir/lowering/context.rs", 3, 3),
-        ("src/ir/lowering/stmts/mod.rs", 1, 1),
+    // The files allowed to SPLIT the mint from its hit (conditional clone
+    // sites, where the hit must be emitted inside the cloning branch), each
+    // with what lives there.
+    //
+    // ⚠ NO BUDGETS. The invariant is the PAIRING — mints == hits per file — and
+    // it derives; the four numbers (3, 3, 1, 1) only re-stated it while making
+    // every legitimate new conditional site cost two hand edits.
+    // ⚠ AND SAID PLAINLY: a per-FILE equality cannot prove each mint is paired
+    // with a hit in the SAME BRANCH, which is the class the docstring names. It
+    // catches the arrival of an unpaired one; it would not catch two mints in
+    // one branch balanced by two hits in another.
+    let allowlist: &[(&str, &str)] = &[
+        ("src/ir/lowering/context.rs",
+         "the lazy-string materialization guard (hit inside `mat_bb`), the \
+          Ptr-vs-value deref arm (hit inside the clone-fn arm), and the \
+          `warn_clone_and_hit` body itself"),
+        ("src/ir/lowering/stmts/mod.rs",
+         "`try_lift_option_ref` (hit inside the Some-arm resource path)"),
     ];
 
     fn count_calls(file: &str, marker: &str) -> usize {
@@ -9392,35 +10651,34 @@ fn clone_warn_hit_pairing() {
         n
     }
 
-    for &(file, warn_budget, hit_budget) in allowlist {
+    for &(file, what) in allowlist {
         let warns = count_calls(file, ".warn_implicit_clone(");
         let hits = count_calls(file, ".emit_clone_site_hit(");
-        assert_eq!(
-            warns, warn_budget,
-            "Bare `.warn_implicit_clone(` count in `{file}` changed: {warns} vs \
-             allowlisted {warn_budget}.\n\n\
-             Every straight-line implicit-clone site must pair its CloneId mint \
-             with its runtime hit via `ctx.warn_clone_and_hit(builder, span, ty, \
-             reason)` — a bare mint reads \"0 hits\" in the [clone-site] report \
-             forever. Only a CONDITIONAL site (clone inside a branch) may split \
-             the pair, with the hit emitted inside the cloning branch; document \
-             it at the site and re-balance this allowlist.",
+        assert!(
+            warns > 0,
+            "`{file}` is allowlisted for SPLIT clone attribution ({what}) but has \
+             no bare `.warn_implicit_clone(` left. If the sites were straightened \
+             into `warn_clone_and_hit`, drop the row — an allowlist entry with \
+             nothing behind it is a hole the next site walks through.",
         );
         assert_eq!(
-            hits, hit_budget,
-            "`.emit_clone_site_hit(` count in `{file}` changed: {hits} vs \
-             allowlisted {hit_budget}.\n\n\
-             In-branch hits exist ONLY as the split half of an allowlisted \
-             conditional clone site (plus the `warn_clone_and_hit` helper body). \
-             A stray hit without its paired mint (or vice versa) misattributes \
-             counts. Re-balance the allowlist with a comment at the site.",
+            warns, hits,
+            "clone attribution is UNPAIRED in `{file}`: {warns} bare CloneId \
+             mint(s) `.warn_implicit_clone(` vs {hits} runtime hit(s) \
+             `.emit_clone_site_hit(` ({what}).\n\n\
+             Every implicit-clone site must mint its CloneId AND emit its \
+             `--clones=stats` counter bump. A bare mint reads \"0 hits\" in the \
+             [clone-site] report forever — silent under-attribution. A \
+             straight-line site goes through `ctx.warn_clone_and_hit(builder, \
+             span, ty, reason)`; only a CONDITIONAL site may split the pair, and \
+             then the hit belongs INSIDE the cloning branch.",
         );
     }
 
     // Any file outside the allowlist must route through the helper: zero bare
     // mints, zero bare hits.
     let allowed: std::collections::HashSet<&str> =
-        allowlist.iter().map(|&(f, _, _)| f).collect();
+        allowlist.iter().map(|&(f, _)| f).collect();
     let mut stray = Vec::new();
     visit_rs_files(Path::new("src"), &mut |path| {
         let p = path.to_str().unwrap_or_default();
@@ -9935,32 +11193,106 @@ fn self_host_body_finalize_single_assembly_site() {
 /// its shape (invisible to stdout + ASan — a spurious clone is output-identical
 /// and only leaks silently under a pool allocator). Call
 /// `maybe_move_owning_param_ctor_temp(builder, &operand, span)` before the
-/// `clone_fn_for_ptr` clone, then bump `EXPECTED_CALL_SITES`.
+/// `clone_fn_for_ptr` clone, then declare the new site below.
+///
+/// ⚠ **The subject is the CLONE SITE, not the helper call.** Counting calls TO
+/// the helper is green over this lint's own class: the defect it exists to
+/// catch is a new ctor clone site with NO call, which adds nothing to a
+/// call-count. So the enumeration runs the other way — every function in the
+/// two scoped files that reaches `clone_fn_for_ptr` is classified, either as a
+/// ctor/boundary site that MUST offer the move first, or as a declared
+/// non-ctor site with its reason. A new cloning function lands in neither and
+/// names itself.
 #[test]
 fn owning_param_ctor_move_helper_site_count() {
     const HELPER_FN: &str = "fn maybe_move_owning_param_ctor_temp";
     const HELPER_CALL: &str = "maybe_move_owning_param_ctor_temp(";
-    const EXPECTED_CALL_SITES: usize = 3;
+    const CLONE_CALL: &str = "clone_fn_for_ptr(";
+
+    // The enumerated class — the three by-value ctor / boundary clone sites.
+    // Each MUST offer the move before it clones.
+    const CTOR_BOUNDARY_CLONE_FNS: &[&str] = &[
+        "clone_resource_args_for_init",  // 1. enum-variant init
+        "ensure_owned_at_boundary",      // 2. struct-boundary, Case 2
+        "clone_multi_use_resource_args", // 3. user-literal by-value
+    ];
+    // Every OTHER function in the two files that reaches `clone_fn_for_ptr`,
+    // with the reason it is NOT a ctor/boundary consuming position. A function
+    // that leaves this list without joining the class above reddens.
+    const NOT_A_CTOR_BOUNDARY: &[(&str, &str)] = &[
+        ("warn_implicit_clone",
+         "diagnostic/meter — derives the runtime fn NAME for the warning text; emits no clone."),
+        ("clone_live_staging_source",
+         "the consuming-ARG staging clone, taken only when the source is LIVE past the \
+          call — a live source has no move to offer."),
+        ("ptr_materialization_kind",
+         "a CLASSIFIER returning `PtrMaterialization::Clone(..)`; it emits nothing, and \
+          its callers are the sites that do."),
+        ("ensure_owned_at_consuming_arg",
+         "the call-ARG face of snag #1, which carries its OWN owning-param move path \
+          (`owning_param_move_src` + `move_zero_and_mark`) directly above the clone."),
+        ("cow_materialize_view_lazy_in_place",
+         "CoW: the source is a VIEW being made owned in place, never an owning-param temp."),
+        ("cow_materialize_view", "CoW view materialization — as above."),
+        ("cow_materialize_alias", "CoW alias materialization — as above."),
+        ("cow_materialize_collection_ref", "CoW collection-ref materialization — as above."),
+        ("lower_expr_inner",
+         "two reads, neither a ctor field-init: the `*box` deref CoW read, and the clone \
+          of a BORROWED match scrutinee."),
+    ];
 
     let files = [
         "src/ir/lowering/context.rs",
         "src/ir/lowering/exprs/mod.rs",
     ];
 
+    // `fn NAME(` with any visibility spelling (`pub(in crate::ir::lowering) fn`
+    // included) — `fn_name_of_decl` above only knows `pub` / `pub(crate)`.
+    fn enclosing_fn(line: &str) -> Option<String> {
+        let t = line.trim_start();
+        let rest = match t.strip_prefix("pub") {
+            Some(r) => r.strip_prefix('(').map_or(r, |r| r.split_once(')').map_or(r, |(_, a)| a)),
+            None => t,
+        };
+        let rest = rest.trim_start();
+        let rest = rest.strip_prefix("unsafe ").unwrap_or(rest);
+        let rest = rest.strip_prefix("fn ")?;
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() || !rest[name.len()..].starts_with(['(', '<']) {
+            return None;
+        }
+        Some(name)
+    }
+
     let mut helper_defs = 0usize;
-    let mut call_sites = 0usize;
+    // The two DERIVED places: which functions clone, and which offer the move.
+    let mut cloning_fns: BTreeSet<String> = Default::default();
+    let mut offering_fns: BTreeSet<String> = Default::default();
     for f in files {
-        let content = fs::read_to_string(f).unwrap_or_default();
+        let content = fs::read_to_string(f)
+            .unwrap_or_else(|_| panic!("owning_param_ctor_move_helper_site_count: cannot read {f}"));
+        let mut cur = String::new();
         for line in content.lines() {
+            if let Some(n) = enclosing_fn(line) {
+                cur = n;
+            }
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") || trimmed.starts_with("///") {
-                continue; // prose / anchor comments mention the helper by name
+                continue; // prose / anchor comments mention both names
             }
             if line.contains(HELPER_FN) {
                 helper_defs += 1;
                 continue; // the definition line is not a call site
             }
-            call_sites += line.matches(HELPER_CALL).count();
+            if line.contains(CLONE_CALL) && !line.contains("fn clone_fn_for_ptr") {
+                cloning_fns.insert(cur.clone());
+            }
+            if line.contains(HELPER_CALL) {
+                offering_fns.insert(cur.clone());
+            }
         }
     }
 
@@ -9968,15 +11300,50 @@ fn owning_param_ctor_move_helper_site_count() {
         helper_defs, 1,
         "Expected exactly one `maybe_move_owning_param_ctor_temp` definition, found {helper_defs}.",
     );
+    assert!(
+        cloning_fns.len() >= 8,
+        "owning_param_ctor_move_helper_site_count: only {} cloning functions found in \
+         {files:?} — the enclosing-fn walk broke, and a short list would make the \
+         classification below look total when it is not.",
+        cloning_fns.len(),
+    );
+
+    let ctor: BTreeSet<String> =
+        CTOR_BOUNDARY_CLONE_FNS.iter().map(|s| (*s).to_string()).collect();
+    let declared: BTreeSet<String> = ctor
+        .iter()
+        .cloned()
+        .chain(NOT_A_CTOR_BOUNDARY.iter().map(|(n, _)| (*n).to_string()))
+        .collect();
+
+    let unclassified: Vec<&String> = cloning_fns.difference(&declared).collect();
+    assert!(
+        unclassified.is_empty(),
+        "these functions in {files:?} emit a `clone_fn_for_ptr` clone and are declared \
+         NEITHER as a ctor/boundary site nor as a non-ctor one: {unclassified:?}\n\n\
+         Classify it. If it clones at a struct/enum ctor field-init or a boundary \
+         consuming position, call `maybe_move_owning_param_ctor_temp(builder, &operand, \
+         span)` BEFORE the clone and add it to CTOR_BOUNDARY_CLONE_FNS — a site that \
+         clones directly re-opens the `^`-move-is-zero-cost regression for its shape \
+         (invisible to stdout AND to ASan: a spurious clone is output-identical and \
+         only leaks under a pool allocator). Otherwise add it to NOT_A_CTOR_BOUNDARY \
+         WITH ITS REASON.",
+    );
+    let stale: Vec<&String> = declared.difference(&cloning_fns).collect();
+    assert!(
+        stale.is_empty(),
+        "these functions are declared here but no longer clone through \
+         `clone_fn_for_ptr` in {files:?}: {stale:?}. Drop the row in the same commit \
+         the site moves, or the classification stops being total silently.",
+    );
     assert_eq!(
-        call_sites, EXPECTED_CALL_SITES,
-        "owning-`!`-param ctor-move helper call-site count changed: {call_sites} vs \
-         {EXPECTED_CALL_SITES}.\n\n\
-         The move-vs-clone decision at a struct/enum ctor field-init must be \
-         centralized in `maybe_move_owning_param_ctor_temp` (Core #4). A new \
-         by-value clone site that doesn't call it before `clone_fn_for_ptr` re-opens \
-         the `!`-move-is-zero-cost regression (snag #1's 8th consuming category). \
-         Route the new site through the shared helper, then bump EXPECTED_CALL_SITES.",
+        offering_fns, ctor,
+        "the set of functions calling `maybe_move_owning_param_ctor_temp` is not the \
+         declared ctor/boundary class.\n  calls the helper : {offering_fns:?}\n  \
+         declared class  : {ctor:?}\n\n\
+         A missing member clones without offering the move (the regression); an extra \
+         one means the class grew without its row — declare it in \
+         CTOR_BOUNDARY_CLONE_FNS.",
     );
 }
 
@@ -12655,7 +14022,11 @@ fn agents_md_size_ratchet() {
 ///
 /// Inflow: a new token-count lint is a `scripts/figures.db` row in the
 /// same commit, or it is rejected.
-const AGENTS_MD_HEADING_COUNT: usize = 81;
+///
+/// ⚠ There is no `AGENTS_MD_HEADING_COUNT` const, deliberately. It was a
+/// third copy of one figure that the bijection below already forces from two
+/// independently-derived places — the inventory table and the extractor's hits
+/// — so it could only ever be edited, never consulted.
 
 const AGENTS_MD_HEADING_INVENTORY: &[(&str, &str)] = &[
     ("H-TITLE", "# Gorget Compiler"),
@@ -12751,21 +14122,21 @@ fn agents_md_heading_inventory_is_pinned() {
     let raw = fs::read_to_string("AGENTS.md").expect("AGENTS.md");
     let hits = agents_md_heading_hits(&raw);
 
-    assert_eq!(
-        AGENTS_MD_HEADING_INVENTORY.len(),
-        AGENTS_MD_HEADING_COUNT,
-        "AGENTS_MD_HEADING_INVENTORY has {} rows; AGENTS_MD_HEADING_COUNT is \
-         {AGENTS_MD_HEADING_COUNT}. The two are one figure — update both in the \
-         same commit.",
+    // Two independently-derived places: the inventory table, and the
+    // extractor's hits over AGENTS.md. No third copy of the number.
+    assert!(
+        AGENTS_MD_HEADING_INVENTORY.len() > 50,
+        "agents_md_heading_inventory_is_pinned: the inventory holds only {} \
+         rows — a short table makes the bijection below trivially satisfiable.",
         AGENTS_MD_HEADING_INVENTORY.len(),
     );
     assert_eq!(
         hits.len(),
-        AGENTS_MD_HEADING_COUNT,
-        "AGENTS.md has {} extractor-hit heading(s); the inventory pins \
-         {AGENTS_MD_HEADING_COUNT}. An extra heading must get an id; a missing \
-         one means a rule was deleted.",
+        AGENTS_MD_HEADING_INVENTORY.len(),
+        "AGENTS.md has {} extractor-hit heading(s); the inventory holds {}. \
+         An extra heading must get an id; a missing one means a rule was deleted.",
         hits.len(),
+        AGENTS_MD_HEADING_INVENTORY.len(),
     );
 
     let mut ids: Vec<&str> = AGENTS_MD_HEADING_INVENTORY.iter().map(|(id, _)| *id).collect();
@@ -13220,49 +14591,150 @@ fn ratchet_c_handrolled_materialize_bypass_count() {
 fn planner_scope_preheader_arm_count() {
     let src = fs::read_to_string("src/ir/lowering/stmts/mod.rs")
         .expect("read src/ir/lowering/stmts/mod.rs");
-
-    // Non-loop scope dispatch-arm hoists: `materialize_scope_carried_bare_params(
-    // ctx, builder, &stmt.node, …)` — one per scope form (If/With/
-    // NamedScope/Match/Select). Was 6; D50 (2026-08-28) removed the `Unsafe`
-    // scope form from the language, taking its dispatch arm with it.
-    const SCOPE_ARMS: usize = 5;
-    let scope_calls = src
-        .lines()
-        .filter(|l| {
-            let t = l.trim_start();
-            !t.starts_with("//")
-                && t.contains("materialize_scope_carried_bare_params(ctx, builder, &stmt.node")
-        })
-        .count();
-    assert_eq!(
-        scope_calls, SCOPE_ARMS,
-        "planner scope pre-header dispatch-arm hoist count changed: {scope_calls} vs \
-         expected {SCOPE_ARMS} (If/With/NamedScope/Match/Select). A new scope \
-         form must route through `materialize_scope_carried_bare_params` at its \
-         `lower_stmt` dispatch arm — see the fn doc + the arm-count lint comment.",
-    );
-
-    // Loop pre-header hoists route through the distinct
-    // `materialize_loop_carried_bare_params` funnel (while + bare loop here, for in
-    // for_loops.rs). Pinned so a loop form can't lose its 2G/loop-else hoist.
-    const LOOP_CALLS: usize = 3;
     let for_src = fs::read_to_string("src/ir/lowering/stmts/for_loops.rs")
         .expect("read src/ir/lowering/stmts/for_loops.rs");
-    let loop_calls = src
+
+    // The two numbers this used to pin (5 and 3) are both variant counts of
+    // `enum Stmt`, so they are DERIVED here instead — a new scope or loop form
+    // enrols itself and its missing hoist names ITSELF.
+    //
+    // LOOP forms carry a back-edge and ride the distinct
+    // `materialize_loop_carried_bare_params` funnel, from inside their lowering
+    // helper rather than from the dispatch arm.
+    const LOOP_FORMS: &[&str] = &["While", "For", "Loop"];
+    // …and the one block-bearing form that opens NO scope here.
+    const NO_PREHEADER: &[(&str, &str)] = &[
+        ("OnError", "does not lower a scope at this dispatch: it pushes its body \
+          onto `func_state.on_error_blocks` for emission on error paths, so there \
+          is no pre-scope block to hoist into."),
+    ];
+
+    // Arm bodies of `lower_stmt`'s dispatch, keyed by variant.
+    let lines: Vec<&str> = src
         .lines()
-        .chain(for_src.lines())
-        .filter(|l| {
-            let t = l.trim_start();
-            !t.starts_with("//")
-                && (t.contains("materialize_loop_carried_bare_params(ctx, builder")
-                    || t.contains("super::materialize_loop_carried_bare_params(ctx, builder"))
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect();
+    let mut heads: Vec<(usize, Vec<String>)> = Vec::new();
+    for (k, l) in lines.iter().enumerate() {
+        if l.strip_prefix("        Stmt::").is_none_or(|r| r.starts_with(' ')) {
+            continue;
+        }
+        let names: Vec<String> = l
+            .split("Stmt::")
+            .skip(1)
+            .map(|p| {
+                p.chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect::<String>()
+            })
+            .filter(|n| !n.is_empty())
+            .collect();
+        if !names.is_empty() {
+            heads.push((k, names));
+        }
+    }
+    assert!(
+        heads.len() > 15,
+        "planner_scope_preheader_arm_count: only {} `lower_stmt` dispatch arms \
+         found — the indentation anchor broke, and every check below would be \
+         meaningless.",
+        heads.len(),
+    );
+    let mut arm_of: std::collections::BTreeMap<String, String> = Default::default();
+    for (k, (at, names)) in heads.iter().enumerate() {
+        let end = heads.get(k + 1).map_or(lines.len(), |(n, _)| *n);
+        let body = lines[*at..end].join("\n");
+        for n in names {
+            arm_of.insert(n.clone(), body.clone());
+        }
+    }
+
+    let loops: BTreeSet<String> = LOOP_FORMS.iter().map(|s| (*s).to_string()).collect();
+    let no_preheader: BTreeSet<String> =
+        NO_PREHEADER.iter().map(|(n, _)| (*n).to_string()).collect();
+    let block_bearing = cow_prescan_block_bearing_stmts();
+    let unknown: Vec<&String> = loops
+        .union(&no_preheader)
+        .filter(|n| !block_bearing.contains(*n))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "planner_scope_preheader_arm_count: {unknown:?} are declared here but are \
+         not block-bearing `Stmt` variants — the rosters have drifted from \
+         `enum Stmt`.",
+    );
+
+    // (1) Every non-loop scope form hoists at its dispatch arm.
+    let scope_forms: Vec<&String> = block_bearing
+        .iter()
+        .filter(|n| !loops.contains(*n) && !no_preheader.contains(*n))
+        .collect();
+    assert!(
+        scope_forms.len() >= 4,
+        "planner_scope_preheader_arm_count: only {} non-loop scope form(s) derived \
+         from `enum Stmt` — the rosters ate the subject.",
+        scope_forms.len(),
+    );
+    let missing_scope: Vec<String> = scope_forms
+        .iter()
+        .filter(|n| {
+            arm_of
+                .get(**n)
+                .is_none_or(|b| !b.contains("materialize_scope_carried_bare_params(ctx, builder, &stmt.node"))
         })
-        .count();
-    assert_eq!(
-        loop_calls, LOOP_CALLS,
-        "loop pre-header hoist call count changed: {loop_calls} vs expected \
-         {LOOP_CALLS} (while + bare loop + for). The loop-else regression fixtures \
-         guard the else-body scan; this presence-count guards the hoist itself.",
+        .map(|n| (*n).clone())
+        .collect();
+    assert!(
+        missing_scope.is_empty(),
+        "planner scope pre-header hoist missing at the `lower_stmt` dispatch arm \
+         for {missing_scope:?}.\n\n\
+         Every non-loop scope form must call \
+         `materialize_scope_carried_bare_params(ctx, builder, &stmt.node, \
+         stmt.span)` in its pre-scope block, BEFORE the scope fn's first \
+         `save_locals` — see the fn doc. If a form genuinely opens no scope here, \
+         add it to NO_PREHEADER WITH ITS REASON.",
+    );
+
+    // (2) Every loop form's LOWERING HELPER rides the loop funnel. The callee is
+    //     read out of the form's own dispatch arm, so a renamed helper follows
+    //     along instead of silently dropping out of the census.
+    let both = format!("{src}\n{for_src}");
+    let mut missing_loop: Vec<String> = Vec::new();
+    for form in LOOP_FORMS {
+        let arm = arm_of.get(*form).unwrap_or_else(|| {
+            panic!("`lower_stmt` has no `Stmt::{form}` dispatch arm — re-anchor this lint")
+        });
+        let callee = arm
+            .lines()
+            .find_map(|l| l.trim_start().strip_prefix("lower_"))
+            .map(|r| {
+                format!(
+                    "lower_{}",
+                    r.chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect::<String>()
+                )
+            })
+            .unwrap_or_else(|| panic!("the `Stmt::{form}` arm calls no `lower_*` helper"));
+        let head = format!("fn {callee}(");
+        let at = both
+            .find(&head)
+            .unwrap_or_else(|| panic!("`{head}` not found in stmts/mod.rs or for_loops.rs"));
+        let end = both[at + head.len()..]
+            .find("\nfn ")
+            .or_else(|| both[at + head.len()..].find("\npub"))
+            .map_or(both.len(), |o| at + head.len() + o);
+        if !both[at..end].contains("materialize_loop_carried_bare_params(") {
+            missing_loop.push(format!("{form} -> {callee}"));
+        }
+    }
+    assert!(
+        missing_loop.is_empty(),
+        "loop pre-header hoist missing in the lowering helper for {missing_loop:?}.\n\n\
+         Every loop form rides `materialize_loop_carried_bare_params`, which keeps \
+         the 2G / loop-else hoist alive across the back-edge. The loop-else \
+         regression fixtures guard the else-body scan; this guards the hoist itself.",
     );
 }
 
@@ -15228,26 +16700,83 @@ fn infer_collection_element_type_arms_count() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // 7 arms: Vector__ · Deque__ · Dict__ · Map__ · HashMap__ · Set__ ·
-    // HashSet__. Each spelled as a `.strip_prefix("<Prefix>__")` call in the
-    // fn body; count the literal appearances of the prefixes (each MUST
-    // appear exactly once).
-    const EXPECTED: usize = 7;
-    let count: usize = ["Vector__", "Deque__", "Dict__", "Map__", "HashMap__", "Set__", "HashSet__"]
+    // The ARM SET, extracted from the fn body — derived place 1.
+    let arms = strip_prefix_families(&body);
+    // The family registry in `compiler/data/resources.gg` — derived place 2,
+    // written by a different author for a different reason.
+    let registry = resources_gg_families();
+
+    // Rows the registry declares that deliberately have NO arm here, each
+    // with the reason it is exempt. A row leaving this list without gaining
+    // an arm reddens the comparison below; so does a new registry family.
+    const NO_ARM_BY_DESIGN: &[(&str, &str)] = &[
+        ("GorgetArray__", "runtime-form alias — the mangled TYPE name a user \
+          collection reaches this fn under is always the surface spelling \
+          (`Vector__T`); the runtime form appears only at the C-emit boundary."),
+        ("GorgetDict__", "runtime-form alias, as GorgetArray__ above."),
+        ("GorgetMap__", "runtime-form alias, as GorgetArray__ above."),
+        ("GorgetSet__", "runtime-form alias, as GorgetArray__ above."),
+        ("Heap__", "Heap is the FACTORY constructor shape \
+          (`typed_constructor=false` in resources.gg, `Heap.new()`), so the \
+          empty-literal size-derivation path that drives the Set/HashSet arms \
+          has no Heap form to reach this fn with, and Heap has no positional \
+          index. If Heap ever gains a literal form, this row flips to an arm."),
+    ];
+    // Arms with no registry row, each with the reason it is spelled here.
+    const ARM_WITHOUT_REGISTRY_ROW: &[(&str, &str)] = &[
+        ("Map__", "an alias spelling with NO `MkPrefix` row in resources.gg \
+          and no producer elsewhere in `src/` — kept as a declared row so its \
+          orphan status stays visible rather than silently summing to 1."),
+    ];
+
+    let exempt: BTreeSet<String> =
+        NO_ARM_BY_DESIGN.iter().map(|(p, _)| p.to_string()).collect();
+    let extra_ok: BTreeSet<String> =
+        ARM_WITHOUT_REGISTRY_ROW.iter().map(|(p, _)| p.to_string()).collect();
+    // The collection families: every registry row that declares a collection
+    // runtime `method_prefix`.
+    let required: BTreeSet<String> = registry
         .iter()
-        .map(|p| body.matches(&format!(".strip_prefix(\"{p}\")")).count())
-        .sum();
-    assert_eq!(
-        count, EXPECTED,
-        "`infer_collection_element_type` arm count changed: {count} vs \
-         expected {EXPECTED}. Admitted-collection member set at Round XXIV \
-         Track E close: {{Vector, Deque, Dict, Map, HashMap, Set, HashSet}}. \
-         If a family was ADDED, verify the `try_resolve_index_element_ptr` \
-         kind-gate at `src/ir/lowering/exprs/mod.rs` also admits its \
-         CollectionKind (or that the family stays index-rejected like \
-         Set/HashSet — size-derivation only), then bump EXPECTED. If REMOVED, \
-         RESTORE the arm — the family now silently falls to `I64_TYPE` (a \
-         gg-check-clean SIGSEGV / llc-reject / C-emit-type-mismatch class).",
+        .filter(|(_, mp)| {
+            matches!(
+                mp.as_deref(),
+                Some("gorget_array") | Some("gorget_heap") | Some("gorget_set") | Some("gorget_map")
+            )
+        })
+        .map(|(p, _)| p.clone())
+        .filter(|p| !exempt.contains(p))
+        .collect();
+    assert!(
+        required.len() >= 4,
+        "infer_collection_element_type_arms_count: only {} collection \
+         families derived from resources.gg — the extraction or the exemption \
+         list broke, and a short roster asserts nothing.",
+        required.len(),
+    );
+
+    let missing: Vec<&String> = required.difference(&arms).collect();
+    let unexpected: Vec<&String> = arms
+        .difference(&required)
+        .filter(|p| !extra_ok.contains(*p))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "`infer_collection_element_type` has NO arm for {missing:?}, which \
+         `compiler/data/resources.gg` declares as collection families. The \
+         family now silently falls to `I64_TYPE` — a gg-check-clean SIGSEGV / \
+         llc-reject / C-emit-type-mismatch class. RESTORE the arm; if the \
+         family is genuinely exempt, add it to NO_ARM_BY_DESIGN WITH ITS \
+         REASON rather than deleting the row.",
+    );
+    assert!(
+        unexpected.is_empty(),
+        "`infer_collection_element_type` gained an arm for {unexpected:?}, a \
+         family `compiler/data/resources.gg` does not declare. Verify the \
+         `try_resolve_index_element_ptr` kind-gate at \
+         `src/ir/lowering/exprs/mod.rs` also admits its CollectionKind (or \
+         that the family stays index-rejected like Set/HashSet — \
+         size-derivation only), then give it a `MkPrefix` row in resources.gg \
+         or a declared ARM_WITHOUT_REGISTRY_ROW entry.",
     );
 }
 
@@ -15300,27 +16829,62 @@ fn elem_size_from_monomorphized_arms_count() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // 5 arms in the array-family: Vector__ · Deque__ · Set__ · HashSet__ ·
-    // Heap__. Each spelled as a `.strip_prefix("<Prefix>__")` call in the
-    // fn body; count the literal appearances of the prefixes (each MUST
-    // appear exactly once). Dict/HashMap constructors take the sibling
-    // dict_elem_sizes_from_monomorphized path and are counted there.
-    const EXPECTED: usize = 5;
-    let count: usize = ["Vector__", "Deque__", "Set__", "HashSet__", "Heap__"]
+    // The ARM SET, extracted from the fn body — derived place 1. Dict/HashMap
+    // constructors take the sibling `dict_elem_sizes_from_monomorphized` path
+    // (two element sizes, not one) and are excluded below.
+    let arms = strip_prefix_families(&body);
+    // The family registry in `compiler/data/resources.gg` — derived place 2.
+    let registry = resources_gg_families();
+
+    const NO_ARM_BY_DESIGN: &[(&str, &str)] = &[
+        ("GorgetArray__", "runtime-form alias — a monomorphized CONSTRUCTOR \
+          name is always the surface spelling (`Vector__T__new`)."),
+        ("GorgetSet__", "runtime-form alias, as GorgetArray__ above."),
+    ];
+    let exempt: BTreeSet<String> =
+        NO_ARM_BY_DESIGN.iter().map(|(p, _)| p.to_string()).collect();
+    // The SINGLE-element collection families: the three collection runtimes
+    // that carry one element size. `gorget_map` is the two-element runtime and
+    // goes through `dict_elem_sizes_from_monomorphized`.
+    let required: BTreeSet<String> = registry
         .iter()
-        .map(|p| body.matches(&format!(".strip_prefix(\"{p}\")")).count())
-        .sum();
-    assert_eq!(
-        count, EXPECTED,
-        "`elem_size_from_monomorphized` arm count changed: {count} vs \
-         expected {EXPECTED}. Array-family constructor member set at Round \
-         XXVI Track D close: {{Vector, Deque, Set, HashSet, Heap}}. If a \
-         family was ADDED, verify it belongs to the gorget_array family (via \
-         `compiler/data/resources.gg`'s `method_prefix`) and bump EXPECTED. \
-         If REMOVED, RESTORE the arm — the family now returns `None` and \
-         `unwrap_or(8)` at `insts.rs:3857` truncates every element of \
-         `Family[S]` where `sizeof(S)` != 8 on both C and LLVM \
-         (Round XXVI Track D bug class).",
+        .filter(|(_, mp)| {
+            matches!(
+                mp.as_deref(),
+                Some("gorget_array") | Some("gorget_heap") | Some("gorget_set")
+            )
+        })
+        .map(|(p, _)| p.clone())
+        .filter(|p| !exempt.contains(p))
+        .collect();
+    assert!(
+        required.len() >= 4,
+        "elem_size_from_monomorphized_arms_count: only {} single-element \
+         collection families derived from resources.gg — the extraction or \
+         the exemption list broke, and a short roster asserts nothing.",
+        required.len(),
+    );
+
+    let missing: Vec<&String> = required.difference(&arms).collect();
+    let unexpected: Vec<&String> = arms.difference(&required).collect();
+    assert!(
+        missing.is_empty(),
+        "`elem_size_from_monomorphized` has NO arm for {missing:?}, which \
+         `compiler/data/resources.gg` declares as single-element collection \
+         families (`method_prefix` gorget_array / gorget_heap / gorget_set). \
+         The helper now returns `None` and `unwrap_or(8)` at \
+         `insts.rs:3857` truncates every element of `Family[S]` where \
+         `sizeof(S)` != 8 on both C and LLVM (Round XXVI Track D bug class). \
+         RESTORE the arm; if the family is genuinely exempt, add it to \
+         NO_ARM_BY_DESIGN WITH ITS REASON.",
+    );
+    assert!(
+        unexpected.is_empty(),
+        "`elem_size_from_monomorphized` gained an arm for {unexpected:?}, \
+         which is not a single-element collection family in \
+         `compiler/data/resources.gg`. A two-element (`gorget_map`) family \
+         belongs in `dict_elem_sizes_from_monomorphized`; a new family needs \
+         its `MkPrefix` row and its `method_prefix` in resources.gg first.",
     );
 }
 
@@ -15395,33 +16959,18 @@ fn elem_size_from_monomorphized_arms_count() {
 /// `pack_trait_object_call_sites_count` precedents.
 #[test]
 fn unify_closure_ret_axis_class_enumeration() {
-    /// The 3-cell class. Bump when a NEW combinator legitimately joins the
-    /// unify-eligible class. NEVER bump silently — document which cell +
-    /// which axis + which sibling exclusion is being overridden, and update
-    /// the helper doc-comment alongside.
-    const EXPECTED_VARIANTS: usize = 3;
-    /// Every unify-eligible cell has EXACTLY ONE caller of the helper.
-    /// `count_callers` scans the whole `src/semantic/typecheck.rs` (not
-    /// scoped to `infer_closure_method_type`), so any additional
-    /// `self.unify_closure_ret_axis(` anywhere in the file bumps this
-    /// count. Extra callers signal a duplicate check or a leak into a
-    /// non-combinator path (Core #4 chokepoint violation); a missing one
-    /// signals the check was dropped — force the reviewer to explain and
-    /// update the constant deliberately.
-    const EXPECTED_CALLERS: usize = 3;
-    /// ggdef mirror: 3 variants (same class shape as production).
-    const EXPECTED_GGDEF_VARIANTS: usize = 3;
+    // ⚠ THE THREE `3`s ARE ONE FIGURE ON THREE LANES, so they are compared to
+    // EACH OTHER rather than to a pinned number. Three constants could drift
+    // apart one lane at a time and each stay green; a parity assertion makes a
+    // one-lane bump impossible by construction (Core #9). And the production
+    // caller count is not a fourth number either: the class's own rule is
+    // "every unify-eligible cell has EXACTLY ONE caller", so it derives from
+    // the variant count.
     /// ggdef mirror: 1 caller. ggdef's `elaborate_method` consolidates the
     /// per-cell arms into a single match, so the check runs at ONE
     /// chokepoint after `combinator_cell` classifies. Additional callers
     /// would signal a duplicate check (Core #4 chokepoint violation).
     const EXPECTED_GGDEF_CALLERS: usize = 1;
-    /// SH mirror: 3 arms in `combinator_axis_cell`. The arm-count is pinned
-    /// by grepping the `# R28E_CELL_MARKER` per-arm marker (chosen to
-    /// avoid ambiguity with prose that names any single cell). Bump only
-    /// alongside `EXPECTED_VARIANTS` + `EXPECTED_GGDEF_VARIANTS` — a
-    /// drift on any of the three lanes is a Core #9 all-lanes gap.
-    const EXPECTED_SH_ARMS: usize = 3;
     /// SH mirror: 1 caller. SH's `walk_expr_closures_inner` mirrors ggdef's
     /// chokepoint (`elaborate_method`) — one classifying call + one
     /// `unify_closure_ret_axis(` call site. Additional callers would
@@ -15499,10 +17048,25 @@ fn unify_closure_ret_axis_class_enumeration() {
     }
 
     let variants = count_variants(&typecheck_src);
+    assert!(
+        variants >= 2,
+        "only {variants} `ClosureCombinatorCell` variant(s) parsed out of \
+         src/semantic/typecheck.rs — the enum scan broke, and every cross-lane \
+         comparison below would be satisfied by three equal wrong numbers.",
+    );
+    let ggdef_variants = count_variants(&ggdef_src);
+    let sh_arms = sh_typecheck_src
+        .lines()
+        .filter(|line| line.contains("# R28E_CELL_MARKER"))
+        .count();
     assert_eq!(
-        variants, EXPECTED_VARIANTS,
-        "ClosureCombinatorCell variant count in src/semantic/typecheck.rs changed: \
-         {variants} vs expected {EXPECTED_VARIANTS}.\n\n\
+        (variants, variants),
+        (ggdef_variants, sh_arms),
+        "the closure-combinator axis-unify class DIVERGED between lanes \
+         (Core #9: a semantic change lands on every lane in the same round).\n  \
+         production `ClosureCombinatorCell` variants (src/semantic/typecheck.rs) : {variants}\n  \
+         ggdef mirror        (spec/ggdef/src/elaborate/mod.rs)                    : {ggdef_variants}\n  \
+         self-host `combinator_axis_cell` `# R28E_CELL_MARKER` arms               : {sh_arms}\n\n\
          If a NEW closure-returning combinator was added to \
          `src/ir/lowering/builtins.rs`, either:\n\
          (a) add a `ClosureCombinatorCell` variant + a match arm in \
@@ -15523,30 +17087,14 @@ fn unify_closure_ret_axis_class_enumeration() {
 
     let callers = count_callers(&typecheck_src);
     assert_eq!(
-        callers, EXPECTED_CALLERS,
-        "unify_closure_ret_axis call-site count in src/semantic/typecheck.rs \
-         changed: {callers} vs expected {EXPECTED_CALLERS}. Same guidance \
-         as EXPECTED_VARIANTS above: either wire a NEW cell (bump both \
-         constants) or reduce the caller count by removing an over-eager \
-         call (bump down).",
-    );
-
-    let ggdef_variants = count_variants(&ggdef_src);
-    assert_eq!(
-        ggdef_variants, EXPECTED_GGDEF_VARIANTS,
-        "ClosureCombinatorCell variant count in spec/ggdef/src/elaborate/mod.rs \
-         changed: {ggdef_variants} vs expected {EXPECTED_GGDEF_VARIANTS}.\n\n\
-         Round XXIV Track D twin-ratchet: the ggdef mirror MUST track \
-         production's `src/semantic/typecheck.rs` class shape. If a NEW \
-         axis-unify cell legitimately joins the class, add the variant + \
-         a match arm in `Elaborator::unify_closure_ret_axis` + a mapping \
-         in `Elaborator::combinator_cell`, then bump \
-         `EXPECTED_GGDEF_VARIANTS` (and `EXPECTED_VARIANTS` on the \
-         production side if that ships together). (Post-Round-XXV-Track-B: \
-         `Result.{{flat_map, filter}}` + `Option.{{map_err, unwrap_error}}` \
-         are now REJECTED at `elaborate_method` — a category-error, not \
-         an axis-unify cell — so they contribute nothing to this count.) \
-         A drift-only bump on one side is a Core #9 lane gap.",
+        callers, variants,
+        "`unify_closure_ret_axis` has {callers} call site(s) in \
+         src/semantic/typecheck.rs for {variants} unify-eligible cell(s).\n\n\
+         Every cell has EXACTLY ONE caller — that is the class's own rule, so the \
+         number derives and there is nothing to bump. An EXTRA caller signals a \
+         duplicate check or a leak into a non-combinator path (Core #4 chokepoint \
+         violation); a MISSING one signals a cell whose check was dropped, and its \
+         cross-type shape then escapes the class guard.",
     );
 
     let ggdef_callers = count_callers(&ggdef_src);
@@ -15569,11 +17117,6 @@ fn unify_closure_ret_axis_class_enumeration() {
     // the helper itself) paraphrases the marker name so it does not
     // inflate the count — the substring is spelled ONLY on the 3
     // classifier arms and on this scan line.
-    fn count_sh_arms(src: &str) -> usize {
-        src.lines()
-            .filter(|line| line.contains("# R28E_CELL_MARKER"))
-            .count()
-    }
     fn count_sh_callers(src: &str) -> usize {
         let mut callers = 0usize;
         for line in src.lines() {
@@ -15595,25 +17138,10 @@ fn unify_closure_ret_axis_class_enumeration() {
         callers
     }
 
-    // The count line itself contains the marker literal, so the scan
-    // would count it too — subtract that self-hit so the assertion
-    // reads the real arm count. (The prose above uses backticks around
-    // the marker to avoid inflating the count; this line does not.)
-    let sh_arms = count_sh_arms(&sh_typecheck_src).saturating_sub(0);
-    assert_eq!(
-        sh_arms, EXPECTED_SH_ARMS,
-        "combinator_axis_cell arm count in \
-         tests/fixtures/self_host_typechecker/typecheck.gg changed: \
-         {sh_arms} vs expected {EXPECTED_SH_ARMS}.\n\n\
-         Round XXVIII Track E 3-lane ratchet: the SH mirror MUST track \
-         production's `src/semantic/typecheck.rs` and ggdef's \
-         `spec/ggdef/src/elaborate/mod.rs` class shape. If a NEW \
-         axis-unify cell legitimately joins the class, add the arm in \
-         `combinator_axis_cell` (marked `# R28E_CELL_MARKER`) + the axis \
-         mapping in `axis_index_for_cell`, then bump `EXPECTED_SH_ARMS` \
-         alongside `EXPECTED_VARIANTS` / `EXPECTED_GGDEF_VARIANTS`. A \
-         drift-only bump on one lane is a Core #9 lane gap.",
-    );
+    // (The SH arm count is measured ABOVE, alongside the two Rust lanes, so the
+    // three-way parity assertion has all three in hand. There is deliberately no
+    // second assertion on it here: re-reading the same scan and comparing it to
+    // itself would assert nothing at all.)
 
     let sh_callers = count_sh_callers(&sh_typecheck_src);
     assert_eq!(
@@ -15865,40 +17393,12 @@ fn move_suggestion_advice_absent_from_source() {
 /// too. Do NOT lower `EXPECTED` without matching all three lanes.
 #[test]
 fn reject_wrong_receiver_combinator_arms_count() {
-    let src = std::fs::read_to_string("src/semantic/typecheck.rs")
-        .expect("read src/semantic/typecheck.rs");
-    const MARKER: &str = "R26A_ARM_MARKER";
-    let arm_count = src.matches(MARKER).count();
-    // One MARKER PER cell in the reject fn: the 5 combinator cells
-    // (Result.{flat_map, filter, flatten} + Option.{map_err, unwrap_error})
-    // plus the 4 tag-check cells added by Round XXVIII Track A
-    // (Result.{is_some, is_none} + Option.{is_ok, is_error}) = 9. The doc
-    // reference in the fn's header uses the string "R26A_ARM_MARKER" only
-    // inside `assert!` / rustdoc — the marker appears exclusively as a
-    // trailing comment on each of the 9 match arms.
-    const EXPECTED: usize = 9;
-    assert_eq!(
-        arm_count, EXPECTED,
-        "Round XXVI Track A + Round XXVIII Track A class-guard: \
-         `R26A_ARM_MARKER` occurrences in `src/semantic/typecheck.rs` \
-         changed: {arm_count} vs expected {EXPECTED}. The 9 markers pin the \
-         Result.{{flat_map, filter, flatten, is_some, is_none}} + \
-         Option.{{map_err, unwrap_error, is_ok, is_error}} receiver-gate \
-         arms in `reject_wrong_receiver_combinator` (combinators + \
-         tag-checks). If you added a new one-sided cell, wire ALL THREE \
-         lanes in the SAME round (Core #9 all-lanes semantic change): the \
-         ggdef production receiver-gate \
-         (`spec/ggdef/src/elaborate/mod.rs::elaborate_method`), this Rust \
-         arm, AND the SH mirror at \
-         `tests/fixtures/self_host_typechecker/typecheck.gg::reject_wrong_receiver_combinator` \
-         (+ its `R27C_ARM_MARKER` arm-count lint). Land a \
-         `combinator_<recv>_<method>_rejected.gg` reject fixture \
-         (RED-verified per Core #12) plus its `check_gg_fails` Rust + \
-         `self_host_lowerer_driver_rejects_combinator_*` SH integration \
-         tests, and bump EXPECTED. If you removed one, move the reference \
-         table in `docs/language-reference.md:3861-3891` and the ggdef gate \
-         too — do NOT lower EXPECTED without all lanes moving with it.",
-    );
+    // ⚠ CELLS, not a count, and compared ACROSS LANES rather than to a pinned
+    // number. Two `EXPECTED = 9` constants — one here, one on the SH twin —
+    // could drift apart one lane at a time and each stay green; a count also
+    // cannot see a cell SUBSTITUTED for another. The parity assertion makes a
+    // one-lane bump impossible by construction (Core #9).
+    assert_receiver_gate_lanes_agree("reject_wrong_receiver_combinator_arms_count");
 }
 
 /// Round XXVII Track B class-retirement guard (Core #6 executable
@@ -16175,40 +17675,10 @@ fn fn_body_end(lines: &[&str], fn_start: usize) -> usize {
 /// `docs/language-reference.md:3861-3891` and both other lanes must move.
 #[test]
 fn sh_reject_wrong_receiver_combinator_arms_count() {
-    let src = std::fs::read_to_string(
-        "tests/fixtures/self_host_typechecker/typecheck.gg",
-    )
-    .expect("read tests/fixtures/self_host_typechecker/typecheck.gg");
-    const MARKER: &str = "R27C_ARM_MARKER";
-    let arm_count = src.matches(MARKER).count();
-    // One MARKER PER cell in the SH reject fn: the 5 combinator cells
-    // (Result.{flat_map, filter, flatten} + Option.{map_err, unwrap_error})
-    // plus the 4 tag-check cells added by Round XXVIII Track A
-    // (Result.{is_some, is_none} + Option.{is_ok, is_error}) = 9. The doc
-    // reference in the fn's header paraphrases (does NOT spell the marker
-    // string) so the count is unambiguous.
-    const EXPECTED: usize = 9;
-    assert_eq!(
-        arm_count, EXPECTED,
-        "Round XXVII Track C + Round XXVIII Track A SH-lane class-guard: \
-         `R27C_ARM_MARKER` occurrences in \
-         `tests/fixtures/self_host_typechecker/typecheck.gg` changed: \
-         {arm_count} vs expected {EXPECTED}. The 9 markers pin the \
-         Result.{{flat_map, filter, flatten, is_some, is_none}} + \
-         Option.{{map_err, unwrap_error, is_ok, is_error}} receiver-gate \
-         arms in the SH-lane `reject_wrong_receiver_combinator` \
-         (combinators + tag-checks). If you added a new one-sided cell, \
-         wire ALL THREE lanes in the SAME round (Core #9): Rust chokepoint \
-         (+`R26A_ARM_MARKER`, bump its lint), ggdef `elaborate_method`, \
-         and this SH arm — plus land a \
-         `combinator_<recv>_<method>_rejected.gg` fixture (RED-verified \
-         per Core #12) and a matching \
-         `self_host_lowerer_driver_rejects_combinator_*` integration test. \
-         If you removed one, move the reference table in \
-         `docs/language-reference.md:3861-3891` and the ggdef + Rust \
-         chokepoints too — do NOT lower EXPECTED without all lanes moving \
-         with it.",
-    );
+    // The SH half of the same parity assertion (see the Rust twin). Kept as its
+    // own `#[test]` so a failure names the lane a reader is looking at, but the
+    // COMPARISON is one — there is no separate SH number to bump.
+    assert_receiver_gate_lanes_agree("sh_reject_wrong_receiver_combinator_arms_count");
 }
 
 /// Round XXIX Track B — Core #6 executable guard for the METHOD SILENT-ACCEPT
@@ -16979,8 +18449,21 @@ fn for_loop_fast_path_method_names_arms_count() {
 /// **Discovery method:** variant-enumeration walk of `SemanticErrorKind`
 /// Display arms (per brief §2c). NOT the earlier grep pattern rejected as
 /// noisy — that returned 67 (any backticked-variable diagnostic), catching
-/// unrelated new diagnostics. This pin is authored from a manual read of
-/// each Display arm; the count is the trip-point.
+/// unrelated new diagnostics. The advice rows are authored from a manual read
+/// of each Display arm.
+///
+/// **Both directions.** The rows → Display walk only proves each row names a
+/// real variant; on its own it is green over this lint's own class, because a
+/// NEW advice-emitting variant in `errors.rs` is simply absent from the list
+/// and nothing looks for it. The Display → rows direction is therefore made
+/// TOTAL: every variant is either an advice row or a declared
+/// `NO_FIX_IT_ADVICE` row, and rustc's exhaustiveness over
+/// `SemanticErrorKind` is the witness that no variant can dodge the Display
+/// impl. A new diagnostic lands in neither list and names itself.
+/// (There is no mechanical marker for "this arm tells the user what to
+/// write": the best candidate needle, ``use `` `, recalls 4 of 14 advice
+/// variants and drags in 6 non-advice ones — measured. Totality is the only
+/// honest instrument.)
 ///
 /// **Sub-case granularity note (Core #15(e) Q2):** some variants (notably
 /// `MoveWithoutOperator` with `shape: MoveShape` + `write_through_available:
@@ -17066,6 +18549,147 @@ fn advice_diagnostic_registration() {
              `Display` scope-detection above is stale."
         );
     }
+
+    // ⚠ REVERSE DIRECTION. The walk above is rows -> Display only: it proves
+    // every row here names a real variant, and says NOTHING about a variant in
+    // errors.rs that emits advice and was never added here — which is the class
+    // this lint exists to close. There is no mechanical marker for "this arm
+    // tells the user what to write" (measured: the best candidate needle,
+    // "use `", recalls 4 of 14 advice variants and drags in 6 non-advice ones),
+    // so totality is the only honest instrument: EVERY variant named in the
+    // Display impl is either an advice row above or a declared no-advice row
+    // below. A new diagnostic lands in neither and names itself here.
+    const NO_FIX_IT_ADVICE: &[&str] = &[
+        "AmpInOperandPosition", "AssignmentToConst", "AutoDerefConsumingThroughGuard",
+        "AwaitNonFuture", "AwaitOutsideAsync", "BorrowAcrossAwait", "BorrowConflict",
+        "BreakOutsideLoop", "CannotInferType", "ClosureEscapesScope",
+        "ClosureKindMismatch", "ContinueOutsideLoop", "DanglingReturn",
+        "DefaultOpNonOptional", "DefaultOpRhsTypeMismatch", "DerefCoercionUnimplemented",
+        "DerefNonBox", "DeriveFromRequiresSingleField", "DoubleAwait", "DoubleMove",
+        "DuplicateDefinition", "DuplicateImpl", "DuplicateNamedArg",
+        "DuplicateStructField", "DuplicateStructFieldDecl", "DuplicateSuiteBlock",
+        "FallibleArithmeticOnNonInt", "FallibleOpInConst", "FieldMissingDerivedTrait",
+        "InferredThrowsUnsupported", "InvalidAssignTarget", "InvalidFnTraitArg",
+        "InvalidParameterMode", "LocalBorrowBind", "MainThrowsNonInt", "MetaEvalError",
+        "MethodGenericInferenceFailed", "MethodSignatureMismatch", "MissingRequiredArg",
+        "MissingReturn", "MissingTraitMethod", "MoveInLoop", "MoveInOperandPosition",
+        "MutationWhileBorrowed", "MutexDoubleLock", "NoFieldFound", "NoMethodFound",
+        "NonDerefContainerBareTrait", "NonExhaustiveMatch", "NonPrintableInterpolation",
+        "NoreturnBodyReturns", "NoreturnWithThrows", "NotAFunction", "NotAStruct",
+        "NotAType", "NotIndexable", "NotIndexableMut", "OnErrorInNonThrowingFunction",
+        "OrPatternBindingMismatch", "OrphanImpl", "PositionalAfterNamed",
+        "PrimitiveTraitImpl", "PrivateImport", "PrivateTypeInPublicSignature",
+        "ReadWhileMutCaptured", "RecursiveTypeNeedsBox", "RequiredAfterDefault",
+        "RethrowInNonThrowingFunction", "ReturnOutsideFunction", "SelectOutsideAsync",
+        "ShiftFallibleRouteBNotYetImplemented", "SpawnClosureCaptureBorrowed",
+        "SpawnClosureCaptureMutable", "SpawnNonFuture", "SpawnWithBorrowedRef",
+        "StringIndexAssign", "TemporaryBorrow", "TraitCycle", "TupleIndexOutOfBounds",
+        "TypeInValuePosition", "TypeMismatch", "TypeMismatchInPow",
+        "UnconvertibleErrorPropagation", "UndefinedName", "UnderivableTrait",
+        "UnknownDirective", "UnknownNamedArg", "UnresolvedBorrowOrigin",
+        "UnresolvedImport", "UnsatisfiedTraitBound", "UnsupportedOperator",
+        "UnwrapOnNonOptional", "UseAfterMove", "UseAfterSourceMoved", "ValueOutOfRange",
+        "ViaFieldNotFound", "ViaFieldTypeMissingTrait", "ViaWithoutTrait",
+        "WriteWhileMutCaptured", "WrongArgCount", "WrongFieldCount",
+    ];
+
+    // Comment-stripped: a `// SemanticErrorKind::Foo` note is prose, not an arm.
+    let display_code: String = display_scope
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut display_variants: BTreeSet<String> = Default::default();
+    for (i, m) in display_code.match_indices("SemanticErrorKind::") {
+        let rest = &display_code[i + m.len()..];
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            display_variants.insert(name);
+        }
+    }
+    assert!(
+        display_variants.len() > 50,
+        "advice_diagnostic_registration: only {} variants parsed out of the \
+         Display impl — the scope detection broke, and a short list would make \
+         the classification below look total when it is not.",
+        display_variants.len(),
+    );
+    // …and the enumeration is TOTAL because rustc says so: the Display `match`
+    // is exhaustive over `SemanticErrorKind`, so a new variant CANNOT reach the
+    // tree without an arm here. rustc is the independent witness; this
+    // assertion is what makes that guarantee readable from the lint.
+    let enum_variants: BTreeSet<String> = {
+        let es = errors_src
+            .find("pub enum SemanticErrorKind {")
+            .expect("`pub enum SemanticErrorKind` moved — re-anchor this lint");
+        let open = errors_src[es..].find('{').expect("enum body open");
+        let mut depth: i32 = 0;
+        let mut close = None;
+        for (i, c) in errors_src[es..].char_indices().skip(open) {
+            if c == '{' { depth += 1; }
+            if c == '}' {
+                depth -= 1;
+                if depth == 0 { close = Some(i + 1); break; }
+            }
+        }
+        errors_src[es..es + close.expect("enum body close")]
+            .lines()
+            .filter_map(|l| {
+                let t = l.strip_prefix("    ")?;
+                if t.starts_with(char::is_whitespace) || t.starts_with("//") {
+                    return None;
+                }
+                let name: String = t
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                let sep = t[name.len()..].chars().next()?;
+                if name.starts_with(char::is_uppercase) && matches!(sep, '{' | '(' | ',' | ' ') {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    };
+    assert_eq!(
+        display_variants, enum_variants,
+        "the `Display` arm set and the `SemanticErrorKind` variant set disagree \
+         in `src/semantic/errors.rs`. rustc's exhaustiveness makes these equal by \
+         construction, so a difference means one of the two EXTRACTIONS above is \
+         broken — and a broken extraction is what makes the classification below \
+         pass vacuously. Fix the parse, do not relax the assertion.",
+    );
+    let classified: BTreeSet<String> = FIX_IT_ADVICE_ROWS
+        .iter()
+        .map(|(v, _)| (*v).to_string())
+        .chain(NO_FIX_IT_ADVICE.iter().map(|v| (*v).to_string()))
+        .collect();
+    let unclassified: Vec<&String> = display_variants.difference(&classified).collect();
+    assert!(
+        unclassified.is_empty(),
+        "these `SemanticErrorKind` variants have a `Display` arm in \
+         `src/semantic/errors.rs` and are in NEITHER list here: {unclassified:?}\n\n\
+         Read the arm and classify it. If it tells the user something concrete \
+         to WRITE (a snippet, a call to add, a sigil to insert), add it to \
+         FIX_IT_ADVICE_ROWS and pair it with a before/after fixture in \
+         `tests/integration.rs::advice_fixtures_have_working_remedy` (or list \
+         it in OK_UNPAIRED with a filed follow-up). If it only DESCRIBES what \
+         is wrong, add it to NO_FIX_IT_ADVICE. Leaving it out is the one thing \
+         that is not allowed: it is how a fix-it advice that does not compile \
+         ships unnoticed.",
+    );
+    let stale: Vec<&String> = classified.difference(&display_variants).collect();
+    assert!(
+        stale.is_empty(),
+        "these names are classified here but have NO `Display` arm in \
+         `src/semantic/errors.rs`: {stale:?}. The variant was renamed or \
+         removed — drop the row in the same commit, or the classification \
+         above stops being total without anyone noticing.",
+    );
 
     // Round XXIX Track C output-review fold — step 4 cross-lint.
     // Every FIX_IT_ADVICE_ROWS entry MUST be EITHER paired with a
@@ -18536,82 +20160,111 @@ fn assigns_compound_op_no_silent_fallthrough() {
 /// per-file count-off-by-one; restore restored green.
 #[test]
 fn d26_map_binop_arm_count_ratchet() {
-    let re = regex::Regex::new(
-        r"(AddFallible|SubFallible|MulFallible|DivFallible|RemFallible|ShlFallible|ShrFallible)",
-    )
-    .expect("d26 fallible-arm regex");
+    // Derived place 1 — the fallible-arith variant set, read out of the typed
+    // helper that DEFINES it. A roster hand-listed here could not see an 8th op.
+    let ast = fs::read_to_string("src/parser/ast.rs").expect("read src/parser/ast.rs");
+    let helper_start = ast
+        .find("pub fn is_fallible_arith(")
+        .expect("`is_fallible_arith` moved — re-anchor this lint");
+    let helper_end = ast[helper_start..]
+        .find("\n    }")
+        .map(|o| helper_start + o)
+        .expect("`is_fallible_arith` body close not found");
+    let variants: BTreeSet<String> = ast[helper_start..helper_end]
+        .match_indices("BinaryOp::")
+        .filter_map(|(k, m)| {
+            let rest = &ast[helper_start + k + m.len()..];
+            let n: String = rest.chars().take_while(|c| c.is_alphanumeric()).collect();
+            n.ends_with("Fallible").then_some(n)
+        })
+        .collect();
+    assert!(
+        variants.len() >= 5,
+        "d26_map_binop_arm_count_ratchet: only {} fallible-arith variants read out \
+         of `is_fallible_arith` — the extraction broke, and a short set makes the \
+         per-file coverage below vacuous. Found: {variants:?}",
+        variants.len(),
+    );
 
-    let expectations: &[(&str, usize, &str)] = &[
-        (
-            "src/parser/ast.rs",
-            14,
-            "BinaryOp enum definition (7) + is_fallible_arith() matches! (7)",
-        ),
-        (
-            "src/formatter/mod.rs",
-            14,
-            "formatter arm - 7 arms `Fallible => \"...!\"` in binary_op_str (7) + \
-             7 mentions in `binary_op_left_bp` precedence table (Round XXXVI FMT-A: \
-             2 shift fallibles at bp 25, 2 add fallibles at bp 27, 3 mul/div/rem \
-             fallibles at bp 29 = 7)",
-        ),
-        (
-            "src/semantic/typecheck.rs",
-            30,
-            "op_glyph_str (7) + op_display non-compound (7) + op_display compound (7) + \
-             shift-fallible Route-B reject guard matches! (2: ShlFallible|ShrFallible) + \
-             op_trait_and_method's EXHAUSTIVE fallible arm (7 — D46 deleted its \
-             `_ => None` catch-all so rustc exhaustiveness, not an arm count, is \
-             the guard that a new BinaryOp variant cannot go unmapped)",
-        ),
-        (
-            "src/parser/expr.rs",
-            7,
-            "Pratt infix-op map - 7 lex-token to InfixOp::Binary arms",
-        ),
-        (
-            "src/ir/lowering/exprs/operators.rs",
-            17,
-            "5-variant matches! dispatch + 5-arm base_op map + 7-arm fallback bin_op map",
-        ),
-        (
-            "spec/ggdef/src/elaborate/mod.rs",
-            12,
-            "map_binop - 5 arith arms (2 mentions each: B::X + BinOp::X) + 2 shift OOS reject",
-        ),
+    // The two MULTIPLICITY GROUPS. Members of a group are mentioned the same
+    // number of times in any given file — the arms come in whole families — so
+    // uniformity WITHIN a group replaces a pinned per-file total, and it is
+    // strictly sharper: a per-file count is green under substitution, while a
+    // single arm deleted for ONE variant breaks its group's uniformity.
+    const ARITH: &[&str] = &[
+        "AddFallible", "SubFallible", "MulFallible", "DivFallible", "RemFallible",
+    ];
+    const SHIFT: &[&str] = &["ShlFallible", "ShrFallible"];
+    let declared: BTreeSet<String> = ARITH
+        .iter()
+        .chain(SHIFT.iter())
+        .map(|s| (*s).to_string())
+        .collect();
+    assert_eq!(
+        declared, variants,
+        "the fallible-arith multiplicity groups here and `is_fallible_arith` in \
+         src/parser/ast.rs disagree.\n  groups: {declared:?}\n  helper: {variants:?}\n\n\
+         An 8th fallible-arith operator joins ARITH or SHIFT (they differ because \
+         the shift ops carry the Route-B reject guard and skip the lowering \
+         base_op map). A retired one leaves both.",
+    );
+
+    // Derived place 2 — every site that must carry the whole family.
+    const SITES: &[(&str, &str)] = &[
+        ("src/parser/ast.rs",
+         "the `BinaryOp` enum definition + the `is_fallible_arith()` typed helper"),
+        ("src/formatter/mod.rs",
+         "`binary_op_str`'s glyph arms + the `binary_op_left_bp` precedence table"),
+        ("src/semantic/typecheck.rs",
+         "`op_glyph_str` + `op_display` (non-compound and compound) + \
+          `op_trait_and_method`'s exhaustive fallible arm; the SHIFT group carries \
+          one extra mention each from the Route-B reject guard"),
+        ("src/parser/expr.rs", "the Pratt infix-op map"),
+        ("src/ir/lowering/exprs/operators.rs",
+         "`lower_fallible_arith_binop`'s dispatch + base_op map (ARITH only) and \
+          the fallback bin_op map (all seven)"),
+        ("spec/ggdef/src/elaborate/mod.rs",
+         "`map_binop` — the arith arms plus the shift out-of-subset rejects"),
     ];
 
-    let mut per_file_actual: Vec<(String, usize)> = Vec::new();
-    for (path, expected, why) in expectations {
-        let content = match fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => panic!("d26_map_binop_arm_count_ratchet: cannot read {path}: {e}"),
-        };
-        let count: usize = content
+    let mut problems: Vec<String> = Vec::new();
+    for (path, why) in SITES {
+        let content = fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("d26_map_binop_arm_count_ratchet: cannot read {path}: {e}"));
+        let code: Vec<&str> = content
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
-            .map(|l| re.find_iter(l).count())
-            .sum();
-        per_file_actual.push((path.to_string(), count));
-        assert_eq!(
-            count, *expected,
-            "d26_map_binop_arm_count_ratchet: `{path}` fallible-arith variant \
-             mentions {count} vs expected {expected} ({why}).\n\n\
-             If a new fallible-arith variant was added (an 8th op), it must land \
-             at every enumerated site (see doc comment). Bump each per-file count \
-             here after confirming the new op reaches: parser Pratt, ast helper, \
-             formatter, checker glyph table, lowerer dispatch + base_op map, \
-             lowerer fallback, ggdef elaborator, AND every SH-mirror site (which \
-             this Rust-only lint does NOT ratchet - the SH mirror lands in the \
-             same round per Core #9).",
-        );
+            .collect();
+        let count = |v: &str| -> usize { code.iter().map(|l| l.matches(v).count()).sum() };
+        let missing: Vec<&String> = variants.iter().filter(|v| count(v) == 0).collect();
+        if !missing.is_empty() {
+            problems.push(format!("{path}: never mentions {missing:?} ({why})"));
+            continue;
+        }
+        for (group, label) in [(ARITH, "ARITH"), (SHIFT, "SHIFT")] {
+            let counts: Vec<(String, usize)> =
+                group.iter().map(|v| ((*v).to_string(), count(v))).collect();
+            let first = counts[0].1;
+            if counts.iter().any(|(_, c)| *c != first) {
+                problems.push(format!(
+                    "{path}: the {label} group is not uniform — {counts:?} ({why})"
+                ));
+            }
+        }
     }
-    let total: usize = per_file_actual.iter().map(|(_, c)| c).sum();
-    let expected_total: usize = expectations.iter().map(|(_, c, _)| c).sum();
-    assert_eq!(
-        total, expected_total,
-        "d26 fallible-arm total {total} vs expected {expected_total} - per-file \
-         breakdown: {per_file_actual:?}",
+    assert!(
+        problems.is_empty(),
+        "D26 fallible-arith family coverage broke:\n  {}\n\n\
+         Every fallible-arith variant must reach EVERY site, and the members of a \
+         multiplicity group must reach each site the SAME number of times — the \
+         arms come in whole families, so an odd one out is an arm that was added \
+         or deleted for a single operator.\n\n\
+         If a NEW fallible-arith operator landed, it must reach: parser Pratt, the \
+         ast helper, the formatter, the checker glyph/display tables, the lowerer \
+         dispatch + base_op map, the lowerer fallback, the ggdef elaborator, AND \
+         every SH-mirror site — which this Rust-only lint does NOT ratchet; the SH \
+         mirror lands in the same round (Core #9).",
+        problems.join("\n  "),
     );
 }
 
@@ -18727,7 +20380,9 @@ fn fmt_precedence_check_arm_count() {
 /// canonical) and never regress to `!` (retired; `!` is now the D26/D29
 /// error channel exclusively). This lint pins the emit-site COUNT on
 /// both sides so a new arm that emits the sigil without joining the
-/// class trips the count.
+/// class trips the count — **and inspects the GLYPH each arm actually
+/// writes**, because a count over arm HEADS is green over its own class
+/// (an arm flipping `^`→`!` keeps its head and leaves the count at 7).
 ///
 /// **Rust arms (7 sites, `src/formatter/mod.rs`):**
 ///   `Ownership::Move =>`     — 4 arms:
@@ -18754,21 +20409,69 @@ fn fmt_move_sigil_emit_arm_count() {
     const EXPECTED_RUST: usize = 7;
     const EXPECTED_SH: usize = 6;
 
+    // The D27 canonical glyph and the retired spelling it must never
+    // regress to, as each appears inside an emitted STRING LITERAL.
+    const OK_EMITS: [&str; 3] = ["\"^\"", "\" ^\"", "\"^self\""];
+    const BAD_EMITS: [&str; 3] = ["\"!\"", "\" !\"", "\"!self\""];
+
     let rust = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
     // Skip pure-comment lines so a `// TODO Ownership::Move …` note
     // doesn't spuriously trip the count. Only real code arms count.
+    let rust_lines: Vec<&str> = rust.lines().collect();
     let mut rust_count = 0usize;
-    for line in rust.lines() {
+    // ⚠ The COUNT alone is green over this lint's own class: an arm that
+    // flips `^` back to `!` keeps its head, so the head census never moves.
+    // Each arm head therefore also has its own EMIT WINDOW inspected — the
+    // head line plus the next five code lines, comments stripped.
+    let mut rust_glyphless: Vec<String> = Vec::new();
+    let mut rust_regressed: Vec<String> = Vec::new();
+    for (i, line) in rust_lines.iter().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("//") {
             continue;
         }
-        rust_count += line.matches("Ownership::Move =>").count();
-        rust_count += line.matches("Type::Owned(inner) =>").count();
-        rust_count += line.matches("Expr::Move { expr } =>").count();
-        rust_count += line.matches("if *is_move {").count();
+        let heads = line.matches("Ownership::Move =>").count()
+            + line.matches("Type::Owned(inner) =>").count()
+            + line.matches("Expr::Move { expr } =>").count()
+            + line.matches("if *is_move {").count();
+        if heads == 0 {
+            continue;
+        }
+        rust_count += heads;
+        let window: String = rust_lines[i..(i + 6).min(rust_lines.len())]
+            .iter()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n");
+        if BAD_EMITS.iter().any(|n| window.contains(n)) {
+            rust_regressed
+                .push(format!("src/formatter/mod.rs:{} — {trimmed}", i + 1));
+        } else if !OK_EMITS.iter().any(|n| window.contains(n)) {
+            rust_glyphless
+                .push(format!("src/formatter/mod.rs:{} — {trimmed}", i + 1));
+        }
     }
+    assert!(
+        rust_regressed.is_empty(),
+        "D27 Round A REGRESSION: a Move-sigil emit arm in \
+         `src/formatter/mod.rs` writes the retired `!` spelling.\n{}\n\n\
+         `!` is now the D26/D29 error channel exclusively; the move sigil \
+         is `^` (D27 Round A). Restore the `^` emit in the arm above.",
+        rust_regressed.join("\n"),
+    );
+    assert!(
+        rust_glyphless.is_empty(),
+        "D27 Round A: a Move-sigil arm head in `src/formatter/mod.rs` has \
+         no recognisable sigil emit in its own window.\n{}\n\n\
+         Every arm matched by this lint must write one of {OK_EMITS:?} \
+         within its head line + 5 following code lines. If the arm \
+         legitimately emits through a helper, route it through \
+         `format_ownership_prefix` (the named-param chokepoint) so the \
+         glyph stays in one place — do NOT widen the window.",
+        rust_glyphless.join("\n"),
+    );
     assert_eq!(
         rust_count, EXPECTED_RUST,
         "D27 Round A emit-site count in `src/formatter/mod.rs` changed: \
@@ -18783,26 +20486,73 @@ fn fmt_move_sigil_emit_arm_count() {
         "tests/fixtures/self_host_resolver/format.gg",
         "tests/fixtures/self_host_typechecker/format.gg",
     ];
+    // SH sigil spellings: `"^" + …` (parser/resolver) and `f"^{…}"`
+    // (typechecker). The retired spellings are the same with `!`.
+    const SH_OK: [&str; 2] = ["\"^\"", "f\"^"];
+    const SH_BAD: [&str; 2] = ["\"!\"", "f\"!"];
     let mut sh_count = 0usize;
+    let mut sh_glyphless: Vec<String> = Vec::new();
+    let mut sh_regressed: Vec<String> = Vec::new();
     for f in sh_files {
         let src = fs::read_to_string(f)
             .unwrap_or_else(|_| panic!("cannot read {f}"));
         // Skip `#`-comment lines so notes mentioning `EMove` / `^self`
         // in prose don't spuriously trip the count.
-        for line in src.lines() {
+        let lines: Vec<&str> = src.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
             let t = line.trim_start();
             if t.starts_with('#') {
                 continue;
             }
             if t.starts_with("case EMove(inner):") {
                 sh_count += 1;
+                // ⚠ Same class blindness as the Rust half: the arm HEAD
+                // survives a `^`→`!` flip untouched. Scope a body window
+                // to this arm — the sibling `case EPropagate(inner):`
+                // legitimately emits `!`, so the window MUST stop at the
+                // next `case`.
+                let mut body: Vec<&str> = Vec::new();
+                for next in lines.iter().skip(i + 1) {
+                    let nt = next.trim_start();
+                    if nt.starts_with("case ") || nt.starts_with("else:") {
+                        break;
+                    }
+                    if nt.starts_with('#') || nt.is_empty() {
+                        continue;
+                    }
+                    body.push(next);
+                }
+                let body = body.join("\n");
+                if SH_BAD.iter().any(|n| body.contains(n)) {
+                    sh_regressed.push(format!("{f}:{} — case EMove", i + 1));
+                } else if !SH_OK.iter().any(|n| body.contains(n)) {
+                    sh_glyphless.push(format!("{f}:{} — case EMove", i + 1));
+                }
             }
             // `^self` emit: only lines that are the actual concat site.
             if t.starts_with("result = result +") && t.contains("\"^self\"") {
                 sh_count += 1;
             }
+            // …and its regressed twin, which the count above cannot see.
+            if t.starts_with("result = result +") && t.contains("\"!self\"") {
+                sh_regressed.push(format!("{f}:{} — `!self` emit", i + 1));
+            }
         }
     }
+    assert!(
+        sh_regressed.is_empty(),
+        "D27 Round A REGRESSION on the SH lane: a Move-sigil emit writes \
+         the retired `!` spelling.\n{}\n\n\
+         Core #9 — the SH formatters emit `^` alongside the Rust reference.",
+        sh_regressed.join("\n"),
+    );
+    assert!(
+        sh_glyphless.is_empty(),
+        "D27 Round A: a SH `case EMove(inner):` arm has no recognisable \
+         sigil emit in its body.\n{}\n\n\
+         The arm must emit one of {SH_OK:?} before the next `case`.",
+        sh_glyphless.join("\n"),
+    );
     assert_eq!(
         sh_count, EXPECTED_SH,
         "D27 Round A SH emit-site count in `self_host_*/format.gg` changed: \
@@ -21087,83 +22837,124 @@ fn formatter_collection_literal_interior_hook_dispatch() {
 /// fn — the scope guard excludes it.
 #[test]
 fn formatter_literal_arms_dispatch_count() {
-    /// Expected collection-literal arms in `format_expr`:
-    /// - Expr::ArrayLiteral
-    /// - Expr::TupleLiteral
-    /// - Expr::DictLiteral
-    /// - Expr::StructLiteral (kept for defensive class-fix even though
-    ///   currently unreachable via fmt's parse-only pipeline)
-    /// Baseline 2026-08-09: 4.
-    const EXPECTED_ARMS: usize = 4;
+    // Derived place 1 — the COLLECTION-literal family of `enum Expr`: every
+    // `*Literal` variant whose payload opens with a `Vec<` of elements
+    // (Array/Tuple/Dict) or is a struct variant (StructLiteral). The scalar
+    // literals are declared out of scope below.
+    //
+    // ⚠ THIS USED TO BE A COUNT OVER A GUESSED LIST. The old shape pinned 4 and
+    // summed matches over four known patterns plus six SPECULATIVE future names
+    // (`Expr::SetLiteral(`, `Expr::MapLiteral(`, …). A new variant spelled
+    // outside that guess — `Expr::ListLit`, say — moved no count and was
+    // invisible, which is precisely the arrival the guard exists to catch.
+    let literals = rust_enum_variants("src/parser/ast.rs", "Expr");
+    let collection: BTreeSet<String> = literals
+        .iter()
+        .filter(|(n, rest)| {
+            n.ends_with("Literal")
+                && (rest.starts_with("(Vec<") || rest.trim_start().starts_with('{'))
+        })
+        .map(|(n, _)| n.clone())
+        .collect();
+    let scalar: BTreeSet<String> = literals
+        .iter()
+        .filter(|(n, _)| n.ends_with("Literal"))
+        .map(|(n, _)| n.clone())
+        .filter(|n| !collection.contains(n))
+        .collect();
+    assert!(
+        collection.len() >= 3 && !scalar.is_empty(),
+        "formatter_literal_arms_dispatch_count: derived {} collection and {} \
+         scalar `*Literal` variants from `enum Expr` — the payload predicate \
+         broke.\n  collection: {collection:?}\n  scalar: {scalar:?}",
+        collection.len(),
+        scalar.len(),
+    );
 
+    // Derived place 2 — `format_expr_inner`'s own arms, and what they reach.
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
-    // Known collection-literal arms (the 4-pattern class-fix set) and a
-    // FUTURE-PROOFING list of potential-new-variant tell-tales. Adding a
-    // new variant to `Expr` typically follows the `*Literal` naming
-    // convention; catching the naming class here (rather than requiring
-    // the lint list to be updated *before* the new variant lands) makes
-    // the guard trip even when a new arm slips in unlisted. Any name in
-    // `future_literal_patterns` that grows a real count bumps the total
-    // — the developer must then either handle the new arm via dispatch
-    // + move the pattern to the KNOWN list, or intentionally raise
-    // EXPECTED_ARMS with a rationale.
-    let arm_patterns = [
-        "Expr::ArrayLiteral(",
-        "Expr::TupleLiteral(",
-        "Expr::DictLiteral(",
-        "Expr::StructLiteral {",
-    ];
-    let future_literal_patterns = [
-        "Expr::SetLiteral(",
-        "Expr::MapLiteral(",
-        "Expr::HashLiteral(",
-        "Expr::RecordLiteral(",
-        "Expr::UnitLiteral(",
-        "Expr::EnumLiteral(",
-    ];
-
-    let mut in_format_expr = false;
+    // Comment lines are BLANKED rather than dropped, so the reported line
+    // numbers are the file's own.
+    let lines: Vec<&str> = content
+        .lines()
+        .map(|l| {
+            if l.trim_start().starts_with("//") { "" } else { l.split("//").next().unwrap_or("") }
+        })
+        .collect();
+    let start = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("fn format_expr_inner("))
+        .expect("`fn format_expr_inner(` moved — re-anchor this lint (R42 Track D \
+                 moved the match there; keying on `format_expr` scopes this census \
+                 to an empty function)");
     let mut depth: i32 = 0;
-    let mut count = 0usize;
-    for line in content.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("//") {
-            continue;
+    let mut end = lines.len();
+    for (k, l) in lines.iter().enumerate().skip(start) {
+        depth += l.matches('{').count() as i32;
+        depth -= l.matches('}').count() as i32;
+        if depth <= 0 && k > start {
+            end = k;
+            break;
         }
-        if !in_format_expr && trimmed.starts_with("fn format_expr_inner(") {
-            in_format_expr = true;
-            depth = 0;
-        }
-        if !in_format_expr {
-            continue;
-        }
-        depth += line.matches('{').count() as i32;
-        depth -= line.matches('}').count() as i32;
-        if depth <= 0 && !trimmed.starts_with("fn format_expr_inner(") {
-            in_format_expr = false;
-            continue;
-        }
-        for pat in arm_patterns.iter().chain(future_literal_patterns.iter()) {
-            if trimmed.starts_with(pat) {
-                count += 1;
-                break;
+    }
+    // Arm heads sit at the match's own indentation — the `Return(Some)`
+    // carve-out that patterns `Expr::TupleLiteral` in `format_stmt` is a
+    // DIFFERENT fn and outside this window.
+    let mut heads: Vec<(usize, String)> = Vec::new();
+    for (k, l) in lines.iter().enumerate().take(end).skip(start) {
+        if let Some(rest) = l.strip_prefix("            Expr::") {
+            let n: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !n.is_empty() {
+                heads.push((k, n));
             }
         }
     }
-    assert_eq!(
-        count, EXPECTED_ARMS,
-        "R39 fmt collection-literal-arm count in `format_expr` in \
-         `src/formatter/mod.rs` = {count}, expected {EXPECTED_ARMS} \
-         (Expr::ArrayLiteral / Expr::TupleLiteral / Expr::DictLiteral / \
-         Expr::StructLiteral).\n\n\
-         If a new collection-literal arm was added, ensure it dispatches \
-         through `format_bracketed_broken_with_comments` when \
-         `has_interior_comments` fires (Core #4 chokepoint), then bump \
-         BOTH this constant AND the dispatch-count constants in \
-         `formatter_collection_literal_interior_hook_dispatch` above. \
-         If an arm was removed, lower EXPECTED_ARMS with the removal \
-         citation."
+    assert!(
+        heads.len() > 20,
+        "formatter_literal_arms_dispatch_count: only {} arm heads found in \
+         `format_expr_inner` — the indentation anchor broke.",
+        heads.len(),
+    );
+
+    let mut problems: Vec<String> = Vec::new();
+    for (k, (at, name)) in heads.iter().enumerate() {
+        if !collection.contains(name) {
+            continue;
+        }
+        let stop = heads.get(k + 1).map_or(end, |(n, _)| *n);
+        // Every collection-literal arm MUST reach the delimited-list
+        // chokepoint, which is what consults the interior-comment side-table
+        // before the `Doc` layer. This is the invariant the arm COUNT only
+        // stood in for.
+        if !lines[*at..stop].join("\n").contains("emit_delimited_list") {
+            problems.push(format!(
+                "Expr::{name} (src/formatter/mod.rs:{}) never reaches \
+                 `emit_delimited_list`",
+                at + 1,
+            ));
+        }
+    }
+    let have: BTreeSet<String> = heads.iter().map(|(_, n)| n.clone()).collect();
+    for name in collection.difference(&have) {
+        problems.push(format!("Expr::{name} has no arm in `format_expr_inner`"));
+    }
+    assert!(
+        problems.is_empty(),
+        "collection-literal formatting broke:\n  {}\n\n\
+         Every collection-literal arm must go through \
+         `Formatter::emit_delimited_list`, the chokepoint that consults the \
+         interior-comment side-table; an arm that hand-rolls a second \
+         `doc::surround_fill` instead drops the author's interior comments (R39). \
+         A NEW collection literal in `enum Expr` needs an arm here that routes \
+         through it — the family is DERIVED from the AST, so there is no list in \
+         this file to update first.\n\n\
+         Scalar literals ({scalar:?}) are out of scope: they carry no element \
+         list, so there is nothing for the chokepoint to delimit.",
+        problems.join("\n  "),
     );
 }
 
@@ -21371,7 +23162,14 @@ fn fmt_no_new_move_bang_in_migrated_corpora() {
 /// in `roots`, skip any path with a `self_host_` segment, strip strings
 /// then comments per line, and count `!name` / `!(` matches. Also
 /// exercised by the unit tests below.
-fn count_bang_move_in_code(roots: &[&str]) -> usize {
+/// The three patterns `count_bang_move_in_code` runs, in ONE place.
+///
+/// ⚠ Every test of this lint's behaviour MUST come through here. The
+/// positive control below used to RE-DECLARE all three inline, so it verified
+/// a COPY: an edit to the patterns the lint actually runs left the control
+/// green, which is precisely the assurance a positive control exists to
+/// refuse to give.
+fn bang_move_regexes() -> (regex::Regex, regex::Regex, regex::Regex) {
     let string_re = regex::Regex::new(
         // Triple-quoted (any [fFrRbBcC] prefix, non-greedy `.*?`) OR
         // single-line double-quoted (any prefix) OR single-line
@@ -21382,6 +23180,11 @@ fn count_bang_move_in_code(roots: &[&str]) -> usize {
     .expect("string regex compiles");
     let comment_re = regex::Regex::new(r"#.*$").expect("comment regex compiles");
     let move_re = regex::Regex::new(r"(^|[^!])!([A-Za-z_]|\()").expect("move regex compiles");
+    (string_re, comment_re, move_re)
+}
+
+fn count_bang_move_in_code(roots: &[&str]) -> usize {
+    let (string_re, comment_re, move_re) = bang_move_regexes();
 
     let mut total = 0usize;
     for root in roots {
@@ -21446,7 +23249,8 @@ fn walk_gg_files(dir: &Path, cb: &mut dyn FnMut(&Path)) {
 /// or `x! + y`.
 #[test]
 fn fmt_bang_move_regex_matches() {
-    let move_re = regex::Regex::new(r"(^|[^!])!([A-Za-z_]|\()").expect("regex compiles");
+    // The lint's OWN pattern, not a retyped copy of it.
+    let (_, _, move_re) = bang_move_regexes();
 
     // MATCH cases — real `!name`-move sites and move-closure.
     let matches: &[&str] = &[
@@ -21476,40 +23280,57 @@ fn fmt_bang_move_regex_matches() {
     }
 }
 
-/// Positive-control for the strip logic: verify that `!x` inside a
-/// STRING or a COMMENT does NOT count as a real site (else the lint
-/// false-positives on `code = "if !flag"` or `# no !move here`).
+/// Positive-control for the strip logic: `!x` inside a STRING or a COMMENT
+/// must NOT count as a real site (else the lint false-positives on
+/// `code = "if !flag"` or `# no !move here`) — and `!x` in CODE must.
+///
+/// ⚠ BOTH HALVES, AND THROUGH `count_bang_move_in_code` ITSELF. This control
+/// used to re-declare the three regexes inline and assert only the zero, so it
+/// (a) verified a copy of the lint rather than the lint, and (b) was satisfied
+/// by a pattern that matches NOTHING AT ALL — a strip that swallowed the whole
+/// line, or a move regex that never fires, both score 0 here and would take
+/// `fmt_no_new_move_bang_in_migrated_corpora` permanently, silently green.
 #[test]
 fn fmt_bang_move_strip_ignores_strings_and_comments() {
     use std::io::Write;
     let tmp = tempfile::tempdir().expect("tempdir");
-    let fixture_path = tmp.path().join("probe.gg");
-    let mut f = std::fs::File::create(&fixture_path).unwrap();
-    // These lines contain `!x` but ALL are in string or comment context.
+
+    // (a) NEGATIVE: every `!x` here is in string or comment context.
+    let quiet = tmp.path().join("quiet");
+    std::fs::create_dir(&quiet).unwrap();
+    let mut f = std::fs::File::create(quiet.join("probe.gg")).unwrap();
     writeln!(f, "String s = \"contains !x literal\"").unwrap();
     writeln!(f, "# comment mentioning !x").unwrap();
     writeln!(f, "String r = r\"raw with !y\"").unwrap();
     writeln!(f, "String fs = f\"fstr with !z\"").unwrap();
     drop(f);
 
-    // Re-apply the strip logic here (avoids running the full walk).
-    let string_re = regex::Regex::new(
-        r#"(?s)([fFrRbBcC]?"""(?:.*?)""")|([fFrRbBcC]?"(?:[^"\\\n]|\\.)*")|('(?:[^'\\\n]|\\.)*')"#,
-    )
-    .unwrap();
-    let comment_re = regex::Regex::new(r"#.*$").unwrap();
-    let move_re = regex::Regex::new(r"(^|[^!])!([A-Za-z_]|\()").unwrap();
+    // (b) POSITIVE: three real `!name`-move sites in CODE, plus the shapes the
+    //     pattern must keep ignoring, so a match-nothing regex cannot pass.
+    let loud = tmp.path().join("loud");
+    std::fs::create_dir(&loud).unwrap();
+    let mut f = std::fs::File::create(loud.join("probe.gg")).unwrap();
+    writeln!(f, "void f(Message !msg):").unwrap();
+    writeln!(f, "    take(!p)").unwrap();
+    writeln!(f, "    Callable c = !(x): x").unwrap();
+    writeln!(f, "    if a != b:            # inequality, not a move").unwrap();
+    writeln!(f, "        return boom(x)!!  # D29 double-mark, not a move").unwrap();
+    drop(f);
 
-    let src = std::fs::read_to_string(&fixture_path).unwrap();
-    let mut count = 0;
-    for line in src.lines() {
-        let stripped = string_re.replace_all(line, "\"\"");
-        let stripped = comment_re.replace_all(&stripped, "");
-        count += move_re.find_iter(&stripped).count();
-    }
+    let quiet_s = quiet.to_string_lossy().to_string();
+    let loud_s = loud.to_string_lossy().to_string();
     assert_eq!(
-        count, 0,
-        "strip logic false-positive: `!x` in string/comment must not count"
+        count_bang_move_in_code(&[quiet_s.as_str()]),
+        0,
+        "strip logic false-positive: `!x` in string/comment must not count",
+    );
+    assert_eq!(
+        count_bang_move_in_code(&[loud_s.as_str()]),
+        3,
+        "strip logic false-NEGATIVE: the three real `!name`-move sites \
+         (`Message !msg`, `take(!p)`, `!(x): x`) must count, and `!=` / `!!` \
+         must not. A pattern that scores 0 on BOTH probes takes \
+         `fmt_no_new_move_bang_in_migrated_corpora` green forever.",
     );
 }
 
@@ -22108,51 +23929,50 @@ fn fmt_paren_emission_census() {
 /// (`Rc::clone`) or is the ENTRY point that builds it from the parse.
 #[test]
 fn fmt_author_paren_table_reaches_sub_formatters() {
-    /// Construction sites of `Formatter::new`, per site:
-    ///   1. `sub_render` — must `Rc::clone` the caller's table.
-    ///   2. `format_source_result` — the entry point, which builds the table
-    ///      from the parser's push-log.
-    const EXPECTED_SITES: usize = 2;
-
+    // ⚠ PER SITE, not three totals. The obligation belongs to each
+    // `Formatter::new` call — share the caller's table or build one from the
+    // parse — and a total says nothing about WHICH site broke it. Three pins
+    // (2, 1, 1) also drift against each other; the classification cannot.
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
-    let mut sites = 0usize;
-    let mut clone_sites = 0usize;
-    let mut from_parser_sites = 0usize;
-    for (i, line) in content.lines().enumerate() {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut clone_sites: Vec<String> = Vec::new();
+    let mut from_parser_sites: Vec<String> = Vec::new();
+    let mut unthreaded: Vec<String> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("//") || !line.contains("Formatter::new(") {
             continue;
         }
-        sites += 1;
         // The argument list spans a few lines; look at the following window.
-        let window: String = content
-            .lines()
-            .skip(i)
-            .take(8)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let window: String = lines[i..(i + 8).min(lines.len())].join("\n");
+        let at = format!("src/formatter/mod.rs:{}", i + 1);
         if window.contains("Rc::clone(&self.author_parens)") {
-            clone_sites += 1;
+            clone_sites.push(at);
         } else if window.contains("author_parens") {
-            from_parser_sites += 1;
+            from_parser_sites.push(at);
+        } else {
+            unthreaded.push(at);
         }
     }
-    assert_eq!(
-        sites, EXPECTED_SITES,
-        "`Formatter::new` construction-site count changed: {sites} vs \
-         {EXPECTED_SITES}. A new sub-formatter must be handed the CALLER's \
-         author-paren table (`Rc::clone(&self.author_parens)`); handing it a \
-         fresh empty table silently deletes author parens in every \
-         pre-rendered position."
+    assert!(
+        unthreaded.is_empty(),
+        "these `Formatter::new` sites neither share the caller's author-paren \
+         table nor build one from the parse:\n  {}\n\n\
+         A sub-formatter handed a fresh EMPTY table silently deletes the author's \
+         parens in every pre-rendered position — the output still re-parses and \
+         stays idempotent, so no round-trip gate can see it. Pass \
+         `Rc::clone(&self.author_parens)`.",
+        unthreaded.join("\n  "),
     );
-    assert_eq!(
-        (clone_sites, from_parser_sites),
-        (1, 1),
-        "author-paren table threading changed: {clone_sites} site(s) share the \
-         caller's table and {from_parser_sites} build one from the parse; \
-         expected exactly 1 of each (`sub_render` shares, \
-         `format_source_result` builds)."
+    assert!(
+        !clone_sites.is_empty() && !from_parser_sites.is_empty(),
+        "fmt_author_paren_table_reaches_sub_formatters: the classification is \
+         vacuous — {} site(s) share the table, {} build it from the parse. Both \
+         roles must exist (`sub_render` shares, `format_source_result` builds), \
+         or the check above passes over a formatter that has neither.",
+        clone_sites.len(),
+        from_parser_sites.len(),
     );
 }
 
@@ -22171,16 +23991,14 @@ fn fmt_author_paren_table_reaches_sub_formatters() {
 /// owes this truncate.
 #[test]
 fn parser_position_restore_sites_are_pinned() {
-    /// Writes to `self.pos` across the whole parser, per site:
-    ///   1. `advance()` — `self.pos += 1`, forward progress.
-    ///   2. `try_parse`'s `None` arm — `self.pos = saved_pos`, THE backtrack.
-    /// (The `saved_pos` locals elsewhere in the parser are progress guards that
-    /// only READ the position; `parse_select_op` speculates THROUGH
-    /// `try_parse` and is covered for free.)
-    const EXPECTED_WRITES: usize = 2;
-
+    // ⚠ THE OBLIGATION IS PER RESTORE, and that is the whole assertion: every
+    // `self.pos =` restore truncates the author-paren push-log. Two totals
+    // (2 writes, 1 truncating restore) said the same thing less precisely — a
+    // second backtracking primitive would have moved BOTH, and neither would
+    // have named it.
     let mut writes: Vec<String> = Vec::new();
-    let mut restores_truncating = 0usize;
+    let mut restores: Vec<String> = Vec::new();
+    let mut restores_without_truncate: Vec<String> = Vec::new();
     let mut parser_files: Vec<PathBuf> = Vec::new();
     visit_rs_files(Path::new("src/parser"), &mut |p| parser_files.push(p.to_path_buf()));
     parser_files.sort();
@@ -22202,30 +24020,36 @@ fn parser_position_restore_sites_are_pinned() {
             writes.push(format!("{}:{}: {}", entry.display(), i + 1, t));
             // A RESTORE (`=`, not `+=`) must truncate the paren log nearby.
             if t.contains("self.pos =") && !t.contains("+=") && !t.contains("-=") {
+                let at = format!("{}:{}", entry.display(), i + 1);
+                restores.push(at.clone());
                 let window = lines[i..(i + 4).min(lines.len())].join("\n");
-                if window.contains("author_paren_spans.truncate(") {
-                    restores_truncating += 1;
+                if !window.contains("author_paren_spans.truncate(") {
+                    restores_without_truncate.push(format!("{at}: {t}"));
                 }
             }
         }
     }
-    assert_eq!(
+    assert!(
+        !writes.is_empty() && !restores.is_empty(),
+        "parser_position_restore_sites_are_pinned: no `self.pos` write \
+         ({} found) or no RESTORE ({} found) under src/parser — the scan broke, \
+         and the per-restore check below would pass vacuously.",
         writes.len(),
-        EXPECTED_WRITES,
-        "`self.pos` write-site count changed: {} vs {EXPECTED_WRITES}.\n{}\n\n\
-         A new site that RESTORES the position is a new backtracking \
-         construct, and it must also truncate `author_paren_spans` to the \
-         length saved before the speculation — otherwise an abandoned parse \
-         leaves a phantom author-paren layer and `gg fmt` multiplies the \
-         author's parens on every pass.",
-        writes.len(),
-        writes.join("\n"),
+        restores.len(),
     );
-    assert_eq!(
-        restores_truncating, 1,
-        "the position RESTORE no longer truncates the author-paren push-log. \
-         That truncate is what keeps a backtracked speculation from leaving a \
-         phantom paren layer behind."
+    assert!(
+        restores_without_truncate.is_empty(),
+        "these `self.pos` RESTORE sites do not truncate the author-paren \
+         push-log within the 4 lines that follow:\n  {}\n\n\
+         A site that restores the position is a backtracking construct, and it \
+         must truncate `author_paren_spans` to the length saved before the \
+         speculation — otherwise an abandoned parse leaves a phantom author-paren \
+         layer and `gg fmt` multiplies the author's parens on every pass \
+         (measured on `int[(2)]`: 2 layers -> 8 over three passes, corpus \
+         reparse gate green throughout).\n\n\
+         All `self.pos` writes seen:\n  {}",
+        restores_without_truncate.join("\n  "),
+        writes.join("\n  "),
     );
 }
 
@@ -22769,31 +24593,42 @@ fn suite_layout_is_read_only_by_the_formatter() {
 /// reaches a synthesized block).
 #[test]
 fn parser_suite_layout_writer_census() {
-    // (file, NextLine writes, Inline writes, header_start writes, rationale)
-    const CENSUS: &[(&str, usize, usize, usize, &str)] = &[
-        // `parse_block_body` IS the indented-suite grammar
-        // (`NEWLINE INDENT stmt* DEDENT`) and is the sole NextLine writer;
-        // `parse_block_or_inline_stmt`'s one-liner path is the Inline one.
-        ("src/parser/mod.rs", 1, 1, 2, "parse_block_body · parse_block_or_inline_stmt"),
-        // `on error <stmt>` (colon-less inline) · `meta match` inline arm body.
-        ("src/parser/stmt.rs", 0, 2, 2, "on error inline · meta match inline arm"),
-        // The three SYNTHETIC wraps: `throw x` and `return x` in expression
-        // position, and the expression-bodied destructuring closure. No author
-        // wrote a suite at any of them, so emitting one would invent syntax.
-        ("src/parser/expr.rs", 0, 3, 3, "throw wrap · return wrap · closure body wrap"),
-        // `Block::synthetic` — no author spelling and no author header.
-        ("src/parser/ast.rs", 1, 0, 1, "Block::synthetic"),
-        // Not a writer: the probe collector COPIES the field into its own
-        // struct, which the scan cannot tell from an init. Kept as an
-        // explicit row so the count is decided rather than excused.
-        ("src/parser/tests.rs", 0, 0, 1, "BlockProbe field copy in the probe collector"),
+    // ⚠ SITES WITH DISPOSITIONS, not fifteen per-file totals.
+    //
+    // Two things changed and both matter. First, rustc ALREADY forces the
+    // decision that the totals were standing in for: `Block` has no `Default`
+    // and `SuiteLayout` has no `Default`, so a construction that omits either
+    // field does not compile (verified — a `Block` literal planted in
+    // `pattern.rs` without `header_start` fails with E0063, not with this
+    // lint). What rustc cannot ask is whether the layout CHOSEN is the one the
+    // author actually wrote, and that is a review, not a count.
+    //
+    // Second, the totals could not name the site: a blameless parser edit moved
+    // three numbers and a genuinely new construction moved the same three.
+    // Declaring the sites by (function, layout, reason) makes a new one land
+    // UNLISTED and say so, and costs nothing otherwise.
+    const SITES: &[(&str, &str, &str)] = &[
+        ("parse_block_body", "NextLine",
+         "IS the indented-suite grammar (`NEWLINE INDENT stmt* DEDENT`) — the \
+          sole NextLine writer in the parser."),
+        ("parse_block_or_inline_stmt", "Inline",
+         "the one-liner path: the author wrote the suite on the header's line."),
+        ("parse_on_error_stmt", "Inline", "`on error <stmt>` — colon-less inline."),
+        ("parse_meta_match_arm_body", "Inline", "`meta match` inline arm body."),
+        ("parse_prefix_inner", "Inline",
+         "the two SYNTHETIC wraps of `throw x` / `return x` in expression \
+          position — no author wrote a suite, so emitting one would invent syntax."),
+        ("parse_closure", "Inline",
+         "the expression-bodied destructuring closure — synthetic, as above."),
+        ("synthetic", "NextLine",
+         "`Block::synthetic`: no author spelling and no author header. NextLine \
+          because the indented form is the shape legal in EVERY position."),
     ];
 
-    // EVERY `src/parser/*.rs`, read from the directory — a file absent from
-    // CENSUS must have ZERO writes, which is what makes the table total. The
-    // hardcoded 4-file list this replaces let a raw `Block` literal planted in
-    // `pattern.rs` pass the whole suite: the same "the enumeration is a
-    // selection" shape the censuses exist to stop, one level up.
+    // EVERY `src/parser/*.rs`, read from the directory. The hardcoded 4-file
+    // list this census once had let a raw `Block` literal planted in
+    // `pattern.rs` pass the whole suite — "the enumeration is a selection",
+    // one level up.
     let mut parser_files: Vec<String> = fs::read_dir("src/parser")
         .expect("cannot read src/parser")
         .map(|e| e.expect("dir entry").path())
@@ -22806,54 +24641,114 @@ fn parser_suite_layout_writer_census() {
         "only {} file(s) found under src/parser — the scan is reading nothing.",
         parser_files.len()
     );
-    let rows: Vec<(&str, usize, usize, usize, &str)> = parser_files
-        .iter()
-        .map(|f| {
-            CENSUS
-                .iter()
-                .find(|(p, ..)| p == f)
-                .copied()
-                // A file with no CENSUS row is asserted to write NOTHING, so a
-                // new writer anywhere under src/parser trips this.
-                .unwrap_or((f.as_str(), 0, 0, 0, "no row: this file writes neither field"))
-        })
-        .collect();
 
-    for (path, want_next, want_inline, want_header, rationale) in &rows {
-        let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
-        // Count WRITES only — a `SuiteLayout::X` in a `==` comparison is a
-        // read, and the parser has none, but be explicit rather than lucky.
-        let got_next = content
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//") && !l.contains("=="))
-            .filter(|l| l.contains("SuiteLayout::NextLine"))
-            .count();
-        let got_inline = content
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//") && !l.contains("=="))
-            .filter(|l| l.contains("SuiteLayout::Inline"))
-            .count();
-        // A field INIT (`header_start,` / `header_start: <expr>,`), never the
-        // parameter declarations (`header_start: usize`) or the prose.
-        let got_header = content
-            .lines()
-            .map(|l| l.trim())
-            .filter(|t| !t.starts_with("//"))
-            .filter(|t| t.starts_with("header_start") && t.ends_with(',') && !t.contains("usize"))
-            .count();
-        assert_eq!(
-            (got_next, got_inline, got_header),
-            (*want_next, *want_inline, *want_header),
-            "R41 T-FMT-C `SuiteLayout` / `Block::header_start` writer census \
-             changed in `{path}` (expected sites: {rationale}).\n\n\
-             A new `Block` construction in the parser must decide, at the only \
-             layer that can: did the author indent this suite, or write it on \
-             the header's line? And WHERE does the owning construct's first \
-             line begin? A construction outside the parser has no author \
-             spelling at all and goes through `Block::synthetic`.\n\n\
-             Bump the row with the new site's rationale."
-        );
+    let mut found: BTreeSet<String> = Default::default();
+    let mut problems: Vec<String> = Vec::new();
+    for path in &parser_files {
+        let content =
+            fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+        let lines: Vec<&str> = content.lines().collect();
+        for (n, line) in lines.iter().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with("//")
+                || t.starts_with("impl ")
+                || t.starts_with("struct ")
+                || t.starts_with("pub struct ")
+                || t.starts_with("pub(crate) struct ")
+            {
+                continue;
+            }
+            // A `Block { … }` LITERAL — never `EquipBlock` / `ExternBlock`,
+            // whose names merely end in `Block`.
+            let is_ctor = line.contains("Block {")
+                && line
+                    .split("Block {")
+                    .next()
+                    .is_some_and(|h| !h.ends_with(char::is_alphanumeric) && !h.ends_with('_'));
+            if !is_ctor {
+                continue;
+            }
+            // The literal's field list; 14 lines is wider than any construction
+            // in the parser today.
+            let window: String = lines[n..(n + 14).min(lines.len())]
+                .iter()
+                .map(|l| l.split("//").next().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let enclosing = lines[..=n]
+                .iter()
+                .rev()
+                .find_map(|l| {
+                    let r = l.trim_start();
+                    let r = r.strip_prefix("pub ").unwrap_or(r);
+                    let r = r.strip_prefix("pub(crate) ").unwrap_or(r);
+                    let r = if r.starts_with("pub(") {
+                        r.split_once(") ").map_or(r, |(_, a)| a)
+                    } else {
+                        r
+                    };
+                    let r = r.strip_prefix("fn ")?;
+                    Some(
+                        r.chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect::<String>(),
+                    )
+                })
+                .unwrap_or_default();
+            let at = format!("{path}:{}", n + 1);
+            let Some((_, layout, _)) = SITES.iter().find(|(f, _, _)| *f == enclosing) else {
+                problems.push(format!("{at}: `{enclosing}` is not a declared Block-construction site"));
+                continue;
+            };
+            found.insert(enclosing.clone());
+            if !window.contains(&format!("SuiteLayout::{layout}")) {
+                problems.push(format!(
+                    "{at}: `{enclosing}` is declared to write `SuiteLayout::{layout}`, \
+                     and this construction does not"
+                ));
+            }
+            // A functional-update INHERITS another block's spelling. rustc is
+            // happy with it and it is exactly the "picked whatever that line's
+            // author felt like" shape the declaration exists to stop.
+            if window.contains("..") && !window.contains("..=") {
+                problems.push(format!(
+                    "{at}: `{enclosing}` builds its Block with a functional-update \
+                     `..` — the layout is then INHERITED, not decided"
+                ));
+            }
+        }
     }
+    let declared: BTreeSet<String> = SITES.iter().map(|(f, _, _)| (*f).to_string()).collect();
+    for gone in declared.difference(&found) {
+        problems.push(format!(
+            "`{gone}` is declared a Block-construction site but constructs none"
+        ));
+    }
+    assert!(
+        found.len() >= 5,
+        "parser_suite_layout_writer_census: only {} construction site(s) found \
+         under src/parser — the scan stopped matching, and a green result here \
+         would say nothing (SIX QUESTIONS #2).",
+        found.len(),
+    );
+    assert!(
+        problems.is_empty(),
+        "R41 T-FMT-C `SuiteLayout` writer census:\n  {}\n\n\
+         A new `Block` construction in the parser must decide, at the only layer \
+         that can: did the author INDENT this suite, or write it on the header's \
+         line? rustc forces the field to be present; only a reader can say \
+         whether the value is right. Declare the site in SITES with the layout it \
+         writes AND the reason, so the decision is in the diff.\n\n\
+         A construction OUTSIDE the parser has no author spelling at all and goes \
+         through `Block::synthetic`.\n\n\
+         Declared sites:\n  {}",
+        problems.join("\n  "),
+        SITES
+            .iter()
+            .map(|(f, l, why)| format!("{f} -> SuiteLayout::{l} ({why})"))
+            .collect::<Vec<_>>()
+            .join("\n  "),
+    );
 }
 
 /// Outside `src/parser/`, an `ast::Block` is built through `Block::synthetic`.
@@ -23679,12 +25574,15 @@ fn formatter_list_emit_fill_census() {
 /// removed without its emit site — both worth a look.
 #[test]
 fn formatter_visibility_emit_site_count() {
-    /// `pub visibility: Visibility` fields in the AST — the carriers.
-    const EXPECTED_CARRIERS: usize = 9;
-    /// `self.format_visibility(` call sites, plus `format_static_decl`'s own
-    /// inverted rule, which together must cover every carrier.
-    const EXPECTED_EMIT_SITES: usize = 8;
+    /// `format_static_decl`'s own inverted rule — the single sanctioned
+    /// carrier that does NOT route through `format_visibility` (statics are
+    /// private-by-default, the opposite convention).
     const STATIC_DECL_OWN_RULE: usize = 1;
+
+    // ⚠ THE RELATION IS THE INVARIANT; the two totals were bookkeeping beside
+    // it. Both sides are grepped from the tree, so pinning 9 and 8 as well made
+    // a blameless AST addition red in three places and said nothing the
+    // coverage relation does not already say.
 
     let ast = fs::read_to_string("src/parser/ast.rs").expect("cannot read src/parser/ast.rs");
     let fmt = fs::read_to_string("src/formatter/mod.rs")
@@ -23700,24 +25598,13 @@ fn formatter_visibility_emit_site_count() {
         .filter(|l| l.contains("self.format_visibility("))
         .count();
 
-    assert_eq!(
-        carriers, EXPECTED_CARRIERS,
-        "the number of AST declarations carrying `visibility` changed \
-         ({EXPECTED_CARRIERS} -> {carriers}).\n\n\
-         If a kind was ADDED: it also needs `explicit_visibility` written at the \
-         parser (one writer, where the keyword is consumed) and an emit through \
-         `format_visibility`, or `gg fmt` will delete the author's `public` on \
-         that kind — the class this guard exists to retire. Then bump both \
-         constants.\n\
-         Census: grep -c 'pub visibility: Visibility,' src/parser/ast.rs"
-    );
-    assert_eq!(
-        emit_sites, EXPECTED_EMIT_SITES,
-        "the `format_visibility` call-site count changed \
-         ({EXPECTED_EMIT_SITES} -> {emit_sites}). A site that DISAPPEARED means \
-         a declaration kind stopped emitting a keyword the user wrote — the \
-         silent-drop class. A site ADDED without a new carrier means something \
-         is emitting visibility twice.\n\
+    assert!(
+        carriers >= 5 && emit_sites >= 4,
+        "formatter_visibility_emit_site_count: {carriers} carrier(s) and \
+         {emit_sites} emit site(s) found — one of the two greps stopped \
+         matching, and the coverage relation below is satisfied trivially by a \
+         pair of zeroes.\n\
+         Census: grep -c 'pub visibility: Visibility,' src/parser/ast.rs\n\
          Census: grep -c 'self.format_visibility(' src/formatter/mod.rs"
     );
     assert_eq!(
@@ -23729,7 +25616,12 @@ fn formatter_visibility_emit_site_count() {
          Every carrier must route through `format_visibility`, which emits the \
          keyword IFF the author wrote one. The single sanctioned exception is \
          `format_static_decl` (statics are private-by-default, the opposite \
-         convention).\n\
+         convention).\n\n\
+         A carrier ADDED also needs `explicit_visibility` written at the parser \
+         (one writer, where the keyword is consumed) — otherwise `gg fmt` deletes \
+         the author's `public` on that kind, the class this guard retires. An \
+         emit site that DISAPPEARED is that same silent drop arriving.\n\
+         Census: grep -c 'pub visibility: Visibility,' src/parser/ast.rs\n\
          Census: grep -c 'self.format_visibility(' src/formatter/mod.rs"
     );
 }
@@ -25578,13 +27470,17 @@ fn known_gaps_passing_allowlist_shrink_only() {
         })
         .collect();
 
-    // EXACT, not `<=`. A ceiling counts rows; it does not identify them, so a
-    // contributor could delete a genuinely-graduated row and add an
-    // unadjudicated one in the same commit and stay green — a ratchet notch
-    // lost with no signal. Equality forces every removal to lower the constant
-    // and every addition to raise it, VISIBLY IN THE DIFF, which is what the
-    // message below actually promises (Core #14: an invariant asserted in an
-    // error string and enforced nowhere is rot).
+    // EXACT, not `<=`: equality forces every removal to lower the constant and
+    // every addition to raise it, VISIBLY IN THE DIFF.
+    //
+    // ⛔ BUT THE COUNT DOES NOT DO WHAT THIS COMMENT USED TO CLAIM. It said
+    // equality stops "delete a genuinely-graduated row and add an unadjudicated
+    // one in the same commit". It does not: 6 - 1 + 1 = 6, and the lint is
+    // green on exactly that swap — the class it was written to catch. A count
+    // counts rows; it never identifies them. The ADJUDICATED-BY-NAME assertion
+    // further down is what actually closes it (Core #14: the file's header
+    // promises every row carries "here is why that is NOT a graduation", and
+    // nothing was enforcing it).
     assert_eq!(
         rows.len(),
         CEILING,
@@ -25606,6 +27502,53 @@ fn known_gaps_passing_allowlist_shrink_only() {
              {CODES:?}. A bare name is how an allowlist becomes a parking lot (Core #14)."
         );
     }
+
+    // …and every row carries exactly one `# ADJUDICATED <name>: <why>` line, in
+    // BIJECTION with the rows. This is the half the row COUNT cannot do: a swap
+    // keeps the count at CEILING, so identity has to come from somewhere.
+    //
+    // ⚠ A LOOSER FORM WAS TRIED AND MEASURED INSUFFICIENT: "the name appears
+    // somewhere in the file's prose" is satisfied by an INCIDENTAL mention —
+    // swapping in `shared_spawn_grow_vector`, an ignored known_gaps test the
+    // CELL-BLIND paragraph already cites as a SIBLING, passed both that check
+    // and the `stale` check below. The marker has to be a line written FOR the
+    // row.
+    let adjudicated: BTreeSet<String> = body
+        .lines()
+        .filter_map(|l| l.trim_start().strip_prefix("# ADJUDICATED "))
+        .filter_map(|r| r.split_once(':'))
+        .map(|(n, _)| n.trim().to_string())
+        .collect();
+    let row_names: BTreeSet<String> = rows.iter().map(|(n, _)| n.clone()).collect();
+    assert_eq!(
+        adjudicated, row_names,
+        "the `# ADJUDICATED <name>:` lines and the rows of \
+         `tests/gaps/PASSING_ALLOWLIST.txt` are not in bijection.\n\n\
+         A ROW WITHOUT ONE is a graduation parked instead of adjudicated — write the \
+         line saying why the test passing is NOT a graduation. A LINE WITHOUT A ROW is \
+         a retired row whose paragraph outlived it — delete it in the same commit. \
+         ⚠ This is the assertion that sees a SWAP: the row count is green on \
+         `6 - 1 + 1 = 6`, so a deleted row plus an unadjudicated new one costs the \
+         ratchet a notch with no other signal.",
+    );
+
+    // …and the half that DOES identify rows lives in CI, not here: the census
+    // reconciles this file against the MEASURED pass set. Core #14 — this lint
+    // points at that guard, so it must assert the guard is still wired, or the
+    // sentence above becomes a claim about a step somebody deleted.
+    let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))
+        .expect("cannot read .github/workflows/ci.yml");
+    assert!(
+        ci.lines().any(|l| {
+            let t = l.trim_start();
+            !t.starts_with('#') && t.contains("scripts/known_gaps_census.sh") && t.contains("--check")
+        }),
+        "`scripts/known_gaps_census.sh --check` is no longer a CI step. That census is \
+         what actually IDENTIFIES the rows of tests/gaps/PASSING_ALLOWLIST.txt — it \
+         compares the file against the MEASURED pass set, which is the half this lint \
+         cannot do from source text alone. Without it, a row swapped for another \
+         ignored-and-passing test is caught by nothing.",
+    );
 
     // Derive the live roster from source and reconcile. This is what makes the
     // ratchet SELF-CLEANING: graduating a test (or deleting it) leaves a row
@@ -28348,28 +30291,34 @@ fn clone_meter_instruments_read_the_declared_spec() {
 /// The workload's true closure is DECLARED, and the SYMLINK SEAM is visible in
 /// a diff rather than buried in a comment.
 ///
-/// ⚠ THE SEAM IS THE POINT. 15 of the 38 `.gg` files in `self_host_lowerer/`
-/// are symlinks into `self_host_typechecker/`. A change to one of them moves
-/// every clone meter while `git diff -- tests/fixtures/self_host_lowerer/`
-/// shows NOTHING. Pinning the manifest here means any change to the seam
-/// surfaces as a diff in `scripts/clone_meter.spec`.
+/// ⚠ THE SEAM IS THE POINT. Most of the `.gg` files in `self_host_lowerer/` are
+/// symlinks into `self_host_typechecker/`. A change to one of them moves every
+/// clone meter while `git diff -- tests/fixtures/self_host_lowerer/` shows
+/// NOTHING. Pinning the manifest here means any change to the seam surfaces as
+/// a diff in `scripts/clone_meter.spec`.
+///
+/// The WHOLE `.gg` manifest is declared the same way, by name. It used to be a
+/// bare count (`== 38`): routine self-host growth moved a number and said
+/// nothing about which file arrived, and a file swapped for another did not
+/// move it at all.
 #[test]
 fn clone_meter_closure_declares_the_symlink_seam() {
     let dir = Path::new("tests/fixtures/self_host_lowerer");
     let mut actual: Vec<String> = Vec::new();
-    let mut gg_files = 0usize;
+    let mut gg_files: Vec<String> = Vec::new();
     for entry in fs::read_dir(dir).expect("read self_host_lowerer") {
         let entry = entry.expect("dir entry");
         let name = entry.file_name().to_string_lossy().into_owned();
         if !name.ends_with(".gg") {
             continue;
         }
-        gg_files += 1;
+        gg_files.push(name.clone());
         if let Ok(target) = fs::read_link(entry.path()) {
             actual.push(format!("{name} -> {}", target.display()));
         }
     }
     actual.sort();
+    gg_files.sort();
     let mut declared = clone_meter_spec_values("symlink");
     declared.sort();
     assert_eq!(
@@ -28380,11 +30329,24 @@ fn clone_meter_closure_declares_the_symlink_seam() {
          declared. Update the `symlink =` lines in the spec (and re-measure: a workload change \
          moves the pins)."
     );
+    let mut declared_files = clone_meter_spec_values("gg_file");
+    declared_files.sort();
+    assert!(
+        declared_files.len() > 20,
+        "clone_meter_closure_declares_the_symlink_seam: only {} `gg_file =` row(s) \
+         in scripts/clone_meter.spec — the manifest is missing or the key changed, \
+         and the comparison below would report the whole directory as new.",
+        declared_files.len(),
+    );
     assert_eq!(
-        gg_files, 38,
-        "self_host_lowerer/ now has {gg_files} .gg files, not the 38 the spec's closure block \
-         records. Update `closure_gg_files`/the closure block in scripts/clone_meter.spec — the \
-         workload grew or shrank, and the pins moved with it."
+        gg_files, declared_files,
+        "the self_host_lowerer `.gg` manifest and its declaration in \
+         scripts/clone_meter.spec disagree.\n\
+         A file added to or removed from the workload MOVES THE CLONE PINS, and a \
+         file SWAPPED for another moves them while a count stays put — which is \
+         why the manifest is declared by NAME rather than counted. Update the \
+         `gg_file =` lines in the spec and RE-MEASURE: a workload change moves \
+         the pins with it."
     );
     for root in clone_meter_spec_values("closure_roots").pop().expect("closure_roots").split_whitespace() {
         assert!(
@@ -28591,8 +30553,10 @@ fn clone_meter_check_refuses_an_unattributed_track() {
 #[test]
 fn process_spawn_deadline_arm_count() {
     /// Every spawn-and-poll loop in the tree lives in `src/proc_guard.rs`.
-    /// Raising this is not a fix: route the new caller through the shared runner.
-    const EXPECTED_POLL_LOOPS: usize = 1;
+    /// The assertion is that LOCATION, not a count: a count cannot say WHICH
+    /// file grew a hand-rolled runner, and it makes a second loop inside the
+    /// shared runner itself — which is still the chokepoint — cost an edit.
+    const SHARED_RUNNER: &str = "src/proc_guard.rs";
 
     let mut sites: Vec<String> = Vec::new();
     for path in tracked_files() {
@@ -28608,17 +30572,27 @@ fn process_spawn_deadline_arm_count() {
         }
     }
     sites.sort();
-    assert_eq!(
-        sites.len(),
-        EXPECTED_POLL_LOOPS,
-        "process spawn-and-poll loop count changed: {} vs expected \
-         {EXPECTED_POLL_LOOPS}.\n{}\n\n\
-         A NEW one is a sixth hand-rolled runner. Do not raise this baseline — call \
-         `gorget::proc_guard::run_with_deadline{{,_opts}}`, which spawns the child as a \
-         process-group LEADER and signals the negative pgid, so the kill reaches \
-         grandchildren. A REMOVED one lowers it.",
-        sites.len(),
-        sites.join("\n"),
+    assert!(
+        !sites.is_empty(),
+        "process_spawn_deadline_arm_count: NO `.try_wait()` site found anywhere \
+         in the tree. The shared runner in `{SHARED_RUNNER}` has one, so either \
+         the runner lost its poll loop or the comment/string stripping ate the \
+         whole file — and a zero here makes the location check below vacuous.",
+    );
+    let strays: Vec<&String> = sites
+        .iter()
+        .filter(|s| !s.trim_start().starts_with(&format!("{SHARED_RUNNER}:")))
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "spawn-and-poll loop(s) OUTSIDE the shared runner `{SHARED_RUNNER}`:\n{}\n\n\
+         Each is a hand-rolled deadline runner. Call \
+         `gorget::proc_guard::run_with_deadline{{,_opts}}` instead — it spawns the \
+         child as a process-group LEADER and signals the negative pgid, so the \
+         kill reaches GRANDCHILDREN. Killing only the direct child leaves an \
+         orphan spinning at ~100% CPU, which corrupts every load-adjusted \
+         deadline on the box in both directions at once.",
+        strays.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n"),
     );
 
     // ── the PYTHON half of the same class ────────────────────────────────────
@@ -30987,6 +32961,15 @@ fn done_md_round_close_shapes_are_pinned() {
 /// TypeDef with `is_closure_env: true` and no `ClosurePack` emitted — and it is
 /// unbuilt.
 ///
+/// **This lint therefore cannot catch its own class, and no rewrite of it at
+/// the source-text layer can** — the missing call leaves no trace to read. What
+/// IS enforced here instead of merely stated: (a) the three artifacts that
+/// carry the blind spot must still EXIST, so the cover cannot be deleted while
+/// the paragraph above goes on claiming it (Core #14); (b) every call site
+/// carries its own `A1M-PACK-SITE` marker, checked per SITE rather than as a
+/// second total, so the marker count is derived from the call set instead of
+/// being a parallel pin that can drift against it.
+///
 /// **If this fails because the count went UP:** a new site was added. Confirm it
 /// passes the DESTINATION's declared TypeId (never the source's inferred type),
 /// give it an `A1M-PACK-SITE (n/N)` marker, and bump both constants with the
@@ -30996,17 +32979,40 @@ fn done_md_round_close_shapes_are_pinned() {
 /// which site went away.
 #[test]
 fn closure_pack_at_dest_type_call_sites() {
-    /// Baseline 2026-09-03 (R49 Track A1-M): 6 call sites, 6 markers.
-    /// 5 -> 6 the same day, on the output review's B1: `return <closure literal>`
-    /// from a `throws` function was a live, unfiled member of the class.
+    /// Baseline 2026-09-03 (R49 Track A1-M): 6 call sites, each carrying its
+    /// own marker. 5 -> 6 the same day, on the output review's B1:
+    /// `return <closure literal>` from a `throws` function was a live, unfiled
+    /// member of the class.
     const EXPECTED_CALLS: usize = 6;
-    const EXPECTED_MARKERS: usize = 6;
+
+    // (0) The blind spot's cover, enforced rather than described. The paragraph
+    //     above says two live unpacked positions are pinned by these artifacts;
+    //     Core #14 — an invariant-asserting comment needs an enforcing guard, or
+    //     it rots. Deleting any of them silently removes the only thing standing
+    //     where this lint cannot look.
+    for cover in [
+        "tests/fixtures/known_gaps/callable_literal_in_container_literal.gg",
+        "todo/t0873.md",
+        "todo/t0681.md",
+    ] {
+        assert!(
+            Path::new(cover).exists(),
+            "`{cover}` is gone. It is one of the artifacts covering the two \
+             consuming positions this lint CANNOT see (it counts calls, and an \
+             unpacked position makes no call). If the gap was genuinely closed, \
+             the position now calls `pack_closure_at_dest_type` — bump \
+             EXPECTED_CALLS, mark the new site, and strike the artifact from this \
+             list and from the docstring above IN THE SAME COMMIT.",
+        );
+    }
 
     let mut calls: Vec<String> = Vec::new();
+    let mut unmarked: Vec<String> = Vec::new();
     let mut markers: Vec<String> = Vec::new();
     for path in walkdir_rs("src") {
         let Ok(text) = fs::read_to_string(&path) else { continue };
-        for (i, line) in text.lines().enumerate() {
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") || trimmed.starts_with("///") {
                 if trimmed.contains("A1M-PACK-SITE (") {
@@ -31017,10 +33023,39 @@ fn closure_pack_at_dest_type_call_sites() {
             // The definition itself is `fn pack_closure_at_dest_type(`.
             if line.contains("pack_closure_at_dest_type(") && !line.contains("fn pack_closure_at_dest_type(") {
                 calls.push(format!("{}:{}", path.display(), i + 1));
+                // The marker belongs to THIS site: look for it in the 24 code
+                // lines above (the widest real gap today is 17, at the `throws`
+                // return wrap). A second total pinned separately can drift
+                // against the call set; a per-site lookup cannot.
+                let lo = i.saturating_sub(24);
+                if !lines[lo..i].iter().any(|l| l.contains("A1M-PACK-SITE (")) {
+                    unmarked.push(format!("{}:{}", path.display(), i + 1));
+                }
             }
         }
     }
 
+    assert!(
+        unmarked.is_empty(),
+        "these `pack_closure_at_dest_type` call sites carry no `A1M-PACK-SITE (n/N)` \
+         marker within the 24 lines above them:\n  {}\n\n\
+         The marker is how a reader tells WHICH position moved when the count below \
+         trips. Add one naming the consuming position.",
+        unmarked.join("\n  "),
+    );
+    assert_eq!(
+        markers.len(),
+        calls.len(),
+        "`A1M-PACK-SITE` marker count ({}) and `pack_closure_at_dest_type` call-site \
+         count ({}) disagree.\n  markers:\n  {}\n  calls:\n  {}\n\n\
+         Exactly one marker per call site. A spare marker is a site that was deleted \
+         and left its comment behind — which is how the enumeration in the docstring \
+         above starts describing a tree that no longer exists.",
+        markers.len(),
+        calls.len(),
+        markers.join("\n  "),
+        calls.join("\n  "),
+    );
     assert_eq!(
         calls.len(),
         EXPECTED_CALLS,
@@ -31032,16 +33067,6 @@ fn closure_pack_at_dest_type_call_sites() {
          reopening. Find the removed site; do NOT lower the constant to match.",
         calls.len(),
         calls.join("\n  "),
-    );
-    assert_eq!(
-        markers.len(),
-        EXPECTED_MARKERS,
-        "`A1M-PACK-SITE` marker count changed: {} vs expected {EXPECTED_MARKERS}.\n\
-         Markers found:\n  {}\n\n\
-         Every call site carries one so a reader can tell WHICH position moved when the count \
-         above trips.",
-        markers.len(),
-        markers.join("\n  "),
     );
 }
 
@@ -31073,14 +33098,21 @@ mod sanitize_corpus_manifest_lint {
 //   |--------------------------------------------------|--------------|--------------|
 //   | before the typed carriers                        | RED (7028)   | at budget    |
 //   | with the typed carriers                          | GREEN (7063) | at budget    |
-//   | carriers + a one-line `const CALL_MARK` hoist    | RED (7028)   | at budget    |
+//   | carriers + a one-line `const CALL_MARK` hoist    | RED (7028)   | RED (+1) *   |
 //
-// The third row is the point: a name-match respelled through a `const` (e.g.
-// `const CALL_MARK: &str = concat!("__", "call");`) is invisible to every
-// textual census, so this counter is IDENTICAL in the correct state and in the
-// broken one. Only a BEHAVIOURAL guard discriminates them, and that guard is
-// the `closure_arg_user_method_named_call*` fixture family, which asserts
-// STDOUT — a fix validated on exit codes greens the loud cells and leaves the
+// The third row WAS the point, and `*` is what changed: the counter now also
+// counts the HOIST itself — a binding of one of the literals below, bare or
+// reassembled through `concat!`, with nothing concatenated onto it — so moving
+// a spelling out of the predicate's argument costs the same budget as leaving
+// it there. RED-verified both ways at this HEAD (`const CALL_MARK: &str =
+// concat!("__", "call");` and the plain-literal form, each appended to
+// `src/ir/lowering/context.rs` and each taking the count to 20).
+//
+// That closes the RESPELLING evasion, not the class. A name-match assembled at
+// RUNTIME, or read out of a table, is still invisible to any textual census.
+// Only a BEHAVIOURAL guard discriminates those, and that guard is the
+// `closure_arg_user_method_named_call*` fixture family, which asserts STDOUT —
+// a fix validated on exit codes greens the loud cells and leaves the
 // silent-wrong-output one live.
 //
 // What this ratchet IS for: making a NEW textual name-match on a closure- or
@@ -31135,6 +33167,18 @@ const CLOSURE_IDENTITY_LITERALS: &[&str] = &[
 /// Covers all five string predicates plus `==` / `!=` against a literal that
 /// contains one of [`CLOSURE_IDENTITY_LITERALS`]. Comment lines are skipped so
 /// prose about a retired site does not count as a site.
+///
+/// ⚠ AND THE HOIST. A1-IDENTITY measured that a one-line
+/// `const CALL_MARK: &str = concat!("__", "call");` moves the literal out of
+/// the predicate's argument and leaves an identical textual counter fully
+/// green with the miscompile live. So a BINDING of one of these literals — as
+/// a bare literal or reassembled through `concat!`, with nothing concatenated
+/// onto it — counts as a site too: hoisting the spelling now costs the same
+/// budget as leaving it in place. Measured at this HEAD: 0 such bindings in
+/// `src/` and 0 across `tests/fixtures/self_host_*`, so this arm changes
+/// neither budget. ⊕ A binding that APPENDS (`"__adapt_" + tname`) is a MINT,
+/// not a decode — 18 of those live on the self-host lane, they are a different
+/// class, and the trailing `;`/`,`/`)`/end-of-line anchor excludes them.
 fn count_closure_identity_name_matches(root: &str, ext: &str) -> usize {
     let alternation = CLOSURE_IDENTITY_LITERALS
         .iter()
@@ -31149,6 +33193,19 @@ fn count_closure_identity_name_matches(root: &str, ext: &str) -> usize {
         r#"[!=]=\s*"[^"]*(?:{alternation})[^"]*""#
     ))
     .unwrap();
+    // The hoist: `<name> = "…__call…"` / `<name> = "…__call…";`. The leading
+    // char class is a stand-in for a look-behind (the `regex` crate has none) —
+    // it excludes `==`, `!=`, `<=`, `>=` and the compound assignments, so the
+    // `eq` arm above keeps its own hits. The trailing anchor is what separates
+    // a hoisted DECODE from a MINT that concatenates onto the prefix.
+    let bind = regex::Regex::new(&format!(
+        r#"[^!=<>+*/-]=\s*"[^"]*(?:{alternation})[^"]*"\s*(?:;|,|\)|$)"#
+    ))
+    .unwrap();
+    // …and the same hoist written through `concat!`, which no literal-scan
+    // sees because the spelling exists only after macro expansion.
+    let concat = regex::Regex::new(r#"[^!=<>+*/-]=\s*concat!\(([^)]*)\)"#).unwrap();
+    let piece = regex::Regex::new(r#""([^"]*)""#).unwrap();
     let mut count = 0;
     visit(root, &mut |path| {
         if path.extension().map_or(true, |e| e != ext) {
@@ -31165,6 +33222,16 @@ fn count_closure_identity_name_matches(root: &str, ext: &str) -> usize {
             }
             count += pred.find_iter(line).count();
             count += eq.find_iter(line).count();
+            count += bind.find_iter(line).count();
+            for c in concat.captures_iter(line) {
+                let joined: String = piece
+                    .captures_iter(&c[1])
+                    .map(|p| p[1].to_string())
+                    .collect();
+                if CLOSURE_IDENTITY_LITERALS.iter().any(|l| joined.contains(l)) {
+                    count += 1;
+                }
+            }
         }
     });
     count
@@ -31181,8 +33248,10 @@ fn count_closure_identity_name_matches(root: &str, ext: &str) -> usize {
 ///
 /// ⚠ THE 11 RETIRED OCCURRENCES ARE STILL BOOKKEEPING, NOT THE CLASS
 /// RETIREMENT. This counter is textual: A1-IDENTITY measured that a one-line
-/// `const CALL_MARK: &str = concat!("__", "call");` hoist restores a
-/// miscompile with this lint fully green. What retires convention 2 is that
+/// `const CALL_MARK: &str = concat!("__", "call");` hoist restored a
+/// miscompile with this lint fully green — that particular evasion is now
+/// counted (see `count_closure_identity_name_matches`), but a textual census
+/// still cannot see a name assembled at runtime. What retires convention 2 is that
 /// after A2-alpha there is NO NAME TO MINT — a runtime-resolved callee's
 /// identity is a typed field on the instruction — and the behavioural guard
 /// for it is the `collide_*` / `sibling*` fixture family in
@@ -31237,8 +33306,9 @@ fn no_growth_in_closure_identity_name_matching() {
 ///
 /// ⚠ WHY THE MINT AND NOT THE DECODE. `no_growth_in_closure_identity_name_matching`
 /// counts the READ sites, and A1-IDENTITY measured that a one-line
-/// `const CALL_MARK: &str = concat!("__", "call");` hoist evades an identical
-/// textual counter while the defect is live. The MINT is different: an arm that
+/// `const CALL_MARK: &str = concat!("__", "call");` hoist evaded an identical
+/// textual counter while the defect was live (that hoist shape is counted
+/// now; a runtime-assembled name still is not). The MINT is different: an arm that
 /// dispatches by name must PRODUCE the name, and the prefix has to appear
 /// somewhere for the emitted symbol to match the decode.
 ///

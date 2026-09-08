@@ -450,29 +450,15 @@ fmt.max_width.mirror = tests/lints.rs:WIDTH_RATCHET_BUDGET
 fmt.max_width.mirror = tests/integration.rs:FILL_PACK_MAX_WIDTH
 fmt.max_width.input = none
 
-# ── exact-pin × derived, AGENTS.md heading membership + four exact ratchets ─
-# scan = none: 79 / 205 / 0 / 89 / 81 are 1–3 digits; tests/lints.rs has hundreds
+# ── exact-pin × derived, four exact ratchets ────────────────────────────────
+# scan = none: 79 / 205 / 0 / 89 are 1–3 digits; tests/lints.rs has hundreds
 # of bare zeros and commit-hash tails collide with 79. The uniqueness scanner
 # cannot police them. Mirrors still exact-pin the literals.
-row = agents_md.heading_count
-agents_md.heading_count.value = 81
-agents_md.heading_count.unit = AGENTS.md extractor-hit headings
-agents_md.heading_count.polarity = exact-pin
-agents_md.heading_count.provenance = derived
-agents_md.heading_count.authority = tests/lints.rs:AGENTS_MD_HEADING_INVENTORY — the extractor-hit table; the count const is a hand-kept mirror
-agents_md.heading_count.regen = grep -oP 'AGENTS_MD_HEADING_COUNT: usize = \K[0-9]+' tests/lints.rs
-agents_md.heading_count.regen_extract = ^(?P<value>[0-9]+)
-agents_md.heading_count.regen_fires = ^[0-9]+$
-agents_md.heading_count.regen_env = none
-agents_md.heading_count.instrument = grep over the count const
-agents_md.heading_count.measured_at = a1eaba9c1
-agents_md.heading_count.home = tests/lints.rs:AGENTS_MD_HEADING_INVENTORY
-agents_md.heading_count.scan = none
-agents_md.heading_count.caveat = a heading inventory does not pin clauses; scan cannot police a 2-digit value
-agents_md.heading_count.cost_secs = 30
-agents_md.heading_count.mirror = tests/lints.rs:AGENTS_MD_HEADING_COUNT
-agents_md.heading_count.input = none
-
+#
+# The AGENTS.md heading membership figure USED to be a fifth row here. It is
+# retired: `agents_md_heading_inventory_is_pinned` now derives the count from
+# two independent places — the inventory table and the extractor's hits over
+# AGENTS.md — so there is no third copy left for a row to mirror.
 row = lint.name_prefix.sites
 lint.name_prefix.sites.value = 204
 lint.name_prefix.sites.unit = name-prefix routing sites in src/
