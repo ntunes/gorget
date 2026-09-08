@@ -7285,8 +7285,10 @@ fn cstr_return_registry_single_source() {
 /// update this to assert the single call site.
 #[test]
 fn await_value_route_sibling_count() {
-    const EXPECTED: usize = 2;
-
+    // ⚠ THE PAIRING IS THE INVARIANT, and it DERIVES: every value-route call
+    // must zero its receiver, so `zero_after == call_sites` needs no pin. The
+    // anti-deletion half is a FLOOR, not an equality — a legitimate third await
+    // form can land without a hand edit, while losing one still reds.
     let files = [
         "src/ir/lowering/exprs/methods.rs",
         "src/ir/lowering/exprs/mod.rs",
@@ -7336,26 +7338,25 @@ fn await_value_route_sibling_count() {
         }
     }
 
-    assert_eq!(
-        call_sites, EXPECTED,
-        "Await value-route `Task__void__await` call-site count changed: \
-         {call_sites} vs {EXPECTED}.\n\n\
+    assert!(
+        call_sites >= 2,
+        "Await value-route `Task__void__await` call sites dropped to \
+         {call_sites} (floor 2).\n\n\
          The `.await()` dispatcher has two hand-synced forms (postfix \
          methods.rs + prefix Expr::Await mod.rs). BOTH must fall through to the \
          `Task__void__await` value-route when the named `__gorget_await_<fn>` \
          path can't resolve a single producer fn — else a collection-sourced \
-         Task[void] silently drops its await. If you added a third await form, \
-         route it through the same value-route fallback and bump EXPECTED. If \
-         you CENTRALIZED the two into one shared helper, set EXPECTED = 1.",
+         Task[void] silently drops its await. If you CENTRALIZED the two into \
+         one shared helper, lower this floor and say which helper.",
     );
     assert_eq!(
-        zero_after, EXPECTED,
-        "Await value-route `move_zero_and_mark` double-join guard count changed: \
-         {zero_after} vs {EXPECTED} (call sites = {call_sites}).\n\n\
-         Every `Task__void__await` value-route call MUST zero the receiver local \
-         (`move_zero_and_mark`) right after, so scope-end `Task__void__drop` is a \
-         no-op and the task isn't joined twice. A value-route site missing the \
-         zero re-opens the double-free. Keep every fallback paired with its zero.",
+        zero_after, call_sites,
+        "{zero_after} of the {call_sites} `Task__void__await` value-route calls \
+         zero their receiver.\n\n\
+         Every one MUST zero it (`move_zero_and_mark`) right after, so scope-end \
+         `Task__void__drop` is a no-op and the task isn't joined twice. A \
+         value-route site missing the zero re-opens the double-free. This is a \
+         PAIRING, so a new await form that carries its zero needs no edit here.",
     );
 }
 
@@ -13380,7 +13381,11 @@ fn agents_md_size_ratchet() {
 ///
 /// Inflow: a new token-count lint is a `scripts/figures.db` row in the
 /// same commit, or it is rejected.
-const AGENTS_MD_HEADING_COUNT: usize = 81;
+///
+/// ⚠ There is no `AGENTS_MD_HEADING_COUNT` const, deliberately. It was a
+/// third copy of one figure that the bijection below already forces from two
+/// independently-derived places — the inventory table and the extractor's hits
+/// — so it could only ever be edited, never consulted.
 
 const AGENTS_MD_HEADING_INVENTORY: &[(&str, &str)] = &[
     ("H-TITLE", "# Gorget Compiler"),
@@ -13476,21 +13481,21 @@ fn agents_md_heading_inventory_is_pinned() {
     let raw = fs::read_to_string("AGENTS.md").expect("AGENTS.md");
     let hits = agents_md_heading_hits(&raw);
 
-    assert_eq!(
-        AGENTS_MD_HEADING_INVENTORY.len(),
-        AGENTS_MD_HEADING_COUNT,
-        "AGENTS_MD_HEADING_INVENTORY has {} rows; AGENTS_MD_HEADING_COUNT is \
-         {AGENTS_MD_HEADING_COUNT}. The two are one figure — update both in the \
-         same commit.",
+    // Two independently-derived places: the inventory table, and the
+    // extractor's hits over AGENTS.md. No third copy of the number.
+    assert!(
+        AGENTS_MD_HEADING_INVENTORY.len() > 50,
+        "agents_md_heading_inventory_is_pinned: the inventory holds only {} \
+         rows — a short table makes the bijection below trivially satisfiable.",
         AGENTS_MD_HEADING_INVENTORY.len(),
     );
     assert_eq!(
         hits.len(),
-        AGENTS_MD_HEADING_COUNT,
-        "AGENTS.md has {} extractor-hit heading(s); the inventory pins \
-         {AGENTS_MD_HEADING_COUNT}. An extra heading must get an id; a missing \
-         one means a rule was deleted.",
+        AGENTS_MD_HEADING_INVENTORY.len(),
+        "AGENTS.md has {} extractor-hit heading(s); the inventory holds {}. \
+         An extra heading must get an id; a missing one means a rule was deleted.",
         hits.len(),
+        AGENTS_MD_HEADING_INVENTORY.len(),
     );
 
     let mut ids: Vec<&str> = AGENTS_MD_HEADING_INVENTORY.iter().map(|(id, _)| *id).collect();
@@ -23206,51 +23211,50 @@ fn fmt_paren_emission_census() {
 /// (`Rc::clone`) or is the ENTRY point that builds it from the parse.
 #[test]
 fn fmt_author_paren_table_reaches_sub_formatters() {
-    /// Construction sites of `Formatter::new`, per site:
-    ///   1. `sub_render` — must `Rc::clone` the caller's table.
-    ///   2. `format_source_result` — the entry point, which builds the table
-    ///      from the parser's push-log.
-    const EXPECTED_SITES: usize = 2;
-
+    // ⚠ PER SITE, not three totals. The obligation belongs to each
+    // `Formatter::new` call — share the caller's table or build one from the
+    // parse — and a total says nothing about WHICH site broke it. Three pins
+    // (2, 1, 1) also drift against each other; the classification cannot.
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
-    let mut sites = 0usize;
-    let mut clone_sites = 0usize;
-    let mut from_parser_sites = 0usize;
-    for (i, line) in content.lines().enumerate() {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut clone_sites: Vec<String> = Vec::new();
+    let mut from_parser_sites: Vec<String> = Vec::new();
+    let mut unthreaded: Vec<String> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("//") || !line.contains("Formatter::new(") {
             continue;
         }
-        sites += 1;
         // The argument list spans a few lines; look at the following window.
-        let window: String = content
-            .lines()
-            .skip(i)
-            .take(8)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let window: String = lines[i..(i + 8).min(lines.len())].join("\n");
+        let at = format!("src/formatter/mod.rs:{}", i + 1);
         if window.contains("Rc::clone(&self.author_parens)") {
-            clone_sites += 1;
+            clone_sites.push(at);
         } else if window.contains("author_parens") {
-            from_parser_sites += 1;
+            from_parser_sites.push(at);
+        } else {
+            unthreaded.push(at);
         }
     }
-    assert_eq!(
-        sites, EXPECTED_SITES,
-        "`Formatter::new` construction-site count changed: {sites} vs \
-         {EXPECTED_SITES}. A new sub-formatter must be handed the CALLER's \
-         author-paren table (`Rc::clone(&self.author_parens)`); handing it a \
-         fresh empty table silently deletes author parens in every \
-         pre-rendered position."
+    assert!(
+        unthreaded.is_empty(),
+        "these `Formatter::new` sites neither share the caller's author-paren \
+         table nor build one from the parse:\n  {}\n\n\
+         A sub-formatter handed a fresh EMPTY table silently deletes the author's \
+         parens in every pre-rendered position — the output still re-parses and \
+         stays idempotent, so no round-trip gate can see it. Pass \
+         `Rc::clone(&self.author_parens)`.",
+        unthreaded.join("\n  "),
     );
-    assert_eq!(
-        (clone_sites, from_parser_sites),
-        (1, 1),
-        "author-paren table threading changed: {clone_sites} site(s) share the \
-         caller's table and {from_parser_sites} build one from the parse; \
-         expected exactly 1 of each (`sub_render` shares, \
-         `format_source_result` builds)."
+    assert!(
+        !clone_sites.is_empty() && !from_parser_sites.is_empty(),
+        "fmt_author_paren_table_reaches_sub_formatters: the classification is \
+         vacuous — {} site(s) share the table, {} build it from the parse. Both \
+         roles must exist (`sub_render` shares, `format_source_result` builds), \
+         or the check above passes over a formatter that has neither.",
+        clone_sites.len(),
+        from_parser_sites.len(),
     );
 }
 
@@ -23269,16 +23273,14 @@ fn fmt_author_paren_table_reaches_sub_formatters() {
 /// owes this truncate.
 #[test]
 fn parser_position_restore_sites_are_pinned() {
-    /// Writes to `self.pos` across the whole parser, per site:
-    ///   1. `advance()` — `self.pos += 1`, forward progress.
-    ///   2. `try_parse`'s `None` arm — `self.pos = saved_pos`, THE backtrack.
-    /// (The `saved_pos` locals elsewhere in the parser are progress guards that
-    /// only READ the position; `parse_select_op` speculates THROUGH
-    /// `try_parse` and is covered for free.)
-    const EXPECTED_WRITES: usize = 2;
-
+    // ⚠ THE OBLIGATION IS PER RESTORE, and that is the whole assertion: every
+    // `self.pos =` restore truncates the author-paren push-log. Two totals
+    // (2 writes, 1 truncating restore) said the same thing less precisely — a
+    // second backtracking primitive would have moved BOTH, and neither would
+    // have named it.
     let mut writes: Vec<String> = Vec::new();
-    let mut restores_truncating = 0usize;
+    let mut restores: Vec<String> = Vec::new();
+    let mut restores_without_truncate: Vec<String> = Vec::new();
     let mut parser_files: Vec<PathBuf> = Vec::new();
     visit_rs_files(Path::new("src/parser"), &mut |p| parser_files.push(p.to_path_buf()));
     parser_files.sort();
@@ -23300,30 +23302,36 @@ fn parser_position_restore_sites_are_pinned() {
             writes.push(format!("{}:{}: {}", entry.display(), i + 1, t));
             // A RESTORE (`=`, not `+=`) must truncate the paren log nearby.
             if t.contains("self.pos =") && !t.contains("+=") && !t.contains("-=") {
+                let at = format!("{}:{}", entry.display(), i + 1);
+                restores.push(at.clone());
                 let window = lines[i..(i + 4).min(lines.len())].join("\n");
-                if window.contains("author_paren_spans.truncate(") {
-                    restores_truncating += 1;
+                if !window.contains("author_paren_spans.truncate(") {
+                    restores_without_truncate.push(format!("{at}: {t}"));
                 }
             }
         }
     }
-    assert_eq!(
+    assert!(
+        !writes.is_empty() && !restores.is_empty(),
+        "parser_position_restore_sites_are_pinned: no `self.pos` write \
+         ({} found) or no RESTORE ({} found) under src/parser — the scan broke, \
+         and the per-restore check below would pass vacuously.",
         writes.len(),
-        EXPECTED_WRITES,
-        "`self.pos` write-site count changed: {} vs {EXPECTED_WRITES}.\n{}\n\n\
-         A new site that RESTORES the position is a new backtracking \
-         construct, and it must also truncate `author_paren_spans` to the \
-         length saved before the speculation — otherwise an abandoned parse \
-         leaves a phantom author-paren layer and `gg fmt` multiplies the \
-         author's parens on every pass.",
-        writes.len(),
-        writes.join("\n"),
+        restores.len(),
     );
-    assert_eq!(
-        restores_truncating, 1,
-        "the position RESTORE no longer truncates the author-paren push-log. \
-         That truncate is what keeps a backtracked speculation from leaving a \
-         phantom paren layer behind."
+    assert!(
+        restores_without_truncate.is_empty(),
+        "these `self.pos` RESTORE sites do not truncate the author-paren \
+         push-log within the 4 lines that follow:\n  {}\n\n\
+         A site that restores the position is a backtracking construct, and it \
+         must truncate `author_paren_spans` to the length saved before the \
+         speculation — otherwise an abandoned parse leaves a phantom author-paren \
+         layer and `gg fmt` multiplies the author's parens on every pass \
+         (measured on `int[(2)]`: 2 layers -> 8 over three passes, corpus \
+         reparse gate green throughout).\n\n\
+         All `self.pos` writes seen:\n  {}",
+        restores_without_truncate.join("\n  "),
+        writes.join("\n  "),
     );
 }
 
@@ -24777,12 +24785,15 @@ fn formatter_list_emit_fill_census() {
 /// removed without its emit site — both worth a look.
 #[test]
 fn formatter_visibility_emit_site_count() {
-    /// `pub visibility: Visibility` fields in the AST — the carriers.
-    const EXPECTED_CARRIERS: usize = 9;
-    /// `self.format_visibility(` call sites, plus `format_static_decl`'s own
-    /// inverted rule, which together must cover every carrier.
-    const EXPECTED_EMIT_SITES: usize = 8;
+    /// `format_static_decl`'s own inverted rule — the single sanctioned
+    /// carrier that does NOT route through `format_visibility` (statics are
+    /// private-by-default, the opposite convention).
     const STATIC_DECL_OWN_RULE: usize = 1;
+
+    // ⚠ THE RELATION IS THE INVARIANT; the two totals were bookkeeping beside
+    // it. Both sides are grepped from the tree, so pinning 9 and 8 as well made
+    // a blameless AST addition red in three places and said nothing the
+    // coverage relation does not already say.
 
     let ast = fs::read_to_string("src/parser/ast.rs").expect("cannot read src/parser/ast.rs");
     let fmt = fs::read_to_string("src/formatter/mod.rs")
@@ -24798,24 +24809,13 @@ fn formatter_visibility_emit_site_count() {
         .filter(|l| l.contains("self.format_visibility("))
         .count();
 
-    assert_eq!(
-        carriers, EXPECTED_CARRIERS,
-        "the number of AST declarations carrying `visibility` changed \
-         ({EXPECTED_CARRIERS} -> {carriers}).\n\n\
-         If a kind was ADDED: it also needs `explicit_visibility` written at the \
-         parser (one writer, where the keyword is consumed) and an emit through \
-         `format_visibility`, or `gg fmt` will delete the author's `public` on \
-         that kind — the class this guard exists to retire. Then bump both \
-         constants.\n\
-         Census: grep -c 'pub visibility: Visibility,' src/parser/ast.rs"
-    );
-    assert_eq!(
-        emit_sites, EXPECTED_EMIT_SITES,
-        "the `format_visibility` call-site count changed \
-         ({EXPECTED_EMIT_SITES} -> {emit_sites}). A site that DISAPPEARED means \
-         a declaration kind stopped emitting a keyword the user wrote — the \
-         silent-drop class. A site ADDED without a new carrier means something \
-         is emitting visibility twice.\n\
+    assert!(
+        carriers >= 5 && emit_sites >= 4,
+        "formatter_visibility_emit_site_count: {carriers} carrier(s) and \
+         {emit_sites} emit site(s) found — one of the two greps stopped \
+         matching, and the coverage relation below is satisfied trivially by a \
+         pair of zeroes.\n\
+         Census: grep -c 'pub visibility: Visibility,' src/parser/ast.rs\n\
          Census: grep -c 'self.format_visibility(' src/formatter/mod.rs"
     );
     assert_eq!(
@@ -24827,7 +24827,12 @@ fn formatter_visibility_emit_site_count() {
          Every carrier must route through `format_visibility`, which emits the \
          keyword IFF the author wrote one. The single sanctioned exception is \
          `format_static_decl` (statics are private-by-default, the opposite \
-         convention).\n\
+         convention).\n\n\
+         A carrier ADDED also needs `explicit_visibility` written at the parser \
+         (one writer, where the keyword is consumed) — otherwise `gg fmt` deletes \
+         the author's `public` on that kind, the class this guard retires. An \
+         emit site that DISAPPEARED is that same silent drop arriving.\n\
+         Census: grep -c 'pub visibility: Visibility,' src/parser/ast.rs\n\
          Census: grep -c 'self.format_visibility(' src/formatter/mod.rs"
     );
 }
@@ -29740,8 +29745,10 @@ fn clone_meter_check_refuses_an_unattributed_track() {
 #[test]
 fn process_spawn_deadline_arm_count() {
     /// Every spawn-and-poll loop in the tree lives in `src/proc_guard.rs`.
-    /// Raising this is not a fix: route the new caller through the shared runner.
-    const EXPECTED_POLL_LOOPS: usize = 1;
+    /// The assertion is that LOCATION, not a count: a count cannot say WHICH
+    /// file grew a hand-rolled runner, and it makes a second loop inside the
+    /// shared runner itself — which is still the chokepoint — cost an edit.
+    const SHARED_RUNNER: &str = "src/proc_guard.rs";
 
     let mut sites: Vec<String> = Vec::new();
     for path in tracked_files() {
@@ -29757,17 +29764,27 @@ fn process_spawn_deadline_arm_count() {
         }
     }
     sites.sort();
-    assert_eq!(
-        sites.len(),
-        EXPECTED_POLL_LOOPS,
-        "process spawn-and-poll loop count changed: {} vs expected \
-         {EXPECTED_POLL_LOOPS}.\n{}\n\n\
-         A NEW one is a sixth hand-rolled runner. Do not raise this baseline — call \
-         `gorget::proc_guard::run_with_deadline{{,_opts}}`, which spawns the child as a \
-         process-group LEADER and signals the negative pgid, so the kill reaches \
-         grandchildren. A REMOVED one lowers it.",
-        sites.len(),
-        sites.join("\n"),
+    assert!(
+        !sites.is_empty(),
+        "process_spawn_deadline_arm_count: NO `.try_wait()` site found anywhere \
+         in the tree. The shared runner in `{SHARED_RUNNER}` has one, so either \
+         the runner lost its poll loop or the comment/string stripping ate the \
+         whole file — and a zero here makes the location check below vacuous.",
+    );
+    let strays: Vec<&String> = sites
+        .iter()
+        .filter(|s| !s.trim_start().starts_with(&format!("{SHARED_RUNNER}:")))
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "spawn-and-poll loop(s) OUTSIDE the shared runner `{SHARED_RUNNER}`:\n{}\n\n\
+         Each is a hand-rolled deadline runner. Call \
+         `gorget::proc_guard::run_with_deadline{{,_opts}}` instead — it spawns the \
+         child as a process-group LEADER and signals the negative pgid, so the \
+         kill reaches GRANDCHILDREN. Killing only the direct child leaves an \
+         orphan spinning at ~100% CPU, which corrupts every load-adjusted \
+         deadline on the box in both directions at once.",
+        strays.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n"),
     );
 
     // ── the PYTHON half of the same class ────────────────────────────────────
