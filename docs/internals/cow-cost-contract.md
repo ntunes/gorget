@@ -444,6 +444,13 @@ warning applies verbatim: *"Do not sell this as 'the #13 round'."*
   `--implicit-clones`, `allow|warn|deny`, checked against B's specified set.
   Corpus burn-down through `warn` before any `deny` default anywhere.
 - **D — #13**, riding A, whenever its own measurement gate justifies its UAF risk.
+  ⛔ **D52 (2026-08-30) ENLARGED THIS PHASE AND THIS NOTE DID NOT KNOW.** #13 now **covers BINDS**
+  (CoW Rule 3 amended from *"a bind always materializes"* to *"materializes unless provably free"*),
+  so Phase D is a larger deliverable than the line above describes. ⚠ **And the bind position is a
+  RESTING position**, so it carries `D58` — *a borrow must not outlive its source* — which is gated on
+  the legality axis's **Rule 1 + Rule 2**, not on anything in this note. ⇒ **Phase D is blocked on the
+  legality axis; Phases A–C are not.** The arg-side elision in §2 operates at *call* positions, where
+  stack discipline and the exclusivity check discharge the obligation structurally.
 
 Order is not negotiable between B and C (see the compatibility hazard). A is
 independently valuable and independently shippable.
