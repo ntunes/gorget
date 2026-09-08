@@ -71,6 +71,230 @@ fn quoted_words(src: &str) -> BTreeSet<String> {
 // rather than a whole-file `contains`: a name that also appears in a SIBLING
 // function answers for a row deleted from the one under test.
 
+/// The variants of a `pub enum <NAME>` in a Rust source file, in declaration
+/// order, each paired with the text that follows its name on the declaration
+/// line (`(Vec<Spanned<Expr>>, …)`, `{`, `,`, …).
+///
+/// This is the INDEPENDENT witness for "which variants exist", and rustc keeps
+/// it honest: a variant cannot be added without appearing here. Use it instead
+/// of hand-listing an arm roster in this file — a hand list cannot see a NEW
+/// variant, which is the direction most arm-count guards claim to catch.
+fn rust_enum_variants(path: &str, enum_name: &str) -> Vec<(String, String)> {
+    let s = fs::read_to_string(path)
+        .unwrap_or_else(|_| panic!("rust_enum_variants: cannot read {path}"));
+    let head = format!("pub enum {enum_name} {{");
+    let es = s
+        .find(&head)
+        .unwrap_or_else(|| panic!("rust_enum_variants: `{head}` not found in {path}"));
+    let open = s[es..].find('{').expect("enum body open");
+    let mut depth: i32 = 0;
+    let mut close = None;
+    for (i, c) in s[es..].char_indices().skip(open) {
+        if c == '{' { depth += 1; }
+        if c == '}' {
+            depth -= 1;
+            if depth == 0 { close = Some(i + 1); break; }
+        }
+    }
+    let body = &s[es..es + close.expect("enum body close")];
+    let mut out = Vec::new();
+    for line in body.lines() {
+        // Exactly one indent level: a variant declaration, never a field of a
+        // struct variant and never a nested type.
+        let Some(t) = line.strip_prefix("    ") else { continue };
+        if t.starts_with(' ') || !t.starts_with(char::is_uppercase) {
+            continue;
+        }
+        let name: String = t
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() {
+            continue;
+        }
+        out.push((name.clone(), t[name.len()..].to_string()));
+    }
+    assert!(
+        out.len() >= 5,
+        "rust_enum_variants: only {} variants parsed out of `{enum_name}` in {path} — \
+         the extraction broke, and a short roster makes every derived comparison \
+         below look complete when it is not.",
+        out.len(),
+    );
+    out
+}
+
+/// The variants of an `enum <NAME>:` in a self-host `.gg` source, in
+/// declaration order, each paired with the text that follows its name.
+///
+/// The `.gg` twin of [`rust_enum_variants`], and the same reason for existing:
+/// a walker's arm roster hand-listed in THIS file cannot see a new variant, so
+/// derive the roster from the AST that declares it.
+fn gg_enum_variants(path: &str, enum_name: &str) -> Vec<(String, String)> {
+    let s = fs::read_to_string(path)
+        .unwrap_or_else(|_| panic!("gg_enum_variants: cannot read {path}"));
+    let head = format!("enum {enum_name}:");
+    let mut out = Vec::new();
+    let mut inside = false;
+    for line in s.lines() {
+        if line.trim_end() == head {
+            inside = true;
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        // Gorget is indentation-based: the declaration ends at the first
+        // non-blank line back at column 0.
+        if !line.is_empty() && !line.starts_with(' ') && !line.starts_with('\t') {
+            break;
+        }
+        let t = line.trim_start();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let name: String = t
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() || !name.starts_with(char::is_uppercase) {
+            continue;
+        }
+        out.push((name.clone(), t[name.len()..].to_string()));
+    }
+    assert!(
+        out.len() >= 5,
+        "gg_enum_variants: only {} variants parsed out of `enum {enum_name}` in \
+         {path} — the extraction broke, and a short roster makes every derived \
+         comparison below look complete when it is not.",
+        out.len(),
+    );
+    out
+}
+
+/// A self-host walker's TOP-LEVEL `case <Variant>…` arms inside `window`, at
+/// exactly `indent` spaces, as variant name -> that arm's comment-stripped
+/// body.
+///
+/// ⚠ A MAP, not a count. A count is green under SUBSTITUTION — one arm leaves,
+/// another arrives — which is precisely the sibling-site drift these walkers
+/// are pinned against, and it cannot say WHICH arm vanished. The bodies come
+/// back too, because an arm that exists and does not RECURSE is the same defect
+/// as no arm at all, and a count sees neither.
+fn gg_walker_arms(
+    window: &str,
+    indent: usize,
+    first_char: char,
+) -> std::collections::BTreeMap<String, String> {
+    let pre = format!("{}case ", " ".repeat(indent));
+    let lines: Vec<&str> = window.lines().collect();
+    let mut heads: Vec<(usize, Vec<String>)> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let Some(rest) = l.strip_prefix(&pre) else { continue };
+        // Exactly this indent: a deeper-nested `case` has more leading space.
+        if rest.starts_with(' ') {
+            continue;
+        }
+        let names: Vec<String> = rest
+            .split('|')
+            .filter_map(|p| {
+                let p = p.trim_start();
+                let n: String = p
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                (!n.is_empty() && n.starts_with(first_char)).then_some(n)
+            })
+            .collect();
+        if !names.is_empty() {
+            heads.push((i, names));
+        }
+    }
+    let mut out: std::collections::BTreeMap<String, String> = Default::default();
+    for (k, (i, names)) in heads.iter().enumerate() {
+        let j = heads.get(k + 1).map_or(lines.len(), |(n, _)| *n);
+        let body: String = lines[*i..j]
+            .iter()
+            .map(|l| l.split('#').next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for n in names {
+            out.insert(n.clone(), body.clone());
+        }
+    }
+    out
+}
+
+/// Reconcile one self-host AST walker against the AST that declares its
+/// variants: the arm SET must equal (all variants − the declared exemptions),
+/// and every payload-bearing arm must RECURSE through the walker family.
+fn assert_gg_walker_covers_ast(
+    what: &str,
+    ast_path: &str,
+    enum_name: &str,
+    exempt: &[(&str, &str)],
+    arms: &std::collections::BTreeMap<String, String>,
+    recurse_needle: &str,
+) {
+    let variants = gg_enum_variants(ast_path, enum_name);
+    let exempt_set: BTreeSet<String> =
+        exempt.iter().map(|(n, _)| (*n).to_string()).collect();
+    let unknown: Vec<&String> = exempt_set
+        .iter()
+        .filter(|n| !variants.iter().any(|(v, _)| v == *n))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "{what}: exemption row(s) {unknown:?} name no variant of `enum {enum_name}` in \
+         {ast_path}. A row that outlives its variant makes the roster below stop \
+         describing the tree — strike it in the same commit the variant goes.",
+    );
+    let required: BTreeSet<String> = variants
+        .iter()
+        .map(|(n, _)| n.clone())
+        .filter(|n| !exempt_set.contains(n))
+        .collect();
+    assert!(
+        required.len() >= 10,
+        "{what}: only {} required variants derived from `enum {enum_name}` — the \
+         extraction or the exemption roster broke.",
+        required.len(),
+    );
+    let have: BTreeSet<String> = arms.keys().cloned().collect();
+    let missing: Vec<&String> = required.difference(&have).collect();
+    assert!(
+        missing.is_empty(),
+        "{what}: NO arm for {missing:?}, which `enum {enum_name}` in {ast_path} \
+         declares. A variant left in `else: pass` is NEVER walked. Give it an arm \
+         that recurses into its sub-nodes; if it genuinely carries none, add it to \
+         the exemption roster WITH ITS REASON.",
+    );
+    let extra: Vec<&String> = have.difference(&required).collect();
+    assert!(
+        extra.is_empty(),
+        "{what}: arm(s) {extra:?} match no non-exempt variant of `enum {enum_name}` \
+         in {ast_path} — either the variant was renamed/retired (drop the arm) or \
+         it is on the exemption roster and should not have one.",
+    );
+    // An arm that exists and does not recurse is the same defect as no arm.
+    // Payload-less variants have nothing to walk into and are exempt from this.
+    let inert: Vec<String> = variants
+        .iter()
+        .filter(|(n, rest)| {
+            required.contains(n) && rest.starts_with('(') && {
+                arms.get(n).map_or(false, |b| !b.contains(recurse_needle))
+            }
+        })
+        .map(|(n, _)| n.clone())
+        .collect();
+    assert!(
+        inert.is_empty(),
+        "{what}: arm(s) {inert:?} carry a payload but never call `{recurse_needle}…`, \
+         so the walk stops there. An arm that exists and does not RECURSE hides \
+         exactly what a missing arm hides — and an arm COUNT sees neither.",
+    );
+}
+
 /// The mangled-name family registry, read out of `compiler/data/resources.gg`:
 /// every `MkPrefix("X__")` row paired with the `method_prefix` its
 /// `ResourceMetadata` declares (`gorget_array` / `gorget_heap` / `gorget_set` /
@@ -868,50 +1092,67 @@ fn no_growth_in_phase_d_proxy_reads() {
 /// Baseline 2026-05-12: 3 (ArrayLiteral, TupleLiteral, DictLiteral).
 /// SetLiteral shares ArrayLiteral's AST node (parser convention; see
 /// `src/parser/expr.rs:1663`).
-fn count_container_literal_arms() -> usize {
-    let content = match fs::read_to_string("src/semantic/typecheck.rs") {
-        Ok(s) => s,
-        Err(_) => return 0,
-    };
-    // Scope the count to the `infer_expr` fn so unrelated match arms
-    // (resolver, rewrite, etc.) don't inflate it. infer_expr's literal
-    // arms are stable patterns at lines ~2212-2270 today.
-    let mut in_infer_expr = false;
-    let mut depth = 0;
-    let mut count = 0;
-    let arm_patterns = [
-        "Expr::ArrayLiteral(",
-        "Expr::TupleLiteral(",
-        "Expr::DictLiteral(",
-        "Expr::SetComprehension {",
-        "Expr::DictComprehension {",
-    ];
-    for line in content.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("//") {
-            continue;
-        }
-        if trimmed.starts_with("fn infer_expr(") {
-            in_infer_expr = true;
-            depth = 0;
-        }
-        if !in_infer_expr {
-            continue;
-        }
-        depth += line.matches('{').count() as i32;
-        depth -= line.matches('}').count() as i32;
-        if depth <= 0 && !trimmed.starts_with("fn infer_expr(") {
-            in_infer_expr = false;
-            continue;
-        }
-        for pat in &arm_patterns {
-            if trimmed.starts_with(pat) {
-                count += 1;
-                break;
-            }
+/// `Expr::<Variant>` -> that variant's ARM SOURCE inside `infer_expr`, for the
+/// arms at the outer `match`'s own indentation.
+///
+/// ⚠ The arm SET alone is vacuous here: `infer_expr`'s outer match has NO
+/// catch-all, so rustc already forces one arm per `Expr` variant and comparing
+/// the two sets would compare a thing to itself. What is NOT forced — and what
+/// this guard is about — is whether the arm PROPAGATES `decl_type_hint` into
+/// its nested `infer_expr` calls, so the bodies are what get returned.
+fn infer_expr_arm_bodies() -> std::collections::BTreeMap<String, String> {
+    let content = fs::read_to_string("src/semantic/typecheck.rs")
+        .expect("infer_expr_arm_bodies: cannot read src/semantic/typecheck.rs");
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("fn infer_expr("))
+        .expect("infer_expr_arm_bodies: `fn infer_expr(` moved — re-anchor this lint");
+    let mut depth: i32 = 0;
+    let mut end = lines.len();
+    for (i, l) in lines.iter().enumerate().skip(start) {
+        depth += l.matches('{').count() as i32;
+        depth -= l.matches('}').count() as i32;
+        if depth <= 0 && i > start {
+            end = i;
+            break;
         }
     }
-    count
+    // Arm heads sit at the outer match's own indentation.
+    const ARM_INDENT: &str = "            Expr::";
+    let mut heads: Vec<(usize, String)> = Vec::new();
+    for (i, l) in lines.iter().enumerate().take(end).skip(start) {
+        let Some(rest) = l.strip_prefix(ARM_INDENT) else { continue };
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            heads.push((i, name));
+        }
+    }
+    assert!(
+        heads.len() > 20,
+        "infer_expr_arm_bodies: only {} arm heads found — the indentation anchor \
+         broke, and a short arm map makes every disposition below look absent.",
+        heads.len(),
+    );
+    let mut out: std::collections::BTreeMap<String, String> = Default::default();
+    for (k, (i, name)) in heads.iter().enumerate() {
+        let j = heads.get(k + 1).map_or(end, |(n, _)| *n);
+        // ⚠ COMMENT-STRIPPED. The arm bodies here are read for what the CODE
+        // does; the TupleLiteral arm's own comment says the words
+        // `decl_type_hint`, so a raw body is green over a deleted propagation
+        // (measured: stripping the propagation left the guard passing).
+        let body: String = lines[*i..j]
+            .iter()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        out.insert(name.clone(), body);
+    }
+    out
 }
 
 /// Snag #11 sibling-guard ratchet (CLAUDE.md rule 4). Every auto-propagation
@@ -1659,27 +1900,92 @@ fn closure_shape_rows_have_a_callback_witness() {
 /// **If the count went DOWN:** lower BUDGET to lock the new floor.
 #[test]
 fn container_literal_arms_count() {
-    /// Expected container-literal-like arms in infer_expr:
-    /// - ArrayLiteral (includes set-shape `{a, b, c}` via parser convention)
-    /// - TupleLiteral
-    /// - DictLiteral
-    /// - DictComprehension
-    /// - SetComprehension
-    /// ListComprehension is intentionally excluded from the lint scope —
-    /// it's range-only today and doesn't admit nested-collection-literal
-    /// element expressions in practice.
-    /// Baseline 2026-05-12: 5.
-    const EXPECTED: usize = 5;
+    // Derived place 1 — the AST's own container/comprehension family:
+    // every `*Comprehension` variant, plus every `*Literal` whose payload
+    // opens with a `Vec<` of elements (`ArrayLiteral` — which carries the
+    // set-shape `{a, b, c}` too, by parser convention — `TupleLiteral`,
+    // `DictLiteral`). `StringLiteral`'s first field is the token, and
+    // `StructLiteral` is a struct variant, so neither is in the family.
+    let family: BTreeSet<String> = rust_enum_variants("src/parser/ast.rs", "Expr")
+        .into_iter()
+        .filter(|(n, rest)| {
+            n.ends_with("Comprehension") || (n.ends_with("Literal") && rest.starts_with("(Vec<"))
+        })
+        .map(|(n, _)| n)
+        .collect();
+    assert!(
+        family.len() >= 4,
+        "container_literal_arms_count: only {} container variants derived from \
+         `enum Expr` — the family predicate broke, and a short family asserts \
+         nothing. Found: {family:?}",
+        family.len(),
+    );
 
-    let count = count_container_literal_arms();
+    // The DISPOSITION table: does this arm propagate `decl_type_hint` into its
+    // nested `infer_expr` calls? The `false` rows carry their reason; the
+    // `true` rows are checked, not trusted.
+    //
+    // ⚠ The old shape pinned `EXPECTED = 5` against a five-entry pattern list
+    // in this file — `arm_patterns.len()`, so it compared a list to itself. And
+    // an arm-SET comparison would be vacuous the other way: `infer_expr`'s
+    // outer match has no catch-all, so rustc already forces an arm per variant.
+    // The propagation decision is the thing nothing else forces.
+    const HINT_PROPAGATION: &[(&str, bool, &str)] = &[
+        ("ArrayLiteral", false,
+         "the var-decl unify site's `is_collection_assignment` permissiveness \
+          coerces the element type, so the arm needs no hint of its own."),
+        ("TupleLiteral", true, ""),
+        ("DictLiteral", true, ""),
+        ("ListComprehension", false,
+         "range-only today: the element expression is derived from the range, so \
+          there is no literal here awaiting an expected type."),
+        ("DictComprehension", false,
+         "the K/V expressions are computed from the iterable, not literals \
+          awaiting a hint. If a nested collection literal ever needs coercing \
+          here, this row flips to `true`."),
+        ("SetComprehension", false, "as DictComprehension above."),
+    ];
+
+    let declared: BTreeSet<String> =
+        HINT_PROPAGATION.iter().map(|(n, _, _)| (*n).to_string()).collect();
     assert_eq!(
-        count, EXPECTED,
-        "Container-literal arm count in `infer_expr` changed: {count} vs expected {EXPECTED}.\n\n\
-         If a new arm was added, audit it for `decl_type_hint` propagation \
-         (DictLiteral / TupleLiteral pattern). If unneeded (e.g., outer var-decl \
-         `is_collection_assignment` permissiveness coerces), document the \
-         exception in the bump comment.\n\n\
-         If an arm was removed, lower EXPECTED in tests/lints.rs.",
+        declared, family,
+        "the container/comprehension family in `src/parser/ast.rs` and the \
+         disposition table in this lint disagree.\n\n\
+         A NEW container variant needs a row saying whether its `infer_expr` arm \
+         propagates `decl_type_hint` to its nested element expressions — rustc \
+         forces the ARM to exist (the outer match has no catch-all) but nothing \
+         forces that decision, and getting it wrong is a nested collection \
+         literal that silently fails to coerce. A RETIRED variant leaves a row \
+         behind; strike it in the same commit.",
+    );
+
+    // Derived place 2 — what the arms actually do.
+    let bodies = infer_expr_arm_bodies();
+    let mut wrong: Vec<String> = Vec::new();
+    for (variant, propagates, _reason) in HINT_PROPAGATION {
+        let body = bodies.get(*variant).unwrap_or_else(|| {
+            panic!(
+                "`infer_expr` has no arm for `Expr::{variant}` — rustc should have \
+                 refused that, so the arm-body extraction is what broke."
+            )
+        });
+        let actual = body.contains("decl_type_hint");
+        if actual != *propagates {
+            wrong.push(format!(
+                "Expr::{variant}: declared propagates={propagates}, measured={actual}"
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "`infer_expr` container-arm hint propagation disagrees with the declared \
+         disposition:\n  {}\n\n\
+         MEASURED TRUE, DECLARED FALSE: the arm gained propagation — flip the row \
+         and drop its reason. MEASURED FALSE, DECLARED TRUE: the arm LOST it, and \
+         a nested collection literal in that position now infers without its \
+         expected type. Restore the propagation; do not flip the row to match.",
+        wrong.join("\n  "),
     );
 }
 
@@ -4176,40 +4482,54 @@ fn visit_rs_files(dir: &Path, f: &mut dyn FnMut(&Path)) {
 /// **If an arm was removed:** lower EXPECTED to lock the new floor.
 #[test]
 fn self_host_comprehension_dispatch_arms_count() {
-    /// Baseline 2026-06-14: 3 (EListComp + ESetComp + EDictComp).
-    const EXPECTED: usize = 3;
+    // Derived place 1 — the comprehension variants the SH AST declares.
+    // (`enum Expr` in ast.gg; the `E*Comp` family.)
+    let family: BTreeSet<String> =
+        gg_enum_variants("tests/fixtures/self_host_lowerer/ast.gg", "Expr")
+            .into_iter()
+            .map(|(n, _)| n)
+            .filter(|n| n.ends_with("Comp"))
+            .collect();
+    assert!(
+        family.len() >= 2,
+        "self_host_comprehension_dispatch_arms_count: only {} `E*Comp` variants \
+         derived from ast.gg's `enum Expr` — the extraction broke, and a short \
+         family asserts nothing. Found: {family:?}",
+        family.len(),
+    );
 
+    // Derived place 2 — the arms lower_expr.gg actually dispatches.
     // lower_expr.gg lives ONLY in self_host_lowerer (real file, not symlinked),
     // so no double-count guard is needed.
-    let content =
-        fs::read_to_string("tests/fixtures/self_host_lowerer/lower_expr.gg").unwrap_or_default();
-    let mut arms = 0usize;
+    let content = fs::read_to_string("tests/fixtures/self_host_lowerer/lower_expr.gg")
+        .expect("cannot read tests/fixtures/self_host_lowerer/lower_expr.gg");
+    let mut arms: BTreeSet<String> = Default::default();
     for line in content.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with('#') {
             continue; // .gg comments
         }
-        if trimmed.starts_with("case EListComp(")
-            || trimmed.starts_with("case ESetComp(")
-            || trimmed.starts_with("case EDictComp(")
-        {
-            arms += 1;
+        let Some(rest) = trimmed.strip_prefix("case E") else { continue };
+        let name: String = std::iter::once('E')
+            .chain(rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_'))
+            .collect();
+        if rest[name.len() - 1..].starts_with(['(', ':']) {
+            arms.insert(name);
         }
     }
 
-    assert_eq!(
-        arms, EXPECTED,
-        "Self-host `lower_expr_inner` comprehension dispatch-arm count changed: \
-         {arms} vs {EXPECTED}.\n\n\
-         The comprehension dispatch (EListComp/ESetComp/EDictComp) is an enumerated \
-         class. A new `E…Comp` variant MUST route through a shared \
-         `lower_*_comprehension` helper — NOT fall into the `else:` Unit stub (which \
-         silently miscompiles to a Unit local and CRASHES the comp through the \
-         self-host). Routing through the helper is also what makes the new arm's \
-         accumulator mint from the MATERIALIZED RESULT ELEMENT (`comp_open` … \
-         `comp_close` → `comp_mint_tid`/`comp_mint_ctor`) instead of from the \
-         source element or a scalar default. \
-         Bump EXPECTED with a justification, or lower it if an arm was removed.",
+    let missing: Vec<&String> = family.difference(&arms).collect();
+    assert!(
+        missing.is_empty(),
+        "Self-host `lower_expr_inner` has NO dispatch arm for the comprehension \
+         variant(s) {missing:?}, which ast.gg's `enum Expr` declares.\n\n\
+         The comprehension dispatch is an enumerated class. A new `E…Comp` variant \
+         MUST route through a shared `lower_*_comprehension` helper — NOT fall into \
+         the `else:` Unit stub, which silently miscompiles to a Unit local and \
+         CRASHES the comp through the self-host. Routing through the helper is also \
+         what makes the new arm's accumulator mint from the MATERIALIZED RESULT \
+         ELEMENT (`comp_open` … `comp_close` → `comp_mint_tid`/`comp_mint_ctor`) \
+         instead of from the source element or a scalar default.",
     );
 }
 
@@ -4570,24 +4890,17 @@ fn self_host_accumulator_producer_sets() {
 /// the new floor.
 #[test]
 fn self_host_generic_discovery_expr_arms_count() {
-    /// Baseline 2026-07-03 (R37-T2): 35 top-level `case E…` arms in
-    /// `discover_generic_calls_expr` — the complete sub-expr-bearing self-host
-    /// `Expr` set. Counts the function's TOP-LEVEL match arms only (8-space
-    /// indent); the nested `case EIdentifier` (inside the ECall arm) and the
-    /// `case Some|None` sub-matches are deeper-indented and excluded.
-    // 2026-07-17 (D29): 35 → 36 — the `EPropagate` transparent wrapper arm
-    // (recurses into its inner; the mark carries no semantics of its own).
-    // 2026-08-07 (D25 Round XXXIV Track C2): 36 → 35 — the `EFaultCatch` arm
-    // vanished when the lexical fault-catch form was removed.
-    // 2026-09-03 (R49 Track E): 35 → 34 — the `EImplicitClosure` arm vanished
-    // with the implicit-`it` closure keyword. `EIt` was a LEAF (`else: pass`),
-    // so only one arm went, and the leaf set shrank from 9 to 8.
-    const EXPECTED: usize = 34;
+    // The 8 LEAF variants: no sub-node to walk into, so `else: pass` is right.
+    const LEAF_EXPRS: &[(&str, &str)] = &[
+        ("EIntLiteral", "leaf"), ("EFloatLiteral", "leaf"), ("EBoolLiteral", "leaf"),
+        ("EStringLiteral", "leaf"), ("ECharLiteral", "leaf"), ("ENoneLiteral", "leaf"),
+        ("EIdentifier", "leaf"), ("ESelfExpr", "leaf"),
+    ];
 
     // lower_generics.gg lives ONLY in self_host_lowerer (real file, not
     // symlinked), so no double-count guard is needed.
-    let content =
-        fs::read_to_string("tests/fixtures/self_host_lowerer/lower_generics.gg").unwrap_or_default();
+    let content = fs::read_to_string("tests/fixtures/self_host_lowerer/lower_generics.gg")
+        .expect("cannot read tests/fixtures/self_host_lowerer/lower_generics.gg");
 
     // Scope to the `discover_generic_calls_expr` fn body: from its signature to
     // the next top-level `void ` definition (`discover_generic_calls_type`).
@@ -4598,34 +4911,17 @@ fn self_host_generic_discovery_expr_arms_count() {
         .find("\nvoid discover_generic_calls_type(")
         .map(|o| start + o)
         .expect("self_host_generic_discovery_expr_arms_count: end of discover_generic_calls_expr not found");
-    let window = &content[start..end];
-
-    let mut arms = 0usize;
-    for line in window.lines() {
-        if line.trim_start().starts_with('#') {
-            continue; // .gg comments
-        }
-        // Top-level match arms are indented EXACTLY 8 spaces. `strip_prefix`
-        // with the 8-space prefix rejects the deeper-indented nested arms
-        // (`case EIdentifier` at 20 spaces, `case Some|None` at 12 spaces).
-        if line.strip_prefix("        case E").is_some() {
-            arms += 1;
-        }
-    }
-
-    assert_eq!(
-        arms, EXPECTED,
-        "Self-host `discover_generic_calls_expr` arm count changed: \
-         {arms} vs {EXPECTED}.\n\n\
-         The generic-instance discovery walker must visit EVERY \
-         sub-expression-bearing `Expr` variant — a variant left in `else: pass` \
-         is never walked, so a generic-struct ctor nested inside it is never \
-         discovered → an empty `{{char __pad}}` mono struct → `[bug] I64(0)` on \
-         a later field read. A new arm MUST recurse into its sub-exprs (and scan \
-         any type-args via the shared `discover_generic_calls_type` walker) — \
-         never register from a non-type-arg field (`EStructLiteral`'s middle \
-         `Vector[String]` is FIELD NAMES). Bump EXPECTED with a justification, \
-         or lower it if an arm was removed.",
+    // Top-level match arms are indented EXACTLY 8 spaces; the nested
+    // `case EIdentifier` (inside the ECall arm, 20 spaces) and the
+    // `case Some|None` sub-matches (12 spaces) are deeper and excluded.
+    let arms = gg_walker_arms(&content[start..end], 8, 'E');
+    assert_gg_walker_covers_ast(
+        "self-host `discover_generic_calls_expr`",
+        "tests/fixtures/self_host_lowerer/ast.gg",
+        "Expr",
+        LEAF_EXPRS,
+        &arms,
+        "discover_generic_calls_",
     );
 }
 
@@ -4656,25 +4952,17 @@ fn self_host_generic_discovery_expr_arms_count() {
 /// **If an arm was removed:** lower EXPECTED to lock the new floor.
 #[test]
 fn self_host_mutinf_scan_expr_arms_count() {
-    /// Baseline 2026-07-04 (R38-T-B): 35 top-level `case E…` arms in
-    /// `mutinf_scan_expr` — the complete sub-expr-bearing self-host `Expr` set,
-    /// identical to `discover_generic_calls_expr`. Counts the function's
-    /// TOP-LEVEL match arms only (8-space indent); the nested `case ESelfExpr`
-    /// (inside the EMethodCall receiver sub-matches, 20-space indent) and the
-    /// `case Some|None` sub-matches (12-space indent) are excluded.
-    // 2026-07-17 (D29): 35 → 36 — the `EPropagate` transparent wrapper arm
-    // (recurses into its inner; the mark carries no semantics of its own).
-    // 2026-08-07 (D25 Round XXXIV Track C2): 36 → 35 — the `EFaultCatch` arm
-    // vanished when the lexical fault-catch form was removed.
-    // 2026-09-03 (R49 Track E): 35 → 34 — the `EImplicitClosure` arm vanished
-    // with the implicit-`it` closure keyword. `EIt` was a LEAF (`else: pass`),
-    // so only one arm went, and the leaf set shrank from 9 to 8.
-    const EXPECTED: usize = 34;
+    // The 8 LEAF variants: no sub-node to walk into, so `else: pass` is right.
+    const LEAF_EXPRS: &[(&str, &str)] = &[
+        ("EIntLiteral", "leaf"), ("EFloatLiteral", "leaf"), ("EBoolLiteral", "leaf"),
+        ("EStringLiteral", "leaf"), ("ECharLiteral", "leaf"), ("ENoneLiteral", "leaf"),
+        ("EIdentifier", "leaf"), ("ESelfExpr", "leaf"),
+    ];
 
     // lower.gg lives ONLY in self_host_lowerer (real file, not symlinked), so
     // no double-count guard is needed.
-    let content =
-        fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg").unwrap_or_default();
+    let content = fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg")
+        .expect("cannot read tests/fixtures/self_host_lowerer/lower.gg");
 
     // Scope to the `mutinf_scan_expr` fn body: from its signature to the next
     // top-level `bool ` definition (`mutinf_scan_stmts`).
@@ -4685,30 +4973,16 @@ fn self_host_mutinf_scan_expr_arms_count() {
         .find("\nbool mutinf_scan_stmts(")
         .map(|o| start + o)
         .expect("self_host_mutinf_scan_expr_arms_count: end of mutinf_scan_expr not found");
-    let window = &content[start..end];
-
-    let mut arms = 0usize;
-    for line in window.lines() {
-        if line.trim_start().starts_with('#') {
-            continue; // .gg comments
-        }
-        // Top-level match arms are indented EXACTLY 8 spaces; deeper-indented
-        // nested `case E…` arms are rejected by the 8-space prefix.
-        if line.strip_prefix("        case E").is_some() {
-            arms += 1;
-        }
-    }
-
-    assert_eq!(
-        arms, EXPECTED,
-        "Self-host `mutinf_scan_expr` arm count changed: {arms} vs {EXPECTED}.\n\n\
-         The `&self` mutation-inference walker must visit EVERY \
-         sub-expression-bearing `Expr` variant — a variant left in `else: pass` \
-         is never walked, so a self-mutation hiding inside it is never detected \
-         → the method is mis-classified read-only → the named-receiver CoW gate \
-         under-materializes → a write-through divergence from Rust. A new arm \
-         MUST recurse into its sub-exprs. Bump EXPECTED with a justification, or \
-         lower it if an arm was removed.",
+    // 8-space indent = the top-level match; the nested `case ESelfExpr` inside
+    // the EMethodCall receiver sub-matches (20 spaces) is deeper and excluded.
+    let arms = gg_walker_arms(&content[start..end], 8, 'E');
+    assert_gg_walker_covers_ast(
+        "self-host `mutinf_scan_expr`",
+        "tests/fixtures/self_host_lowerer/ast.gg",
+        "Expr",
+        LEAF_EXPRS,
+        &arms,
+        "mutinf_scan_",
     );
 }
 
@@ -4740,17 +5014,25 @@ fn self_host_mutinf_scan_expr_arms_count() {
 /// lower EXPECTED to lock the new floor.
 #[test]
 fn self_host_mutinf_scan_stmts_arms_count() {
-    /// Baseline 2026-07-04 (R38-T-B): 19 top-level `case S…` arms in
-    /// `mutinf_scan_stmts`. Counts the function's TOP-LEVEL match arms only
-    /// (12-space indent — one level deeper than mutinf_scan_expr because the
-    /// `match st:` sits inside `for st in stmts:`); the nested `case Some|None`
-    /// / `case SORecv|SOSend` sub-matches are deeper-indented and excluded.
-    const EXPECTED: usize = 19;
+    // Exempt from the walk, each with the reason it carries no self-write.
+    const NOT_WALKED: &[(&str, &str)] = &[
+        ("SContinue", "leaf — no sub-nodes."),
+        ("SPass", "leaf — no sub-nodes."),
+        ("SItem", "a nested item DEFINITION never captures the enclosing `self`."),
+        ("SMeta", "compile-time: meta.gg expands it BEFORE lowering, so it is \
+          absent from a method body reaching `compute_method_mutates_self`."),
+        ("SMetaFor", "compile-time, as SMeta."),
+        ("SMetaIf", "compile-time, as SMeta."),
+        ("SMetaConst", "compile-time, as SMeta."),
+        ("SMetaForMatch", "compile-time, as SMeta."),
+        ("SMetaMatch", "compile-time, as SMeta."),
+        ("SMetaWhile", "compile-time, as SMeta."),
+    ];
 
     // lower.gg lives ONLY in self_host_lowerer (real file, not symlinked), so
     // no double-count guard is needed.
-    let content =
-        fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg").unwrap_or_default();
+    let content = fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg")
+        .expect("cannot read tests/fixtures/self_host_lowerer/lower.gg");
 
     // Scope to the `mutinf_scan_stmts` fn body: from its signature to the next
     // top-level `void ` definition (`compute_method_mutates_self`).
@@ -4761,30 +5043,17 @@ fn self_host_mutinf_scan_stmts_arms_count() {
         .find("\nvoid compute_method_mutates_self(")
         .map(|o| start + o)
         .expect("self_host_mutinf_scan_stmts_arms_count: end of mutinf_scan_stmts not found");
-    let window = &content[start..end];
-
-    let mut arms = 0usize;
-    for line in window.lines() {
-        if line.trim_start().starts_with('#') {
-            continue; // .gg comments
-        }
-        // Top-level match arms are indented EXACTLY 12 spaces; deeper-indented
-        // nested `case S…` arms (the SSelect `case SORecv|SOSend`, 20 spaces)
-        // are rejected by the 12-space prefix.
-        if line.strip_prefix("            case S").is_some() {
-            arms += 1;
-        }
-    }
-
-    assert_eq!(
-        arms, EXPECTED,
-        "Self-host `mutinf_scan_stmts` arm count changed: {arms} vs {EXPECTED}.\n\n\
-         Statements are the PRIMARY self-mutation carriers — a variant left in \
-         `else: pass` hides a direct `self.f = x` / `self.f += x` → the method \
-         is mis-classified read-only → the named-receiver CoW gate \
-         under-materializes → a write-through divergence from Rust. A new arm \
-         MUST scan its sub-exprs and flag a self-rooted assign lhs. Bump \
-         EXPECTED with a justification, or lower it if an arm was removed.",
+    // 12-space indent — one level deeper than `mutinf_scan_expr`, because the
+    // `match st:` sits inside `for st in stmts:`; the nested `case Some|None`
+    // and `case SORecv|SOSend` sub-matches are deeper still and excluded.
+    let arms = gg_walker_arms(&content[start..end], 12, 'S');
+    assert_gg_walker_covers_ast(
+        "self-host `mutinf_scan_stmts`",
+        "tests/fixtures/self_host_lowerer/ast.gg",
+        "Stmt",
+        NOT_WALKED,
+        &arms,
+        "mutinf_scan_",
     );
 }
 
