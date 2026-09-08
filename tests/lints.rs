@@ -445,6 +445,53 @@ fn assert_receiver_gate_lanes_agree(from_lane: &str) {
     );
 }
 
+/// `lower_compound_assign`'s TARGET-SHAPE arms — the `if let Expr::<V> … =
+/// &target.node` chain — as variant name -> that arm's comment-stripped body.
+///
+/// ⚠ Per-ARM, deliberately. A count of prologue calls across the whole function
+/// is green under SUBSTITUTION: one arm loses its call while another gains a
+/// second, and the total never moves — which is the exact drift these guards
+/// exist to catch.
+fn compound_assign_target_arms() -> std::collections::BTreeMap<String, String> {
+    let src = fs::read_to_string("src/ir/lowering/stmts/assigns.rs")
+        .expect("read src/ir/lowering/stmts/assigns.rs");
+    let sig = "pub(super) fn lower_compound_assign(";
+    let start = src.find(sig).expect("locate lower_compound_assign");
+    let after = start + sig.len();
+    let end = src[after..].find("\nfn ").map_or(src.len(), |i| after + i);
+    // Comment lines are BLANKED, not dropped, so arm bodies keep their shape.
+    let lines: Vec<&str> = src[start..end]
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect();
+    let mut heads: Vec<(usize, String)> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let t = l.strip_prefix("    ").unwrap_or("");
+        let t = t.strip_prefix("} else ").unwrap_or(t);
+        let Some(rest) = t.strip_prefix("if let Expr::") else { continue };
+        let n: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !n.is_empty() {
+            heads.push((i, n));
+        }
+    }
+    assert!(
+        heads.len() >= 4,
+        "compound_assign_target_arms: only {} target-shape arm(s) found in \
+         `lower_compound_assign` — the `if let Expr::… = &target.node` chain \
+         moved, and every per-arm check below would be vacuous.",
+        heads.len(),
+    );
+    let mut out: std::collections::BTreeMap<String, String> = Default::default();
+    for (k, (i, name)) in heads.iter().enumerate() {
+        let j = heads.get(k + 1).map_or(lines.len(), |(n, _)| *n);
+        out.insert(name.clone(), lines[*i..j].join("\n"));
+    }
+    out
+}
+
 /// The mangled-name family registry, read out of `compiler/data/resources.gg`:
 /// every `MkPrefix("X__")` row paired with the `method_prefix` its
 /// `ResourceMetadata` declares (`gorget_array` / `gorget_heap` / `gorget_set` /
@@ -2915,7 +2962,23 @@ fn sh_amp_operand_reject_sites_count() {
          (Core #10).",
     );
 
-    const EXPECTED_STRIP: usize = 4;
+    // The ITERABLE POSITIONS, derived from the AST that declares them: the
+    // `SFor` statement plus every comprehension expression. A pinned `4` here
+    // could not see a NEW comprehension form arriving, which is the case the
+    // guard is for.
+    let iterable_positions: BTreeSet<String> =
+        gg_enum_variants("tests/fixtures/self_host_typechecker/ast.gg", "Expr")
+            .into_iter()
+            .map(|(n, _)| n)
+            .filter(|n| n.ends_with("Comp"))
+            .chain(std::iter::once("SFor".to_string()))
+            .collect();
+    assert!(
+        iterable_positions.len() >= 3,
+        "sh_amp_operand_reject_sites_count: only {} iterable position(s) derived \
+         from ast.gg — the extraction broke. Found: {iterable_positions:?}",
+        iterable_positions.len(),
+    );
     // Count call sites (`check_iterable_maybe_amp(`) but EXCLUDE the definition
     // line (`void check_iterable_maybe_amp(`).
     let strip_calls = body
@@ -2924,14 +2987,15 @@ fn sh_amp_operand_reject_sites_count() {
         .filter(|l| !l.trim_start().starts_with("void check_iterable_maybe_amp("))
         .count();
     assert_eq!(
-        strip_calls, EXPECTED_STRIP,
-        "SH `check_iterable_maybe_amp` call-site count changed: {strip_calls} vs \
-         expected {EXPECTED_STRIP}. Every iterable position (SFor + 3 comprehension \
-         arms) must route through this ONE helper — a new iterable site that walks \
-         its iterable inline (bypassing the strip) would false-flag a legit \
-         `&`-BOUNDARY iterable as an operand-position reject. If a legitimate new \
-         iterable arm was added, wire it through the helper and bump EXPECTED. If \
-         an arm was removed, lower EXPECTED — do NOT inline the strip.",
+        strip_calls,
+        iterable_positions.len(),
+        "SH `check_iterable_maybe_amp` call-site count is {strip_calls}, but \
+         `ast.gg` declares {} iterable positions ({iterable_positions:?}).\n\n\
+         Every iterable position must route through this ONE helper — a new \
+         iterable site that walks its iterable inline (bypassing the strip) \
+         false-flags a legit `&`-BOUNDARY iterable as an operand-position reject. \
+         Wire the new arm through the helper; do NOT inline the strip.",
+        iterable_positions.len(),
     );
 }
 
@@ -3221,39 +3285,55 @@ fn self_host_safety_place_probes_are_structural() {
 ///     re-opened; restore the call, do not lower EXPECTED.
 #[test]
 fn compound_assign_root_materialize_arms_count() {
-    let src = fs::read_to_string("src/ir/lowering/stmts/assigns.rs")
-        .expect("read src/ir/lowering/stmts/assigns.rs");
-    let sig = "pub(super) fn lower_compound_assign(";
-    let start = src.find(sig).expect("locate lower_compound_assign");
-    // Body ends at the next top-level `fn ` (compound_op_to_gir).
-    let after_sig = start + sig.len();
-    let end = src[after_sig..]
-        .find("\nfn ")
-        .map(|i| after_sig + i)
-        .unwrap_or(src.len());
-    // Strip line comments so the ratchet reasons about EXECUTABLE code only —
-    // the arm comments legitimately mention the helper name in prose.
-    let body: String = src[start..end]
-        .lines()
-        .map(|l| l.split("//").next().unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join("\n");
+    // The PROJECTED-mutation arms: the target names a place INSIDE a root, so
+    // the root must be materialized FIRST or the write goes THROUGH the
+    // caller's storage (matcluster #1). The other shapes ARE their own root.
+    const PROJECTED: &[(&str, &str)] = &[
+        ("FieldAccess", "`obj.field OP= x`"),
+        ("Index", "`obj[i] OP= x`"),
+        ("TupleFieldAccess", "`t.0 OP= x` — a tuple field is a projection like a struct field"),
+    ];
+    const NOT_PROJECTED: &[(&str, &str)] = &[
+        ("Identifier", "the target IS the root; there is nothing to materialize."),
+        ("Deref", "`*p OP= x` writes THROUGH the pointer by design — the pointee \
+          is not a private copy, and materializing the root would break that."),
+    ];
 
-    // One call per projected-mutation arm: FieldAccess + Index + TupleFieldAccess
-    // = 3 (the TupleFieldAccess arm `t.0 OP= v` was added with Target-2; a tuple
-    // field is a projected mutation exactly like a struct field, so it too must
-    // materialize the root FIRST on a bare-value-param / alias root).
-    const EXPECTED: usize = 3;
-    let calls = body.matches("materialize_assign_target_root(").count();
+    let arms = compound_assign_target_arms();
+    let declared: BTreeSet<String> = PROJECTED
+        .iter()
+        .chain(NOT_PROJECTED.iter())
+        .map(|(n, _)| (*n).to_string())
+        .collect();
+    let have: BTreeSet<String> = arms.keys().cloned().collect();
     assert_eq!(
-        calls, EXPECTED,
-        "`materialize_assign_target_root` call count in `lower_compound_assign` \
-         changed: {calls} vs expected {EXPECTED}. Every PROJECTED-mutation compound \
-         arm (`obj.field OP= x`, `obj[i] OP= x`) must materialize the root FIRST so \
-         a bare-value-param / alias / element root gets a private owned copy instead \
-         of writing THROUGH the caller (matcluster #1). If you added a legitimate \
-         new projected arm, add the prologue and bump EXPECTED with a justification; \
-         if a prologue was removed, RESTORE it — do not lower EXPECTED.",
+        declared, have,
+        "`lower_compound_assign`'s target-shape arms and the classification here \
+         disagree.\n  declared: {declared:?}\n  in source: {have:?}\n\n\
+         A NEW target shape must be classified: does it name a place INSIDE a \
+         root (then it needs the `materialize_assign_target_root` prologue) or is \
+         it its own root? Getting that wrong writes through the caller's storage.",
+    );
+
+    let mut wrong: Vec<String> = Vec::new();
+    for (variant, what) in PROJECTED {
+        if !arms[*variant].contains("materialize_assign_target_root(") {
+            wrong.push(format!("{variant} ({what}) has NO root prologue"));
+        }
+    }
+    for (variant, why) in NOT_PROJECTED {
+        if arms[*variant].contains("materialize_assign_target_root(") {
+            wrong.push(format!("{variant} materializes a root, but {why}"));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "`lower_compound_assign` root-materialization is wrong per arm:\n  {}\n\n\
+         Every PROJECTED-mutation arm must materialize the root FIRST, so a \
+         bare-value-param / alias / element root gets a private owned copy \
+         instead of writing THROUGH the caller (matcluster #1). RESTORE a missing \
+         prologue — do not reclassify the arm to make this pass.",
+        wrong.join("\n  "),
     );
 }
 
@@ -3391,18 +3471,59 @@ fn compound_assign_resource_read_centralized() {
         "emit_compound_place_rmw must be defined exactly once (the shared \
          resource-safe compound read-modify-write); found {def_count}.",
     );
-    // All four place-based compound arms call it with the `(ctx, builder, …)`
-    // shape; the definition uses `(\n    ctx,` so it is not counted here.
-    let call_count = src.matches("emit_compound_place_rmw(ctx, builder,").count();
+
+    // ⚠ PER ARM, not a total. The old shape pinned 4 and matched the exact
+    // prefix `emit_compound_place_rmw(ctx, builder,`, so a REFORMATTED call
+    // vanished from the census silently, and a total is green under
+    // substitution anyway.
+    const ROUTES_THROUGH_HELPER: &[(&str, &str)] = &[
+        ("FieldAccess", "the resolved-place arm AND its `.get()`-Ref None-fallback"),
+        ("TupleFieldAccess", "the tuple-field place arm"),
+        ("Deref", "the pointee place arm"),
+    ];
+    const OWN_PATH: &[(&str, &str)] = &[
+        ("Identifier", "a whole-local compound assign — no place to read through."),
+        ("Index", "resolves and writes the element place itself, on the \
+          index-lowering path; it does not take the shared field-place route."),
+    ];
+
+    let arms = compound_assign_target_arms();
+    let declared: BTreeSet<String> = ROUTES_THROUGH_HELPER
+        .iter()
+        .chain(OWN_PATH.iter())
+        .map(|(n, _)| (*n).to_string())
+        .collect();
+    let have: BTreeSet<String> = arms.keys().cloned().collect();
     assert_eq!(
-        call_count, 4,
-        "expected EXACTLY 4 callers of emit_compound_place_rmw (the FieldAccess \
-         Some arm, the `.get()`-Ref None-fallback, the TupleFieldAccess arm, and \
-         the Deref arm), found {call_count}. A place-based compound-assign arm \
-         must NOT re-open-code the current-value read — a resource field read via \
-         an intermediate `assign(cur, Copy(field_place))` trips the resource-move \
-         validator (\"shallow copy of resource\"), the R-STRING ICE. Route the arm \
-         through emit_compound_place_rmw (Core #4, one fix all siblings).",
+        declared, have,
+        "`lower_compound_assign`'s target-shape arms and the routing \
+         classification here disagree.\n  declared: {declared:?}\n  \
+         in source: {have:?}\n\n\
+         A NEW place-based arm must NOT re-open-code the current-value read: a \
+         resource field read via an intermediate `assign(cur, Copy(field_place))` \
+         trips the resource-move validator (\"shallow copy of resource\"), the \
+         R-STRING ICE. Route it through `emit_compound_place_rmw` (Core #4).",
+    );
+
+    let mut wrong: Vec<String> = Vec::new();
+    for (variant, what) in ROUTES_THROUGH_HELPER {
+        if !arms[*variant].contains("emit_compound_place_rmw(") {
+            wrong.push(format!("{variant} ({what}) no longer calls the helper"));
+        }
+    }
+    for (variant, why) in OWN_PATH {
+        if arms[*variant].contains("emit_compound_place_rmw(") {
+            wrong.push(format!(
+                "{variant} now calls the helper, but is declared as its own path: {why}"
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "`lower_compound_assign` resource-read routing is wrong per arm:\n  {}\n\n\
+         A place-based compound-assign arm must not open-code the \
+         read-modify-write; route it through `emit_compound_place_rmw`.",
+        wrong.join("\n  "),
     );
 }
 
@@ -10269,10 +10390,24 @@ fn no_type_variable_name_shape_heuristic() {
 /// helper), lower the budget in the same commit.
 #[test]
 fn clone_warn_hit_pairing() {
-    // (file, bare `.warn_implicit_clone(` budget, `.emit_clone_site_hit(` budget)
-    let allowlist: &[(&str, usize, usize)] = &[
-        ("src/ir/lowering/context.rs", 3, 3),
-        ("src/ir/lowering/stmts/mod.rs", 1, 1),
+    // The files allowed to SPLIT the mint from its hit (conditional clone
+    // sites, where the hit must be emitted inside the cloning branch), each
+    // with what lives there.
+    //
+    // ⚠ NO BUDGETS. The invariant is the PAIRING — mints == hits per file — and
+    // it derives; the four numbers (3, 3, 1, 1) only re-stated it while making
+    // every legitimate new conditional site cost two hand edits.
+    // ⚠ AND SAID PLAINLY: a per-FILE equality cannot prove each mint is paired
+    // with a hit in the SAME BRANCH, which is the class the docstring names. It
+    // catches the arrival of an unpaired one; it would not catch two mints in
+    // one branch balanced by two hits in another.
+    let allowlist: &[(&str, &str)] = &[
+        ("src/ir/lowering/context.rs",
+         "the lazy-string materialization guard (hit inside `mat_bb`), the \
+          Ptr-vs-value deref arm (hit inside the clone-fn arm), and the \
+          `warn_clone_and_hit` body itself"),
+        ("src/ir/lowering/stmts/mod.rs",
+         "`try_lift_option_ref` (hit inside the Some-arm resource path)"),
     ];
 
     fn count_calls(file: &str, marker: &str) -> usize {
@@ -10291,35 +10426,34 @@ fn clone_warn_hit_pairing() {
         n
     }
 
-    for &(file, warn_budget, hit_budget) in allowlist {
+    for &(file, what) in allowlist {
         let warns = count_calls(file, ".warn_implicit_clone(");
         let hits = count_calls(file, ".emit_clone_site_hit(");
-        assert_eq!(
-            warns, warn_budget,
-            "Bare `.warn_implicit_clone(` count in `{file}` changed: {warns} vs \
-             allowlisted {warn_budget}.\n\n\
-             Every straight-line implicit-clone site must pair its CloneId mint \
-             with its runtime hit via `ctx.warn_clone_and_hit(builder, span, ty, \
-             reason)` — a bare mint reads \"0 hits\" in the [clone-site] report \
-             forever. Only a CONDITIONAL site (clone inside a branch) may split \
-             the pair, with the hit emitted inside the cloning branch; document \
-             it at the site and re-balance this allowlist.",
+        assert!(
+            warns > 0,
+            "`{file}` is allowlisted for SPLIT clone attribution ({what}) but has \
+             no bare `.warn_implicit_clone(` left. If the sites were straightened \
+             into `warn_clone_and_hit`, drop the row — an allowlist entry with \
+             nothing behind it is a hole the next site walks through.",
         );
         assert_eq!(
-            hits, hit_budget,
-            "`.emit_clone_site_hit(` count in `{file}` changed: {hits} vs \
-             allowlisted {hit_budget}.\n\n\
-             In-branch hits exist ONLY as the split half of an allowlisted \
-             conditional clone site (plus the `warn_clone_and_hit` helper body). \
-             A stray hit without its paired mint (or vice versa) misattributes \
-             counts. Re-balance the allowlist with a comment at the site.",
+            warns, hits,
+            "clone attribution is UNPAIRED in `{file}`: {warns} bare CloneId \
+             mint(s) `.warn_implicit_clone(` vs {hits} runtime hit(s) \
+             `.emit_clone_site_hit(` ({what}).\n\n\
+             Every implicit-clone site must mint its CloneId AND emit its \
+             `--clones=stats` counter bump. A bare mint reads \"0 hits\" in the \
+             [clone-site] report forever — silent under-attribution. A \
+             straight-line site goes through `ctx.warn_clone_and_hit(builder, \
+             span, ty, reason)`; only a CONDITIONAL site may split the pair, and \
+             then the hit belongs INSIDE the cloning branch.",
         );
     }
 
     // Any file outside the allowlist must route through the helper: zero bare
     // mints, zero bare hits.
     let allowed: std::collections::HashSet<&str> =
-        allowlist.iter().map(|&(f, _, _)| f).collect();
+        allowlist.iter().map(|&(f, _)| f).collect();
     let mut stray = Vec::new();
     visit_rs_files(Path::new("src"), &mut |path| {
         let p = path.to_str().unwrap_or_default();
