@@ -7507,13 +7507,24 @@ fn self_host_param_ctor_site_count() {
 ///    is `todo/t0958`.
 #[test]
 fn self_host_value_callee_producer_is_the_only_dispatch() {
-    // The identifier-bound-callable arm, the EFieldAccess (method-style) arm,
-    // the immediately-invoked closure literal, `None()`, and the three
-    // non-identifier value-callee shapes (EIndex, ECall result, EMethodCall
-    // result). Five of the seven dispatch through the producer; EFieldAccess
-    // and ENoneLiteral do not (they route to `lower_call` or return unit).
-    const EXPECTED_ARMS: usize = 7;
-    const EXPECTED_CONSUMERS: usize = 5;
+    // ⚠ PER ARM, not two counts. `EXPECTED_ARMS = 7` and
+    // `EXPECTED_CONSUMERS = 5` were a pair whose own failure text admitted the
+    // problem — "if this number moved and EXPECTED_CONSUMERS did not, the new
+    // arm is OPEN-CODING the dispatch". That inference is only available to a
+    // reader; asserting it PER ARM makes it the machine's.
+    //
+    // Every callee shape is declared: does it evaluate to a callable VALUE (and
+    // therefore route through `lower_callable_value_call`) or not, and why.
+    const CALLEE_ARMS: &[(&str, bool, &str)] = &[
+        ("EIdentifier", true, "an identifier bound to a callable value"),
+        ("EFieldAccess", false,
+         "method-style `a.b(…)` — routes to `lower_call`, not a value callee"),
+        ("EClosure", true, "an immediately-invoked closure literal"),
+        ("ENoneLiteral", false, "`None()` — returns unit, there is nothing to call"),
+        ("EIndex", true, "`fs[0](21)` — the element is the callable value"),
+        ("ECall", true, "`f()(x)` — the inner call's RESULT is the callable value"),
+        ("EMethodCall", true, "`c.clone()(1)` — the method's RESULT is the callable"),
+    ];
 
     let path = "tests/fixtures/self_host_lowerer/lower_expr.gg";
     let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
@@ -7531,28 +7542,74 @@ fn self_host_value_callee_producer_is_the_only_dispatch() {
         )
     });
     let rest = &content[open + CALLEE_MATCH_OPEN.len()..];
-    let mut arms = 0usize;
-    for line in rest.lines() {
+    let all: Vec<&str> = rest.lines().collect();
+    let mut heads: Vec<(usize, String)> = Vec::new();
+    let mut stop = all.len();
+    for (i, line) in all.iter().enumerate() {
         // Stop at the next arm of the OUTER match (8-space `case `/`else:`).
         let t = line.trim_start();
         let indent = line.len() - t.len();
         if indent == 8 && (t.starts_with("case ") || t.starts_with("else:")) {
+            stop = i;
             break;
         }
-        if line.starts_with(CALLEE_ARM_INDENT) {
-            arms += 1;
+        if let Some(r) = line.strip_prefix(CALLEE_ARM_INDENT) {
+            let n: String = r
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !n.is_empty() {
+                heads.push((i, n));
+            }
         }
     }
-    assert_eq!(
-        arms, EXPECTED_ARMS,
-        "The `ECall` callee match now has {arms} `case` arms, the pinned count is \
-         {EXPECTED_ARMS}.\n\n\
-         A new CALLEE SHAPE is a semantic addition: route it through \
-         `lower_callable_value_call` if it evaluates to a callable value (and bump \
-         EXPECTED_CONSUMERS with it), or give it a real lowering of its own. Then bump \
-         this number. If you removed an arm, lower both. ⚠ If this number moved and \
-         EXPECTED_CONSUMERS did not, the new arm is OPEN-CODING the dispatch — that is \
-         the drift that let `fs[0](21)` and `c.clone()(1)` be silently discarded."
+    let mut found: BTreeSet<String> = Default::default();
+    let mut problems: Vec<String> = Vec::new();
+    for (k, (i, name)) in heads.iter().enumerate() {
+        let j = heads.get(k + 1).map_or(stop, |(n, _)| *n);
+        let body: String = all[*i..j]
+            .iter()
+            .map(|l| l.split('#').next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        found.insert(name.clone());
+        let Some((_, routes, why)) = CALLEE_ARMS.iter().find(|(n, _, _)| n == name) else {
+            problems.push(format!(
+                "`case {name}` is a callee shape this lint does not declare"
+            ));
+            continue;
+        };
+        let actual = body.contains("lower_callable_value_call(");
+        if actual != *routes {
+            problems.push(format!(
+                "`case {name}` ({why}): declared routes-through-producer={routes}, \
+                 measured={actual}"
+            ));
+        }
+    }
+    let declared: BTreeSet<String> =
+        CALLEE_ARMS.iter().map(|(n, _, _)| (*n).to_string()).collect();
+    for gone in declared.difference(&found) {
+        problems.push(format!("`case {gone}` is declared here but the match has no such arm"));
+    }
+    assert!(
+        found.len() >= 5,
+        "self_host_value_callee_producer_is_the_only_dispatch: only {} callee arm(s) \
+         found — the indent anchor broke, and every check below is vacuous.",
+        found.len(),
+    );
+    assert!(
+        problems.is_empty(),
+        "the `ECall` callee dispatch changed:\n  {}\n\n\
+         A new CALLEE SHAPE is a semantic addition. If it evaluates to a callable \
+         VALUE it routes through `lower_callable_value_call` — closure value as \
+         arg-0, args borrowed, `__callable_<arity>`, and the typed return-type \
+         ladder; otherwise it needs a real lowering of its own. Either way it gets \
+         a row here WITH its reason. ⚠ An arm that OPEN-CODES the dispatch is the \
+         drift that let `fs[0](21)` and `c.clone()(1)` be silently discarded, and \
+         it is exactly what a pair of totals could not see: they moved together \
+         and a reader had to notice.",
+        problems.join("\n  "),
     );
 
     let mut defs = 0usize;
@@ -7570,17 +7627,13 @@ fn self_host_value_callee_producer_is_the_only_dispatch() {
     }
 
     assert_eq!(defs, 1, "expected exactly ONE `lower_callable_value_call` definition in {path}, found {defs}");
-    assert_eq!(
-        calls, EXPECTED_CONSUMERS,
-        "Self-host value-callee dispatch call-site count changed: {calls} vs \
-         {EXPECTED_CONSUMERS}.\n\n\
-         Every callee shape that evaluates to a callable VALUE routes through \
-         `lower_callable_value_call` — closure value as arg-0, args borrowed, \
-         `__callable_<arity>`, and the typed return-type ladder. A DROP here means \
-         a shape that used to go through the producer no longer does. If you added \
-         a callee shape, CALL the producer and bump this with EXPECTED_ARMS. ⚠ This \
-         count alone cannot see an arm that open-codes the dispatch — the arm count \
-         above is what catches that, which is why both are asserted.",
+    let want_calls = CALLEE_ARMS.iter().filter(|(_, r, _)| *r).count();
+    assert!(
+        calls >= want_calls,
+        "`lower_callable_value_call` has {calls} call site(s) in {path}, fewer than \
+         the {want_calls} callee arms declared to route through it. A DROP means a \
+         shape that used to reach the producer no longer does — the per-arm check \
+         above names which.",
     );
 
     // The `ECall` callee match must lower-or-REJECT (Core #10). Find the arm's
@@ -16906,33 +16959,18 @@ fn elem_size_from_monomorphized_arms_count() {
 /// `pack_trait_object_call_sites_count` precedents.
 #[test]
 fn unify_closure_ret_axis_class_enumeration() {
-    /// The 3-cell class. Bump when a NEW combinator legitimately joins the
-    /// unify-eligible class. NEVER bump silently — document which cell +
-    /// which axis + which sibling exclusion is being overridden, and update
-    /// the helper doc-comment alongside.
-    const EXPECTED_VARIANTS: usize = 3;
-    /// Every unify-eligible cell has EXACTLY ONE caller of the helper.
-    /// `count_callers` scans the whole `src/semantic/typecheck.rs` (not
-    /// scoped to `infer_closure_method_type`), so any additional
-    /// `self.unify_closure_ret_axis(` anywhere in the file bumps this
-    /// count. Extra callers signal a duplicate check or a leak into a
-    /// non-combinator path (Core #4 chokepoint violation); a missing one
-    /// signals the check was dropped — force the reviewer to explain and
-    /// update the constant deliberately.
-    const EXPECTED_CALLERS: usize = 3;
-    /// ggdef mirror: 3 variants (same class shape as production).
-    const EXPECTED_GGDEF_VARIANTS: usize = 3;
+    // ⚠ THE THREE `3`s ARE ONE FIGURE ON THREE LANES, so they are compared to
+    // EACH OTHER rather than to a pinned number. Three constants could drift
+    // apart one lane at a time and each stay green; a parity assertion makes a
+    // one-lane bump impossible by construction (Core #9). And the production
+    // caller count is not a fourth number either: the class's own rule is
+    // "every unify-eligible cell has EXACTLY ONE caller", so it derives from
+    // the variant count.
     /// ggdef mirror: 1 caller. ggdef's `elaborate_method` consolidates the
     /// per-cell arms into a single match, so the check runs at ONE
     /// chokepoint after `combinator_cell` classifies. Additional callers
     /// would signal a duplicate check (Core #4 chokepoint violation).
     const EXPECTED_GGDEF_CALLERS: usize = 1;
-    /// SH mirror: 3 arms in `combinator_axis_cell`. The arm-count is pinned
-    /// by grepping the `# R28E_CELL_MARKER` per-arm marker (chosen to
-    /// avoid ambiguity with prose that names any single cell). Bump only
-    /// alongside `EXPECTED_VARIANTS` + `EXPECTED_GGDEF_VARIANTS` — a
-    /// drift on any of the three lanes is a Core #9 all-lanes gap.
-    const EXPECTED_SH_ARMS: usize = 3;
     /// SH mirror: 1 caller. SH's `walk_expr_closures_inner` mirrors ggdef's
     /// chokepoint (`elaborate_method`) — one classifying call + one
     /// `unify_closure_ret_axis(` call site. Additional callers would
@@ -17010,10 +17048,25 @@ fn unify_closure_ret_axis_class_enumeration() {
     }
 
     let variants = count_variants(&typecheck_src);
+    assert!(
+        variants >= 2,
+        "only {variants} `ClosureCombinatorCell` variant(s) parsed out of \
+         src/semantic/typecheck.rs — the enum scan broke, and every cross-lane \
+         comparison below would be satisfied by three equal wrong numbers.",
+    );
+    let ggdef_variants = count_variants(&ggdef_src);
+    let sh_arms = sh_typecheck_src
+        .lines()
+        .filter(|line| line.contains("# R28E_CELL_MARKER"))
+        .count();
     assert_eq!(
-        variants, EXPECTED_VARIANTS,
-        "ClosureCombinatorCell variant count in src/semantic/typecheck.rs changed: \
-         {variants} vs expected {EXPECTED_VARIANTS}.\n\n\
+        (variants, variants),
+        (ggdef_variants, sh_arms),
+        "the closure-combinator axis-unify class DIVERGED between lanes \
+         (Core #9: a semantic change lands on every lane in the same round).\n  \
+         production `ClosureCombinatorCell` variants (src/semantic/typecheck.rs) : {variants}\n  \
+         ggdef mirror        (spec/ggdef/src/elaborate/mod.rs)                    : {ggdef_variants}\n  \
+         self-host `combinator_axis_cell` `# R28E_CELL_MARKER` arms               : {sh_arms}\n\n\
          If a NEW closure-returning combinator was added to \
          `src/ir/lowering/builtins.rs`, either:\n\
          (a) add a `ClosureCombinatorCell` variant + a match arm in \
@@ -17034,30 +17087,14 @@ fn unify_closure_ret_axis_class_enumeration() {
 
     let callers = count_callers(&typecheck_src);
     assert_eq!(
-        callers, EXPECTED_CALLERS,
-        "unify_closure_ret_axis call-site count in src/semantic/typecheck.rs \
-         changed: {callers} vs expected {EXPECTED_CALLERS}. Same guidance \
-         as EXPECTED_VARIANTS above: either wire a NEW cell (bump both \
-         constants) or reduce the caller count by removing an over-eager \
-         call (bump down).",
-    );
-
-    let ggdef_variants = count_variants(&ggdef_src);
-    assert_eq!(
-        ggdef_variants, EXPECTED_GGDEF_VARIANTS,
-        "ClosureCombinatorCell variant count in spec/ggdef/src/elaborate/mod.rs \
-         changed: {ggdef_variants} vs expected {EXPECTED_GGDEF_VARIANTS}.\n\n\
-         Round XXIV Track D twin-ratchet: the ggdef mirror MUST track \
-         production's `src/semantic/typecheck.rs` class shape. If a NEW \
-         axis-unify cell legitimately joins the class, add the variant + \
-         a match arm in `Elaborator::unify_closure_ret_axis` + a mapping \
-         in `Elaborator::combinator_cell`, then bump \
-         `EXPECTED_GGDEF_VARIANTS` (and `EXPECTED_VARIANTS` on the \
-         production side if that ships together). (Post-Round-XXV-Track-B: \
-         `Result.{{flat_map, filter}}` + `Option.{{map_err, unwrap_error}}` \
-         are now REJECTED at `elaborate_method` — a category-error, not \
-         an axis-unify cell — so they contribute nothing to this count.) \
-         A drift-only bump on one side is a Core #9 lane gap.",
+        callers, variants,
+        "`unify_closure_ret_axis` has {callers} call site(s) in \
+         src/semantic/typecheck.rs for {variants} unify-eligible cell(s).\n\n\
+         Every cell has EXACTLY ONE caller — that is the class's own rule, so the \
+         number derives and there is nothing to bump. An EXTRA caller signals a \
+         duplicate check or a leak into a non-combinator path (Core #4 chokepoint \
+         violation); a MISSING one signals a cell whose check was dropped, and its \
+         cross-type shape then escapes the class guard.",
     );
 
     let ggdef_callers = count_callers(&ggdef_src);
@@ -17080,11 +17117,6 @@ fn unify_closure_ret_axis_class_enumeration() {
     // the helper itself) paraphrases the marker name so it does not
     // inflate the count — the substring is spelled ONLY on the 3
     // classifier arms and on this scan line.
-    fn count_sh_arms(src: &str) -> usize {
-        src.lines()
-            .filter(|line| line.contains("# R28E_CELL_MARKER"))
-            .count()
-    }
     fn count_sh_callers(src: &str) -> usize {
         let mut callers = 0usize;
         for line in src.lines() {
@@ -17106,25 +17138,10 @@ fn unify_closure_ret_axis_class_enumeration() {
         callers
     }
 
-    // The count line itself contains the marker literal, so the scan
-    // would count it too — subtract that self-hit so the assertion
-    // reads the real arm count. (The prose above uses backticks around
-    // the marker to avoid inflating the count; this line does not.)
-    let sh_arms = count_sh_arms(&sh_typecheck_src).saturating_sub(0);
-    assert_eq!(
-        sh_arms, EXPECTED_SH_ARMS,
-        "combinator_axis_cell arm count in \
-         tests/fixtures/self_host_typechecker/typecheck.gg changed: \
-         {sh_arms} vs expected {EXPECTED_SH_ARMS}.\n\n\
-         Round XXVIII Track E 3-lane ratchet: the SH mirror MUST track \
-         production's `src/semantic/typecheck.rs` and ggdef's \
-         `spec/ggdef/src/elaborate/mod.rs` class shape. If a NEW \
-         axis-unify cell legitimately joins the class, add the arm in \
-         `combinator_axis_cell` (marked `# R28E_CELL_MARKER`) + the axis \
-         mapping in `axis_index_for_cell`, then bump `EXPECTED_SH_ARMS` \
-         alongside `EXPECTED_VARIANTS` / `EXPECTED_GGDEF_VARIANTS`. A \
-         drift-only bump on one lane is a Core #9 lane gap.",
-    );
+    // (The SH arm count is measured ABOVE, alongside the two Rust lanes, so the
+    // three-way parity assertion has all three in hand. There is deliberately no
+    // second assertion on it here: re-reading the same scan and comparing it to
+    // itself would assert nothing at all.)
 
     let sh_callers = count_sh_callers(&sh_typecheck_src);
     assert_eq!(
@@ -24576,31 +24593,42 @@ fn suite_layout_is_read_only_by_the_formatter() {
 /// reaches a synthesized block).
 #[test]
 fn parser_suite_layout_writer_census() {
-    // (file, NextLine writes, Inline writes, header_start writes, rationale)
-    const CENSUS: &[(&str, usize, usize, usize, &str)] = &[
-        // `parse_block_body` IS the indented-suite grammar
-        // (`NEWLINE INDENT stmt* DEDENT`) and is the sole NextLine writer;
-        // `parse_block_or_inline_stmt`'s one-liner path is the Inline one.
-        ("src/parser/mod.rs", 1, 1, 2, "parse_block_body · parse_block_or_inline_stmt"),
-        // `on error <stmt>` (colon-less inline) · `meta match` inline arm body.
-        ("src/parser/stmt.rs", 0, 2, 2, "on error inline · meta match inline arm"),
-        // The three SYNTHETIC wraps: `throw x` and `return x` in expression
-        // position, and the expression-bodied destructuring closure. No author
-        // wrote a suite at any of them, so emitting one would invent syntax.
-        ("src/parser/expr.rs", 0, 3, 3, "throw wrap · return wrap · closure body wrap"),
-        // `Block::synthetic` — no author spelling and no author header.
-        ("src/parser/ast.rs", 1, 0, 1, "Block::synthetic"),
-        // Not a writer: the probe collector COPIES the field into its own
-        // struct, which the scan cannot tell from an init. Kept as an
-        // explicit row so the count is decided rather than excused.
-        ("src/parser/tests.rs", 0, 0, 1, "BlockProbe field copy in the probe collector"),
+    // ⚠ SITES WITH DISPOSITIONS, not fifteen per-file totals.
+    //
+    // Two things changed and both matter. First, rustc ALREADY forces the
+    // decision that the totals were standing in for: `Block` has no `Default`
+    // and `SuiteLayout` has no `Default`, so a construction that omits either
+    // field does not compile (verified — a `Block` literal planted in
+    // `pattern.rs` without `header_start` fails with E0063, not with this
+    // lint). What rustc cannot ask is whether the layout CHOSEN is the one the
+    // author actually wrote, and that is a review, not a count.
+    //
+    // Second, the totals could not name the site: a blameless parser edit moved
+    // three numbers and a genuinely new construction moved the same three.
+    // Declaring the sites by (function, layout, reason) makes a new one land
+    // UNLISTED and say so, and costs nothing otherwise.
+    const SITES: &[(&str, &str, &str)] = &[
+        ("parse_block_body", "NextLine",
+         "IS the indented-suite grammar (`NEWLINE INDENT stmt* DEDENT`) — the \
+          sole NextLine writer in the parser."),
+        ("parse_block_or_inline_stmt", "Inline",
+         "the one-liner path: the author wrote the suite on the header's line."),
+        ("parse_on_error_stmt", "Inline", "`on error <stmt>` — colon-less inline."),
+        ("parse_meta_match_arm_body", "Inline", "`meta match` inline arm body."),
+        ("parse_prefix_inner", "Inline",
+         "the two SYNTHETIC wraps of `throw x` / `return x` in expression \
+          position — no author wrote a suite, so emitting one would invent syntax."),
+        ("parse_closure", "Inline",
+         "the expression-bodied destructuring closure — synthetic, as above."),
+        ("synthetic", "NextLine",
+         "`Block::synthetic`: no author spelling and no author header. NextLine \
+          because the indented form is the shape legal in EVERY position."),
     ];
 
-    // EVERY `src/parser/*.rs`, read from the directory — a file absent from
-    // CENSUS must have ZERO writes, which is what makes the table total. The
-    // hardcoded 4-file list this replaces let a raw `Block` literal planted in
-    // `pattern.rs` pass the whole suite: the same "the enumeration is a
-    // selection" shape the censuses exist to stop, one level up.
+    // EVERY `src/parser/*.rs`, read from the directory. The hardcoded 4-file
+    // list this census once had let a raw `Block` literal planted in
+    // `pattern.rs` pass the whole suite — "the enumeration is a selection",
+    // one level up.
     let mut parser_files: Vec<String> = fs::read_dir("src/parser")
         .expect("cannot read src/parser")
         .map(|e| e.expect("dir entry").path())
@@ -24613,54 +24641,114 @@ fn parser_suite_layout_writer_census() {
         "only {} file(s) found under src/parser — the scan is reading nothing.",
         parser_files.len()
     );
-    let rows: Vec<(&str, usize, usize, usize, &str)> = parser_files
-        .iter()
-        .map(|f| {
-            CENSUS
-                .iter()
-                .find(|(p, ..)| p == f)
-                .copied()
-                // A file with no CENSUS row is asserted to write NOTHING, so a
-                // new writer anywhere under src/parser trips this.
-                .unwrap_or((f.as_str(), 0, 0, 0, "no row: this file writes neither field"))
-        })
-        .collect();
 
-    for (path, want_next, want_inline, want_header, rationale) in &rows {
-        let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
-        // Count WRITES only — a `SuiteLayout::X` in a `==` comparison is a
-        // read, and the parser has none, but be explicit rather than lucky.
-        let got_next = content
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//") && !l.contains("=="))
-            .filter(|l| l.contains("SuiteLayout::NextLine"))
-            .count();
-        let got_inline = content
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//") && !l.contains("=="))
-            .filter(|l| l.contains("SuiteLayout::Inline"))
-            .count();
-        // A field INIT (`header_start,` / `header_start: <expr>,`), never the
-        // parameter declarations (`header_start: usize`) or the prose.
-        let got_header = content
-            .lines()
-            .map(|l| l.trim())
-            .filter(|t| !t.starts_with("//"))
-            .filter(|t| t.starts_with("header_start") && t.ends_with(',') && !t.contains("usize"))
-            .count();
-        assert_eq!(
-            (got_next, got_inline, got_header),
-            (*want_next, *want_inline, *want_header),
-            "R41 T-FMT-C `SuiteLayout` / `Block::header_start` writer census \
-             changed in `{path}` (expected sites: {rationale}).\n\n\
-             A new `Block` construction in the parser must decide, at the only \
-             layer that can: did the author indent this suite, or write it on \
-             the header's line? And WHERE does the owning construct's first \
-             line begin? A construction outside the parser has no author \
-             spelling at all and goes through `Block::synthetic`.\n\n\
-             Bump the row with the new site's rationale."
-        );
+    let mut found: BTreeSet<String> = Default::default();
+    let mut problems: Vec<String> = Vec::new();
+    for path in &parser_files {
+        let content =
+            fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+        let lines: Vec<&str> = content.lines().collect();
+        for (n, line) in lines.iter().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with("//")
+                || t.starts_with("impl ")
+                || t.starts_with("struct ")
+                || t.starts_with("pub struct ")
+                || t.starts_with("pub(crate) struct ")
+            {
+                continue;
+            }
+            // A `Block { … }` LITERAL — never `EquipBlock` / `ExternBlock`,
+            // whose names merely end in `Block`.
+            let is_ctor = line.contains("Block {")
+                && line
+                    .split("Block {")
+                    .next()
+                    .is_some_and(|h| !h.ends_with(char::is_alphanumeric) && !h.ends_with('_'));
+            if !is_ctor {
+                continue;
+            }
+            // The literal's field list; 14 lines is wider than any construction
+            // in the parser today.
+            let window: String = lines[n..(n + 14).min(lines.len())]
+                .iter()
+                .map(|l| l.split("//").next().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let enclosing = lines[..=n]
+                .iter()
+                .rev()
+                .find_map(|l| {
+                    let r = l.trim_start();
+                    let r = r.strip_prefix("pub ").unwrap_or(r);
+                    let r = r.strip_prefix("pub(crate) ").unwrap_or(r);
+                    let r = if r.starts_with("pub(") {
+                        r.split_once(") ").map_or(r, |(_, a)| a)
+                    } else {
+                        r
+                    };
+                    let r = r.strip_prefix("fn ")?;
+                    Some(
+                        r.chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect::<String>(),
+                    )
+                })
+                .unwrap_or_default();
+            let at = format!("{path}:{}", n + 1);
+            let Some((_, layout, _)) = SITES.iter().find(|(f, _, _)| *f == enclosing) else {
+                problems.push(format!("{at}: `{enclosing}` is not a declared Block-construction site"));
+                continue;
+            };
+            found.insert(enclosing.clone());
+            if !window.contains(&format!("SuiteLayout::{layout}")) {
+                problems.push(format!(
+                    "{at}: `{enclosing}` is declared to write `SuiteLayout::{layout}`, \
+                     and this construction does not"
+                ));
+            }
+            // A functional-update INHERITS another block's spelling. rustc is
+            // happy with it and it is exactly the "picked whatever that line's
+            // author felt like" shape the declaration exists to stop.
+            if window.contains("..") && !window.contains("..=") {
+                problems.push(format!(
+                    "{at}: `{enclosing}` builds its Block with a functional-update \
+                     `..` — the layout is then INHERITED, not decided"
+                ));
+            }
+        }
     }
+    let declared: BTreeSet<String> = SITES.iter().map(|(f, _, _)| (*f).to_string()).collect();
+    for gone in declared.difference(&found) {
+        problems.push(format!(
+            "`{gone}` is declared a Block-construction site but constructs none"
+        ));
+    }
+    assert!(
+        found.len() >= 5,
+        "parser_suite_layout_writer_census: only {} construction site(s) found \
+         under src/parser — the scan stopped matching, and a green result here \
+         would say nothing (SIX QUESTIONS #2).",
+        found.len(),
+    );
+    assert!(
+        problems.is_empty(),
+        "R41 T-FMT-C `SuiteLayout` writer census:\n  {}\n\n\
+         A new `Block` construction in the parser must decide, at the only layer \
+         that can: did the author INDENT this suite, or write it on the header's \
+         line? rustc forces the field to be present; only a reader can say \
+         whether the value is right. Declare the site in SITES with the layout it \
+         writes AND the reason, so the decision is in the diff.\n\n\
+         A construction OUTSIDE the parser has no author spelling at all and goes \
+         through `Block::synthetic`.\n\n\
+         Declared sites:\n  {}",
+        problems.join("\n  "),
+        SITES
+            .iter()
+            .map(|(f, l, why)| format!("{f} -> SuiteLayout::{l} ({why})"))
+            .collect::<Vec<_>>()
+            .join("\n  "),
+    );
 }
 
 /// Outside `src/parser/`, an `ast::Block` is built through `Block::synthetic`.
