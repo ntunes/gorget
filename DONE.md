@@ -1,3 +1,21 @@
+- [2026-09-09] **`t1642` — the leak burn-down channel was computed every round and thrown away; now it is persisted, and something consumes it.**
+  `scripts/sanitize_sweep.sh`'s `adjudicate_leaks` already named, per row, which allowlist entries had stopped
+  leaking and which had shed classes — and `OUT` defaulted to an ephemeral `/tmp` dir that CI and the round-close
+  battery both discarded. The sweep now publishes its verdict itself, at exit, with **no caller edited**: the `$$`
+  default stays for concurrent ad-hoc runs, and the file lands under gitignored, per-worktree `target/` (a fixed
+  `/tmp` path *is* MA-9's clobber). One file, published by `mv`, because a directory of files leaves a window
+  where a reader sees this run's classification beside the previous run's provenance.
+  It carries **HEAD sha + the `sha256` of the allowlist as swept**, and says in its own header that a hash is not
+  a signature — it closes ACCIDENT (yesterday's verdict, or one from another branch, picked up off a stable
+  path), not forgery. The operational consequence is an order: **sweep first, then edit.**
+  `fixed_leak` + `shrunk_class` surface as a BURN-DOWN PROPOSAL table with a disposition per row — explicitly a
+  table and never a gate, since a red there would punish the round that measured honestly — and the table says
+  in its own words that it does not close the loop, naming what does (`scripts/bless_leak_allowlist.py`, `t1628`).
+  Also fixed the stale comment the item named (Core #14): rows whose fixture was not run read `absent`, not
+  `fixed`, and the coverage-floor branch is now documented as the belt-and-braces it became when the three-state
+  sort landed. The corpus-wide retirement the item's addendum deferred is filed as `t1644` rather than left in
+  a closed item's prose.
+
 - [2026-09-06] **🏁 ROUND LI (R51) CLOSED — THE OWNER'S OPTIMALITY PIVOT, TAKEN RECURSIVELY. Seven tracks integrated, two stood down, three ledger rulings ratified, full battery green.**
   **Theme:** the owner's 2026-09-05 pivot from safety to optimality, with the standing directive that
   *prerequisites are tackled RECURSIVELY* rather than filed and deferred. The round was told at its open that

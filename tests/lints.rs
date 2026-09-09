@@ -13190,9 +13190,9 @@ fn sanitize_allowlists_shrink_only() {
     }
 }
 
-/// **Every pinned constant inside `sanitize_allowlists_shrink_only` has a
-/// `scripts/figures.db` row mirroring it — so a SEVENTH constant cannot appear
-/// undeclared.**
+/// **Every pinned constant the `sanitize_allowlists_shrink_only` guard can
+/// READ has a `scripts/figures.db` row mirroring it — so a SEVENTH constant
+/// cannot appear undeclared.**
 ///
 /// The DB carries a typed `bless` classifier saying whether a write-back may
 /// move a pin, and `figures.py validate` refuses any family row that omits it.
@@ -13211,12 +13211,35 @@ fn sanitize_allowlists_shrink_only() {
 /// ⚠ NOT A COUNT. A count green-lights a delete-plus-add inside one commit and
 /// cannot name the constant that arrived; the failure below names it, and says
 /// which two lines to write.
+///
+/// ⛔ **AND THE SUBJECT IS REACHABILITY, NOT LEXICAL CONTAINMENT — because the
+/// first version of this lint scoped itself to `const`s declared *inside* the
+/// function body, and a pin declared one scope up escapes it with no signal.**
+/// Measured: `const SEVENTH_UNDECLARED_PIN: usize = 77;` at MODULE scope
+/// immediately above the fn, consumed inside the body, left this lint green and
+/// still reporting six constants. One line of vertical movement defeated the
+/// whole guard — which is the failure mode this lint's own doc-comment names,
+/// committed by the lint. So the subject is every screaming-snake constant the
+/// guard body REFERENCES that carries an integer literal anywhere in this file,
+/// wherever it is declared.
+///
+/// ⚠ AND THE REGION IS BOUNDED BY THE NEXT `#[test]`, not by the first closing
+/// brace at column 0. A brace-bounded region can truncate EARLY — and a
+/// truncated region passes a vacuity floor while silently dropping the pins
+/// below the cut. `#[test]` appears only at the start of the following test, so
+/// the region cannot end short of the function.
+///
+/// ⚠ RESIDUAL, stated rather than papered over: the subject is INTEGER pins. A
+/// fixed-length `&[&str]` allowlist or an inline tuple budget reachable from the
+/// same guard is not seen here — the same blind spot `todo/t1618` records for
+/// the `const NAME: TYPE = <digits>` predicate generally.
 #[test]
 fn sanitize_pinned_constants_are_declared_in_figures_db() {
     let src = fs::read_to_string("tests/lints.rs").expect("read tests/lints.rs");
     // Comments and string literals go first: this file's own prose quotes
     // `const LEAK_CEILING` more than once, and a grep cannot tell a declaration
-    // from a discussion of one.
+    // from a discussion of one. It is also what keeps a `{CONST}` interpolation
+    // inside an assert message out of the reference set below.
     let code = strip_rust_comments_and_strings(&src);
     const GUARD: &str = "fn sanitize_allowlists_shrink_only() {";
     let start = code.find(GUARD).unwrap_or_else(|| {
@@ -13225,31 +13248,69 @@ fn sanitize_pinned_constants_are_declared_in_figures_db() {
              subject that cannot be located passes VACUOUSLY. Re-point it."
         )
     });
-    let body = &code[start..];
-    let end = body.find("\n}\n").unwrap_or_else(|| {
-        panic!("no closing brace at column 0 after `{GUARD}` — cannot bound the guard body")
-    });
-    let body = &body[..end];
+    // Bounded by the NEXT `#[test]`, never by the first `\n}\n`: a brace-bounded
+    // region can end EARLY, and an early end silently drops every pin below the
+    // cut while still looking like a successful extraction.
+    let rest = &code[start..];
+    let region = match rest.find("\n#[test]") {
+        Some(e) => &rest[..e],
+        None => rest,
+    };
+    assert!(
+        region.len() > GUARD.len() * 4,
+        "the extracted region for `{GUARD}` is {} bytes — too small to be the guard body, so \
+         every assertion below would be vacuous. The comment/string stripping or the region \
+         bound is broken.",
+        region.len()
+    );
 
-    let mut declared: Vec<String> = Vec::new();
-    for line in body.lines() {
+    // Every integer `const` in the FILE, wherever it is declared. A pin one
+    // scope up is as reachable from the guard body as one inside it.
+    let mut int_consts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for line in code.lines() {
         let t = line.trim();
-        let Some(rest) = t.strip_prefix("const ") else { continue };
+        let rest = t.strip_prefix("pub ").unwrap_or(t);
+        let Some(rest) = rest.strip_prefix("const ") else { continue };
         let Some((name, after)) = rest.split_once(':') else { continue };
         // `= <digits>;` — an integer pin. A `&[&str]` allowlist or a tuple
         // budget is a different shape and is not this lint's subject.
         let Some((_, val)) = after.split_once('=') else { continue };
-        if !val.trim().trim_end_matches(';').chars().all(|c| c.is_ascii_digit() || c == '_') {
+        let digits = val.trim().trim_end_matches(';');
+        if digits.is_empty()
+            || !digits.chars().all(|c| c.is_ascii_digit() || c == '_')
+        {
             continue;
         }
-        declared.push(name.trim().to_string());
+        *int_consts.entry(name.trim().to_string()).or_default() += 1;
     }
-    declared.sort();
+
+    // ...intersected with what the guard body actually NAMES.
+    let mut referenced: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for tok in region.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+        if tok.len() < 2 || !tok.starts_with(|c: char| c.is_ascii_uppercase()) {
+            continue;
+        }
+        if !tok.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_') {
+            continue;
+        }
+        if int_consts.contains_key(tok) {
+            referenced.insert(tok.to_string());
+        }
+    }
+    let declared: Vec<String> = referenced.into_iter().collect();
+
+    // The floor is the LIVE population, and it is a floor rather than a comment
+    // because the region bound above is what makes truncation impossible — this
+    // catches the other vacuity mode, where the stripping or the token scan
+    // returns nothing at all. Retiring a pin from this guard legitimately lowers
+    // it in the same commit; that is a review event, which is the point.
+    const REACHABLE_PIN_FLOOR: usize = 6;
     assert!(
-        declared.len() >= 2,
-        "found {} integer `const` declaration(s) inside `{GUARD}` — the guard pins several, so \
-         a near-empty set means the extraction broke and every assertion below is vacuous. \
-         found: {declared:?}",
+        declared.len() >= REACHABLE_PIN_FLOOR,
+        "found {} integer pin(s) reachable from `{GUARD}`, floor is {REACHABLE_PIN_FLOOR}. \
+         The guard pins at least that many, so a smaller set means the extraction or the \
+         token scan broke and every assertion below is vacuous. found: {declared:?}",
         declared.len()
     );
 
@@ -13261,8 +13322,8 @@ fn sanitize_pinned_constants_are_declared_in_figures_db() {
     let orphans: Vec<&String> = declared.iter().filter(|c| !mirrored.contains(*c)).collect();
     assert!(
         orphans.is_empty(),
-        "pinned constant(s) in `sanitize_allowlists_shrink_only` with NO row in \
-         scripts/figures.db: {orphans:?}\n\n\
+        "pinned constant(s) REACHABLE FROM `sanitize_allowlists_shrink_only` with NO row \
+         in scripts/figures.db: {orphans:?}\n\n\
          A pin with no row carries no polarity, no provenance, no regen command and — the \
          reason this lint exists — no `bless` classifier, so nothing can say whether a \
          write-back may move it, and no gate notices that nothing said. Add a row (see the \
@@ -13271,8 +13332,43 @@ fn sanitize_pinned_constants_are_declared_in_figures_db() {
          `figures_db_mirrors_agree` will hold the two spellings together."
     );
     eprintln!(
-        "sanitize_pinned_constants_are_declared_in_figures_db: {} constant(s), all mirrored: {declared:?}",
+        "sanitize_pinned_constants_are_declared_in_figures_db: {} reachable pin(s), all \
+         mirrored: {declared:?}",
         declared.len()
+    );
+}
+
+/// **The pin write-back certifies itself, on every commit.**
+///
+/// `scripts/bless_leak_allowlist.py` rewrites a debt pin in two tracked files.
+/// Every refusal it makes was demonstrated once by hand when it was written, and
+/// a refusal demonstrated once by hand is pinned by NOTHING — delete the
+/// loosening branch tomorrow and no gate goes red. That is Core #6 and Core #12
+/// on the most safety-critical artifact in its own diff.
+///
+/// `--self-test` drives the whole decision against synthetic inputs: every
+/// widening shape (including the MIXED EDIT, a legitimate removal carrying a
+/// loosening that no verdict file can see), the attack, a comment-out, an
+/// unmeasured row, a wrong-count tightening, a frame rename, a TORN verdict
+/// file, both provenance refusals, and the write-back's own single-target
+/// assertions.
+///
+/// ⚠ **The POSITIVE controls are the load-bearing half.** A `decide` that
+/// refused everything would satisfy every negative case, which is verbatim the
+/// trap `scripts/sanitize_sweep.sh`'s self-test names about its own detectors —
+/// so three cases must ACCEPT and one must report nothing to do, or the run
+/// fails.
+#[test]
+fn bless_leak_allowlist_self_test() {
+    let out = std::process::Command::new("python3")
+        .args(["scripts/bless_leak_allowlist.py", "--self-test"])
+        .output()
+        .unwrap_or_else(|e| panic!("python3 scripts/bless_leak_allowlist.py failed to start: {e}"));
+    assert!(
+        out.status.success(),
+        "the leak-pin write-back cannot certify its own refusals.\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
     );
 }
 

@@ -225,11 +225,16 @@ def rows(db):
 def _family_pin_mirrored_into_lints(db, rid):
     """`exact-pin` AND mirroring a literal into `tests/lints.rs`.
 
-    That pair is precisely the population a pin write-back could ever act on:
-    `exact-pin` because a floor or a ratchet is re-pinned by a different
-    operation, and the `tests/lints.rs` mirror because the write-back has to
-    have a literal to rewrite. `mirror = none` rows are excluded by
-    construction, not by omission.
+    ⚠ A DELIBERATELY NARROW CUT, NOT AN EXHAUSTIVE ONE — and the difference
+    matters, because the first version of this docstring claimed it was
+    "precisely the population a pin write-back could ever act on" and that is
+    false: a floor or a ratchet mirrors an equally rewritable literal, and a row
+    mirroring into `tests/integration.rs` is just as writable. What this cut
+    buys is that the rows inside it are the ones where the QUESTION is live —
+    `exact-pin` because that is the polarity Core #6's clause is written about,
+    and a `tests/lints.rs` mirror because that is where the pins this mechanism
+    exists for live. Widening it later is a schema edit plus one declaration per
+    new member, which `validate` will demand; it is not a redesign.
     """
     if one(db, f"{rid}.polarity") != "exact-pin":
         return False

@@ -67,10 +67,14 @@ EDIT SHAPE, not on the verdict.
 WHAT IT WILL NOT DO
 ═══════════════════════════════════════════════════════════════════════════
 
-* It writes only rows the DB classifies `bless = auto-lower`
-  (`python3 scripts/figures.py family bless`). It does not know a blessable pin
-  from a positive control by name — `scripts/figures.db` does, and a row that
-  omits the classifier fails `figures.py validate`.
+* It writes the INTERSECTION of two sets, and both halves are real: the rows
+  this tool knows how to compute (`PINS` below) and the rows the DB classifies
+  `bless = auto-lower` (`python3 scripts/figures.py family bless`). ⚠ SAY BOTH.
+  Flipping a row to `never` in the DB takes it out of the write set with no edit
+  here — which is the property that matters, since it means the tool cannot be
+  talked into writing a positive control. But flipping one TO `auto-lower` does
+  NOT bring it in: this tool must also know what quantity that row records. The
+  classifier is a VETO, not the whole selector.
 * `UNCITED_LEAK_CLASS_PAIRS` is `bless = never` and is DELIBERATELY out of
   scope, which costs about one edit in seven and removes a whole class of
   vacuous acceptance. It is computed from the CITATION column, not the leak
@@ -113,11 +117,27 @@ path and acted on.
 working file is in neither the sweep's `allow` set nor its `seen` set, so the
 instrument would say nothing at all about it.
 
-⭐ A PARTIAL VERDICT IS STRUCTURALLY SAFE. The sweep's three-state sort puts an
-allowlisted row with no verdict line into `absent`, one that was reached but not
-leak-measured into `unmeasured`, and only a genuinely measured-clean row into
-`fixed_leak` — so a `FIXLIST` verdict cannot let an unswept row masquerade as
-fixed. That is what makes a targeted verdict cheap enough to be the normal path.
+⭐ A PARTIAL SWEEP IS STRUCTURALLY SAFE — AND A PARTIAL *FILE* IS NOT. Say which,
+because the first sentence used to be written as if it covered both. The sweep's
+three-state sort puts an allowlisted row with no verdict line into `absent`, one
+that was reached but not leak-measured into `unmeasured`, and only a genuinely
+measured-clean row into `fixed_leak`, so a `FIXLIST` verdict cannot let an
+unswept row masquerade as fixed. That is what makes a targeted verdict cheap
+enough to be the normal path, and it is a fact about a sweep of FEWER FIXTURES.
+
+🚨 IT SAYS NOTHING ABOUT A TRUNCATED VERDICT FILE, AND THE POLARITY IS WHAT
+BITES. Every section this tool reads refuses by ABSENCE — a stem missing from
+`measured` or `fixed_leak` is a refusal — except `new_class`, which refuses by
+PRESENCE. So an empty `new_class` list is indistinguishable from "the rename
+census ran and found nothing", and a verdict truncated before that section
+DISARMS THE RENAME GUARD while every other condition still passes. Measured: the
+same rename-shaped edit is REFUSED against the complete verdict and ACCEPTED
+against one truncated before `[new_class]`.
+
+⇒ The sweep writes an `[end]` sentinel precisely so a consumer can tell a
+complete verdict from a torn one. This tool reads it, and requires every declared
+section header to be present — naming the missing one — rather than reading an
+absent section as an empty one.
 
 ⚠ ERRATUM ON THE PREDICATE: an earlier draft also required a removed stem to be
 absent from `new_leak`. That condition is VACUOUS here — `new_leak` names stems
@@ -126,6 +146,11 @@ HEAD allowlist — so it is dropped rather than kept as decoration.
 
     python3 scripts/bless_leak_allowlist.py            # adjudicate, write nothing
     python3 scripts/bless_leak_allowlist.py --apply    # write the pins
+    python3 scripts/bless_leak_allowlist.py --self-test  # every refusal + every accept
+
+⚠ THE SELF-TEST IS THE COVERAGE, and `tests/lints.rs::bless_leak_allowlist_self_test`
+is what runs it on every commit. A refusal demonstrated once by hand is pinned by
+nothing.
 
 Exit: 0 accepted (or nothing to do) · 1 REFUSED · 2 instrument error ·
 3 accepted, but an un-blessable pin still needs a hand edit.
@@ -146,6 +171,17 @@ import proc_guard  # noqa: E402
 
 ALLOWLIST = "tests/sanitize/LEAK_ALLOWLIST.txt"
 GIT_TIMEOUT = 60
+
+# The sections `scripts/sanitize_sweep.sh::publish_verdict` writes, and the
+# sentinel it terminates the file with. ⚠ THIS LIST IS A CONTRACT WITH THAT
+# FUNCTION: a section added there and not here is simply not required, and a
+# section required here and not written there refuses every verdict. The
+# self-test builds its fixtures from this tuple, so the two cannot silently
+# disagree about the SHAPE — only about the membership, which is one grep:
+#     grep -n 'for _sec in' scripts/sanitize_sweep.sh
+REQUIRED_SECTIONS = ("measured", "fixed_leak", "shrunk_class", "new_class",
+                     "new_leak", "absent", "unmeasured", "retire_due")
+END_SENTINEL = "end"
 
 # WHAT THIS SCRIPT KNOWS HOW TO COMPUTE, keyed by the DB row that records it.
 # ⚠ THIS TABLE IS NOT THE POLICY. It is an identity mapping — "the quantity I
@@ -269,19 +305,9 @@ def census(text):
 
 
 # ── the verdict ────────────────────────────────────────────────────────────
-def parse_verdict(path):
+def parse_verdict_text(text, origin):
+    """Parse, and REFUSE a torn file rather than reading it as an empty one."""
     head, sections, cur = {}, {}, None
-    try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError as e:
-        raise Refusal(
-            f"no persisted sweep verdict at {path}: {e}\n"
-            f"   Run the sweep first — `bash scripts/sanitize_sweep.sh` publishes one at\n"
-            f"   exit, and a FIXLIST run over the fixtures you touched is enough (a partial\n"
-            f"   verdict is structurally safe; see this script's header).\n"
-            f"   ⚠ SWEEP FIRST, THEN EDIT: the verdict must be taken against the allowlist\n"
-            f"   in its HEAD state, or the provenance gate below refuses it forever.")
     for line in text.split("\n"):
         if line.startswith("#") or not line.strip():
             continue
@@ -294,7 +320,38 @@ def parse_verdict(path):
             head[k.strip()] = v.strip()
         else:
             sections[cur].append(line)
+    # 🚨 REFUSE BY ABSENCE IS NOT UNIFORM ACROSS THESE SECTIONS, so a missing one
+    # cannot be read as an empty one. `new_class` is the rename guard and it
+    # refuses by PRESENCE: truncate the file above it and the guard is disarmed
+    # while everything else still looks answerable.
+    missing = [s for s in REQUIRED_SECTIONS if s not in sections]
+    if END_SENTINEL not in sections or missing:
+        raise Refusal(
+            f"the verdict at {origin} is INCOMPLETE — "
+            + (f"missing section(s) {missing}" if missing else
+               f"no `[{END_SENTINEL}]` sentinel")
+            + ".\n"
+            f"   A torn or truncated verdict is not a smaller verdict. Most sections here\n"
+            f"   refuse by ABSENCE, so a shorter file looks stricter — but `new_class` is\n"
+            f"   the RENAME GUARD and it refuses by PRESENCE, so losing it silently DISARMS\n"
+            f"   the one check that separates a fixed leak from a renamed stack frame.\n"
+            f"   The sweep terminates a complete verdict with `[{END_SENTINEL}]`. Re-run it.")
     return head, sections
+
+
+def parse_verdict(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as e:
+        raise Refusal(
+            f"no persisted sweep verdict at {path}: {e}\n"
+            f"   Run the sweep first — `bash scripts/sanitize_sweep.sh` publishes one at\n"
+            f"   exit, and a FIXLIST run over the fixtures you touched is enough (a partial\n"
+            f"   verdict is structurally safe; see this script's header).\n"
+            f"   ⚠ SWEEP FIRST, THEN EDIT: the verdict must be taken against the allowlist\n"
+            f"   in its HEAD state, or the provenance gate below refuses it forever.")
+    return parse_verdict_text(text, path)
 
 
 def git(*args):
@@ -304,29 +361,47 @@ def git(*args):
     return r.stdout
 
 
-def check_provenance(head, path):
-    """Refuse a verdict from a different tree. ACCIDENT, not forgery."""
-    now = git("rev-parse", "HEAD").strip()
+def provenance_problem(head, now, at_head):
+    """The comparison, with no git in it — so the self-test can drive it.
+
+    Returns a refusal string, or None. ⚠ `tree_dirty` and `sweep_rc` are
+    recorded by the sweep and deliberately NOT read here. `tree_dirty` would be
+    wrong to gate on: the normal workflow is to FIX a leak (dirtying `src/`),
+    sweep, and then edit the allowlist, so a dirty tree at sweep time is the
+    expected state — what must match HEAD is the ALLOWLIST's bytes, and that is
+    checked exactly. `sweep_rc` is not read because a sweep that exits 1 on an
+    unrelated ceiling still measured these rows correctly, and refusing on it
+    would make an unrelated regression block a burn-down.
+    """
     if head.get("head_sha") != now:
-        raise Refusal(
+        return (
             f"the verdict was taken at {head.get('head_sha', '<missing>')} and HEAD is {now}.\n"
             f"   A stale-but-complete verdict is accepted WHOLE if nobody checks: a row that\n"
             f"   regressed two rounds ago still reads present + MEASURED + clean. The\n"
             f"   three-state sort protects against INCOMPLETENESS, never against STALENESS.\n"
             f"   Re-run the sweep at HEAD.")
-    at_head = git("show", f"HEAD:{ALLOWLIST}")
     want = hashlib.sha256(at_head.encode()).hexdigest()
     got = head.get("allowlist_sha256")
     if head.get("allowlist_path") != ALLOWLIST:
-        raise Refusal(f"the verdict adjudicated {head.get('allowlist_path')!r}, not {ALLOWLIST!r}")
+        return f"the verdict adjudicated {head.get('allowlist_path')!r}, not {ALLOWLIST!r}"
     if got != want:
-        raise Refusal(
+        return (
             f"the verdict adjudicated a DIFFERENT allowlist than HEAD's.\n"
             f"     verdict: {got}\n"
             f"     HEAD:    {want}\n"
             f"   The sweep must be run BEFORE the edit, with the allowlist in its HEAD state:\n"
             f"   this bless asks what the instrument measured about the PRE-EDIT rows, and a\n"
             f"   verdict taken over the edited file cannot answer that.")
+    return None
+
+
+def check_provenance(head, path):
+    """Refuse a verdict from a different tree. ACCIDENT, not forgery."""
+    now = git("rev-parse", "HEAD").strip()
+    at_head = git("show", f"HEAD:{ALLOWLIST}")
+    problem = provenance_problem(head, now, at_head)
+    if problem:
+        raise Refusal(problem)
     return at_head
 
 
@@ -429,10 +504,39 @@ def adjudicate(sections, removed, tight):
     return bad
 
 
+def decide(before, after, sections):
+    """THE WHOLE DECISION, as a pure function. -> (kind, rows, shape)
+
+    `kind` is one of:
+      `nothing`   no parsed signature changed
+      `loosened`  the edit widens the allowlist — refused OUTRIGHT, before any
+                  verdict is consulted, because the verdict cannot see it
+      `refused`   a changed row the verdict does not support
+      `ok`        every changed row is named by the verdict
+
+    ⚠ IT IS PURE SO THAT `--self-test` CAN DRIVE IT. A refusal demonstrated once
+    by hand is pinned by nothing; this one is exercised on every run of
+    `bless_leak_allowlist_self_test`, including its POSITIVE controls — a
+    `decide` that refused everything would satisfy every negative case.
+    """
+    tight, loosened, removed, added = diff_signatures(before, after)
+    shape = (tight, loosened, removed, added)
+    if added or loosened:
+        rows = [(s, "ADDED as a new row — a new leak is not a burn-down")
+                for s in sorted(added)] + sorted(loosened)
+        return "loosened", rows, shape
+    if not removed and not tight:
+        return "nothing", [], shape
+    bad = adjudicate(sections, removed, tight)
+    if bad:
+        return "refused", bad, shape
+    return "ok", [], shape
+
+
 # ── the write-back ─────────────────────────────────────────────────────────
-def rewrite_literal(path, symbol, new):
+def rewrite_literal(path, symbol, new, root=None):
     """Rewrite `const <symbol>...= <digits>;`, asserting exactly one match."""
-    full = os.path.join(ROOT, path)
+    full = os.path.join(root if root is not None else ROOT, path)
     with open(full, encoding="utf-8") as fh:
         lines = fh.read().split("\n")
     hits = []
@@ -460,26 +564,296 @@ def rewrite_literal(path, symbol, new):
         fh.write("\n".join(lines))
 
 
-def rewrite_db_value(rid, new):
-    path = os.path.join(HERE, "figures.db")
+def rewrite_db_value(rid, new, path=None):
+    path = path if path is not None else os.path.join(HERE, "figures.db")
     with open(path, encoding="utf-8") as fh:
         lines = fh.read().split("\n")
     pre = f"{rid}.value = "
     hits = [i for i, l in enumerate(lines) if l.startswith(pre)]
     if len(hits) != 1:
-        raise Refusal(f"scripts/figures.db: {len(hits)} `{pre}` line(s), want exactly one")
+        raise Refusal(f"{path}: {len(hits)} `{pre}` line(s), want exactly one")
     lines[hits[0]] = f"{pre}{new}"
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines))
+
+
+# ── the self-test ──────────────────────────────────────────────────────────
+# ⛔ SIX HUNDRED LINES THAT WRITE TWO TRACKED FILES OWE AUTOMATED COVERAGE, and
+# a refusal demonstrated once by hand is pinned by NOTHING: delete the loosening
+# branch tomorrow and no gate goes red. That is Core #6 (convert the class into
+# an executable guard) and Core #12 (a fixture is not coverage until it has been
+# seen to FAIL) applied to the most safety-critical artifact here — the one that
+# rewrites a debt pin.
+#
+# The precedent is `scripts/sanitize_sweep.sh`'s own `run_selftest`: watch every
+# detector fire, in this invocation, before trusting any verdict.
+#
+# ⚠ AND THE POSITIVE CONTROLS ARE NOT DECORATION. A `decide` that refused
+# everything would satisfy every negative case below — the same trap the sweep's
+# self-test names ("a detector that answered UNMEASURED to everything would
+# satisfy the second of these and make the whole gate silent"). Three cases here
+# must ACCEPT, and one must report nothing to do.
+
+_BASE = "\n".join([
+    "# a synthetic allowlist — the SHAPE of the real one, none of its content",
+    "",
+    "alpha\tfoo*3,bar*2\tfoo=t0001",
+    "beta\tbaz*5",
+    "gamma\tqux*1+",
+    "delta\tzip*4",
+    "epsilon\twib*2",
+    "",
+])
+
+
+def _sections(new_class=(), measured=None, fixed=("beta",),
+              shrunk=("alpha\tfoo x1 (row says x3); bar gone (row says x2)",)):
+    """The verdict a sweep of this synthetic corpus would publish.
+
+    `epsilon` is deliberately absent from `measured`: it is the row the sweep
+    never looked at, which must never be retirable.
+    """
+    if measured is None:
+        measured = ("alpha", "beta", "gamma", "delta")
+    return {
+        "measured": list(measured),
+        "fixed_leak": list(fixed),
+        "shrunk_class": list(shrunk),
+        "new_class": list(new_class),
+        "new_leak": [],
+        "absent": ["epsilon"],
+        "unmeasured": [],
+        "retire_due": [],
+        END_SENTINEL: [],
+    }
+
+
+def _verdict_text(sections, sha="cafe", alsha="beef", path=ALLOWLIST, upto=None):
+    """Render a verdict file. `upto` truncates before that section header."""
+    out = ["# synthetic verdict", f"head_sha\t{sha}", f"allowlist_path\t{path}",
+           f"allowlist_sha256\t{alsha}", "written_at\tnow"]
+    for sec in list(REQUIRED_SECTIONS) + [END_SENTINEL]:
+        if upto is not None and sec == upto:
+            break
+        out.append(f"[{sec}]")
+        out.extend(sections.get(sec, []))
+    return "\n".join(out) + "\n"
+
+
+def _edit(base, **kw):
+    """Apply one named edit to the synthetic allowlist text."""
+    lines = base.split("\n")
+
+    def row(stem):
+        hits = [i for i, l in enumerate(lines) if l.split("\t")[0] == stem]
+        assert len(hits) == 1, f"{stem}: {len(hits)} rows in the synthetic base"
+        return hits[0]
+
+    for op, arg in kw.items():
+        if op == "remove":
+            del lines[row(arg)]
+        elif op == "comment_out":
+            i = row(arg)
+            lines[i] = "#" + lines[i]
+        elif op == "set":
+            stem, col2 = arg
+            i = row(stem)
+            cols = lines[i].split("\t")
+            cols[1] = col2
+            lines[i] = "\t".join(cols)
+        elif op == "add":
+            lines.insert(len(lines) - 1, arg)
+        else:
+            raise AssertionError(f"unknown edit {op}")
+    return "\n".join(lines)
+
+
+def self_test():
+    fails = []
+
+    def case(name, want, base=None, work=None, sections=None):
+        b = parse_allowlist(base if base is not None else _BASE)
+        a = parse_allowlist(work)
+        kind, rows, _ = decide(b, a, sections if sections is not None else _sections())
+        got = kind
+        ok = got == want
+        detail = "; ".join(f"{s}: {w[:60]}" for s, w in rows) if rows else "-"
+        print(f"  [{'ok  ' if ok else 'FAIL'}] {name:38s} want={want:<9s} got={got:<9s} {detail}")
+        if not ok:
+            fails.append(name)
+
+    def refuses(name, fn, expect):
+        try:
+            fn()
+        except Refusal as e:
+            ok = expect in str(e)
+            print(f"  [{'ok  ' if ok else 'FAIL'}] {name:38s} REFUSED"
+                  f"{'' if ok else ' (wrong reason: ' + str(e)[:80] + ')'}")
+            if not ok:
+                fails.append(name)
+            return
+        print(f"  [FAIL] {name:38s} did NOT refuse")
+        fails.append(name)
+
+    print("=== bless_leak_allowlist self-test ===")
+    print("-- the edit shape (refusals that need no verdict at all) --")
+    # 🚨 THE MIXED EDIT. One legitimate removal plus one loosening: the loosened
+    # row is neither removed nor tightened, so a subject set scoped to
+    # "removed or tightened" evaluates NOTHING for it — while every blessable
+    # total still moves DOWN.
+    case("mixed edit (removal + raise)", "loosened",
+         work=_edit(_BASE, remove="beta", set=("delta", "zip*14")))
+    case("count raised", "loosened", work=_edit(_BASE, set=("delta", "zip*14")))
+    case("class added to a row", "loosened",
+         work=_edit(_BASE, set=("delta", "zip*4,extra*1")))
+    case("row added", "loosened", work=_edit(_BASE, add="zeta\tnew*1"))
+    case("`+` added (count check OFF)", "loosened",
+         work=_edit(_BASE, set=("delta", "zip*4+")))
+    # Re-arming a count check is a tightening in spirit and adjudicable by
+    # nothing: the sweep SKIPS a loose class, so it appears in no output file.
+    case("`+` removed (unadjudicable)", "loosened",
+         work=_edit(_BASE, set=("gamma", "qux*1")))
+
+    print("-- the verdict adjudication --")
+    case("THE ATTACK: remove a still-leaking row", "refused",
+         work=_edit(_BASE, remove="delta"))
+    # The same removal spelled as a comment-out. A textual diff reads a
+    # modification; the parse-based one reads a REMOVED STEM.
+    case("...spelled as a comment-out", "refused",
+         work=_edit(_BASE, comment_out="delta"))
+    case("remove a row never MEASURED", "refused", work=_edit(_BASE, remove="epsilon"))
+    case("partial truncation (3 rows)", "refused",
+         work=_edit(_BASE, remove="delta") .replace("epsilon\twib*2\n", "")
+              .replace("gamma\tqux*1+\n", ""))
+    case("tighten to the WRONG count", "refused",
+         work=_edit(_BASE, set=("alpha", "foo*2,bar*2")))
+    case("tighten a class the sweep did not shed", "refused",
+         work=_edit(_BASE, set=("beta", "baz*1")))
+    # A frame RENAME fires `new_class` and `shrunk_class` together, and the
+    # tightening branch is where condition 4 is not a no-op.
+    case("RENAME (new_class fires)", "refused",
+         work=_edit(_BASE, set=("alpha", "foo*1,bar*2")),
+         sections=_sections(new_class=["alpha\tfoo_v2 x1 (class not tolerated)"]))
+
+    print("-- the POSITIVE controls (a detector that refuses everything is silent) --")
+    case("no edit", "nothing", work=_BASE)
+    case("legitimate removal", "ok", work=_edit(_BASE, remove="beta"))
+    case("legitimate count tightening", "ok",
+         work=_edit(_BASE, set=("alpha", "foo*1,bar*2")))
+    case("legitimate class DROP (`gone`)", "ok",
+         work=_edit(_BASE, set=("alpha", "foo*3")))
+
+    print("-- the verdict FILE: torn is not smaller --")
+    # 🚨 THE POLARITY ASYMMETRY. Every section above refuses by ABSENCE except
+    # `new_class`, which refuses by PRESENCE — so a file truncated above it
+    # DISARMS the rename guard while everything else still looks answerable.
+    for sec in ("new_class", "measured", "shrunk_class"):
+        refuses(f"truncated before [{sec}]",
+                lambda s=sec: parse_verdict_text(
+                    _verdict_text(_sections(), upto=s), "<synthetic>"),
+                "INCOMPLETE")
+    refuses("no [end] sentinel",
+            lambda: parse_verdict_text(
+                _verdict_text(_sections(), upto=END_SENTINEL), "<synthetic>"),
+            "INCOMPLETE")
+    # ...and the complete file must PARSE, or the four above prove nothing.
+    _h, _s = parse_verdict_text(_verdict_text(_sections()), "<synthetic>")
+    if sorted(_s.get("fixed_leak", [])) != ["beta"]:
+        print("  [FAIL] a COMPLETE verdict did not parse — the refusals above are vacuous")
+        fails.append("complete verdict parses")
+    else:
+        print(f"  [ok  ] {'a complete verdict parses':38s} fixed_leak={_s['fixed_leak']}")
+
+    print("-- provenance (accident, not forgery) --")
+    good = {"head_sha": "cafe", "allowlist_path": ALLOWLIST,
+            "allowlist_sha256": hashlib.sha256(_BASE.encode()).hexdigest()}
+    checks = [
+        ("verdict from another commit", {**good, "head_sha": "f00d"}, "HEAD is"),
+        ("verdict over another allowlist", {**good, "allowlist_sha256": "00"},
+         "DIFFERENT allowlist"),
+        ("verdict over another file", {**good, "allowlist_path": "other.txt"}, "not "),
+    ]
+    for name, head, expect in checks:
+        got = provenance_problem(head, "cafe", _BASE)
+        ok = got is not None and expect in got
+        print(f"  [{'ok  ' if ok else 'FAIL'}] {name:38s} {'refused' if got else 'ACCEPTED'}")
+        if not ok:
+            fails.append(name)
+    if provenance_problem(good, "cafe", _BASE) is not None:
+        print("  [FAIL] a MATCHING provenance was refused — the three above are vacuous")
+        fails.append("provenance positive control")
+    else:
+        print(f"  [ok  ] {'a matching provenance is accepted':38s} (positive control)")
+
+    print("-- the write-back --")
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="bless_selftest_") as d:
+        rs = os.path.join(d, "lints.rs")
+        with open(rs, "w", encoding="utf-8") as fh:
+            fh.write("    const A_PIN: usize = 12;\n    const B_PIN: usize = 12;\n")
+        rewrite_literal(rs, "A_PIN", 7, root=d)
+        body = open(rs, encoding="utf-8").read()
+        ok = "const A_PIN: usize = 7;" in body and "const B_PIN: usize = 12;" in body
+        print(f"  [{'ok  ' if ok else 'FAIL'}] {'rewrites ONLY the named constant':38s}")
+        if not ok:
+            fails.append("rewrite_literal")
+        refuses("refuses an absent constant",
+                lambda: rewrite_literal(rs, "NO_SUCH_PIN", 1, root=d), "0 declaration")
+        with open(rs, "a", encoding="utf-8") as fh:
+            fh.write("    const A_PIN: usize = 9;\n")
+        refuses("refuses two declarations",
+                lambda: rewrite_literal(rs, "A_PIN", 1, root=d), "2 declaration")
+        db = os.path.join(d, "figures.db")
+        with open(db, "w", encoding="utf-8") as fh:
+            fh.write("x.value = 12\ny.value = 12\n")
+        rewrite_db_value("x", 7, path=db)
+        body = open(db, encoding="utf-8").read()
+        ok = "x.value = 7" in body and "y.value = 12" in body
+        print(f"  [{'ok  ' if ok else 'FAIL'}] {'rewrites ONLY the named row':38s}")
+        if not ok:
+            fails.append("rewrite_db_value")
+        refuses("refuses an absent row",
+                lambda: rewrite_db_value("zzz", 1, path=db), "0 `zzz.value = `")
+
+    print("-- the DB classification this tool reads --")
+    _, db = figures.parse()
+    for rid in PINS:
+        if rid not in figures.rows(db):
+            print(f"  [FAIL] {rid} is not a row in scripts/figures.db")
+            fails.append(rid)
+        elif figures.one(db, f"{rid}.bless") not in figures.CLASSIFIERS["bless"]["values"]:
+            print(f"  [FAIL] {rid} declares no legal `bless`")
+            fails.append(rid)
+    w = sorted(set(figures.classified(db, "bless", "auto-lower")) & set(PINS))
+    n = sorted(set(PINS) - set(w))
+    print(f"  [ok  ] {'write set is the TYPED field ∩ this table':38s} auto-lower={len(w)} never={len(n)}")
+    if not w or not n:
+        print("  [FAIL] the write set is all-or-nothing — the classifier is not discriminating")
+        fails.append("classifier discriminates")
+
+    if fails:
+        print(f"\n❌ SELF-TEST FAILED: {len(fails)} case(s): {fails}")
+        return 1
+    print("\nself-test: OK — the loosening refusal fired on every widening shape including")
+    print("           the MIXED EDIT, the verdict adjudication refused the attack, a")
+    print("           comment-out, an unmeasured row, a wrong count and a rename, a TORN")
+    print("           verdict was refused rather than read as a smaller one, provenance")
+    print("           refused a foreign commit and a foreign allowlist, the write-back")
+    print("           touched only what it named — and every positive control still passed.")
+    return 0
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--apply", action="store_true",
                     help="write the pins (default: adjudicate and report only)")
+    ap.add_argument("--self-test", action="store_true", dest="self_test",
+                    help="drive every refusal and every accept against synthetic inputs")
     ap.add_argument("--verdict", default=os.environ.get(
         "VERDICT_FILE", os.path.join(ROOT, "target/sanitize-verdict/verdict.txt")))
     args = ap.parse_args()
+    if args.self_test:
+        return self_test()
 
     _, db = figures.parse()
     for rid in PINS:
@@ -498,7 +872,7 @@ def main():
         with open(os.path.join(ROOT, ALLOWLIST), encoding="utf-8") as fh:
             working = fh.read()
         before, after = parse_allowlist(at_head), parse_allowlist(working)
-        tight, loosened, removed, added = diff_signatures(before, after)
+        kind, rows, (tight, loosened, removed, added) = decide(before, after, sections)
 
         print("=== bless: the leak-allowlist pins ===")
         print(f"  verdict    : {args.verdict}")
@@ -506,16 +880,16 @@ def main():
               f"reps={head.get('reps')}, fixlist={head.get('fixlist')})")
         print(f"  edit shape : {len(removed)} removed · {len(tight)} tightened · "
               f"{len(added)} added · {len(loosened)} loosening(s)")
+        print(f"  write set  : {len(writable)} of {len(PINS)} known pin(s) — this tool's "
+              f"table ∩ `bless = auto-lower`; the classifier is a VETO, not the selector")
 
         # 🚨 THE LOOSENING REFUSAL COMES FIRST AND IS OUTRIGHT. It is not one
         # condition among four; it is a claim about the whole edit.
-        if added or loosened:
+        if kind == "loosened":
             print("\n⛔ REFUSED — THE EDIT LOOSENS THE ALLOWLIST, and a bless is a burn-down")
             print("   instrument. A loosening is a hand edit with a justification, which is")
             print("   the review event the pin exists to force.")
-            for stem in sorted(added):
-                print(f"     {stem}: ADDED as a new row — a new leak is not a burn-down")
-            for stem, why in sorted(loosened):
+            for stem, why in rows:
                 print(f"     {stem}: {why}")
             print("\n   ⚠ Note what did NOT catch this: all three blessable pins can move DOWN")
             print("     across such an edit, and a loosened row that still leaks exactly as")
@@ -523,15 +897,14 @@ def main():
             print("     sees it.")
             return 1
 
-        if not removed and not tight:
+        if kind == "nothing":
             print("\n  nothing to bless — the allowlist is byte-equivalent to HEAD's on every")
             print("  parsed signature. No file was written.")
             return 0
 
-        bad = adjudicate(sections, removed, tight)
-        if bad:
-            print(f"\n⛔ REFUSED — {len(bad)} row(s) the sweep's verdict does not support:")
-            for stem, why in bad:
+        if kind == "refused":
+            print(f"\n⛔ REFUSED — {len(rows)} row(s) the sweep's verdict does not support:")
+            for stem, why in rows:
                 print(f"     {stem}: {why}")
             print("\n   Nothing was written. Either the edit is wrong, or the verdict is not")
             print("   the one that measured it — re-run the sweep over these fixtures")

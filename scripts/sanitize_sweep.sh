@@ -653,6 +653,12 @@ publish_verdict() {
     echo "# ⚠ A HASH IS NOT A SIGNATURE. These fields close ACCIDENT (a stale or"
     echo "#   foreign verdict picked up from a stable path), not forgery."
     printf 'head_sha\t%s\n'            "$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+    # ⚠ RECORDED AND DELIBERATELY NOT GATED ON, which is a claim that needs its
+    # reason written down or it reads as an oversight. The normal workflow FIXES
+    # a leak (dirtying src/), sweeps, and only then edits the allowlist — so a
+    # dirty tree at sweep time is the EXPECTED state, and refusing on it would
+    # refuse the exact case this apparatus exists to serve. What must match HEAD
+    # is the ALLOWLIST's bytes, and that is checked exactly, below.
     printf 'tree_dirty\t%s\n'          "$(git diff --quiet HEAD 2>/dev/null && echo no || echo yes)"
     printf 'allowlist_path\t%s\n'      "$LEAK_LIST"
     printf 'allowlist_sha256\t%s\n'    "$(_sha256 "$LEAK_LIST")"
@@ -663,6 +669,10 @@ publish_verdict() {
     printf 'reps\t%s\n'                "$REPS"
     printf 'fixlist\t%s\n'             "${FIXLIST:--}"
     printf 'coverage_floor\t%s\n'      "$COVERAGE_FLOOR"
+    # ⚠ ALSO RECORDED AND NOT GATED ON: a sweep that exits 1 on an unrelated
+    # ceiling still measured these rows correctly, so refusing on it would let an
+    # unrelated regression block a burn-down. It is here for the reader, and for
+    # a future consumer that wants to say WHICH run this was.
     printf 'sweep_rc\t%s\n'            "$_rc"
     printf 'scanned\t%s\n'             "$(wc -l < "$OUT/verdicts.tsv")"
     printf 'out\t%s\n'                 "$OUT"
