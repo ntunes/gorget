@@ -31633,8 +31633,11 @@ fn verdict_classifier_self_test_and_exclusivity() {
 
 /// **The orphan reaper certifies itself, including the incident that shaped it.**
 ///
-/// `scripts/reap_orphans.py --self-test` plants SIX live processes and makes
-/// SIXTEEN assertions about them. Three are the whole design:
+/// `scripts/reap_orphans.py --self-test` plants SIX live processes and asserts
+/// on them. (It used to say "SIXTEEN assertions" — a bare count in a comment is
+/// an invariant claim with nothing enforcing it, Core #14, and it went stale the
+/// first time a control gained a check. The gate reads the failure count the
+/// script prints, not this sentence.) Three controls are the whole design:
 ///   * the NAME control — an identically-named binary OUTSIDE the scratch domain
 ///     must SURVIVE. A `pkill -f 'integration-[0-9a-f]'` has already killed a
 ///     live executor's release test binary mid-gate in this tree; the ownership
@@ -31645,6 +31648,14 @@ fn verdict_classifier_self_test_and_exclusivity() {
 ///     is not hypothetical either: the first version of the predicate dug digits
 ///     out of the MIDDLE of a word and invented an owner for a random `mkdtemp`
 ///     suffix, which its own self-test caught before it shipped.
+///     ⛔ AND THE CONTROL USED TO BE CORRECT ONLY BY LUCK. Its name came from
+///     `mkdtemp`, whose alphabet includes `_`, so roughly one run in a hundred
+///     minted a parsable component and the reaper KILLED the control that exists
+///     to prove a guess is never a kill (`todo/t1641`, observed as a flake and
+///     dismissed as one). The name is now deterministic and the control asserts
+///     its own unparsability THROUGH THE SAME READER before the scan runs — so
+///     it cannot be green by luck, and the assertion is on the basename actually
+///     handed to `makedirs`, not on a prefix or a template.
 ///   * the NON-LEADER control — a member of a STRANGER's process group must be
 ///     killed by pid, and the stranger's group LEADER must survive. Without it
 ///     every planted process was a group leader, so an unguarded
@@ -31676,6 +31687,49 @@ fn shared_python_runner_self_test() {
         out.status.success(),
         "scripts/proc_guard.py self-test FAILED — the Python lane's runner cannot \
          show that it kills a grandchild.\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+/// **The reader half of the same tool, with no processes in it at all.**
+///
+/// `--tag-reader-test` runs the owner-tag reader's typed axis — position ×
+/// multiplicity × bound × script — and spawns nothing, so unlike its sibling
+/// below it cannot lose a race on a loaded box. That separation is what
+/// `todo/t1441` asks for: the pure-logic half always on, the process-spawning
+/// half left to the sibling.
+///
+/// It carries TWO assertions that look like one table and are not:
+///   * **A — reader characterization.** What the reader actually returns.
+///     ⛔ Its first four rows are recorded as THE DEFECT, never as desired
+///     behaviour: an arbitrary directory name still yields an owner pid, which
+///     `todo/t0900`'s run ledger retires by registering ownership at the root's
+///     BIRTH. They are pinned so the defect cannot move unobserved — and,
+///     because those rows ARE the real producer spelling `gg_<label>_<pid>`,
+///     they double as the over-rejection gate: a tightening that blinds the
+///     reader reds them. Measured: applying the (rejected) discriminating-prefix
+///     tightening reds all four here AND the RED/GREEN/PGRP controls below AND
+///     "preflight FAILS LOUDLY on the poisoned box" — that last one is the
+///     transition failing GREEN, which is why the tightening stays out.
+///   * **B — the control certifier.** Whether a given name is FIT TO BE the
+///     NOTAG control, answered through the SAME reader rather than a second
+///     regex (Python's `\d` matches unicode digits and `[0-9]` does not, so two
+///     spellings of one rule disagree on exactly the names this file got wrong).
+#[test]
+fn orphan_reaper_tag_reader_table() {
+    let out = std::process::Command::new("python3")
+        .args(["scripts/reap_orphans.py", "--tag-reader-test"])
+        .output()
+        .unwrap_or_else(|e| {
+            panic!("python3 scripts/reap_orphans.py --tag-reader-test failed: {e}")
+        });
+    assert!(
+        out.status.success(),
+        "scripts/reap_orphans.py --tag-reader-test FAILED. Either the owner-tag \
+         reader changed shape — and rows 1-4 changing means a REAL scratch root \
+         stopped resolving its owner — or the NOTAG control certifier no longer \
+         refuses a parsable name.\n{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );

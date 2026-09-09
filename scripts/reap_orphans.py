@@ -38,7 +38,12 @@ below, and it is not confined to one file:
 ⚠ USE THAT, NOT A NARROWER PATTERN. An earlier version greped two prefixes in
 `tests/integration.rs` and returned 16 — a SELECTION dressed as a census, missing
 `spec_conformance.rs`, `security.rs` and `smith/main.rs` entirely, which no grep
-of one file can reach. The command above returns 65. The ledger says exactly this
+of one file can reach. REGENERATE THE SIZE, never quote a stored one — this
+line read "returns 65" while the command returned 79:
+
+    grep -rn '"gg_' tests/ | wc -l
+
+The ledger says exactly this
 one line above the anchors ruling: *"derived by CENSUS … never by this list
 (a cited list is a selection)"* (`docs/define-gorget/decisions.md:2070-2045`).
 
@@ -92,7 +97,8 @@ deadlocking on a single stale orphan.
     scripts/reap_orphans.py                # report (dry run), always exit 0
     scripts/reap_orphans.py --preflight    # exit 1 if the box is poisoned
     scripts/reap_orphans.py --reap         # SIGKILL the reapable set
-    scripts/reap_orphans.py --self-test    # six planted procs, 16 assertions
+    scripts/reap_orphans.py --self-test    # plants live procs, then reaps them
+    scripts/reap_orphans.py --tag-reader-test  # the reader table; spawns NOTHING
 """
 from __future__ import annotations
 
@@ -207,8 +213,43 @@ class Root:
         # failure the NAME predicate has, reintroduced one level down. An owner
         # tag is a whole `_`-separated component that is ENTIRELY decimal, or
         # there is no owner tag and the root is UNDECIDABLE.
+        #
+        # ⚠ AND STRICTLY ASCII. `str.isdigit()` is TRUE for non-ASCII digits,
+        # and the two halves of that fail DIFFERENTLY — both measured against
+        # this reader:
+        #   * `gg_x_٧` (ARABIC-INDIC SEVEN) and `gg_x_８` (FULLWIDTH
+        #     EIGHT) are `isdigit()` AND `isdecimal()`, so `int()` accepts them
+        #     and this tool INVENTS owner 7 / owner 8 out of a name no producer
+        #     ever wrote. That is this file's own "two things that share a
+        #     spelling" defect, one level further down.
+        #   * `gg_x_²` (SUPERSCRIPT TWO) and `gg_x_②` are `isdigit()`
+        #     but NOT `isdecimal()`, so `int()` RAISES — and nothing catches
+        #     it, so `--preflight` dies with a traceback instead of returning a
+        #     verdict. That preflight is a CI gate: `scripts/run_integration.sh`
+        #     and `scripts/sanitize_sweep.sh` both call it, and anyone who can
+        #     `mkdir` a `gg_`-prefixed name reaches it.
+        # `isdecimal()` fixes only the second. `isascii()` fixes both and costs
+        # nothing — a pid is ASCII by construction — so this is a STRICT
+        # NARROWING with no transition cost and no over-rejection risk. Pinned by
+        # the reader-axis table below (`--tag-reader-test`, rows 7 and 8).
+        #
+        # ⛔ NAMED OMISSION, DELIBERATE AND IN WRITING: THE READER CAN STILL
+        # GUESS. Everything above narrows WHICH strings parse; none of it makes
+        # the tag DISCRIMINATING. `gg_st...x..._notagxhj99ug_8` is structurally
+        # identical to the real producer spelling `gg_<label>_<pid>` that every
+        # site in the census writes (`grep -rn '"gg_' tests/`), so NO name-based
+        # rule rejects the first and still accepts the second. Requiring a
+        # discriminating prefix was considered and REJECTED HERE, because its
+        # transition fails GREEN, which is the worse direction: `--preflight`
+        # gates on `reapable` and explicitly does NOT gate on UNDECIDABLE ("Not a
+        # gate; a stated blind spot", in `report` below), so a prefix only new
+        # code writes turns every legacy root undecidable and A POISONED BOX
+        # PASSES PREFLIGHT. The fix that actually retires this is `todo/t0900`'s
+        # run ledger — ownership registered at the root's BIRTH, needing no
+        # name parsing at all (Core #3). Until that lands the guess stays, and it
+        # is written down here rather than left as an unstated absence.
         cands = [int(t) for t in self.base.split("_")
-                 if t.isdigit() and 0 < int(t) <= pid_max]
+                 if t.isascii() and t.isdigit() and 0 < int(t) <= pid_max]
         if not cands:
             self.undecidable = ("no owner tag: no whole `_`-separated component "
                                 "is a plausible pid")
@@ -251,6 +292,7 @@ def scan(root_filter=None):
     root_dir = temp_root()
     roots = []
     untagged_temp_dirs = 0
+    untagged_temp_matched = []
     try:
         # scandir, not listdir+isdir: this runs as a PRE-FLIGHT before every
         # sweep, and /tmp here currently holds ~100k entries. scandir uses the
@@ -273,6 +315,20 @@ def scan(root_filter=None):
                     # `root_filter`: it is a read-only statement about the
                     # domain, and nothing is ever signalled on its strength.
                     untagged_temp_dirs += 1
+                    # ⊕ AND THE NAMES, but ONLY under a filter. The
+                    # self-test's OOD control used to be certified by
+                    # `untagged_temp_dirs > 0` — a WHOLE-BOX count, which
+                    # some OTHER agent's `.tmp` directory satisfies while our own
+                    # control goes uncounted. A count cannot say WHICH directory
+                    # it counted, so that check was green for a reason unrelated
+                    # to the property it names (SIX-Q #6). Identity needs the
+                    # basename, so `scan` returns it. Collected only under a
+                    # filter because an unfiltered list is ~95k strings on a
+                    # poisoned box and no caller reads it; the COUNT above stays
+                    # whole-box exactly as documented.
+                    if root_filter is not None and name.startswith(
+                            UNTAGGED_TEMP_PREFIX + root_filter):
+                        untagged_temp_matched.append(name)
                 elif root_filter is None or name.startswith(root_filter):
                     roots.append(Root(entry.path))
     except OSError as e:
@@ -315,6 +371,7 @@ def scan(root_filter=None):
         "leave": leave,
         "undecidable": undecidable,
         "untagged_temp_dirs": untagged_temp_dirs,
+        "untagged_temp_matched": untagged_temp_matched,
         "pids_examined": seen_pids,
         "temp_root": root_dir,
         "root_filter": root_filter,
@@ -422,8 +479,138 @@ def report(res, preflight=False, do_reap=False) -> int:
     return rc
 
 
+# ──────────────── the owner-tag reader's typed axis, pinned ─────────────────
+# ⛔ TWO SUBJECTS. THEY LOOK LIKE ONE TABLE AND THEY ARE NOT.
+#
+# The tempting shape is a single table with one `expected: rejected` column,
+# and it is wrong in the direction that ships the bug AS THE SPEC.
+# `gg_st...x..._notagxhj99ug_8` is STRUCTURALLY IDENTICAL to the real producer
+# spelling `gg_<label>_<pid>` that every site in the census writes
+# (`grep -rn '"gg_' tests/`). No name-based rule rejects the first and still
+# accepts the second, so a table demanding "rejected" for both can go green only
+# by BLINDING the reader — and a blinded reader makes `--preflight` pass on a
+# poisoned box (see the NAMED OMISSION in `Root.__init__`). So the column is
+# split BY SUBJECT:
+#
+#   A — READER CHARACTERIZATION. What the reader ACTUALLY returns, pinned so it
+#       cannot drift silently.
+#       ⛔ ROWS 1-4 ARE THE DEFECT, RECORDED AS A DEFECT. An arbitrary directory
+#       name yielding an owner pid is exactly the "guess an owner out of a
+#       string" class this whole file exists to refuse, and it is retired by
+#       `todo/t0900`'s run ledger — ownership registered at the root's BIRTH,
+#       no name parsing at all — NOT by anything in this file. They are pinned
+#       here so the defect cannot move unobserved. THEY ARE NOT DESIRED
+#       BEHAVIOUR AND MUST NEVER BE READ AS A SPECIFICATION.
+#       ⊕ AND THE SAME FOUR ROWS ARE THIS FILE'S OVER-REJECTION GATE. They ARE
+#       the producer spelling, so any tightening that blinds the reader reds
+#       them (SIX-Q #2 applied to the fix, not just to the bug). The integration
+#       form of the same gate is the RED / GREEN / PGRP controls in
+#       `self_test`, which mint `gg_<label>_<pid>` roots and fail if the reader
+#       stops resolving their owners.
+#       Rows 7-8 are a DIFFERENT KIND OF ROW: they pin a fix that DID land here.
+#       Non-ASCII digits used to invent an owner (`_٧` -> 7) or raise an
+#       unhandled `ValueError` inside a CI gate (`_²`).
+#
+#   B — THE CONTROL CERTIFIER. A separate question with a separate answer: is a
+#       given name FIT TO BE the self-test's NOTAG control? It is fit iff THE
+#       SAME READER cannot get an owner out of it. Rows 1-4 are REFUSED as
+#       control names, which is NOT a claim that the reader should reject them —
+#       it is a claim about what the control may be called.
+
+
+def control_name_is_certified(path) -> bool:
+    r"""Is `path` fit to be the self-test's NOTAG control?
+
+    ⛔ ROUTED THROUGH THE SAME READER, never a second predicate. A
+    re-implemented regex can be satisfied while the control is still parsable:
+    Python's `\d` matches unicode digits and `[0-9]` does not, so two spellings
+    of "the same" rule disagree on precisely the names this file used to get
+    wrong. One source of truth per axis (layering rule 3).
+    """
+    return Root(path).undecidable is not None
+
+
+def _reader_axis_rows(pid_max):
+    """(basename, owner the reader returns) over position x multiplicity x bound x script."""
+    return [
+        ("gg_probe_8", 8,
+         "trailing -- AND the real producer spelling, so it cannot be rejected"),
+        ("gg_probe_8_ug", 8,
+         "INTERIOR: `_` is in mkdtemp's alphabet, so a random suffix mints these"),
+        ("gg_probe_6_", 6,
+         "empty tail component -- `split` yields '', which is not a digit"),
+        ("gg_probe_7_11", 11,
+         "multiplicity: two candidates, the LAST one wins"),
+        ("gg_probe_0", None,
+         "zero is not a pid -- below the bound"),
+        ("gg_probe_{}".format(pid_max + 1), None,
+         "above this box's pid_max -- a creation stamp, not an owner"),
+        ("gg_probe_\u0667", None,
+         "ARABIC-INDIC SEVEN: isdigit() AND isdecimal(); used to yield owner 7"),
+        ("gg_probe_\u00b2", None,
+         "SUPERSCRIPT TWO: isdigit(), NOT isdecimal(); int() used to RAISE"),
+    ]
+
+
+def tag_reader_table() -> int:
+    """Assertions A and B. NOTHING IS SPAWNED AND NOTHING IS SIGNALLED.
+
+    `todo/t1441` asks for the self-test's pure-logic half to run always with the
+    process-spawning half separable; this is that half. `--tag-reader-test` runs
+    it alone, so it is immune to the load races that item records, and
+    `--self-test` runs it first before planting anything.
+
+    ⭐ The reader is directly callable on a path that DOES NOT EXIST — its
+    `os.stat` is guarded — so this table needs no directories, no processes and
+    no refactor. There is no separate tag-parser function to call: the logic is
+    inline in `Root.__init__`, and calling `Root` is what keeps this table
+    honest about the thing that actually runs.
+    """
+    fails = 0
+    pid_max = _pid_max()
+    tmp = temp_root()
+
+    def check(name, cond, why):
+        nonlocal fails
+        if not cond:
+            fails += 1
+        print(f"  {'ok  ' if cond else 'FAIL'} {name:56s} {why}")
+
+    print("=== A: READER CHARACTERIZATION — rows 1-4 pin THE DEFECT that "
+          "todo/t0900's run ledger retires, never desired behaviour ===")
+    for base, expected, note in _reader_axis_rows(pid_max):
+        try:
+            got = Root(os.path.join(tmp, base)).owner_pid
+        except Exception as e:                                    # noqa: BLE001
+            got = f"***{e.__class__.__name__}: {e}***"
+        check(f"A  {base!r} -> {expected}", got == expected, f"got {got!r}; {note}")
+
+    print("=== B: CONTROL CERTIFIER — may this name BE the NOTAG control? ===")
+    for base, expected, note in _reader_axis_rows(pid_max):
+        want_fit = expected is None
+        try:
+            fit = control_name_is_certified(os.path.join(tmp, base))
+        except Exception as e:                                    # noqa: BLE001
+            fit = f"***{e.__class__.__name__}***"
+        check(f"B  {base!r} is {'FIT' if want_fit else 'REFUSED'}",
+              fit is want_fit, f"certifier said {fit!r}; {note}")
+
+    print(f"\ntag-reader table: {fails} failures")
+    # ⚠ THE RAW COUNT, not an exit status. `self_test` folds this into its own
+    # total, and collapsing eight failed rows to a 1 understates the report an
+    # operator reads. `main` converts to an rc at the boundary, where an rc
+    # belongs — measured: the fold printed "7 failures" for 15.
+    return fails
+
+
 # ─────────────────────────────── the self-test ───────────────────────────────
-# SIX PLANTED PROCESSES, SIXTEEN ASSERTIONS.
+# SIX PLANTED PROCESSES, AND THE PROCESS-FREE READER TABLE ABOVE.
+#
+# ⚠ THIS BANNER USED TO SAY "SIXTEEN ASSERTIONS". A bare count in a comment is
+# an invariant claim with nothing enforcing it (Core #14) — it was already
+# wrong the moment a control gained a check, and the failure count printed at
+# the end is what the gate actually reads. The SHAPE is what matters and it is
+# described below; the count is not.
 #
 # ⚠ SIX is what the harness SPAWNS AND TRACKS; control 6's stranger `sh` also
 # forks a group member this file never holds a handle to, so seven processes
@@ -448,7 +635,12 @@ def self_test() -> int:
     import tempfile
 
     tmp = temp_root()
-    fails = 0
+    # ⭐ THE PURE-LOGIC HALF RUNS FIRST, AND ITS FAILURES COUNT. It plants
+    # nothing, so it cannot lose a race under load — `todo/t1441`'s
+    # "pure-logic half always on". `--tag-reader-test` runs it WITHOUT the
+    # spawning half for exactly that reason.
+    fails = tag_reader_table()
+    print("=== planted-process controls ===")
     made = []
     procs = []
     # Unique per invocation, and deliberately NOT `_`-separable into digits: the
@@ -495,7 +687,7 @@ def self_test() -> int:
         # rather than a pid, so a sentinel above the bound is classified
         # UNDECIDABLE and the RED/PGRP controls silently stop testing the
         # predicate they were planted for. Measured: on a container with
-        # pid_max=99999 that is 5 of the 16 assertions failing for a reason
+        # pid_max=99999 that is FIVE assertions failing for a reason
         # that has nothing to do with the reaper.
         dead_owner = min(999_999, _pid_max())
         while proc_start_epoch(dead_owner) is not None:
@@ -524,7 +716,19 @@ def self_test() -> int:
         # from it by a list somebody maintains. The prefix deliberately avoids
         # `gg_`: putting the control inside the scratch family would test
         # something else. It is asserted absent from EVERY bucket, not merely
-        # from `reapable`, so the domain-filter above cannot be what excludes it.
+        # from `reapable`.
+        #
+        # ⚠ WHAT THIS CONTROL DOES NOT PROVE — the claim that used to stand here
+        # was FALSE (Core #14). It read "so the domain-filter above cannot be
+        # what excludes it". TWO INDEPENDENT EXCLUSIONS apply and no assertion
+        # here can separate them: (1) the basename starts with neither `gg_` nor
+        # `.tmp`, so `scan` never builds a `Root` for it at all, and (2)
+        # `root_filter=pfx` would exclude it even if it did. Single-sourcing the
+        # exclusion is not available without weakening the control — moving the
+        # name under `pfx` puts it INSIDE the scratch family, which is precisely
+        # what this control is defined not to be. So the false claim is deleted
+        # rather than patched, and what remains is true and still the incident:
+        # a `pkill`-shaped NAME is not sufficient to enter any bucket.
         name_dir = tempfile.mkdtemp(prefix="selftest_namectl_")
         made.append(name_dir)
         outside = os.path.join(name_dir, "deps")
@@ -535,14 +739,49 @@ def self_test() -> int:
         # whose name carries no whole-component pid. It must be UNDECIDABLE, not
         # reapable: guessing an owner out of a random suffix is how the first
         # version of this file flagged control 3 for reaping.
-        notag_root = tempfile.mkdtemp(prefix=f"{pfx}notagx")
+        #
+        # ⛔ MINTED DETERMINISTICALLY, AND IT CERTIFIES ITSELF. This used to be
+        # `tempfile.mkdtemp(prefix=f"{pfx}notagx")`, and `mkdtemp`'s alphabet
+        # INCLUDES `_`
+        # (`python3 -c "import tempfile; print(tempfile._RandomNameSequence.characters)"`),
+        # so the random suffix mints whole `_`-separated components — INTERIOR
+        # ones, not just trailing. About one percent of the names it produces are
+        # therefore parsable, and on those runs the reaper resolves a bogus
+        # owner, finds it dead, and KILLS THE CONTROL that exists to prove a
+        # guess is never a kill. Regenerate the rate with the Monte-Carlo in
+        # `todo/t1641`; the load-bearing fact is that it is not zero.
+        # ⚠ AND FORCING A NON-DIGIT LAST CHARACTER IS NOT THE FIX. Measured, it
+        # only cuts that rate by roughly ten times, leaving a control that is
+        # correct BY LUCK — strictly worse than the flake, because it removes the
+        # only signal that the tool still guesses.
+        # So: a deterministic name off a prefix with no decimal component, and
+        # the property ASSERTED THROUGH THE SAME READER before any scan runs. The
+        # assertion is on the basename actually handed to `makedirs`, not on the
+        # prefix or a template — a guard whose subject is the DECLARATION goes
+        # green over a still-wrong value.
+        notag_root = os.path.join(tmp, f"{pfx}notag")
+        os.makedirs(notag_root, exist_ok=False)
         made.append(notag_root)
+        check("NOTAG control CERTIFIES ITSELF unparsable, before the scan",
+              control_name_is_certified(notag_root),
+              f"{os.path.basename(notag_root)} — via the SAME reader, never a "
+              f"second regex")
         notag_proc = sleeper(os.path.join(notag_root, "async_select_diff"))
 
         # CONTROL 5 (OUT OF DOMAIN) — a live process inside an UNTAGGED temp
         # family, the `tempfile::TempDir` blind spot. It must be REPORTED as a
         # blind class, never counted as "0 orphans, all clear".
-        untagged = tempfile.mkdtemp(prefix=".tmp")
+        #
+        # ⛔ CERTIFIED BY IDENTITY, NOT BY A COUNT. The check below used to read
+        # `res["untagged_temp_dirs"] > 0` — a WHOLE-BOX number that any other
+        # agent's `.tmp` directory satisfies, so it could pass with our own
+        # control uncounted, green for a reason unrelated to the property
+        # (SIX-Q #6). The name is therefore deterministic and carries this
+        # invocation's prefix AFTER the `.tmp` marker, so it still takes the
+        # untagged branch in `scan` (which tests `.tmp` first) while `scan` can
+        # hand the basename back in `untagged_temp_matched`.
+        untagged = os.path.join(tmp, f"{UNTAGGED_TEMP_PREFIX}{pfx}ood")
+        os.makedirs(untagged, exist_ok=False)
         made.append(untagged)
         oob_proc = sleeper(os.path.join(untagged, "async_select_diff"))
 
@@ -604,9 +843,11 @@ def self_test() -> int:
         check("NOTAG unparsable owner tag is UNDECIDABLE, not reapable",
               notag_proc.pid in undec and notag_proc.pid not in reaped,
               f"pid {notag_proc.pid}")
-        check("OOD   untagged-temp process is out of domain, blind class counted",
-              oob_proc.pid not in every and res["untagged_temp_dirs"] > 0,
-              f"pid {oob_proc.pid}; {res['untagged_temp_dirs']} untagged dirs reported")
+        check("OOD   untagged-temp process out of domain, OUR OWN dir counted",
+              oob_proc.pid not in every
+              and os.path.basename(untagged) in res["untagged_temp_matched"],
+              f"pid {oob_proc.pid}; matched={res['untagged_temp_matched']} of "
+              f"{res['untagged_temp_dirs']} untagged dirs box-wide")
         check("PGRP  non-leader member of a STRANGER's group is FLAGGED",
               member_pid in reaped, f"pid {member_pid}")
         check("PGRP  the control really is a NON-leader (else it proves nothing)",
@@ -673,7 +914,14 @@ def main(argv=None) -> int:
                     help="exit non-zero when the box is poisoned, so a sweep "
                          "refuses to measure one")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--tag-reader-test", action="store_true",
+                    help="run ONLY the process-free owner-tag reader table "
+                         "(assertions A and B). Spawns nothing and signals "
+                         "nothing, so it is immune to the load races "
+                         "todo/t1441 records.")
     a = ap.parse_args(argv)
+    if a.tag_reader_test:
+        return 1 if tag_reader_table() else 0
     if a.self_test:
         return self_test()
     return report(scan(), preflight=a.preflight, do_reap=a.reap)
