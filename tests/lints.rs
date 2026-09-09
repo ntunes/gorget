@@ -13190,6 +13190,92 @@ fn sanitize_allowlists_shrink_only() {
     }
 }
 
+/// **Every pinned constant inside `sanitize_allowlists_shrink_only` has a
+/// `scripts/figures.db` row mirroring it — so a SEVENTH constant cannot appear
+/// undeclared.**
+///
+/// The DB carries a typed `bless` classifier saying whether a write-back may
+/// move a pin, and `figures.py validate` refuses any family row that omits it.
+/// That closes the question *for rows the DB knows about* — and it is blind in
+/// exactly one direction: a new `const` added to the guard with **no DB row at
+/// all** is in no family, owes no classifier, and every existing gate stays
+/// green over it. A classification mechanism that cannot see an unclassified
+/// member is SIX QUESTIONS #2 in its usual costume.
+///
+/// So the subject here is the GUARD's own declarations, and the assertion is
+/// that each is MIRRORED. `figures_db_mirrors_agree` walks the other way —
+/// every declared mirror must resolve — and the two together make the
+/// constant set and the row set the same set. Neither direction alone does:
+/// one is blind to an undeclared constant, the other to a deleted one.
+///
+/// ⚠ NOT A COUNT. A count green-lights a delete-plus-add inside one commit and
+/// cannot name the constant that arrived; the failure below names it, and says
+/// which two lines to write.
+#[test]
+fn sanitize_pinned_constants_are_declared_in_figures_db() {
+    let src = fs::read_to_string("tests/lints.rs").expect("read tests/lints.rs");
+    // Comments and string literals go first: this file's own prose quotes
+    // `const LEAK_CEILING` more than once, and a grep cannot tell a declaration
+    // from a discussion of one.
+    let code = strip_rust_comments_and_strings(&src);
+    const GUARD: &str = "fn sanitize_allowlists_shrink_only() {";
+    let start = code.find(GUARD).unwrap_or_else(|| {
+        panic!(
+            "`{GUARD}` is not in tests/lints.rs — this lint's subject was renamed, and a \
+             subject that cannot be located passes VACUOUSLY. Re-point it."
+        )
+    });
+    let body = &code[start..];
+    let end = body.find("\n}\n").unwrap_or_else(|| {
+        panic!("no closing brace at column 0 after `{GUARD}` — cannot bound the guard body")
+    });
+    let body = &body[..end];
+
+    let mut declared: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let t = line.trim();
+        let Some(rest) = t.strip_prefix("const ") else { continue };
+        let Some((name, after)) = rest.split_once(':') else { continue };
+        // `= <digits>;` — an integer pin. A `&[&str]` allowlist or a tuple
+        // budget is a different shape and is not this lint's subject.
+        let Some((_, val)) = after.split_once('=') else { continue };
+        if !val.trim().trim_end_matches(';').chars().all(|c| c.is_ascii_digit() || c == '_') {
+            continue;
+        }
+        declared.push(name.trim().to_string());
+    }
+    declared.sort();
+    assert!(
+        declared.len() >= 2,
+        "found {} integer `const` declaration(s) inside `{GUARD}` — the guard pins several, so \
+         a near-empty set means the extraction broke and every assertion below is vacuous. \
+         found: {declared:?}",
+        declared.len()
+    );
+
+    let mirrored: std::collections::HashSet<String> = figures_db_rows()
+        .iter()
+        .flat_map(|row| figures_db_values(&format!("{row}.mirror")))
+        .filter_map(|m| m.strip_prefix("tests/lints.rs:").map(str::to_string))
+        .collect();
+    let orphans: Vec<&String> = declared.iter().filter(|c| !mirrored.contains(*c)).collect();
+    assert!(
+        orphans.is_empty(),
+        "pinned constant(s) in `sanitize_allowlists_shrink_only` with NO row in \
+         scripts/figures.db: {orphans:?}\n\n\
+         A pin with no row carries no polarity, no provenance, no regen command and — the \
+         reason this lint exists — no `bless` classifier, so nothing can say whether a \
+         write-back may move it, and no gate notices that nothing said. Add a row (see the \
+         `sanitize.leak.*` rows for the shape) with a `mirror = tests/lints.rs:<NAME>`; \
+         `figures.py validate` will then require the classifier, and \
+         `figures_db_mirrors_agree` will hold the two spellings together."
+    );
+    eprintln!(
+        "sanitize_pinned_constants_are_declared_in_figures_db: {} constant(s), all mirrored: {declared:?}",
+        declared.len()
+    );
+}
+
 /// Every block that ADMITS a leak row declares what retires it, on a canonical
 /// line, and every `todo/` item that line names still exists.
 ///
@@ -32794,6 +32880,16 @@ fn figures_db_edit_line(text: &str, prefix: &str, replacement: Option<&str>) -> 
 ///   VALUE — two rows legitimately share one (a pin and its round-open anchor
 ///   start equal) — so a duplicated waiver would double-count and hide a real
 ///   spelling.
+/// * **Every row in a CLASSIFIER's family declares that classifier**, with a
+///   legal value, and no row outside the family declares it. A classifier is a
+///   typed per-row field a mechanism keys on instead of a hardcoded list of ids
+///   — `bless` is the first, and it exists because the DB could not tell a
+///   burn-downable debt magnitude from the sanitizer's POSITIVE CONTROL: the
+///   six constants in `sanitize_allowlists_shrink_only` are identical on every
+///   other typed axis, and only free-text `caveat` separated them. All three
+///   directions are demonstrated below, and the third is the one a hand-kept
+///   name list cannot have — a row declaring a classifier it is not a member
+///   of, which nothing reads and which looks like a decision.
 #[test]
 fn figures_db_rows_are_wellformed() {
     let (ok, out) = figures_py(&["validate"], None);
@@ -32803,9 +32899,9 @@ fn figures_db_rows_are_wellformed() {
         "figures.py validate did not report a clean run:\n{out}"
     );
 
-    // ⭐ VERIFY THE VERIFIER (Core #13). Seven broken declarations, seven
-    // refusals, on every run of this lint. A guard that has never been seen to
-    // fail is not evidence.
+    // ⭐ VERIFY THE VERIFIER (Core #13). Ten broken declarations, ten refusals,
+    // on every run of this lint. A guard that has never been seen to fail is not
+    // evidence.
     let cases: Vec<(&str, Box<dyn Fn(String) -> String>, &str)> = vec![
         (
             "trailing_ws",
@@ -32871,6 +32967,40 @@ fn figures_db_rows_are_wellformed() {
                 )
             }),
             "already declared by",
+        ),
+        // ── the classifier contract, all three directions ────────────────────
+        (
+            "classifier_missing",
+            Box::new(|t: String| figures_db_edit_line(&t, "sanitize.corruption.pin.bless = ", None)),
+            "must declare `bless`",
+        ),
+        (
+            "classifier_illegal_value",
+            Box::new(|t: String| {
+                figures_db_edit_line(
+                    &t,
+                    "sanitize.leak.rows.pin.bless = ",
+                    Some("sanitize.leak.rows.pin.bless = sometimes"),
+                )
+            }),
+            "is not one of auto-lower|never",
+        ),
+        (
+            // A row OUTSIDE the family declaring the field anyway. `.round_open`
+            // anchors are `mirror = none`, so no write-back could ever reach
+            // them — a `bless` there is read by nothing.
+            "classifier_out_of_family",
+            Box::new(|t: String| {
+                figures_db_edit_line(
+                    &t,
+                    "sanitize.leak.rows.round_open.mirror = ",
+                    Some(
+                        "sanitize.leak.rows.round_open.bless = never
+sanitize.leak.rows.round_open.mirror = none",
+                    ),
+                )
+            }),
+            "declares `bless` but is not",
         ),
     ];
     for (tag, mutate, expect) in cases {

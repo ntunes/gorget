@@ -237,6 +237,116 @@ The per-pass dispatcher mirrors Rust's `assert_module_valid(module, after)`: `va
 
 So the per-pass + `GG_VALIDATE_<NAME>` env-gate pattern this chapter describes *is* exercised in self-host. The one gap is the BIR layer: the self-host has no separate BIR newtype layer (no `bir_*.gg`; the canonical-op expansion helpers are folded into `lir_lower.gg`), so `assert_primitives_only` has no self-host analogue. The GIR and LIR guards are exercised through `c_emit_comparison` and `self_host_bootstrap_fixed_point`.
 
+## Paying a debt pin down — the lower-only write-back
+
+A ratchet whose number is an exact `==` is the honest shape: slack is what rots,
+and a burn-down that forgets to lower its ceiling would otherwise leave headroom
+that quietly admits the next violation. The cost of that honesty is churn — every
+improvement moves a literal by hand, in the guard and again in its
+`scripts/figures.db` row — so the pin is lowered by an **auto-lowering
+write-back** instead: a tool rewrites the number when the measurement is better,
+refuses to raise it, and leaves a green tree byte-identical. A raise stays a hand
+edit with a justification, because a raise is an admission and an admission is
+the review event the pin exists to force.
+
+Which pins a tool may write is a **typed classification**, not a list of names a
+tool carries. `scripts/figures.db` gives every row in the relevant family a
+`bless` field, `scripts/figures.py validate` refuses a family member that omits
+it, and `figures.py family bless` prints the family with a disposition per row.
+The family itself is derived from typed fields — an exact pin that mirrors a
+literal into the lint suite — so a row that joins it starts owing a declaration
+and a row that leaves it stops, which is the property a hand-kept list cannot
+have. The declaration matters because rows that look identical on every other
+axis mean opposite things: a debt magnitude and a sanitizer's *positive control*
+are both exact, derived pins over an allowlist, and only the classifier separates
+"lower this automatically" from "never touch this".
+
+### When the measurement is a declaration, the count is not evidence
+
+Most pins are easy to bless: the regen re-runs a census over the source tree, so
+a fall in the number **is** the evidence. The leak-allowlist pins are the hard
+case, and they are the ones that churn. They are derived from a hand-edited
+declaration — a human edits the allowlist and the pins are recomputed from that
+edit — so "the number went down" says nothing except that the edit happened.
+
+No magnitude bound repairs this, and the reason is structural rather than a
+matter of choosing a better threshold: a *partial* truncation is non-vacuous and
+plausible under any floor, and at the limit a single accidentally-deleted row is
+indistinguishable from a legitimate one-row burn-down, because the inputs contain
+no independent reading of whether that row deserved to go. A floor catches the
+extreme instance and green-lights the class.
+
+So the decision input is the sanitize sweep's own adjudication, which measures
+reality: it names the allowlist rows for which it saw no leak record of any
+class, and, per row, each class that shed records and the exact count it shed to.
+`scripts/bless_leak_allowlist.py` requires the sweep to have **named** every row
+the edit touches, and recomputes the pins from the resulting file. Truncation
+then dies by construction — rows vanished that the instrument never named — and
+the direction of the claim inverts: instead of a human editing and the pin
+following, the instrument measures and the human's edit must match it.
+
+Three properties make that adjudication trustworthy rather than decorative:
+
+- **The verdict carries its provenance.** It records the commit it was taken at
+  and the exact bytes of the allowlist it adjudicated, and the bless refuses a
+  verdict whose commit is not HEAD or whose allowlist is not HEAD's. A stale but
+  complete verdict is otherwise accepted whole — a row that regressed two rounds
+  ago still reads as present, measured and clean. A hash is not a signature and
+  nothing here authenticates the writer; it closes accident, which is the threat
+  that happens. The operational consequence is an order: **sweep first, then
+  edit.**
+- **The adjudication is against HEAD.** A row already deleted from the working
+  file is in neither the instrument's allow set nor its observed set, so the
+  instrument would say nothing at all about it.
+- **A partial verdict is safe.** The sweep sorts an allowlisted row with no
+  verdict line into *absent*, one it reached but could not leak-measure into
+  *unmeasured*, and only a genuinely measured-clean row into *fixed*. An unswept
+  row therefore cannot masquerade as fixed, which is what makes a targeted
+  verdict cheap enough to be the normal path.
+
+### The subject set is every changed row, and a loosening is refused outright
+
+The tempting scope for the adjudication is "rows removed or tightened". That is a
+hole, and it is the one worth stating plainly: one legitimate removal plus one
+loosening — a class count raised on an otherwise untouched row — moves every
+blessable pin **down**. The loosened row is neither removed nor tightened, so it
+never enters that subject set and not one condition is evaluated for it. Nor does
+the rename guard see it: the sweep flags a new class only for a row it observed
+leaking beyond what the row admits, and a padded row that still leaks exactly as
+declared appears in no output file at all.
+
+So the subject set is every row whose parsed signature changed **in any
+direction**, and the tool refuses outright if anything loosened — a row added, a
+class added, a count raised, or a count check switched off. A bless is a burn-down
+instrument; a loosening is a hand edit with a justification. The diff is
+parse-based rather than textual for the same reason: a commented-out row must
+read as a removed row, not as a modification.
+
+### What it will not do, and says so
+
+Two of the allowlist's pins are deliberately outside the mechanism, and the
+reasons are different. One counts *admissions* rather than debt — each mark is a
+row whose count check is switched off, earned by the instrument's own drift
+census — which is an agreement count, and a lower-only write-back is the wrong
+operation on one. The other is computed from the allowlist's **citation** column
+rather than its leak column, so appending citations moves it while the leak
+column stays byte-identical: an edit-shape predicate has an empty subject set
+there and every condition passes over nothing. There is no adjudication for it
+even in principle, and adding a citation when a leak is filed is the encouraged
+workflow rather than an attack.
+
+Because those pins move anyway when rows retire, the tool cannot make the suite
+green on its own — and it must not report success as though it had. It names the
+pins that still need a human, prints why each is un-blessable, and exits
+non-zero. It also leaves the *narrative* above each constant to a human: it wrote
+the number, not the reason, and the reason is what the next reader needs.
+
+Two limits are worth carrying: a lower-only mechanism addresses only the
+downward half of the churn, by design; and these totals are shared counters, so
+two tracks each retiring a row are each right alone and wrong together — the
+integrating parent re-runs the write-back from the merged tree and takes the
+measured output, never a delta added by hand.
+
 ## The parity floors — the north-star number as an executable gate
 
 Since round 32 the two headline comparison harnesses are no longer
