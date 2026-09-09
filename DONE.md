@@ -1,3 +1,21 @@
+- [2026-09-09] **`t1642` — the leak burn-down channel was computed every round and thrown away; now it is persisted, and something consumes it.**
+  `scripts/sanitize_sweep.sh`'s `adjudicate_leaks` already named, per row, which allowlist entries had stopped
+  leaking and which had shed classes — and `OUT` defaulted to an ephemeral `/tmp` dir that CI and the round-close
+  battery both discarded. The sweep now publishes its verdict itself, at exit, with **no caller edited**: the `$$`
+  default stays for concurrent ad-hoc runs, and the file lands under gitignored, per-worktree `target/` (a fixed
+  `/tmp` path *is* MA-9's clobber). One file, published by `mv`, because a directory of files leaves a window
+  where a reader sees this run's classification beside the previous run's provenance.
+  It carries **HEAD sha + the `sha256` of the allowlist as swept**, and says in its own header that a hash is not
+  a signature — it closes ACCIDENT (yesterday's verdict, or one from another branch, picked up off a stable
+  path), not forgery. The operational consequence is an order: **sweep first, then edit.**
+  `fixed_leak` + `shrunk_class` surface as a BURN-DOWN PROPOSAL table with a disposition per row — explicitly a
+  table and never a gate, since a red there would punish the round that measured honestly — and the table says
+  in its own words that it does not close the loop, naming what does (`scripts/bless_leak_allowlist.py`, `t1628`).
+  Also fixed the stale comment the item named (Core #14): rows whose fixture was not run read `absent`, not
+  `fixed`, and the coverage-floor branch is now documented as the belt-and-braces it became when the three-state
+  sort landed. The corpus-wide retirement the item's addendum deferred is filed as `t1644` rather than left in
+  a closed item's prose.
+
 - [2026-09-09] `t1641` — **the orphan reaper's "unparsable tag" control was correct BY LUCK, and when the luck ran out the reaper killed it.** The control's name came from `mkdtemp`, whose alphabet includes `_`, so ~1% of runs minted a whole decimal component (interior, not just trailing) and the owner-tag reader resolved a bogus owner out of it — filed as a flake, dismissed three times as noise. Closed with three things and one strict narrowing: **(1)** the control is now minted deterministically and **certifies itself** through the SAME reader on the basename actually handed to `makedirs`, before any scan; **(2)** a process-free reader-axis table (`--tag-reader-test`, gated by `orphan_reaper_tag_reader_table`) split **by subject** into A — reader characterization, whose first four rows pin the mis-parse **as a recorded defect** — and B — a control certifier that refuses those same four shapes as control *names*; the single-column table the brief first asked for would have ratified the bug as the spec, since row 1 *is* the real producer spelling `gg_<label>_<pid>`; **(3)** the over-rejection gate, measured rather than promised — applying the (rejected) discriminating-prefix tightening reds rows 1-4, the RED/GREEN/PGRP controls, **and `preflight FAILS LOUDLY on the poisoned box`**, i.e. the transition fails GREEN and a poisoned box would pass CI. The narrowing: `t.isascii() and t.isdigit()`, because `str.isdigit()` is true for non-ASCII digits — `gg_x_٧` resolved to **owner 7** and `gg_x_²` raised an **unhandled `ValueError` inside `--preflight`**, a CI gate dying with a traceback instead of returning a verdict. ⛔ **The reader still guesses, deliberately** — that omission is written into the code and into `t0900`, whose run ledger retires it. Also fixed while there: the OOD control asserted a **whole-box** count that another agent's `.tmp` directory satisfied, now an identity check; a **false** Core #14 claim on the NAME control ("the domain filter cannot be what excludes it" — two independent exclusions apply); and a stale census figure (`returns 65` → the command returns 79).
 
 - [2026-09-06] **🏁 ROUND LI (R51) CLOSED — THE OWNER'S OPTIMALITY PIVOT, TAKEN RECURSIVELY. Seven tracks integrated, two stood down, three ledger rulings ratified, full battery green.**

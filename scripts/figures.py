@@ -53,6 +53,7 @@ in `tests/lints.rs` (`figures_db_*`) plus the two runnable modes here:
     python3 scripts/figures.py checkall [pfx] every row, sharing regen runs
     python3 scripts/figures.py report         the informational table (round close)
     python3 scripts/figures.py --list         id · polarity · provenance · value
+    python3 scripts/figures.py family <field> the typed selector, one row per line
     python3 scripts/figures.py --where <n>    every unmasked spelling of a value
     python3 scripts/figures.py --spellings    the separator census (see rule 1)
 
@@ -195,6 +196,83 @@ def rows(db):
     return list(db.get("row", []))
 
 
+# ── TYPED CLASSIFICATION FIELDS ────────────────────────────────────────────
+# A CLASSIFIER is a typed per-row field that a MECHANISM keys on INSTEAD of a
+# hardcoded list of row ids or constant names. It exists because of a measured
+# failure: `sanitize_allowlists_shrink_only` declares six `exact-pin`,
+# `derived` constants, and the DB could not tell a burn-downable debt magnitude
+# from the sanitizer's POSITIVE CONTROL — the two are identical on every typed
+# axis this file had, and only free-text `caveat` separated them. Core #2's own
+# remedy is the one taken here: *if the metadata does not exist yet, add it.*
+#
+# ⛔ AND THE MECHANISM IS SHARED, THE FIELD IS NOT. Two mechanisms want a typed
+# selector over overlapping rows — a write-back (which rows may a tool re-pin?)
+# and a CI-wiring cut (which rows does a gate evaluate?) — and they are
+# DIFFERENT AXES: `CORRUPTION_CEILING` must never be re-pinned automatically and
+# must certainly stay gated. Folding both onto one field is Layering rule 3 in
+# reverse. So what is shared is the SCHEMA SLOT, the parse, the family
+# derivation and the completeness check, PARAMETERISED BY FIELD NAME; a second
+# axis adds an entry to `CLASSIFIERS` and declares its own family.
+#
+# ⚠ THE FAMILY IS DERIVED FROM TYPED FIELDS, NEVER FROM AN ID PREFIX. A
+# `sanitize.`-prefixed family would have swept in `sanitize.coverage_floor` and
+# `sanitize.unknown_ceiling` — a shell `${VAR:-N}` policy floor and an
+# instrument blind-spot ratchet, neither of them a lint pin — reintroducing
+# exactly the name-matching this field exists to retire. A row that leaves the
+# family (its polarity changes, its mirror moves) stops owing the declaration
+# automatically, and a row that JOINS it starts owing one, which is the property
+# a hand-kept name list cannot have.
+def _family_pin_mirrored_into_lints(db, rid):
+    """`exact-pin` AND mirroring a literal into `tests/lints.rs`.
+
+    ⚠ A DELIBERATELY NARROW CUT, NOT AN EXHAUSTIVE ONE — and the difference
+    matters, because the first version of this docstring claimed it was
+    "precisely the population a pin write-back could ever act on" and that is
+    false: a floor or a ratchet mirrors an equally rewritable literal, and a row
+    mirroring into `tests/integration.rs` is just as writable. What this cut
+    buys is that the rows inside it are the ones where the QUESTION is live —
+    `exact-pin` because that is the polarity Core #6's clause is written about,
+    and a `tests/lints.rs` mirror because that is where the pins this mechanism
+    exists for live. Widening it later is a schema edit plus one declaration per
+    new member, which `validate` will demand; it is not a redesign.
+    """
+    if one(db, f"{rid}.polarity") != "exact-pin":
+        return False
+    return any(m != "none" and m.rsplit(":", 1)[0] == "tests/lints.rs"
+               for m in db.get(f"{rid}.mirror", []))
+
+
+CLASSIFIERS = {
+    # ⚠ `auto-lower` is Core #6's clause verbatim — an improvement lowers the
+    # pin, a raise stays a hand edit with a justification, which is the review
+    # event the pin exists to force. `never` is NOT "this number never
+    # improves": it is "no tool may move this literal", and the rows that carry
+    # it each have their own reason, recorded in their `caveat`.
+    # ⊕ A third value for the BIDIRECTIONAL case (a round-open baseline, where
+    # refusing to record a rise makes the next round's delta a lie) is
+    # deliberately NOT declared here: those rows are `mirror = none`, so they
+    # are not in this family, and an enum value with no member is a claim with
+    # no subject.
+    "bless": {
+        "values": ("auto-lower", "never"),
+        "family": _family_pin_mirrored_into_lints,
+        "family_desc": "an `exact-pin` row mirroring a literal into tests/lints.rs",
+        "asks": "may a write-back move this pin without a human, and which way?",
+    },
+}
+
+
+def classified(db, field, value):
+    """Every row declaring `<field> = <value>`. The typed selector itself."""
+    return [r for r in rows(db) if one(db, f"{r}.{field}") == value]
+
+
+def family_of(db, field):
+    """Every row that OWES a declaration of `field`, declared or not."""
+    spec = CLASSIFIERS[field]
+    return [r for r in rows(db) if spec["family"](db, r)]
+
+
 # ── separator normalisation, in ONE place (scanner rule 1) ─────────────────
 def norm(tok):
     # ⚠ THE EXAMPLE IS DELIBERATELY NOT A LIVE FIGURE. The first draft of this
@@ -314,7 +392,7 @@ def validate(db, order):
             if len(parts) != 3 or parts[2] not in ("at", "law", "regen"):
                 errs.append(f"`{key}`: an input sub-key is `input.<name>.{{at,law,regen}}`")
             continue
-        if field not in REQUIRED + MULTI + OPTIONAL:
+        if field not in REQUIRED + MULTI + OPTIONAL + tuple(CLASSIFIERS):
             errs.append(f"`{key}`: unknown field `{field}`")
 
     for rid in ids:
@@ -380,6 +458,23 @@ def validate(db, order):
         if prov == "measured" and f("authority") is not None:
             errs.append(f"{rid}: a `measured` row has no `authority` — its authority is the "
                         f"instrument, already named by `instrument`/`regen`")
+
+        # ── the typed classification fields ────────────────────────────────
+        # THREE failures, not one, and the third is the one a hand-kept name
+        # list cannot have: a row declaring a classifier it is not a member of.
+        # That field is read by nothing and looks like a decision.
+        for cf, spec in CLASSIFIERS.items():
+            declared, in_family = f(cf), spec["family"](db, rid)
+            if in_family and declared in (None, ""):
+                errs.append(f"{rid}: is {spec['family_desc']}, so it must declare "
+                            f"`{cf}` (one of {'|'.join(spec['values'])}) — "
+                            f"{spec['asks']} Put the REASON in `caveat`.")
+            if declared is not None and declared not in spec["values"]:
+                errs.append(f"{rid}: `{cf} = {declared}` is not one of "
+                            f"{'|'.join(spec['values'])}")
+            if declared is not None and not in_family:
+                errs.append(f"{rid}: declares `{cf}` but is not {spec['family_desc']}, "
+                            f"so no mechanism reads it")
 
         cost = f("cost_secs")
         if cost is not None and cost != "unmeasured" and not cost.isdigit():
@@ -774,6 +869,20 @@ def main():
         return 0
     if cmd in ("--spellings", "spellings"):
         return spellings(db)
+    if cmd == "family":
+        if not args.row or args.row not in CLASSIFIERS:
+            print(f"usage: figures.py family <{'|'.join(CLASSIFIERS)}>", file=sys.stderr)
+            return 2
+        spec = CLASSIFIERS[args.row]
+        fam = family_of(db, args.row)
+        print(f"=== `{args.row}` — {spec['family_desc']} ===")
+        print(f"    {spec['asks']}")
+        for rid in fam:
+            print(f"  {one(db, rid + '.' + args.row):<12s} {rid:44s} "
+                  f"{' '.join(db.get(rid + '.mirror', []))}")
+        print(f"{len(fam)} row(s) in the family; "
+              f"{len(rows(db)) - len(fam)} row(s) outside it owe no declaration")
+        return 0
     if cmd in ("--list", "list"):
         for rid in rows(db):
             print(f"{rid:44s} {one(db, rid + '.polarity'):13s} "

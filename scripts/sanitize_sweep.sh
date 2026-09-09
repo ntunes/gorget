@@ -121,6 +121,27 @@ JOBS="${JOBS:-8}"
 REPS="${REPS:-3}"
 GG="${GG:-target/debug/gg}"
 OUT="${OUT:-/tmp/sanitize_sweep_$$}"
+# ⭐ THE VERDICT IS COMPUTED EVERY ROUND AND WAS THROWN AWAY EVERY ROUND. `OUT`
+# is per-PID on purpose — concurrent ad-hoc sweeps must not share a scratch dir
+# — so the adjudication below died with the run, and the one instrument that
+# says WHICH allowlist rows can go was recomputed from scratch by hand each
+# time (todo/t1642).
+#
+# ⛔ PERSISTED FROM INSIDE THE SCRIPT, NOT BY EDITING CALLERS. The round-close
+# and CI invocations live in AGENTS.md's battery block and .github/workflows/
+# ci.yml, held together by `round_close_battery_covers_ci_steps` and with the
+# former at a few hundred bytes of headroom; giving each an explicit `OUT` would
+# spend that budget and leave ad-hoc runs unpersisted anyway. Keeping the `$$`
+# default and ALSO publishing at exit costs no caller a character.
+#
+# ⚠ `target/` RATHER THAN `/tmp`: it is gitignored and PER-WORKTREE, so two
+# agents on one box do not silently overwrite each other's verdict (MA-9). A
+# fixed `/tmp` path is that clobber by construction. Within one worktree a
+# second concurrent sweep still wins the race — which is why the file carries
+# its provenance and every consumer is required to check it, rather than
+# trusting the path.
+VERDICT_DIR="${VERDICT_DIR:-target/sanitize-verdict}"
+VERDICT_FILE="$VERDICT_DIR/verdict.txt"
 # `-` not `:-`: an explicitly EMPTY LSANOPT selects the default root set, which
 # is how the paired instrument comparison is run.
 LSANOPT="${LSANOPT-use_stacks=0}"
@@ -596,6 +617,81 @@ adjudicate_leaks() {
   done
 }
 
+# --- publishing the verdict --------------------------------------------------
+# 🚨 A PERSISTED VERDICT WITH NO PROVENANCE IS A LIABILITY, NOT AN ASSET. Give a
+# consumer a stable path and it will trust a verdict produced from a DIFFERENT
+# TREE: a stale-but-complete file is accepted whole, and a row that regressed
+# two rounds ago still reads `present + MEASURED + clean`. The three-state
+# `absent`/`unmeasured`/`fixed_leak` design protects against INCOMPLETENESS; it
+# says nothing whatever about STALENESS. So the file records the commit it was
+# taken at and the exact bytes of the allowlist it adjudicated.
+#
+# ⚠ DO NOT OVERCLAIM WHAT THAT BUYS. A hash is not a signature — any writer sets
+# both fields, and nothing here authenticates the writer. It closes ACCIDENT,
+# which is the threat that actually happens: a consumer picking up yesterday's
+# verdict, or one taken on another branch, and acting on it.
+#
+# ⚠ AND IT IS THE ALLOWLIST AS SWEPT THAT IS HASHED. A consumer adjudicating an
+# EDIT wants a verdict taken against the pre-edit file, so the operational order
+# is SWEEP FIRST, THEN EDIT. Hashing a dirty working file makes such a consumer
+# refuse forever, and the refusal would name the wrong cause.
+#
+# ⚠ ONE FILE, PUBLISHED BY `mv`. Writing a directory of files leaves a window
+# where a reader sees this run's `fixed_leak` beside the previous run's
+# provenance — a torn read is the one real hazard here, and rename(2) over a
+# single file has no such window.
+_sha256() {
+  sha256sum "$1" 2>/dev/null | cut -d" " -f1 || shasum -a 256 "$1" | cut -d" " -f1
+}
+
+publish_verdict() {
+  _rc="$1"
+  mkdir -p "$VERDICT_DIR" || return 0
+  _tmp="$VERDICT_DIR/.verdict.$$"
+  {
+    echo "# sanitize sweep verdict — written by scripts/sanitize_sweep.sh"
+    echo "# ⚠ A HASH IS NOT A SIGNATURE. These fields close ACCIDENT (a stale or"
+    echo "#   foreign verdict picked up from a stable path), not forgery."
+    printf 'head_sha\t%s\n'            "$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+    # ⚠ RECORDED AND DELIBERATELY NOT GATED ON, which is a claim that needs its
+    # reason written down or it reads as an oversight. The normal workflow FIXES
+    # a leak (dirtying src/), sweeps, and only then edits the allowlist — so a
+    # dirty tree at sweep time is the EXPECTED state, and refusing on it would
+    # refuse the exact case this apparatus exists to serve. What must match HEAD
+    # is the ALLOWLIST's bytes, and that is checked exactly, below.
+    printf 'tree_dirty\t%s\n'          "$(git diff --quiet HEAD 2>/dev/null && echo no || echo yes)"
+    printf 'allowlist_path\t%s\n'      "$LEAK_LIST"
+    printf 'allowlist_sha256\t%s\n'    "$(_sha256 "$LEAK_LIST")"
+    printf 'corruption_path\t%s\n'     "$CORRUPT_LIST"
+    printf 'corruption_sha256\t%s\n'   "$(_sha256 "$CORRUPT_LIST")"
+    printf 'written_at\t%s\n'          "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'gg\t%s\n'                  "$GG"
+    printf 'reps\t%s\n'                "$REPS"
+    printf 'fixlist\t%s\n'             "${FIXLIST:--}"
+    printf 'coverage_floor\t%s\n'      "$COVERAGE_FLOOR"
+    # ⚠ ALSO RECORDED AND NOT GATED ON: a sweep that exits 1 on an unrelated
+    # ceiling still measured these rows correctly, so refusing on it would let an
+    # unrelated regression block a burn-down. It is here for the reader, and for
+    # a future consumer that wants to say WHICH run this was.
+    printf 'sweep_rc\t%s\n'            "$_rc"
+    printf 'scanned\t%s\n'             "$(wc -l < "$OUT/verdicts.tsv")"
+    printf 'out\t%s\n'                 "$OUT"
+    # The classification files, verbatim. A consumer that needs to know whether
+    # a stem was LOOKED AT reads `measured`; the three leak buckets are the
+    # burn-down evidence; `new_class` is the rename guard.
+    for _sec in measured fixed_leak shrunk_class new_class new_leak absent unmeasured retire_due; do
+      echo "[$_sec]"
+      case "$_sec" in
+        measured) cat "$OUT/got_measured" 2>/dev/null ;;
+        *)        cat "$OUT/$_sec" 2>/dev/null ;;
+      esac
+    done
+    echo "[end]"
+  } > "$_tmp" 2>/dev/null || { rm -f "$_tmp"; return 0; }
+  mv -f "$_tmp" "$VERDICT_FILE" 2>/dev/null || { rm -f "$_tmp"; return 0; }
+  echo "verdict:     $VERDICT_FILE (HEAD $(git rev-parse --short HEAD 2>/dev/null || echo unknown), allowlist $(_sha256 "$LEAK_LIST" | cut -c1-12))"
+}
+
 # --- self-test ---------------------------------------------------------------
 # Watch every detector fire, in this invocation, before trusting any verdict.
 run_selftest() {
@@ -1038,12 +1134,23 @@ if [ "$COVERAGE_FLOOR" -gt 0 ] && [ "$n_covered" -lt "$COVERAGE_FLOOR" ]; then
   echo "    census above (BUILD_FAIL_*), fix it, or lower the floor deliberately."
   rc=1
 fi
-# ⚠ THE "no longer leaks at all" HALF IS ONLY MEANINGFUL OVER THE WHOLE CORPUS.
-# On a FIXLIST demonstration every row whose fixture was not run reads as fixed,
-# so that half is dropped when the coverage floor is disabled — the same signal,
-# and the same reason, as the COVERAGE FELL check below. The per-class half
-# (a cited class that SHRANK or is GONE) only ever fires on a fixture that
-# actually ran, so it stays live in both modes.
+# ⚠ CORRECTED — THE REASON THIS GATING WAS WRITTEN FOR NO LONGER EXISTS. It read
+# "on a FIXLIST demonstration every row whose fixture was not run reads as
+# fixed". That was true of the TWO-state adjudicator and is FALSE of this one:
+# `adjudicate_leaks` now sorts an allowlisted row with no LEAK verdict into
+# `absent` (no verdict line at all), `unmeasured` (a line, but the at-exit leak
+# check never ran) or `fixed_leak`, and only the third produces retire advice.
+# A row whose fixture was not run therefore reads `absent`, not fixed, and can
+# reach neither `retire_due` nor a delete recommendation. The self-test proves
+# exactly that on every invocation — see the `selftest_absent_by_design` block,
+# which asserts `absent` is populated while `fixed_leak` and `retire_due` stay
+# empty.
+# ⇒ SO THIS BRANCH IS NOW BELT-AND-BRACES, AND IS KEPT DELIBERATELY: the
+# three-state sort is what closes the case, and a second, cruder condition on
+# the fatal half costs nothing and does not depend on that sort staying correct.
+# It is NOT load-bearing, and nothing should be built on the belief that it is.
+# The per-class half (a cited class that SHRANK or is GONE) only ever fires on a
+# fixture that actually ran, so it stays live in both modes.
 if [ "$COVERAGE_FLOOR" -gt 0 ]; then
   cp "$OUT/retire_due" "$OUT/retire_fatal" 2>/dev/null || : > "$OUT/retire_fatal"
 else
@@ -1132,4 +1239,30 @@ fi
 # count, no `❌` fires and one of these advisories is the ONLY thing printed.
 [ -s "$OUT/fixed_leak" ] && { echo; echo "✅ no longer leaking — NO leak record of ANY class was reported for these rows. If the defect is really gone, DELETE them from $LEAK_LIST:"; sed 's/^/    /' "$OUT/fixed_leak"; echo "    ⚠ That is what was MEASURED, not that the defect is fixed. A class key is a"; echo "      stack FRAME NAME: a renamed frame vanishes here exactly like a fixed leak."; echo "      CHECK FOR A PAIRED ❌ ABOVE on the same fixture BEFORE deleting a row."; }
 [ -s "$OUT/shrunk_class" ] && { echo; echo "✅ leaking LESS than its row admits — these classes no longer appear, or appear fewer times. TIGHTEN these rows in $LEAK_LIST:"; sed 's/^/    /' "$OUT/shrunk_class"; echo "    ⚠ Same caveat: a class reported \`gone\` may have been RENAMED, not fixed."; echo "      Look for a paired ❌ NEW LEAK CLASS on the same fixture first."; }
+
+# --- the burn-down proposal --------------------------------------------------
+# ⛔ A TABLE, NEVER A GATE. Reading it must not be able to fail: a red here would
+# punish the round that MEASURED honestly, which the round lifecycle forbids in
+# so many words. Every row above that is fatal is fatal for a different reason —
+# a NEW leak, a NEW class, a CITED admission outliving its defect — and none of
+# them is this.
+if [ -s "$OUT/fixed_leak" ] || [ -s "$OUT/shrunk_class" ]; then
+  echo
+  echo "── BURN-DOWN PROPOSAL (a table, not a gate) ────────────────────────────────"
+  printf '    %-11s %-44s %s\n' DISPOSITION ROW "WHAT THIS RUN MEASURED"
+  awk '{printf "    %-11s %-44s %s\n", "DELETE", $0, "no leak record of ANY class"}' "$OUT/fixed_leak"
+  awk -F"\t" '{printf "    %-11s %-44s %s\n", "TIGHTEN", $1, $2}' "$OUT/shrunk_class"
+  echo "    proposed: $(wc -l < "$OUT/fixed_leak") deletion(s), $(wc -l < "$OUT/shrunk_class") tightening(s)"
+  echo
+  echo "    ⚠ A TABLE IS NOT A BURN-DOWN, and printing one does not close the loop."
+  echo "      Nothing here edits a file. The loop closes only when something CONSUMES"
+  echo "      this verdict: scripts/bless_leak_allowlist.py adjudicates an allowlist"
+  echo "      EDIT against it and re-pins tests/lints.rs and scripts/figures.db from"
+  echo "      the result, refusing any row this run did not name."
+  echo "    ⚠ AND \`no longer leaking\` IS WHAT WAS MEASURED, NOT THAT A DEFECT IS FIXED:"
+  echo "      a class key is a stack FRAME NAME, so a renamed frame reads identically to"
+  echo "      a fixed leak. Check for a paired ❌ on the same fixture first."
+fi
+
+publish_verdict "$rc"
 exit $rc

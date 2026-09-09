@@ -430,6 +430,7 @@ fmt.max_width.value = 120
 fmt.max_width.unit = columns
 fmt.max_width.polarity = exact-pin
 fmt.max_width.provenance = derived
+fmt.max_width.bless = never
 fmt.max_width.authority = src/formatter/doc.rs:MAX_WIDTH — the owner-ratified FMT CANON PAIR; the two mirrors below are hand-kept copies of it
 fmt.max_width.regen = grep -oP 'MAX_WIDTH: usize = \K[0-9]+' src/formatter/doc.rs
 fmt.max_width.regen_extract = ^(?P<value>[0-9]+)
@@ -444,7 +445,7 @@ fmt.max_width.home = src/formatter/doc.rs:MAX_WIDTH
 # MIRROR check is 100% of this row's enforcement. Saying so is the point — a
 # `scan = standard` here would be a waiver farm, which is how a guard dies.
 fmt.max_width.scan = none
-fmt.max_width.caveat = the value is too small and too common to police by scanning; only figures_db_mirrors_agree guards it
+fmt.max_width.caveat = the value is too small and too common to police by scanning; only figures_db_mirrors_agree guards it. ⊕ bless = never — the value is a RATIFIED CANON PAIR the owner chose, not a debt magnitude: nothing measures a `better` width, so there is no improvement for a write-back to record, and a tool moving it would re-flow the whole tree
 fmt.max_width.cost_secs = 30
 fmt.max_width.mirror = tests/lints.rs:WIDTH_RATCHET_BUDGET
 fmt.max_width.mirror = tests/integration.rs:FILL_PACK_MAX_WIDTH
@@ -464,6 +465,7 @@ lint.name_prefix.sites.value = 204
 lint.name_prefix.sites.unit = name-prefix routing sites in src/
 lint.name_prefix.sites.polarity = exact-pin
 lint.name_prefix.sites.provenance = derived
+lint.name_prefix.sites.bless = auto-lower
 lint.name_prefix.sites.authority = tests/lints.rs::no_growth_in_name_prefix_routing site census
 lint.name_prefix.sites.regen = printf '%d\n' "$(grep -rhoE 'starts_with\("(Vector|Deque|Dict|HashMap|Map|OrderedDict|Set|HashSet|Mutex|RWLock|Channel|Shared|Weak|Guard|ReadGuard|WriteGuard|Box|Task|Heap|Tuple|Callable|MutCallable|ConsumeCallable|Option|Result|AtomicInt|AtomicBool|Thread|TaskGroup|WaitGroup|Barrier|CondVar|Semaphore|OnceFlag|GorgetMap|GorgetSet|GorgetDict)__"\)' --include='*.rs' src | wc -l)"
 lint.name_prefix.sites.regen_extract = ^(?P<value>[0-9]+)
@@ -473,7 +475,7 @@ lint.name_prefix.sites.instrument = grep census of starts_with("X__") occurrence
 lint.name_prefix.sites.measured_at = ba72b46bf
 lint.name_prefix.sites.home = tests/lints.rs:NAME_PREFIX_BUDGET
 lint.name_prefix.sites.scan = none
-lint.name_prefix.sites.caveat = too common to police by scanning, hence scan = none. The regen RE-RUNS the census rather than reading the constant: reading it would assert a literal equals itself, which figures_db_mirrors_agree already does, so check would be a tautology (SIX-Q #2). It therefore DUPLICATES the MANGLED_PREFIXES alternation from tests/lints.rs, and that duplication is the point -- adding a prefix there moves the lint census, NAME_PREFIX_BUDGET and this value together while a stale alternation here does not, so the disagreement goes RED instead of quietly agreeing. And the two lists are held identical by tests/lints.rs::figures_db_name_prefix_regen_alternation_matches_the_lint, which compares this alternation against MANGLED_PREFIXES.join("|") -- it exists because a prefix with no src/ site drifts without moving any number here.
+lint.name_prefix.sites.caveat = too common to police by scanning, hence scan = none. The regen RE-RUNS the census rather than reading the constant: reading it would assert a literal equals itself, which figures_db_mirrors_agree already does, so check would be a tautology (SIX-Q #2). It therefore DUPLICATES the MANGLED_PREFIXES alternation from tests/lints.rs, and that duplication is the point -- adding a prefix there moves the lint census, NAME_PREFIX_BUDGET and this value together while a stale alternation here does not, so the disagreement goes RED instead of quietly agreeing. And the two lists are held identical by tests/lints.rs::figures_db_name_prefix_regen_alternation_matches_the_lint, which compares this alternation against MANGLED_PREFIXES.join("|") -- it exists because a prefix with no src/ site drifts without moving any number here. ⊕ bless = auto-lower — a debt magnitude whose regen RE-RUNS the src/ census, so the measurement is independent of any hand-kept declaration and a fall in it IS the evidence; routing a site onto the chokepoint is exactly the improvement Core #6's write-back exists to record. ⭐ AND IT IS THE ONLY ROW IN THIS GROUP THAT EARNS auto-lower: its three siblings grep the mirrored constant and are therefore `never`, while this regen re-runs the alternation census over src/. ⚠ THE DUPLICATED ALTERNATION IS THE POINT, not a smell — adding a prefix moves the src/ census, NAME_PREFIX_BUDGET and this value together while a stale alternation here does not, so drift goes RED rather than quietly agreeing
 lint.name_prefix.sites.cost_secs = 30
 lint.name_prefix.sites.mirror = tests/lints.rs:NAME_PREFIX_BUDGET
 lint.name_prefix.sites.input = none
@@ -483,6 +485,7 @@ lint.typed_metadata.sidecars.value = 0
 lint.typed_metadata.sidecars.unit = typed-metadata sidecar maps in src/
 lint.typed_metadata.sidecars.polarity = exact-pin
 lint.typed_metadata.sidecars.provenance = derived
+lint.typed_metadata.sidecars.bless = never
 lint.typed_metadata.sidecars.authority = tests/lints.rs::no_typed_metadata_sidecars site census
 lint.typed_metadata.sidecars.regen = grep -oP 'TYPED_METADATA_SIDECAR_BUDGET: usize = \K[0-9]+' tests/lints.rs
 lint.typed_metadata.sidecars.regen_extract = ^(?P<value>[0-9]+)
@@ -492,7 +495,7 @@ lint.typed_metadata.sidecars.instrument = grep over the lint const
 lint.typed_metadata.sidecars.measured_at = db9ec6a13
 lint.typed_metadata.sidecars.home = tests/lints.rs:TYPED_METADATA_SIDECAR_BUDGET
 lint.typed_metadata.sidecars.scan = none
-lint.typed_metadata.sidecars.caveat = a single-digit value cannot be policed by the uniqueness scanner
+lint.typed_metadata.sidecars.caveat = a single-digit value cannot be policed by the uniqueness scanner. ⊕ bless = never — AND NOT BECAUSE THE NUMBER SHOULD NOT FALL. Its `regen` greps the MIRRORED CONSTANT out of tests/lints.rs, as this row's own `instrument` field says, so the `measured` value it produces IS the literal a write-back would rewrite — the tautology `value == the mirrored literal`, which figures_db_mirrors_agree already asserts, and which todo/t1630's second correction names as the defect to avoid rather than reproduce. There is no independent reading here for a write-back to record, so auto-lowering would write back the number it just read. ⭐ FLIP THIS TO auto-lower THE MOMENT THE REGEN MEASURES THE SOURCE TREE — the sibling row lint.name_prefix.sites shows the shape, running its own src/ census rather than reading the budget
 lint.typed_metadata.sidecars.cost_secs = 30
 lint.typed_metadata.sidecars.mirror = tests/lints.rs:TYPED_METADATA_SIDECAR_BUDGET
 lint.typed_metadata.sidecars.input = none
@@ -502,6 +505,7 @@ lint.phase_d.proxy_reads.value = 89
 lint.phase_d.proxy_reads.unit = Phase-D ownership proxy reads in src/
 lint.phase_d.proxy_reads.polarity = exact-pin
 lint.phase_d.proxy_reads.provenance = derived
+lint.phase_d.proxy_reads.bless = never
 lint.phase_d.proxy_reads.authority = tests/lints.rs::no_growth_in_phase_d_proxy_reads site census
 lint.phase_d.proxy_reads.regen = grep -oP 'PHASE_D_PROXY_BUDGET: usize = \K[0-9]+' tests/lints.rs
 lint.phase_d.proxy_reads.regen_extract = ^(?P<value>[0-9]+)
@@ -511,7 +515,7 @@ lint.phase_d.proxy_reads.instrument = grep over the lint const
 lint.phase_d.proxy_reads.measured_at = 030d4d2d7
 lint.phase_d.proxy_reads.home = tests/lints.rs:PHASE_D_PROXY_BUDGET
 lint.phase_d.proxy_reads.scan = none
-lint.phase_d.proxy_reads.caveat = too small and too common to police by scanning; only figures_db_mirrors_agree guards it
+lint.phase_d.proxy_reads.caveat = too small and too common to police by scanning; only figures_db_mirrors_agree guards it. ⊕ bless = never — AND NOT BECAUSE THE NUMBER SHOULD NOT FALL. Its `regen` greps the MIRRORED CONSTANT out of tests/lints.rs, as this row's own `instrument` field says, so the `measured` value it produces IS the literal a write-back would rewrite — the tautology `value == the mirrored literal`, which figures_db_mirrors_agree already asserts, and which todo/t1630's second correction names as the defect to avoid rather than reproduce. There is no independent reading here for a write-back to record, so auto-lowering would write back the number it just read. ⭐ FLIP THIS TO auto-lower THE MOMENT THE REGEN MEASURES THE SOURCE TREE — the sibling row lint.name_prefix.sites shows the shape, running its own src/ census rather than reading the budget
 lint.phase_d.proxy_reads.cost_secs = 30
 lint.phase_d.proxy_reads.mirror = tests/lints.rs:PHASE_D_PROXY_BUDGET
 lint.phase_d.proxy_reads.input = none
@@ -521,6 +525,7 @@ lint.self_host.name_prefix.sites.value = 81
 lint.self_host.name_prefix.sites.unit = name-prefix routing sites in tests/fixtures/self_host_*
 lint.self_host.name_prefix.sites.polarity = exact-pin
 lint.self_host.name_prefix.sites.provenance = derived
+lint.self_host.name_prefix.sites.bless = never
 lint.self_host.name_prefix.sites.authority = tests/lints.rs::no_growth_in_self_host_name_prefix_routing site census
 lint.self_host.name_prefix.sites.regen = grep -oP 'SELF_HOST_NAME_PREFIX_BUDGET: usize = \K[0-9]+' tests/lints.rs
 lint.self_host.name_prefix.sites.regen_extract = ^(?P<value>[0-9]+)
@@ -530,7 +535,7 @@ lint.self_host.name_prefix.sites.instrument = grep over the lint const
 lint.self_host.name_prefix.sites.measured_at = db9ec6a13
 lint.self_host.name_prefix.sites.home = tests/lints.rs:SELF_HOST_NAME_PREFIX_BUDGET
 lint.self_host.name_prefix.sites.scan = none
-lint.self_host.name_prefix.sites.caveat = too small and too common to police by scanning; only figures_db_mirrors_agree guards it
+lint.self_host.name_prefix.sites.caveat = too small and too common to police by scanning; only figures_db_mirrors_agree guards it. ⊕ bless = never — AND NOT BECAUSE THE NUMBER SHOULD NOT FALL. Its `regen` greps the MIRRORED CONSTANT out of tests/lints.rs, as this row's own `instrument` field says, so the `measured` value it produces IS the literal a write-back would rewrite — the tautology `value == the mirrored literal`, which figures_db_mirrors_agree already asserts, and which todo/t1630's second correction names as the defect to avoid rather than reproduce. There is no independent reading here for a write-back to record, so auto-lowering would write back the number it just read. ⭐ FLIP THIS TO auto-lower THE MOMENT THE REGEN MEASURES THE SOURCE TREE — the sibling row lint.name_prefix.sites shows the shape, running its own src/ census rather than reading the budget
 lint.self_host.name_prefix.sites.cost_secs = 30
 lint.self_host.name_prefix.sites.mirror = tests/lints.rs:SELF_HOST_NAME_PREFIX_BUDGET
 lint.self_host.name_prefix.sites.input = none
@@ -902,6 +907,7 @@ sanitize.leak.rows.pin.value = 245
 sanitize.leak.rows.pin.unit = rows in tests/sanitize/LEAK_ALLOWLIST.txt (one per leaking fixture)
 sanitize.leak.rows.pin.polarity = exact-pin
 sanitize.leak.rows.pin.provenance = derived
+sanitize.leak.rows.pin.bless = auto-lower
 sanitize.leak.rows.pin.authority = tests/sanitize/LEAK_ALLOWLIST.txt — the lint counts its non-comment, non-blank lines; LEAK_CEILING is a hand-kept pin of that count
 sanitize.leak.rows.pin.regen = awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; n=s; sub(/^.*\*/,"",n); if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} pairs++; records+=n+0}} END{print "leak-allowlist census: rows=" rows+0 " pairs=" pairs+0 " records=" records+0 " loose=" loose+0 " (scanned " NR " lines)"}' tests/sanitize/LEAK_ALLOWLIST.txt
 sanitize.leak.rows.pin.regen_extract = census: rows=(?P<value>[0-9]+) pairs=
@@ -911,7 +917,7 @@ sanitize.leak.rows.pin.instrument = an awk census over the allowlist, applying t
 sanitize.leak.rows.pin.measured_at = 547e801c8
 sanitize.leak.rows.pin.home = tests/lints.rs:LEAK_CEILING
 sanitize.leak.rows.pin.scan = none
-sanitize.leak.rows.pin.caveat = scan = none — 294 has 33 unmasked spellings across the roots (14 in tests/integration.rs, 3 in scripts/clone_meter.spec, one each in nine todo/ items) because it is also the R47 cross-checkout clone discrepancy; a waiver farm on that scale is how a guard dies. ⚠ AND A ROW COUNT IS NOT LEAK VOLUME: it counts FIXTURES, and one fixture's row can tolerate five mechanisms and dozens of records — read it with `records` and `class_pairs` or not at all
+sanitize.leak.rows.pin.caveat = scan = none — 294 has 33 unmasked spellings across the roots (14 in tests/integration.rs, 3 in scripts/clone_meter.spec, one each in nine todo/ items) because it is also the R47 cross-checkout clone discrepancy; a waiver farm on that scale is how a guard dies. ⚠ AND A ROW COUNT IS NOT LEAK VOLUME: it counts FIXTURES, and one fixture's row can tolerate five mechanisms and dozens of records — read it with `records` and `class_pairs` or not at all. ⊕ bless = auto-lower — a debt magnitude read off the allowlist's LEAK column. ⚠ AND UNLIKE THE src/ CENSUSES IT IS DERIVED FROM A HAND-EDITED DECLARATION, so the count alone authorises nothing: scripts/bless_leak_allowlist.py requires the sweep's own provenance-checked verdict to name every removed and every tightened row, and refuses outright if anything loosened
 sanitize.leak.rows.pin.cost_secs = 30
 sanitize.leak.rows.pin.mirror = tests/lints.rs:LEAK_CEILING
 sanitize.leak.rows.pin.input = none
@@ -940,6 +946,7 @@ sanitize.leak.records.pin.value = 1804
 sanitize.leak.records.pin.unit = leak records the allowlist tolerates in total
 sanitize.leak.records.pin.polarity = exact-pin
 sanitize.leak.records.pin.provenance = derived
+sanitize.leak.records.pin.bless = auto-lower
 sanitize.leak.records.pin.authority = tests/sanitize/LEAK_ALLOWLIST.txt column 2 — the sum of every `<top-frame>*<records>` signature; LEAK_RECORDS is a hand-kept pin of that sum
 sanitize.leak.records.pin.regen = awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; n=s; sub(/^.*\*/,"",n); if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} pairs++; records+=n+0}} END{print "leak-allowlist census: rows=" rows+0 " pairs=" pairs+0 " records=" records+0 " loose=" loose+0 " (scanned " NR " lines)"}' tests/sanitize/LEAK_ALLOWLIST.txt
 sanitize.leak.records.pin.regen_extract = census: rows=[0-9]+ pairs=[0-9]+ records=(?P<value>[0-9]+) loose=
@@ -949,7 +956,7 @@ sanitize.leak.records.pin.instrument = the awk census over tests/sanitize/LEAK_A
 sanitize.leak.records.pin.measured_at = 547e801c8
 sanitize.leak.records.pin.home = tests/lints.rs:LEAK_RECORDS
 sanitize.leak.records.pin.scan = none
-sanitize.leak.records.pin.caveat = scan = none since this became a four-digit figure — four-digit values collide with `file:line` CITATIONS, which churn every round: when the value was 2283 the unrelated spellings were `src/main.rs:2283` quoted in docs/devbook/01 and a self-host line pair 2280/2283 in todo/t0944, neither a mirror of anything. Waiving line numbers means re-waiving them whenever a file moves, and a waiver that must be renewed is a waiver nobody reads. The mirror to LEAK_RECORDS is what actually holds this row, exactly as for sanitize.leak.class_pairs.pin. ⊕ the `*N+` signatures are counted at their FLOOR — a `+` means at-least-N and switches that row's count check off, so this total is a lower bound on what the concurrency rows may actually leak; see sanitize.leak.loose_signatures.pin for how many rows are in that state
+sanitize.leak.records.pin.caveat = scan = none since this became a four-digit figure — four-digit values collide with `file:line` CITATIONS, which churn every round: when the value was 2283 the unrelated spellings were `src/main.rs:2283` quoted in docs/devbook/01 and a self-host line pair 2280/2283 in todo/t0944, neither a mirror of anything. Waiving line numbers means re-waiving them whenever a file moves, and a waiver that must be renewed is a waiver nobody reads. The mirror to LEAK_RECORDS is what actually holds this row, exactly as for sanitize.leak.class_pairs.pin. ⊕ the `*N+` signatures are counted at their FLOOR — a `+` means at-least-N and switches that row's count check off, so this total is a lower bound on what the concurrency rows may actually leak; see sanitize.leak.loose_signatures.pin for how many rows are in that state. ⊕ bless = auto-lower — the same debt magnitude one unit down, under the same adjudication: the write-back is authorised by the sweep's verdict naming the rows, never by the total having fallen
 sanitize.leak.records.pin.cost_secs = 30
 sanitize.leak.records.pin.mirror = tests/lints.rs:LEAK_RECORDS
 sanitize.leak.records.pin.input = none
@@ -978,6 +985,7 @@ sanitize.leak.class_pairs.pin.value = 423
 sanitize.leak.class_pairs.pin.unit = (fixture, leak-class) pairs the allowlist names
 sanitize.leak.class_pairs.pin.polarity = exact-pin
 sanitize.leak.class_pairs.pin.provenance = derived
+sanitize.leak.class_pairs.pin.bless = auto-lower
 sanitize.leak.class_pairs.pin.authority = tests/sanitize/LEAK_ALLOWLIST.txt column 2 — one pair per comma-separated signature; LEAK_CLASS_PAIRS is a hand-kept pin of that count
 sanitize.leak.class_pairs.pin.regen = awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; n=s; sub(/^.*\*/,"",n); if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} pairs++; records+=n+0}} END{print "leak-allowlist census: rows=" rows+0 " pairs=" pairs+0 " records=" records+0 " loose=" loose+0 " (scanned " NR " lines)"}' tests/sanitize/LEAK_ALLOWLIST.txt
 sanitize.leak.class_pairs.pin.regen_extract = census: rows=[0-9]+ pairs=(?P<value>[0-9]+) records=
@@ -987,7 +995,7 @@ sanitize.leak.class_pairs.pin.instrument = the awk census over tests/sanitize/LE
 sanitize.leak.class_pairs.pin.measured_at = 547e801c8
 sanitize.leak.class_pairs.pin.home = tests/lints.rs:LEAK_CLASS_PAIRS
 sanitize.leak.class_pairs.pin.scan = none
-sanitize.leak.class_pairs.pin.caveat = scan = none since R49 Track E — 500 is a round three-digit number with 32 legitimate spellings across the roots (18 in tests/integration.rs, 12 in tests/lints.rs — `> 500` size thresholds and the re-seed ledger — one each in todo/t0154 and todo/t0605), and a waiver farm on that scale is how a guard dies. It carried `scan = standard` only while the value happened to be 501. The mirror to LEAK_CLASS_PAIRS is what actually holds this row. ⊕ the PAIR is the citation unit precisely because the ROW is not: most rows carrying multiple mechanisms would leave the majority of pairs unobliged under a per-row rule. This count says how many obligations exist, never whether any is discharged — that is sanitize.leak.uncited_class_pairs.pin
+sanitize.leak.class_pairs.pin.caveat = scan = none since R49 Track E — 500 is a round three-digit number with 32 legitimate spellings across the roots (18 in tests/integration.rs, 12 in tests/lints.rs — `> 500` size thresholds and the re-seed ledger — one each in todo/t0154 and todo/t0605), and a waiver farm on that scale is how a guard dies. It carried `scan = standard` only while the value happened to be 501. The mirror to LEAK_CLASS_PAIRS is what actually holds this row. ⊕ the PAIR is the citation unit precisely because the ROW is not: most rows carrying multiple mechanisms would leave the majority of pairs unobliged under a per-row rule. This count says how many obligations exist, never whether any is discharged — that is sanitize.leak.uncited_class_pairs.pin. ⊕ bless = auto-lower — the same debt magnitude at PAIR granularity, under the same adjudication: a fallen total is not evidence, the verdict naming the shed classes is
 sanitize.leak.class_pairs.pin.cost_secs = 30
 sanitize.leak.class_pairs.pin.mirror = tests/lints.rs:LEAK_CLASS_PAIRS
 sanitize.leak.class_pairs.pin.input = none
@@ -1016,6 +1024,7 @@ sanitize.leak.loose_signatures.pin.value = 8
 sanitize.leak.loose_signatures.pin.unit = `*N+` signatures — allowlist rows whose record COUNT check is switched off
 sanitize.leak.loose_signatures.pin.polarity = exact-pin
 sanitize.leak.loose_signatures.pin.provenance = derived
+sanitize.leak.loose_signatures.pin.bless = never
 sanitize.leak.loose_signatures.pin.authority = tests/sanitize/LEAK_ALLOWLIST.txt column 2 — the signatures carrying a trailing `+`; LEAK_LOOSE_SIGNATURES is a hand-kept pin of that count
 sanitize.leak.loose_signatures.pin.regen = awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; n=s; sub(/^.*\*/,"",n); if(n ~ /\+$/){loose++; sub(/\+$/,"",n)} pairs++; records+=n+0}} END{print "leak-allowlist census: rows=" rows+0 " pairs=" pairs+0 " records=" records+0 " loose=" loose+0 " (scanned " NR " lines)"}' tests/sanitize/LEAK_ALLOWLIST.txt
 sanitize.leak.loose_signatures.pin.regen_extract = census: .* loose=(?P<value>[0-9]+) \(scanned
@@ -1025,7 +1034,7 @@ sanitize.leak.loose_signatures.pin.instrument = the awk census over tests/saniti
 sanitize.leak.loose_signatures.pin.measured_at = 54dafc26d
 sanitize.leak.loose_signatures.pin.home = tests/lints.rs:LEAK_LOOSE_SIGNATURES
 sanitize.leak.loose_signatures.pin.scan = none
-sanitize.leak.loose_signatures.pin.caveat = a single-digit value the uniqueness scanner structurally cannot police — 8 has over fifteen hundred unmasked spellings in the roots — so figures_db_mirrors_agree plus this regen are the whole enforcement. ⚠ NOT a debt-magnitude number: it is an ADMISSION count, and each `+` is a row whose record count no longer gates. Earned only by a row the sweep's own count-drift census has named
+sanitize.leak.loose_signatures.pin.caveat = a single-digit value the uniqueness scanner structurally cannot police — 8 has over fifteen hundred unmasked spellings in the roots — so figures_db_mirrors_agree plus this regen are the whole enforcement. ⚠ NOT a debt-magnitude number: it is an ADMISSION count, and each `+` is a row whose record count no longer gates. Earned only by a row the sweep's own count-drift census has named. ⊕ bless = never — this is Core #6's AGREEMENT shape, not a debt magnitude: each `+` is an admission earned by the sweep's own count-drift census, and REMOVING one switches a count check back ON, which no verdict file adjudicates (a loose class is skipped by the sweep's per-class loop, so it appears in no output at all). Moving it stays a hand edit with a justification
 sanitize.leak.loose_signatures.pin.cost_secs = 30
 sanitize.leak.loose_signatures.pin.mirror = tests/lints.rs:LEAK_LOOSE_SIGNATURES
 sanitize.leak.loose_signatures.pin.input = none
@@ -1035,6 +1044,7 @@ sanitize.leak.uncited_class_pairs.pin.value = 409
 sanitize.leak.uncited_class_pairs.pin.unit = (fixture, leak-class) pairs with no citation naming a todo/ item that exists AND names the pair's top frame
 sanitize.leak.uncited_class_pairs.pin.polarity = exact-pin
 sanitize.leak.uncited_class_pairs.pin.provenance = derived
+sanitize.leak.uncited_class_pairs.pin.bless = never
 sanitize.leak.uncited_class_pairs.pin.authority = tests/sanitize/LEAK_ALLOWLIST.txt columns 2 and 3, joined against todo/<id>.md — a pair counts as CITED only when its column-3 entry names an item that EXISTS and whose body CONTAINS the pair's top-frame symbol
 sanitize.leak.uncited_class_pairs.pin.regen = awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s!="") pr++}} END{print "leak-allowlist pairs scanned=" pr+0}' tests/sanitize/LEAK_ALLOWLIST.txt; awk -F'\t' '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; nc=split($3,C,","); ns=split($2,S,","); for(i=1;i<=ns;i++){s=S[i]; gsub(/^[ \t]+|[ \t]+$/,"",s); if(s=="") continue; sym=s; sub(/\*[^*]*$/,"",sym); ids=""; for(j=1;j<=nc;j++){e=C[j]; gsub(/^[ \t]+|[ \t]+$/,"",e); p=index(e,"="); if(p==0) continue; k=substr(e,1,p-1); v=substr(e,p+1); gsub(/^[ \t]+|[ \t]+$/,"",k); gsub(/^[ \t]+|[ \t]+$/,"",v); if(k==sym) ids=(ids=="")?v:ids "," v} print sym "|" ids}}' tests/sanitize/LEAK_ALLOWLIST.txt | while IFS='|' read -r sym ids; do c=0; for id in $(printf '%s' "$ids" | tr ',' ' '); do grep -qF -- "$sym" "todo/$id.md" 2>/dev/null && c=1; done; [ "$c" = 0 ] && echo u; done | wc -l | awk '{print "leak-allowlist uncited pairs=" $1}'
 sanitize.leak.uncited_class_pairs.pin.regen_extract = leak-allowlist uncited pairs=(?P<value>[0-9]+)
@@ -1044,7 +1054,7 @@ sanitize.leak.uncited_class_pairs.pin.instrument = an awk + grep join over the a
 sanitize.leak.uncited_class_pairs.pin.measured_at = 547e801c8
 sanitize.leak.uncited_class_pairs.pin.home = tests/lints.rs:UNCITED_LEAK_CLASS_PAIRS
 sanitize.leak.uncited_class_pairs.pin.scan = standard
-sanitize.leak.uncited_class_pairs.pin.caveat = TARGET IS 0, so this number is EVIDENCE OF A GAP, not of health. ⚠ AND THE TOKEN CHECK IS A FLOOR, NOT A LOCK: two frames account for the majority of rows, so one item naming both would satisfy a pair on every one of them. What stops that is the pair granularity plus a reviewer reading the row's ⚖ ADMITTED block — the number says how much is uncited, the block says whether the citation is true
+sanitize.leak.uncited_class_pairs.pin.caveat = TARGET IS 0, so this number is EVIDENCE OF A GAP, not of health. ⚠ AND THE TOKEN CHECK IS A FLOOR, NOT A LOCK: two frames account for the majority of rows, so one item naming both would satisfy a pair on every one of them. What stops that is the pair granularity plus a reviewer reading the row's ⚖ ADMITTED block — the number says how much is uncited, the block says whether the citation is true. ⊕ bless = never — IT IS COMPUTED FROM THE CITATION COLUMN, NOT THE LEAK COLUMN, and that makes a write-back over it vacuous rather than merely unwise. Measured: appending citations moves this number down by a quarter with the leak column BYTE-IDENTICAL — zero rows removed, zero tightened — so an edit-shape predicate has an EMPTY subject set and every condition it checks passes over nothing. Nor is there an adjudication for it even in principle: the citation column feeds only `retire_due`. And it is not an attack — citing a leak item is the encouraged workflow
 sanitize.leak.uncited_class_pairs.pin.cost_secs = 120
 sanitize.leak.uncited_class_pairs.pin.mirror = tests/lints.rs:UNCITED_LEAK_CLASS_PAIRS
 sanitize.leak.uncited_class_pairs.pin.waiver = tests/lints.rs 1 declared the constant's own re-seed log, which spells `420 -> 409` directly above the declaration. The log is the evidence for WHY the number moved and by what; deleting it to satisfy the scanner would trade a readable history for a silent one
@@ -1122,6 +1132,7 @@ sanitize.corruption.pin.value = 1
 sanitize.corruption.pin.unit = rows in tests/sanitize/CORRUPTION_ALLOWLIST.txt
 sanitize.corruption.pin.polarity = exact-pin
 sanitize.corruption.pin.provenance = derived
+sanitize.corruption.pin.bless = never
 sanitize.corruption.pin.authority = tests/sanitize/CORRUPTION_ALLOWLIST.txt — the lint counts its non-comment, non-blank lines; CORRUPTION_CEILING is a hand-kept pin of that count
 sanitize.corruption.pin.regen = awk '{t=$0; sub(/^[ \t]*/,"",t); if(t ~ /^#/) next; g=$0; gsub(/^[ \t]+|[ \t]+$/,"",g); if(g=="") next; rows++} END{print "corruption-allowlist census: rows=" rows+0 " (scanned " NR " lines)"}' tests/sanitize/CORRUPTION_ALLOWLIST.txt
 sanitize.corruption.pin.regen_extract = corruption-allowlist census: rows=(?P<value>[0-9]+)
@@ -1131,7 +1142,7 @@ sanitize.corruption.pin.instrument = an awk row census over the allowlist, apply
 sanitize.corruption.pin.measured_at = dc0b0024b
 sanitize.corruption.pin.home = tests/lints.rs:CORRUPTION_CEILING
 sanitize.corruption.pin.scan = none
-sanitize.corruption.pin.caveat = a single-digit value the uniqueness scanner structurally cannot police, so figures_db_mirrors_agree plus this regen are the whole enforcement. ⚠ THE ONE ROW IS NOT A DEFECT: it is stack_guard_deep_recursion, whose entire purpose is to prove the stack guard fires, so the honest target here is 1 and not 0 — a SECOND row would ship a known use-after-free class
+sanitize.corruption.pin.caveat = a single-digit value the uniqueness scanner structurally cannot police, so figures_db_mirrors_agree plus this regen are the whole enforcement. ⚠ THE ONE ROW IS NOT A DEFECT: it is stack_guard_deep_recursion, whose entire purpose is to prove the stack guard fires, so the honest target here is 1 and not 0 — a SECOND row would ship a known use-after-free class. ⊕ bless = never — the one row is the sanitizer's POSITIVE CONTROL, so the honest target is that row and not none; an auto-lowering write-back would delete the pin on the control the moment the control stopped being measured
 sanitize.corruption.pin.cost_secs = 30
 sanitize.corruption.pin.mirror = tests/lints.rs:CORRUPTION_CEILING
 sanitize.corruption.pin.input = none
