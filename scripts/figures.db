@@ -465,15 +465,15 @@ lint.name_prefix.sites.unit = name-prefix routing sites in src/
 lint.name_prefix.sites.polarity = exact-pin
 lint.name_prefix.sites.provenance = derived
 lint.name_prefix.sites.authority = tests/lints.rs::no_growth_in_name_prefix_routing site census
-lint.name_prefix.sites.regen = grep -oP 'NAME_PREFIX_BUDGET: usize = \K[0-9]+' tests/lints.rs
+lint.name_prefix.sites.regen = printf '%d\n' "$(grep -rhoE 'starts_with\("(Vector|Deque|Dict|HashMap|Map|OrderedDict|Set|HashSet|Mutex|RWLock|Channel|Shared|Weak|Guard|ReadGuard|WriteGuard|Box|Task|Heap|Tuple|Callable|MutCallable|ConsumeCallable|Option|Result|AtomicInt|AtomicBool|Thread|TaskGroup|WaitGroup|Barrier|CondVar|Semaphore|OnceFlag|GorgetMap|GorgetSet|GorgetDict)__"\)' --include='*.rs' src | wc -l)"
 lint.name_prefix.sites.regen_extract = ^(?P<value>[0-9]+)
 lint.name_prefix.sites.regen_fires = ^[0-9]+$
 lint.name_prefix.sites.regen_env = none
-lint.name_prefix.sites.instrument = grep over the lint const
-lint.name_prefix.sites.measured_at = db9ec6a13
+lint.name_prefix.sites.instrument = grep census of starts_with("X__") occurrences over src/**/*.rs
+lint.name_prefix.sites.measured_at = ba72b46bf
 lint.name_prefix.sites.home = tests/lints.rs:NAME_PREFIX_BUDGET
 lint.name_prefix.sites.scan = none
-lint.name_prefix.sites.caveat = too common to police by scanning; only figures_db_mirrors_agree guards it
+lint.name_prefix.sites.caveat = too common to police by scanning, hence scan = none. The regen RE-RUNS the census rather than reading the constant: reading it would assert a literal equals itself, which figures_db_mirrors_agree already does, so check would be a tautology (SIX-Q #2). It therefore DUPLICATES the MANGLED_PREFIXES alternation from tests/lints.rs, and that duplication is the point -- adding a prefix there moves the lint census, NAME_PREFIX_BUDGET and this value together while a stale alternation here does not, so the disagreement goes RED instead of quietly agreeing. And the two lists are held identical by tests/lints.rs::figures_db_name_prefix_regen_alternation_matches_the_lint, which compares this alternation against MANGLED_PREFIXES.join("|") -- it exists because a prefix with no src/ site drifts without moving any number here.
 lint.name_prefix.sites.cost_secs = 30
 lint.name_prefix.sites.mirror = tests/lints.rs:NAME_PREFIX_BUDGET
 lint.name_prefix.sites.input = none
