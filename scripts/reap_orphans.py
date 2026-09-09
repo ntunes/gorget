@@ -428,9 +428,18 @@ def report(res, preflight=False, do_reap=False) -> int:
     print(f"pids examined:    {res['pids_examined']} "
           f"(this PID namespace only — processes outside it are INVISIBLE, "
           f"not absent)")
-    print(f"scratch roots:    {len(roots)} tagged "
+    # ⚠ EVERY NUMBER ON THIS LINE NAMES EXACTLY WHAT IT COUNTS. It used to read
+    # `{len(roots)} tagged … {n} with no parsable owner tag`, where `len(roots)`
+    # is EVERY root in the domain, tagged or not — so a temp dir holding one
+    # untagged root printed `1 tagged (0 owner-dead), 1 with no parsable owner
+    # tag`, two counts of the same directory under contradictory names. A label
+    # that names a bigger thing than it counts is worse than no number, and this
+    # is the one report an operator reads to decide whether the box is clean.
+    undecidable_roots = [r for r in roots if r.undecidable]
+    print(f"scratch roots:    {len(roots)} in domain — "
+          f"{len(roots) - len(undecidable_roots)} with a parsable owner tag "
           f"({len(dead_roots)} owner-dead), "
-          f"{sum(1 for r in roots if r.undecidable)} with no parsable owner tag")
+          f"{len(undecidable_roots)} with none")
     print(f"untagged .tmp dirs: {res['untagged_temp_dirs']} "
           f"(tempfile::TempDir / mkdtemp — NO owner tag exists, so this tool is "
           f"BLIND to any process living in one. This is the domain gap the "
@@ -516,6 +525,18 @@ def report(res, preflight=False, do_reap=False) -> int:
 #       SAME READER cannot get an owner out of it. Rows 1-4 are REFUSED as
 #       control names, which is NOT a claim that the reader should reject them —
 #       it is a claim about what the control may be called.
+#
+# ⊕ ONE CELL OF THE POSITION AXIS IS OMITTED ON PURPOSE, AND HERE IS WHY
+# (Core #12: name the omitted cell rather than let a reader find the hole).
+# The LEADING position — a name like `8_probe`, whose FIRST `_`-component is
+# decimal — has no row. It is unreachable for any root the scan can build:
+# `scan` only reaches the `Root` constructor for a name starting with
+# `SCRATCH_PREFIX` (`.tmp*` takes the untagged branch and never becomes a
+# `Root`), so `base.split("_")[0]` is always the literal `gg`. Adding a row for
+# a shape the domain cannot produce would assert coverage this table does not
+# have. ⚠ The scope of that claim is the SCAN's domain, not the class: `Root` is
+# directly constructible, as this very table demonstrates, so a future caller
+# that builds one from an arbitrary string reopens the cell.
 
 
 def control_name_is_certified(path) -> bool:
@@ -759,8 +780,13 @@ def self_test() -> int:
         # assertion is on the basename actually handed to `makedirs`, not on the
         # prefix or a template — a guard whose subject is the DECLARATION goes
         # green over a still-wrong value.
+        # ⚠ `mode=0o700`, because `mkdtemp` mints 0700 and `os.makedirs`
+        # defaults to 0777-minus-umask — 0755 on this box. These controls sit in
+        # a SHARED /tmp beside other agents' work, so the permission the old
+        # `mkdtemp` call gave them is restored explicitly rather than inherited
+        # from whatever umask the caller happens to run under.
         notag_root = os.path.join(tmp, f"{pfx}notag")
-        os.makedirs(notag_root, exist_ok=False)
+        os.makedirs(notag_root, mode=0o700, exist_ok=False)
         made.append(notag_root)
         check("NOTAG control CERTIFIES ITSELF unparsable, before the scan",
               control_name_is_certified(notag_root),
@@ -780,8 +806,9 @@ def self_test() -> int:
         # invocation's prefix AFTER the `.tmp` marker, so it still takes the
         # untagged branch in `scan` (which tests `.tmp` first) while `scan` can
         # hand the basename back in `untagged_temp_matched`.
+        # `mode=0o700` for the same reason as the NOTAG control above.
         untagged = os.path.join(tmp, f"{UNTAGGED_TEMP_PREFIX}{pfx}ood")
-        os.makedirs(untagged, exist_ok=False)
+        os.makedirs(untagged, mode=0o700, exist_ok=False)
         made.append(untagged)
         oob_proc = sleeper(os.path.join(untagged, "async_select_diff"))
 
