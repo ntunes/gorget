@@ -465,7 +465,7 @@ lint.name_prefix.sites.unit = name-prefix routing sites in src/
 lint.name_prefix.sites.polarity = exact-pin
 lint.name_prefix.sites.provenance = derived
 lint.name_prefix.sites.authority = tests/lints.rs::no_growth_in_name_prefix_routing site census
-lint.name_prefix.sites.regen = printf '%d\n' "$(grep -rhoE 'starts_with\("(Vector|Deque|Dict|HashMap|Map|OrderedDict|Set|HashSet|Mutex|RWLock|Channel|Shared|Weak|Guard|ReadGuard|WriteGuard|Box|Task|Heap|Tuple|Callable|MutCallable|ConsumeCallable|Option|Result|AtomicInt|AtomicBool|Thread|TaskGroup|WaitGroup|Barrier|CondVar|Semaphore|OnceFlag|GorgetMap|GorgetSet|GorgetDict)__"\)' --include=*.rs src | wc -l)"
+lint.name_prefix.sites.regen = printf '%d\n' "$(grep -rhoE 'starts_with\("(Vector|Deque|Dict|HashMap|Map|OrderedDict|Set|HashSet|Mutex|RWLock|Channel|Shared|Weak|Guard|ReadGuard|WriteGuard|Box|Task|Heap|Tuple|Callable|MutCallable|ConsumeCallable|Option|Result|AtomicInt|AtomicBool|Thread|TaskGroup|WaitGroup|Barrier|CondVar|Semaphore|OnceFlag|GorgetMap|GorgetSet|GorgetDict)__"\)' --include='*.rs' src | wc -l)"
 lint.name_prefix.sites.regen_extract = ^(?P<value>[0-9]+)
 lint.name_prefix.sites.regen_fires = ^[0-9]+$
 lint.name_prefix.sites.regen_env = none

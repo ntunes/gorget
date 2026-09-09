@@ -7,8 +7,19 @@
 // independently-written readings of one declaration, neither of them a copy of
 // the other, asserted to agree on the live corpus.
 //
-// ⛔ DO NOT WRITE A THIRD READING. Three readings of one declaration witness
-// nothing — a disagreement stops naming which instrument is broken.
+// ⚠ THE WITNESS IS OVER *MEMBERSHIP*, AND IT IS A PAIR. A THIRD reading of
+// this directive already exists and is deliberately NOT part of it:
+// `tests/lints.rs::parity_declarations_are_well_formed` does its own
+// `strip_prefix` + `split_once(':')` + kind-table + continuation walk. It
+// answers a different question — is EVERY declaration in the tree well formed —
+// and never builds a membership set, so it cannot be one of two readings that
+// disagree about WHICH fixtures are untriaged.
+//
+// The consequence, not an unenforced rule: add a third reading of MEMBERSHIP
+// and a disagreement stops naming which instrument is broken, because three
+// readings have no majority worth trusting and no pair to attribute the fault
+// to. Nothing in the tree can stop you doing it, which is exactly why the
+// reason is written here rather than a bare prohibition (Core #14).
 //
 // The items are `pub` because both binaries include this inside a `mod`. Each
 // uses a different subset, so both include sites carry `#[allow(dead_code)]`

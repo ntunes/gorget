@@ -899,6 +899,71 @@ fn no_growth_in_name_prefix_routing() {
     );
 }
 
+/// The `lint.name_prefix.sites` row in `scripts/figures.db` re-runs the census
+/// above, which means it DUPLICATES [`MANGLED_PREFIXES`] inside its `regen`
+/// command. That duplication is deliberate — it is what makes
+/// `figures.py check` measure reality instead of asserting a literal equals
+/// itself — but the row's own `caveat` asks the next contributor to "keep the
+/// two lists in step", and prose rots (Core #6).
+///
+/// ⚠ AND THE DRIFT IS NOT SELF-ANNOUNCING. Adding a prefix here only moves the
+/// census if that prefix has at least ONE `starts_with("X__")` site in `src/`;
+/// a zero-site prefix leaves the count, `NAME_PREFIX_BUDGET` and the DB `value`
+/// all unchanged, so `figures.py check` stays green over an alternation that no
+/// longer describes what the lint counts. Measured: renaming `OnceFlag` in the
+/// DB alternation leaves `python3 scripts/figures.py check lint.name_prefix.sites`
+/// at rc 0 and reddens only this lint. Regenerate the size of that blind spot —
+/// the prefixes with no site in `src/`, every one of which can drift silently —
+/// with:
+///
+/// ```text
+/// for p in $(grep -oP 'starts_with\\\("\(\K[^)]+' scripts/figures.db | tr '|' ' '); do
+///   printf '%s %s\n' "$(grep -rhoE "starts_with\(\"${p}__\"\)" --include='*.rs' src | wc -l)" "$p"
+/// done | grep -c '^0 '
+/// ```
+///
+/// It prints 14 at this HEAD: 14 of the 37 prefixes carry no `src/` site at
+/// all, so each of them can drift out of either list in total silence.
+///
+/// So the two lists are compared HERE, by identity, where a stale one cannot
+/// hide behind an unmoved number.
+#[test]
+fn figures_db_name_prefix_regen_alternation_matches_the_lint() {
+    const ROW: &str = "lint.name_prefix.sites";
+    // The regen embeds the alternation as `starts_with\("(A|B|…)__"\)`.
+    const OPEN: &str = r#"starts_with\("("#;
+    const CLOSE: &str = r#")__"\)"#;
+
+    let regen = figures_db_field(ROW, "regen")
+        .unwrap_or_else(|| panic!("`{ROW}.regen` is not declared in scripts/figures.db"));
+    let after = regen.split_once(OPEN).map(|(_, rest)| rest).unwrap_or_else(|| {
+        panic!(
+            "`{ROW}.regen` no longer embeds a `{OPEN}…{CLOSE}` alternation:\n  {regen}\n\n\
+             That row exists to re-run this file's `starts_with(\"X__\")` census. If the regen \
+             was rewritten into a different shape, re-anchor this lint against the new one — do \
+             NOT delete the row, and do not let the regen go back to grepping \
+             NAME_PREFIX_BUDGET, which would make `figures.py check` assert a literal equals \
+             itself."
+        )
+    });
+    let db_alternation = after.split_once(CLOSE).map(|(a, _)| a).unwrap_or_else(|| {
+        panic!("`{ROW}.regen` opens an alternation and never closes it with `{CLOSE}`:\n  {regen}")
+    });
+
+    assert_eq!(
+        db_alternation,
+        MANGLED_PREFIXES.join("|"),
+        "MANGLED_PREFIXES and the `{ROW}` regen alternation in scripts/figures.db have \
+         DRIFTED.\n\n  tests/lints.rs : {}\n  figures.db     : {db_alternation}\n\n\
+         The DB row re-runs this file's census, so its prefix list must be this file's prefix \
+         list. A prefix added here and not there is silently uncounted by the row; a prefix \
+         there and not here counts sites the lint does not. Neither shows up as a moved number \
+         when the prefix has no `starts_with(\"X__\")` site in `src/` — which is why this is an \
+         identity check and not a count.",
+        MANGLED_PREFIXES.join("|"),
+    );
+}
+
 /// Tier 2d — sidecar absence. Static check that no parallel
 /// `HashMap<key, value>` sidecar exists in the codebase tracking a fact
 /// already on a typed metadata field. Per `docs/devbook/25-structural-guards.md`
@@ -22837,47 +22902,53 @@ fn formatter_blank_emit_site_census() {
 /// `src/parser/`; the total moves and this lint fires, forcing the new site to
 /// be classified as guarded / carve-out / non-flippable.
 ///
-/// ## ONE bucket of three is a WITNESS. The other two are still PINS.
+/// ## ⛔ BOTH `assert_eq!`s ARE LOAD-BEARING. DELETING EITHER IS A MEASURED
+/// ## REGRESSION, AND ONE WAS DELETED ONCE.
 ///
-/// ⚠ The name says "site pin" and that is still true of most of it — do not
-/// read a green run as more than it is:
+/// `GUARDED` is a PIN *and* it is witnessed: the second assertion reads the
+/// same bucket off the formatter — `.format_ownership_modifier_operand(` call
+/// sites in `src/formatter/mod.rs`, a genuinely independent enumerator.
+/// Regenerate that reading with
+/// `grep -rn 'format_ownership_modifier_operand' src/formatter/`. Two
+/// constraints, not one:
 ///
-///   * **WITNESSED — the GUARDED bucket.** Its magnitude is no longer written
-///     down. It is READ from the formatter, by counting
-///     `.format_ownership_modifier_operand(` call sites in
-///     `src/formatter/mod.rs` — a second enumerator that already existed and
-///     that this test used to compare against a constant instead of deriving
-///     from. Regenerate it with
-///     `grep -rn 'format_ownership_modifier_operand' src/formatter/`. Nothing
-///     maintains the number, so nothing can leave it stale, and either
-///     enumerator going silent turns the total assert RED rather than reading
-///     as progress.
-///   * **STILL PINS — `CARVE_OUT` and `NON_FLIPPABLE`.** Neither has a second
-///     in-tree enumerator: they are dispositions a human assigned to specific
-///     parser positions, and no other file counts them. They are hand-
-///     maintained magnitudes and a green run says nothing about whether the
-///     classification is right (Core #15e Q3 / `assert_exact_ratchet`'s own
-///     "a count is not a verdict").
+///   1. `sites == GUARDED + CARVE_OUT + NON_FLIPPABLE` — the parser census is
+///      TOTALLY accounted for by the three dispositions.
+///   2. `guarded == GUARDED` — the formatter carries exactly one guard per
+///      expression-operand position.
 ///
-/// What the conversion gives up, stated so it is not discovered later: adding a
-/// guarded parser position TOGETHER with its formatter guard — or deleting both
-/// together — is now silently green, because both readings move as one. That is
-/// the CORRECT coordinated change. The DEFECT this guard exists for, a parser
-/// position that strips a sigil ahead of an expression with no formatter guard,
-/// still REDs: the total gains one and the formatter does not.
+/// ⚠ THEY ARE NOT REDUNDANT, AND THE PROOF IS A COMPENSATING PAIR. Deriving
+/// `GUARDED` from the formatter and dropping assertion 2 looks like a
+/// strictly-better "witness" and is strictly worse — it takes the constraint
+/// rank from 2 to 1. Measured, both breaks line-anchored: comment out the
+/// `parse_call_arg` guard at `src/formatter/mod.rs:6890` (the formatter reading
+/// falls 2 → 1) AND route the `NON_FLIPPABLE` `parse_param` site at
+/// `src/parser/mod.rs:2103` through a one-line helper (the parser census falls
+/// 7 → 6), and the single-assertion form returns **rc 0** with an
+/// expression-operand parser position left unguarded — precisely the defect
+/// this test names. With assertion 2 present the same pair is RED. A pin that a
+/// second enumerator ALSO checks is the strongest shape available here; do not
+/// "simplify" it back down.
+///
+/// ⚠ AND ONLY THE GUARDED BUCKET IS WITNESSED. `CARVE_OUT` and `NON_FLIPPABLE`
+/// have NO second in-tree enumerator — they are dispositions a human assigned
+/// to specific parser positions, and no other file counts them. A green run
+/// says nothing about whether either classification is right (Core #15e Q3, and
+/// `assert_exact_ratchet`'s own "a count is not a verdict").
 #[test]
 fn formatter_ownership_modifier_site_pin() {
-    // EXPRESSION-OPERAND positions — the sigil is stripped ahead of an
-    // expression, so an expression whose emission LEADS with a sigil silently
-    // re-homes it into the node's `ownership` field. These are the positions
-    // `Formatter::format_ownership_modifier_operand` must guard, and they are
-    // NOT written down here: `guarded` below COUNTS the formatter's guards.
-    // Today that reading is 2 —
-    //   1. `src/parser/stmt.rs`  `parse_for_stmt`  — the iterable
-    //   2. `src/parser/expr.rs`  `parse_call_arg`  — the value (POSITIONAL
-    //      args only: the pre-pass runs ahead of the `name =` lookahead, so a
-    //      named arg's value is parsed with no pre-pass and needs no guard)
-    // — but that list is a comment for the reader, not the assertion.
+    /// EXPRESSION-OPERAND positions — the sigil is stripped ahead of an
+    /// expression, so an expression whose emission LEADS with a sigil silently
+    /// re-homes it into the node's `ownership` field. These are the positions
+    /// `Formatter::format_ownership_modifier_operand` must guard:
+    ///   1. `src/parser/stmt.rs`  `parse_for_stmt`  — the iterable
+    ///   2. `src/parser/expr.rs`  `parse_call_arg`  — the value (POSITIONAL
+    ///      args only: the pre-pass runs ahead of the `name =` lookahead, so a
+    ///      named arg's value is parsed with no pre-pass and needs no guard)
+    ///
+    /// A PIN that the formatter reading below ALSO checks. Both are needed —
+    /// see the compensating pair in this test's doc comment.
+    const GUARDED: usize = 2;
     /// The comprehension iterable (`src/parser/expr.rs`, sigil BEFORE `in`).
     /// Also an expression-operand position, deliberately NOT guarded: the
     /// ratified D33 comprehension rider retires the pre-`in` spelling by moving
@@ -22916,10 +22987,31 @@ fn formatter_ownership_modifier_site_pin() {
         }
     }
 
-    // THE SECOND ENUMERATOR. The size of the GUARDED bucket is DERIVED from
-    // the formatter — the file that has to carry one guard per expression-
-    // operand parser position — instead of being a constant somebody keeps in
-    // step by hand. Regenerate:
+    // ASSERTION 1 — the parser census is TOTALLY accounted for.
+    assert_eq!(
+        sites,
+        GUARDED + CARVE_OUT + NON_FLIPPABLE,
+        "R41 T-FMT-A site pin: `parse_ownership_modifier()` call-site count \
+         under src/parser/ is {sites}, but the census accounts for {} \
+         ({GUARDED} guarded + {CARVE_OUT} carve-out + {NON_FLIPPABLE} \
+         non-flippable).\n\n\
+         Every position that strips an ownership sigil BEFORE parsing an \
+         EXPRESSION must be guarded by \
+         `Formatter::format_ownership_modifier_operand`, or `gg fmt` will \
+         re-home the sigil into the enclosing node's `ownership` field and \
+         change accept/reject. Classify the new site and update the constants \
+         (and the formatter guard, if it is an expression-operand position).\n\n\
+         ⚠ This assertion alone is EVADED BY A COMPENSATING PAIR — lose a \
+         formatter guard and re-spell a non-flippable parser site in the same \
+         commit and the arithmetic still balances. Assertion 2 below is what \
+         catches that; do not delete it.",
+        GUARDED + CARVE_OUT + NON_FLIPPABLE
+    );
+
+    // ASSERTION 2 — THE SECOND ENUMERATOR, and the one that survives a
+    // compensating pair. The formatter has to carry exactly one guard per
+    // expression-operand parser position, and it is an independent reading of
+    // the GUARDED bucket. Regenerate:
     //   grep -rn 'format_ownership_modifier_operand' src/formatter/
     let fmt = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
@@ -22928,28 +23020,18 @@ fn formatter_ownership_modifier_site_pin() {
         .filter(|l| !l.trim_start().starts_with("//"))
         .map(|l| l.matches(".format_ownership_modifier_operand(").count())
         .sum::<usize>();
-
     assert_eq!(
-        sites,
-        guarded + CARVE_OUT + NON_FLIPPABLE,
-        "R41 T-FMT-A site pin: `parse_ownership_modifier()` call-site count \
-         under src/parser/ is {sites}, but the census accounts for {} \
-         ({guarded} guarded + {CARVE_OUT} carve-out + {NON_FLIPPABLE} \
-         non-flippable).\n\n\
-         `{guarded} guarded` is NOT a constant — it is the number of \
-         `.format_ownership_modifier_operand(` call sites in \
-         `src/formatter/mod.rs`, counted on this run. So the two readings that \
-         disagree are the PARSER's positions and the FORMATTER's guards, and \
-         the usual cause is the defect this test exists for: a new parser \
-         position that strips an ownership sigil BEFORE parsing an EXPRESSION, \
-         with no matching guard. Unguarded, `gg fmt` re-homes the sigil into \
-         the enclosing node's `ownership` field and CHANGES accept/reject.\n\n\
-         If the new position is an expression operand, add the formatter guard \
-         — the total then balances with no constant edit. If it is not, \
-         classify it and bump `CARVE_OUT` or `NON_FLIPPABLE` with a reason. If \
-         instead the FORMATTER lost a guard, put it back; do not `git rm` a \
-         parser position to make the arithmetic work.",
-        guarded + CARVE_OUT + NON_FLIPPABLE
+        guarded, GUARDED,
+        "R41 T-FMT-A site pin: the formatter has {guarded} \
+         `format_ownership_modifier_operand(` call site(s), expected {GUARDED} \
+         — one per expression-operand `parse_ownership_modifier` position. If a \
+         parser position was added or removed, move BOTH counts together.\n\n\
+         ⛔ THIS IS NOT REDUNDANT WITH THE TOTAL ABOVE. The total is evaded by \
+         a compensating pair (a lost formatter guard plus a re-spelled \
+         non-flippable parser site); measured, dropping this assertion in \
+         favour of deriving GUARDED from `guarded` made exactly that pair \
+         return rc 0 with an expression-operand position left unguarded. Two \
+         constraints, not one."
     );
 }
 
@@ -31756,7 +31838,8 @@ fn parity_declarations_are_well_formed() {
         if !KINDS.contains(&kind) {
             problems.push(format!(
                 "{stem}.gg: unknown parity-exclusion kind `{kind}` — the kinds are {KINDS:?} \
-                 (`ParityExclusionKind`, tests/integration.rs). Note there is deliberately NO \
+                 (`ParityExclusionKind`, tests/lints_support/parity_exclusion_reader.rs). Note \
+                 there is deliberately NO \
                  kind meaning \"the self-host miscompiles it\": that fixture stays in the corpus \
                  as WRONG-OUTPUT / CC-FAIL and goes to the TODO backlog."
             ));
