@@ -638,6 +638,9 @@ fn count_name_prefix_sites_self_host(prefixes: &[&str]) -> usize {
         // Walk the dir's own .gg files; skip symlinks so shared
         // parser.gg / lexer.gg / ast.gg aren't double-counted across
         // self_host_lowerer (symlinked into self_host_typechecker), etc.
+        // ⚠ This is the SAME policy [`visit`] applies, deliberately — the two
+        // counters read one tree and a divergence here makes them readings of
+        // different trees. Change one, change both; see [`visit`]'s docstring.
         let dir_entries = match fs::read_dir(&path) {
             Ok(e) => e,
             Err(_) => continue,
@@ -679,6 +682,29 @@ fn count_name_prefix_in_tree(root: &str, ext: &str) -> usize {
     count
 }
 
+/// The shared recursive walker, and THE ONE PLACE THIS FILE DECIDES ITS
+/// SYMLINK POLICY: symlinks are SKIPPED, files and directories alike.
+///
+/// ⚠ TWO COUNTERS OVER ONE TREE MUST AGREE ON SYMLINK POLICY OR THEY ARE NOT
+/// READINGS OF THE SAME THING. `count_name_prefix_sites_self_host` skips
+/// symlinked `.gg` files by hand, because `tests/fixtures/self_host_check/` and
+/// `self_host_lowerer/` link the SAME `ast.gg` / `lexer.gg` / `parser.gg` …
+/// (29 links, `find tests/fixtures/self_host_* -type l`), so a hit in one of
+/// them would be counted once per LINKING DIRECTORY — a census reporting three
+/// sites where one file has one. This walker followed them, so
+/// `no_growth_in_self_host_closure_identity_name_matching`, which walks the
+/// same tree through `count_closure_identity_name_matches`, had the OPPOSITE
+/// policy. Latent, not harmless: measured at this HEAD, no symlinked `.gg`
+/// carries any `CLOSURE_IDENTITY_LITERALS` spelling
+/// (`find tests/fixtures/self_host_* -type l -name '*.gg' -print0 | xargs -0
+/// grep -lE '__Closure_|__call|__callable_|__gorget_closure_call_|__adapt_'`
+/// finds none), so the two only ever disagreed about a hit nobody had written
+/// yet. The policy lives HERE rather than at each caller so there is no
+/// per-caller omission opportunity (layering rule 3, one source of truth).
+///
+/// Measured no-op for every other caller: `src/`, `src/lir`, `src/backend`,
+/// `src/ir/lowering` and `spec/ggdef/src` contain no symlink at all
+/// (`find src spec/ggdef/src -type l`).
 fn visit(dir: impl AsRef<Path>, f: &mut dyn FnMut(&Path)) {
     let entries = match fs::read_dir(&dir) {
         Ok(e) => e,
@@ -686,6 +712,9 @@ fn visit(dir: impl AsRef<Path>, f: &mut dyn FnMut(&Path)) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        if path.is_symlink() {
+            continue;
+        }
         if path.is_dir() {
             visit(&path, f);
         } else {
@@ -22807,17 +22836,48 @@ fn formatter_blank_emit_site_census() {
 /// **Break-and-verify:** add a `parse_ownership_modifier()` call anywhere under
 /// `src/parser/`; the total moves and this lint fires, forcing the new site to
 /// be classified as guarded / carve-out / non-flippable.
+///
+/// ## ONE bucket of three is a WITNESS. The other two are still PINS.
+///
+/// ⚠ The name says "site pin" and that is still true of most of it — do not
+/// read a green run as more than it is:
+///
+///   * **WITNESSED — the GUARDED bucket.** Its magnitude is no longer written
+///     down. It is READ from the formatter, by counting
+///     `.format_ownership_modifier_operand(` call sites in
+///     `src/formatter/mod.rs` — a second enumerator that already existed and
+///     that this test used to compare against a constant instead of deriving
+///     from. Regenerate it with
+///     `grep -rn 'format_ownership_modifier_operand' src/formatter/`. Nothing
+///     maintains the number, so nothing can leave it stale, and either
+///     enumerator going silent turns the total assert RED rather than reading
+///     as progress.
+///   * **STILL PINS — `CARVE_OUT` and `NON_FLIPPABLE`.** Neither has a second
+///     in-tree enumerator: they are dispositions a human assigned to specific
+///     parser positions, and no other file counts them. They are hand-
+///     maintained magnitudes and a green run says nothing about whether the
+///     classification is right (Core #15e Q3 / `assert_exact_ratchet`'s own
+///     "a count is not a verdict").
+///
+/// What the conversion gives up, stated so it is not discovered later: adding a
+/// guarded parser position TOGETHER with its formatter guard — or deleting both
+/// together — is now silently green, because both readings move as one. That is
+/// the CORRECT coordinated change. The DEFECT this guard exists for, a parser
+/// position that strips a sigil ahead of an expression with no formatter guard,
+/// still REDs: the total gains one and the formatter does not.
 #[test]
 fn formatter_ownership_modifier_site_pin() {
-    /// EXPRESSION-OPERAND positions — the sigil is stripped ahead of an
-    /// expression, so an expression whose emission LEADS with a sigil silently
-    /// re-homes it into the node's `ownership` field. These are the positions
-    /// `Formatter::format_ownership_modifier_operand` must guard:
-    ///   1. `src/parser/stmt.rs`  `parse_for_stmt`  — the iterable
-    ///   2. `src/parser/expr.rs`  `parse_call_arg`  — the value (POSITIONAL
-    ///      args only: the pre-pass runs ahead of the `name =` lookahead, so a
-    ///      named arg's value is parsed with no pre-pass and needs no guard)
-    const GUARDED: usize = 2;
+    // EXPRESSION-OPERAND positions — the sigil is stripped ahead of an
+    // expression, so an expression whose emission LEADS with a sigil silently
+    // re-homes it into the node's `ownership` field. These are the positions
+    // `Formatter::format_ownership_modifier_operand` must guard, and they are
+    // NOT written down here: `guarded` below COUNTS the formatter's guards.
+    // Today that reading is 2 —
+    //   1. `src/parser/stmt.rs`  `parse_for_stmt`  — the iterable
+    //   2. `src/parser/expr.rs`  `parse_call_arg`  — the value (POSITIONAL
+    //      args only: the pre-pass runs ahead of the `name =` lookahead, so a
+    //      named arg's value is parsed with no pre-pass and needs no guard)
+    // — but that list is a comment for the reader, not the assertion.
     /// The comprehension iterable (`src/parser/expr.rs`, sigil BEFORE `in`).
     /// Also an expression-operand position, deliberately NOT guarded: the
     /// ratified D33 comprehension rider retires the pre-`in` spelling by moving
@@ -22856,36 +22916,40 @@ fn formatter_ownership_modifier_site_pin() {
         }
     }
 
-    assert_eq!(
-        sites,
-        GUARDED + CARVE_OUT + NON_FLIPPABLE,
-        "R41 T-FMT-A site pin: `parse_ownership_modifier()` call-site count \
-         under src/parser/ is {sites}, but the census accounts for {} \
-         ({GUARDED} guarded + {CARVE_OUT} carve-out + {NON_FLIPPABLE} \
-         non-flippable).\n\n\
-         Every position that strips an ownership sigil BEFORE parsing an \
-         EXPRESSION must be guarded by \
-         `Formatter::format_ownership_modifier_operand`, or `gg fmt` will \
-         re-home the sigil into the enclosing node's `ownership` field and \
-         change accept/reject. Classify the new site and update the constants \
-         (and the formatter guard, if it is an expression-operand position).",
-        GUARDED + CARVE_OUT + NON_FLIPPABLE
-    );
-
-    // The formatter side of the pin: exactly GUARDED call sites.
+    // THE SECOND ENUMERATOR. The size of the GUARDED bucket is DERIVED from
+    // the formatter — the file that has to carry one guard per expression-
+    // operand parser position — instead of being a constant somebody keeps in
+    // step by hand. Regenerate:
+    //   grep -rn 'format_ownership_modifier_operand' src/formatter/
     let fmt = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
-    let guards = fmt
+    let guarded = fmt
         .lines()
         .filter(|l| !l.trim_start().starts_with("//"))
         .map(|l| l.matches(".format_ownership_modifier_operand(").count())
         .sum::<usize>();
+
     assert_eq!(
-        guards, GUARDED,
-        "R41 T-FMT-A site pin: the formatter has {guards} \
-         `format_ownership_modifier_operand(` call site(s), expected {GUARDED} \
-         — one per expression-operand `parse_ownership_modifier` position. If a \
-         parser position was added or removed, move BOTH counts together."
+        sites,
+        guarded + CARVE_OUT + NON_FLIPPABLE,
+        "R41 T-FMT-A site pin: `parse_ownership_modifier()` call-site count \
+         under src/parser/ is {sites}, but the census accounts for {} \
+         ({guarded} guarded + {CARVE_OUT} carve-out + {NON_FLIPPABLE} \
+         non-flippable).\n\n\
+         `{guarded} guarded` is NOT a constant — it is the number of \
+         `.format_ownership_modifier_operand(` call sites in \
+         `src/formatter/mod.rs`, counted on this run. So the two readings that \
+         disagree are the PARSER's positions and the FORMATTER's guards, and \
+         the usual cause is the defect this test exists for: a new parser \
+         position that strips an ownership sigil BEFORE parsing an EXPRESSION, \
+         with no matching guard. Unguarded, `gg fmt` re-homes the sigil into \
+         the enclosing node's `ownership` field and CHANGES accept/reject.\n\n\
+         If the new position is an expression operand, add the formatter guard \
+         — the total then balances with no constant edit. If it is not, \
+         classify it and bump `CARVE_OUT` or `NON_FLIPPABLE` with a reason. If \
+         instead the FORMATTER lost a guard, put it back; do not `git rm` a \
+         parser position to make the arithmetic work.",
+        guarded + CARVE_OUT + NON_FLIPPABLE
     );
 }
 
@@ -31756,13 +31820,32 @@ fn parity_declarations_are_well_formed() {
 /// (Deliberately no count here: a number would rot the next time someone adds
 /// a call.)
 ///
+/// ⊕ AND THE REGION IS TWO FILES, because the READER moved out of
+/// `tests/integration.rs`. It now lives in
+/// `tests/lints_support/parity_exclusion_reader.rs` and is `include!`d by BOTH
+/// test binaries, so `tests/lints.rs::parity_untriaged_exclusions_shrink_only`
+/// can compare its own inline reading of the declaration against it. Scanning
+/// only the harness span would have left the reader — the one function the
+/// whole guard is about — unread, which is the identical blindness the span
+/// check above exists to prevent. So the region is the harness span PLUS the
+/// whole reader file, the reader's `include!` is asserted to be inside the
+/// span, and the stem scan runs over both. Strictly wider than before: a stem
+/// classifier planted in the reader file is now an offender too.
+///
 /// The allowlist is the whole point: two stem comparisons in the region are
 /// legitimate and named. A THIRD is a reservation, not a budget line.
 #[test]
 fn parity_harness_does_not_classify_by_stem() {
+    /// The shared reader, `include!`d by `tests/integration.rs` (the three
+    /// consumers) and by `tests/lints.rs` (the untriaged-debt witness).
+    const READER: &str = "tests/lints_support/parity_exclusion_reader.rs";
+
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let src = fs::read_to_string(root.join("tests/integration.rs")).expect("read integration.rs");
     let lines: Vec<&str> = src.lines().collect();
+    let reader_src = fs::read_to_string(root.join(READER))
+        .unwrap_or_else(|e| panic!("read {READER}: {e} — the parity reader moved again; \
+                                    re-anchor this lint, do not drop the file from the region"));
 
     // The parity harness region: from the Chain-3 banner to the first `#[test]`
     // AFTER the regen fn — i.e. past the end of the regen's body, so consumer 2
@@ -31784,13 +31867,37 @@ fn parity_harness_does_not_classify_by_stem() {
         .unwrap_or(lines.len());
     assert!(start < regen && regen < end, "parity region anchors crossed");
 
-    // ⛔ THE SPAN MUST CONTAIN EVERY CONSUMER OF THE CLASSIFICATION, plus the
+    // ⛔ THE READER IS PULLED IN BY THE SPAN, NOT BY THIS LINT'S SAY-SO. If the
+    // harness stops including it, the file this lint reads is no longer the code
+    // that runs, and scanning it would be theatre.
+    assert!(
+        lines[start..end]
+            .iter()
+            .any(|l| l.contains(&format!("include!(\"{}\")", READER.trim_start_matches("tests/")))),
+        "the parity harness region no longer `include!`s `{READER}`. This lint scans that \
+         file as part of the region, so a reader the harness does not include would be scanned \
+         while the real one went unread. Re-anchor the span, or point READER at the file the \
+         harness actually includes."
+    );
+
+    // The REGION: the harness span, plus every line of the shared reader.
+    // `(path, 1-based line, text)` so an offender still cites a real coordinate.
+    let mut region: Vec<(&str, usize, &str)> = lines[start..end]
+        .iter()
+        .enumerate()
+        .map(|(i, l)| ("tests/integration.rs", start + i + 1, *l))
+        .collect();
+    region.extend(
+        reader_src.lines().enumerate().map(|(i, l)| (READER, i + 1, l)),
+    );
+
+    // ⛔ THE REGION MUST CONTAIN EVERY CONSUMER OF THE CLASSIFICATION, plus the
     // reader itself. This is the check the first version of this lint did not
     // have, and its absence made the lint structurally blind to consumer 2 (see
     // the doc comment). An anchor that drifts now FAILS here instead of quietly
     // shrinking the region to nothing.
     const MUST_BE_IN_SPAN: &[&str] = &[
-        "fn fixture_parity_exclusion(",          // the reader
+        "fn fixture_parity_exclusion(",          // the reader (in READER)
         "fn self_host_runtime_diff(",            // consumer 1, the floored diagnostic
         "fn self_host_runtime(",                 // consumer 3, the lock-in net
         "fn regenerate_runtime_snapshots(",      // consumer 2, the regen
@@ -31798,14 +31905,14 @@ fn parity_harness_does_not_classify_by_stem() {
     let missing: Vec<&str> = MUST_BE_IN_SPAN
         .iter()
         .copied()
-        .filter(|needle| !lines[start..end].iter().any(|l| l.contains(needle)))
+        .filter(|needle| !region.iter().any(|(_, _, l)| l.contains(needle)))
         .collect();
     assert!(
         missing.is_empty(),
         "the scanned parity region no longer contains {missing:?} — so this lint is BLIND to \
          whatever those do with a fixture stem. Re-anchor the span \
-         (tests/integration.rs:{}..{}); do not delete the row. The whole point of the region is \
-         that every consumer of the classification is inside it.",
+         (tests/integration.rs:{}..{}, plus all of {READER}); do not delete the row. The whole \
+         point of the region is that every consumer of the classification is inside it.",
         start + 1,
         end + 1,
     );
@@ -31844,7 +31951,7 @@ fn parity_harness_does_not_classify_by_stem() {
         "bw.stem == *s",
     ];
     let mut offenders: Vec<String> = Vec::new();
-    for (i, line) in lines[start..end].iter().enumerate() {
+    for (path, lineno, line) in &region {
         let t = line.trim();
         if t.starts_with("//") {
             continue;
@@ -31854,7 +31961,7 @@ fn parity_harness_does_not_classify_by_stem() {
             || t.contains("stem.ends_with(")
             || (t.contains("stem ==") && !ALLOWED.iter().any(|a| t.contains(a)));
         if stem_shaped {
-            offenders.push(format!("tests/integration.rs:{}: {t}", start + i + 1));
+            offenders.push(format!("{path}:{lineno}: {t}"));
         }
     }
     assert!(
@@ -31969,6 +32076,36 @@ fn parity_declared_fixtures_have_no_snapshot() {
 /// kind, or it is REINSTATED into the parity corpus (which moves
 /// `RUNTIME_DIFF_MATCH_FLOOR` / `RUNTIME_DIFF_NONMATCH_CEILING` and is
 /// therefore its own piece of work: `todo/t0828`).
+///
+/// ## The MEMBERSHIP half is a WITNESS; the CEILING half is still a PIN
+///
+/// ⚠ Read that sentence before trusting a green run. This test now makes TWO
+/// assertions with very different strengths, and only one of them is witnessed:
+///
+///   * **WITNESSED — *which* fixtures are untriaged.** The set is read twice.
+///     Reading 1 is this test's own inline `strip_prefix` + `starts_with` walk.
+///     Reading 2 is `fixture_parity_exclusion_at`, the parity corpus's own
+///     typed reader (`tests/lints_support/parity_exclusion_reader.rs`) — the
+///     SAME file `tests/integration.rs` includes for the three consumers that
+///     decide whether a fixture is actually in the parity corpus. Neither is a
+///     copy of the other: the reader validates the kind, follows `#!`
+///     continuations, and rejects malformed / duplicate / empty-evidence
+///     declarations; this test's walk does none of that. No constant is
+///     maintained for the set, and a disagreement NAMES the fixture.
+///   * **STILL A PIN — *how many*.** `UNTRIAGED_CEILING` below is a
+///     hand-maintained magnitude with no second enumerator, exactly as before.
+///     Nothing here converts it, and a green run is no evidence that it is right.
+///
+/// ⛔ THE TWO READINGS ARE DELIBERATELY NOT MADE IDENTICAL. They already
+/// disagree on shapes the live corpus does not contain today — `#!parity-excluded
+/// untriaged : x` (space before the colon) parses for the reader, whose
+/// `kind_text.trim()` absorbs it, and NOT for the inline walk, whose
+/// `starts_with("untriaged:")` does not. That is a real defect class, not a
+/// nuisance: the parity consumers would drop such a fixture from the corpus
+/// while this ratchet failed to count its debt. Collapsing the inline walk into
+/// a call to the reader would make the disagreement unobservable and leave one
+/// reading — which witnesses nothing. Keep both; when they disagree, fix the
+/// FIXTURE's spelling (or, if the reader is wrong, the reader).
 #[test]
 fn parity_untriaged_exclusions_shrink_only() {
     // Regenerate:
@@ -31996,6 +32133,44 @@ fn parity_untriaged_exclusions_shrink_only() {
         .map(|p| p.file_stem().unwrap().to_string_lossy().to_string())
         .collect();
     untriaged.sort();
+
+    // READING 2 — the parity corpus's own typed reader, independently written
+    // and used by the three consumers in `tests/integration.rs`. It PANICS on a
+    // malformed declaration, which is the behaviour the consumers get.
+    let mut by_reader: Vec<String> = fs::read_dir(&fixtures)
+        .expect("read tests/fixtures")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |x| x == "gg"))
+        .filter(|p| {
+            parity_exclusion_reader::fixture_parity_exclusion_at(p).is_some_and(|d| {
+                d.kind == parity_exclusion_reader::ParityExclusionKind::Untriaged
+            })
+        })
+        .map(|p| p.file_stem().unwrap().to_string_lossy().to_string())
+        .collect();
+    by_reader.sort();
+
+    let inline_only: Vec<&String> = untriaged.iter().filter(|s| !by_reader.contains(s)).collect();
+    let reader_only: Vec<&String> = by_reader.iter().filter(|s| !untriaged.contains(s)).collect();
+    assert_eq!(
+        untriaged, by_reader,
+        "THE TWO READINGS OF `{DECL} untriaged:` DISAGREE — one of the two \
+         instruments is broken, and the count below is meaningless until you know \
+         which.\n  \
+         only this test's inline walk sees: {inline_only:?}\n  \
+         only the corpus reader sees:       {reader_only:?}\n\n\
+         The READER (`tests/lints_support/parity_exclusion_reader.rs`) is the \
+         authority on whether a fixture is actually out of the parity corpus — it \
+         is what `self_host_runtime_diff` and `regenerate_runtime_snapshots` call. \
+         So a fixture in `reader_only` is debt that ESCAPED this ratchet: the \
+         corpus drops it and nothing counts it. The usual cause is a spelling the \
+         inline walk cannot see (`untriaged : x`, a space before the colon); fix \
+         the FIXTURE. A fixture in `inline_only` means the reader refused a \
+         declaration this walk accepted — read the reader's error, do not widen \
+         this walk to match. ⛔ Do NOT resolve this by replacing the inline walk \
+         with a call to the reader: that leaves ONE reading and witnesses nothing.",
+    );
 
     assert!(
         untriaged.len() <= UNTRIAGED_CEILING,
@@ -33368,6 +33543,16 @@ mod ggdef_corpus_membership_lint {
 // `scripts/sanitize_sweep.sh` — do not re-list directories here.
 mod sanitize_corpus_manifest_lint {
     include!("lints_support/sanitize_corpus_manifest_lint.rs");
+}
+
+// The parity corpus's OWN `#!parity-excluded` reader, the exact file
+// `tests/integration.rs` includes for its three consumers. It is here so
+// `parity_untriaged_exclusions_shrink_only` can compare its own inline reading
+// of the declaration against a second, independently-written one — a witness,
+// not a copy. ⛔ Do not fork it; ⛔ do not write a third reading.
+#[allow(dead_code)]
+mod parity_exclusion_reader {
+    include!("lints_support/parity_exclusion_reader.rs");
 }
 
 // ─── R49 Track A1-IDENTITY: the closure-identity name-match ratchet ──────────

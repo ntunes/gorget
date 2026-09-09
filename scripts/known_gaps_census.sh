@@ -102,6 +102,22 @@ done
 #
 # Two reference spellings are recognised: `known_gaps/<name>.gg` (the common
 # one) and `known_gaps/<dir>` as a bare directory argument to `run_gg_dir`.
+#
+# ⚠ AND A PATTERN MENTION IS NOT A REFERENCE. `collect` deliberately reads
+# COMMENTS (an `#[ignore]` reason names the fixture as often as the body does),
+# so it also meets the GLOB and BRACE spellings prose uses to talk about a
+# FAMILY: `known_gaps/rust_gg_bug_*` and
+# `known_gaps/sh_comprehension_{list_arm_source_derived_mint,…}`. The stem
+# pattern stops at the metacharacter, so both used to yield a PHANTOM stem
+# (`rust_gg_bug_`, `sh_comprehension_`) that exists nowhere on disk. Neither
+# inflated the roster — each shared a row with a real stem, and `--check`
+# compares row NAMES — but both polluted the fixture column, which is the column
+# a reader (or a witness built on this census) trusts to name a real file.
+# Regenerate the absence:
+#   scripts/known_gaps_census.sh --list | tail -n +2 | cut -f3 | tr ',' '\n' |
+#     sort -u | while read -r s; do
+#       [ -e "tests/fixtures/known_gaps/$s.gg" ] || [ -d "tests/fixtures/known_gaps/$s" ] ||
+#         echo "PHANTOM: $s"; done
 enumerate() {
   for f in tests/*.rs; do
     awk -v F="$f" '
@@ -117,11 +133,20 @@ enumerate() {
       function flush(    i) {
         if (pend_n > 0) { for (i = 0; i < pend_n; i++) print pend[i]; pend_n = 0 }
       }
-      function collect(into_pre,    line, r) {
+      function collect(into_pre,    line, r, nxt) {
         line = $0
         while (match(line, /known_gaps\/[A-Za-z0-9_]+(\/[A-Za-z0-9_.]+)?(\.gg)?/)) {
           r = substr(line, RSTART + 11, RLENGTH - 11)
+          # The character the stem pattern STOPPED at. A glob or brace there
+          # means prose is naming a FAMILY, not citing a file, and the stem is
+          # a truncation with no fixture behind it. Drop it. (End of line is
+          # not a metacharacter and stays a reference.)
+          nxt = substr(line, RSTART + RLENGTH, 1)
           sub(/\.gg$/, "", r); sub(/\/.*$/, "", r)
+          if (nxt == "*" || nxt == "{" || nxt == "?" || nxt == "[") {
+            line = substr(line, RSTART + RLENGTH)
+            continue
+          }
           if (into_pre) {
             if (index(pre_refs, "|" r "|") == 0) {
               pre_refs = pre_refs "|" r "|"
