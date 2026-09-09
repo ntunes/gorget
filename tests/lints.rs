@@ -22923,8 +22923,10 @@ fn formatter_blank_emit_site_census() {
 /// rank from 2 to 1. Measured, both breaks line-anchored: comment out the
 /// `parse_call_arg` guard at `src/formatter/mod.rs:6890` (the formatter reading
 /// falls 2 → 1) AND route the `NON_FLIPPABLE` `parse_param` site at
-/// `src/parser/mod.rs:2103` through a one-line helper (the parser census falls
-/// 7 → 6), and the single-assertion form returns **rc 0** with an
+/// `src/parser/mod.rs:2103` — re-anchor with
+/// `grep -rn 'parse_ownership_modifier()' src/parser/`, Core #15a — through a
+/// one-line helper (the parser census falls 7 → 6), and the single-assertion
+/// form returns **rc 0** with an
 /// expression-operand parser position left unguarded — precisely the defect
 /// this test names. With assertion 2 present the same pair is RED. A pin that a
 /// second enumerator ALSO checks is the strongest shape available here; do not

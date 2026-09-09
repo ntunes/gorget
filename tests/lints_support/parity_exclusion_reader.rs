@@ -7,18 +7,35 @@
 // independently-written readings of one declaration, neither of them a copy of
 // the other, asserted to agree on the live corpus.
 //
-// ⚠ THE WITNESS IS OVER *MEMBERSHIP*, AND IT IS A PAIR. A THIRD reading of
-// this directive already exists and is deliberately NOT part of it:
-// `tests/lints.rs::parity_declarations_are_well_formed` does its own
-// `strip_prefix` + `split_once(':')` + kind-table + continuation walk. It
-// answers a different question — is EVERY declaration in the tree well formed —
-// and never builds a membership set, so it cannot be one of two readings that
-// disagree about WHICH fixtures are untriaged.
+// ⚠ THE WITNESS IS OVER *MEMBERSHIP*, AND IT IS A PAIR — but this directive has
+// more inline readers than that, so do not read "a pair" as a census of the
+// tree. TWO OTHER inline readings exist in `tests/lints.rs`, and neither is
+// part of the witness. Regenerate the population:
 //
-// The consequence, not an unenforced rule: add a third reading of MEMBERSHIP
-// and a disagreement stops naming which instrument is broken, because three
-// readings have no majority worth trusting and no pair to attribute the fault
-// to. Nothing in the tree can stop you doing it, which is exactly why the
+//     grep -n 'const DECL: &str = "#!parity-excluded"' tests/lints.rs
+//
+// → three hits: the witness's own reading 1 in
+// `parity_untriaged_exclusions_shrink_only`, plus
+//
+//   * `parity_declarations_are_well_formed` — its own `strip_prefix` +
+//     `split_once(':')` + kind-table + continuation walk, answering a DIFFERENT
+//     question (is EVERY declaration in the tree well formed) and building no
+//     membership set at all;
+//   * `parity_declared_fixtures_have_no_snapshot` — this one DOES build a
+//     membership set (`declared: Vec<String>`), but over a different
+//     PREDICATE: any exclusion, not `untriaged`. It answers "does a declared
+//     fixture still have a committed snapshot", never "which fixtures are
+//     untriaged", so it cannot be a third leg disagreeing with the pair.
+//
+// ⚠ The first version of this paragraph named only the first of those two and
+// called it "a THIRD reading" — an undercount, in a comment written to retire an
+// earlier claim that was false about the tree (SIX-Q #3: a selection cannot show
+// you what it omits). Hence the grep above rather than a number.
+//
+// The consequence, not an unenforced rule: add a reading of the SAME membership
+// predicate and a disagreement stops naming which instrument is broken, because
+// three readings have no majority worth trusting and no pair to attribute the
+// fault to. Nothing in the tree can stop you doing it, which is exactly why the
 // reason is written here rather than a bare prohibition (Core #14).
 //
 // The items are `pub` because both binaries include this inside a `mod`. Each
