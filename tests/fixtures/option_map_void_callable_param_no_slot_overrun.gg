@@ -1,0 +1,52 @@
+# `Option[T].map(f)` with `f` a VOID-returning `Callable` PARAMETER: the
+# effect runs, the program exits 0 printing `hello%`, and NOTHING writes past
+# the end of the `map` result slot on either lane.
+#
+# GRADUATED from `known_gaps/` (was `todo/t0729`'s repro). It stays a fixture
+# in its own right because of the INSTRUMENT it is wired to: the live test
+# builds it `--backend=llvm --sanitize` and runs it under `detect_leaks=1`.
+# No other cell in the tree asserts that combination over this shape, and a
+# value-only lane is STRUCTURALLY BLIND to the class — the emitted USER IR is
+# not ASan-instrumented (only the runtime C is), so a stack out-of-bounds
+# write surfaces only when it trips the `memcpy` interceptor's OVERLAP check,
+# which needs the overrun to land EXACTLY on the source buffer. This cell's
+# does. A plain `--backend=llvm` build of the broken compiler exited 0 with
+# the right answer, correct BY LUCK.
+#
+# ── WHAT THE OVERRUN WAS ──
+# The result slot of a void `map` is allocated `Option[int64]` — 16 bytes, 8
+# tag + 8 payload — on BOTH lanes. The broken compiler then called the void
+# callee through a fn-pointer cast typed from the RECEIVER (`Str(*)(...)`) and
+# copied the resulting 32-byte `GorgetString` into that 8-byte field: on LLVM
+# a 24-byte stack write past the end (the copy length came from the SOURCE
+# value), on C a truncating 8-byte write (the length came from the DESTINATION
+# field). Reading the callee's REAL signature removes the copy entirely — a
+# `void` callee is called through a `void` function pointer and there is no
+# value to store. `tests/fixtures/combinator_void_callable_spelling_axis.gg`
+# pins the same read across every spelling of the callee.
+#
+# ⚠ THE `Callable` PARAMETER SPELLING IS LOAD-BEARING FOR THIS CELL: it is the
+# one closure shape whose GIR local type is erased, so the declared return has
+# to be recovered from the callable sidecar rather than read off the local.
+# `mk` exists so the payload is a heap-built `String` and not a static
+# literal — a static payload would not exercise the aggregate copy at all.
+#
+# ⊕ WHAT THIS FIXTURE DOES NOT DECIDE. The result TYPE of a void `map` is an
+# open design question: the slot is still minted `Option[int64]` rather than
+# the receiver's `Option[String]`. Nothing is written into it now, so the
+# program is well-defined either way — but this fixture pins the ABSENCE OF
+# THE OVERRUN, not the slot's type, and a future ruling on that type must
+# leave this cell green.
+
+String mk(String a, String b):
+    return a + b
+
+void shout(String s):
+    print(mk(s, "%"))
+
+void void_map(Callable[void(String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    o.map(f)
+
+void main():
+    void_map(shout)

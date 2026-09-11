@@ -63,6 +63,7 @@ pub const GGDEF_CORPUS_B_CENSUS: &[(&str, GgdefCorpusDisp)] = &[
     ("combinator_unwrap_or_else_money_local.gg", Match),
     ("combinator_unwrap_or_else_money_param.gg", Match),
     ("combinator_unwrap_or_else_str.gg", Exclude),
+    ("combinator_void_callable_spelling_axis.gg", Exclude),
     ("cow_alias_severed_by_root_reassign_then_view.gg", Match),
     ("cow_alias_spelled_element_field_borrow.gg", Match),
     ("cow_alias_spelled_view_literal_payload.gg", Match),

@@ -4042,6 +4042,41 @@ fn call_closure_in_adapter(
         // equal the receiver's payload type. Read the declared return through
         // the same accessor reader 1 uses, so the slot's TYPE and the indirect
         // call's CAST are always the same fact.
+        // ⛔ A `void` CALLEE IS CALLED THROUGH A `void` FUNCTION POINTER, AND
+        // THAT IS NOT THE SAME QUESTION AS WHAT THE COMBINATOR EVALUATES TO
+        // (`t1652`). An indirect call's fn-pointer CAST *is* the callee's
+        // signature; `fallback_ret_type` is RECEIVER-derived, so a
+        // `Callable[void(T)]` at `Option[Str].map` was cast to return `Str`.
+        // Under the SysV x86_64 large-struct return convention the hidden
+        // `sret` pointer occupies the first integer register, shifting every
+        // declared argument one slot, so the adapter reads the environment
+        // where its first user argument belongs and the callee receives the
+        // top-level adapter's NULL env: measured `rc 139` at a plain
+        // `gg build`, no sanitizer, on the default C backend. AArch64 returns
+        // a large struct through the dedicated `x8` register and so cannot
+        // see this class at all.
+        //
+        // The two SIBLING arms of this same enumerated set already branch on
+        // `unit` — the closure-TYPE arm above (`call_void` on a `UNIT_TYPE`
+        // `fn_sigs` answer) and the direct callable-call arm in
+        // `exprs/calls.rs` (`call_indirect_void` on a `UNIT_TYPE` local).
+        // This is that branch at the third arm, not a new rule.
+        //
+        // It does NOT decide what a void `map` EVALUATES to — that is
+        // `t0729`'s open owner question, and the `unit` stays dropped for the
+        // result-slot reader (`callable_param_return_type`) exactly as before.
+        // Whatever that answer turns out to be, calling a `void` function
+        // through a `Str`-returning pointer is undefined behaviour under all
+        // of them.
+        if callable_param_declared_return_type(ctx, closure_op) == Some(UNIT_TYPE) {
+            builder.call_indirect_void(
+                closure_op.clone(),
+                final_args,
+                crate::ir::abi::ClosureDispatchKind::CallableParam,
+                Vec::new(),
+            );
+            return Operand::Constant(Constant::Unit);
+        }
         let ret_type = callable_param_return_type(ctx, closure_op).unwrap_or(fallback_ret_type);
         let dst = ctx.call_indirect_tracked(
             builder,
@@ -4059,6 +4094,15 @@ fn call_closure_in_adapter(
         let ret_type = ctx.fn_sigs.get(name.as_str())
             .map(|(_, ret)| *ret)
             .unwrap_or(fallback_ret_type);
+        // The fourth arm of the same enumerated set (`t1652`, Core #4): a
+        // `void` top-level function named directly at a combinator
+        // (`o.map(shout)`) must be CALLED as one. Here the callee is Named,
+        // so the sibling shape is the closure-TYPE arm's `call_void`, not
+        // `call_indirect_void`.
+        if ret_type == UNIT_TYPE {
+            builder.call_void(name.clone(), call_args);
+            return Operand::Constant(Constant::Unit);
+        }
         let dst = ctx.call_indirect_tracked(builder, IndirectCallee::Named(name.clone()), call_args, ret_type);
         return FunctionBuilder::copy(dst);
     }
@@ -4744,15 +4788,6 @@ fn try_lower_option_result_combinator(
 /// disagreement is exactly the `t0770` defect: a slot allocated
 /// `Option__int64_t` and read as `Option__GorgetString`.
 fn callable_param_return_type(ctx: &LoweringContext, closure_op: &Operand) -> Option<TypeId> {
-    let (Operand::Copy(place) | Operand::Move(place)) = closure_op else {
-        return None;
-    };
-    // The sidecar is keyed on the LOCAL. A projection reads a field of the
-    // local, not the callable itself, so it carries no entry — fall through
-    // to the caller's existing behaviour rather than mis-attributing one.
-    if !place.projections.is_empty() {
-        return None;
-    }
     // ⚠ A RECOVERED `unit` RETURN IS DROPPED, NOT PROPAGATED. `Option[T].map(f)`
     // with a `Callable[void(T)]` runs `f` for its effect and keeps the receiver's
     // payload type — that is what ggdef does, and what the closure-literal
@@ -4770,10 +4805,36 @@ fn callable_param_return_type(ctx: &LoweringContext, closure_op: &Operand) -> Op
     // `__callable_N` recovery DROPS a `unit` exactly as this does, and says
     // why in its own comment. Here the recovered type would become a result
     // PAYLOAD, so dropping it is the only correct move.
-    match ctx.callable_return_type(place.local) {
+    match callable_param_declared_return_type(ctx, closure_op) {
         Some(ret) if ret != UNIT_TYPE => Some(ret),
         _ => None,
     }
+}
+
+/// The DECLARED return type of a `Callable` PARAMETER operand — `unit`
+/// INCLUDED, and the ONE place the `callable_return_types` sidecar is read
+/// from in this module (Layering rule 3: one source of truth per axis).
+///
+/// ⚠ `callable_param_return_type` above is this read's `unit`-DROPPING
+/// RESULT-SLOT reader, not a synonym. The two questions have different right
+/// answers: a recovered `unit` must not become a result PAYLOAD (it lands in
+/// a `Str` slot — the reason that helper drops it), and it must not be lost
+/// from an indirect call's fn-pointer CAST (`t1652` — SysV shifts every
+/// argument one slot behind a `void` callee cast to return a large struct).
+fn callable_param_declared_return_type(
+    ctx: &LoweringContext,
+    closure_op: &Operand,
+) -> Option<TypeId> {
+    let (Operand::Copy(place) | Operand::Move(place)) = closure_op else {
+        return None;
+    };
+    // The sidecar is keyed on the LOCAL. A projection reads a field of the
+    // local, not the callable itself, so it carries no entry — fall through
+    // to the caller's existing behaviour rather than mis-attributing one.
+    if !place.projections.is_empty() {
+        return None;
+    }
+    ctx.callable_return_type(place.local)
 }
 
 /// Infer the return type of a closure operand from its __call function signature.

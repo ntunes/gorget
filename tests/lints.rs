@@ -17736,11 +17736,22 @@ fn unify_closure_ret_axis_class_enumeration() {
 #[test]
 fn erased_callable_param_reader_axis_census() {
     /// GIR-side readers: sites reading `callable_return_type(..)` inside the
-    /// lowering. Readers 1+2 share ONE helper in `exprs/methods.rs`
-    /// (`callable_param_return_type`, whose two callers are the adapter's
-    /// result-type inference and its indirect-call emitter, so they can never
-    /// disagree), reader 5 is the closure-body inference in `closures.rs`, and
-    /// the pre-existing direct-call arm is in `exprs/calls.rs`.
+    /// lowering. Readers 1+2 share ONE sidecar accessor in `exprs/methods.rs`
+    /// (`callable_param_declared_return_type`), reader 5 is the closure-body
+    /// inference in `closures.rs`, and the pre-existing direct-call arm is in
+    /// `exprs/calls.rs`.
+    ///
+    /// ⚠ SHARING THE ACCESSOR IS NOT THE SAME AS SHARING THE ANSWER, and this
+    /// comment used to claim readers 1+2 "can never disagree" because they
+    /// shared a helper. They must disagree about exactly one value (`t1652`).
+    /// Reader 1 SIZES the result slot, so a recovered `unit` is dropped —
+    /// minting it as a result PAYLOAD stores a void call's result into a `Str`
+    /// slot. Reader 2 emits the indirect call's fn-pointer CAST, which *is*
+    /// the callee's signature, so a `unit` there must survive: cast a `void`
+    /// callee to return a large struct and SysV's hidden `sret` pointer takes
+    /// the first integer register, shifting every declared argument one slot.
+    /// `callable_param_return_type` is reader 1's `unit`-dropping wrapper over
+    /// the shared accessor; reader 2 calls the accessor directly.
     const EXPECTED_GIR_READS_METHODS: usize = 1;
     const EXPECTED_GIR_READS_CLOSURES: usize = 1;
     const EXPECTED_GIR_READS_CALLS: usize = 1;

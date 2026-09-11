@@ -61381,43 +61381,38 @@ fn nested_option_match_inline_some_none() {
     run_gg("nested_option_match_inline_some_none.gg", "inner-none");
 }
 
-/// t0729, RE-SCOPED — the aggregate-copy class the graduated fixture's fix did
-/// NOT retire. `Option[T].map(f)` with `f` a VOID-returning `Callable`
-/// PARAMETER allocates the result slot as `Option[int64]`
-/// (`%s17 = alloca %Option__int64_t`, 16 bytes) and copies the receiver's real
-/// payload into its 8-byte field (`memcpy(%s17+8, %s16, i64 32)`) — a 32-byte
-/// `GorgetString`, 24 bytes out of bounds.
+/// GRADUATED from `known_gaps/` (was `t0729`'s repro): nothing writes past the
+/// end of a void `map`'s result slot, asserted on the ONE instrument that can
+/// see the class.
 ///
-/// TWO defects, one loud. The mistyped slot is UPSTREAM of both backends —
-/// the C lane emits `__gg_Option__int64_t __s17` for the same source. What
-/// differs is the copy LENGTH: C takes it from the DESTINATION FIELD
-/// (`sizeof(int64_t)`, in bounds but a truncated `String`), LLVM takes it from
-/// the SOURCE VALUE. So the C lane's cleanliness is not a vindication of the
-/// lowering (Core #8) — it is clean because a void `map` discards its result
-/// and nothing reads the truncated payload — and fixing only the LLVM length
-/// would silence ASan while leaving the type disagreement, which is exactly
-/// the trap `t0729`'s original `llvm.memmove` prescription was.
+/// The broken compiler called a `void` callee through a fn-pointer cast typed
+/// from the RECEIVER, so the 32-byte `GorgetString` it appeared to return was
+/// copied into an `Option[int64]`'s 8-byte payload field: on LLVM a 24-byte
+/// stack write past the end (copy length from the SOURCE value), on C a
+/// truncating 8-byte write (length from the DESTINATION field). Reading the
+/// callee's real signature removes the copy entirely.
 ///
-/// ⚠ THIS IS NOT A HYPOTHETICAL AND NOT A SIDE ISSUE: the top-level, GREEN,
-/// non-`#[ignore]`d `combinator_callable_param_same_type.gg` contains this cell
-/// (`void_map`) and trips identically under `--backend=llvm --sanitize`. A
-/// plain `--backend=llvm` build exits 0 with correct output — benign BY LUCK,
-/// which Core #8 refuses.
+/// ⚠ THE LANE AND THE SANITIZER ARE BOTH LOAD-BEARING (Core #13). A plain
+/// `--backend=llvm` build of the broken compiler exited 0 with the right
+/// answer — correct BY LUCK, which Core #8 refuses — and the C lane was
+/// value-clean because a void `map` discards its result, so nothing read the
+/// truncated payload. Only `--backend=llvm --sanitize` reddened, and only
+/// because the overrun landed EXACTLY on the copy's own source and tripped
+/// the `memcpy` interceptor's overlap check; the emitted user IR carries no
+/// ASan instrumentation of its own.
 ///
-/// The fix is in `src/`, outside the zone that filed this, and the surviving
-/// class is broader than this one cell. What the result TYPE of a void `map`
-/// should be is an open design question, deliberately not prescribed here:
-/// the `I64_TYPE` fallback is a documented retreat (minting `unit` measured
-/// rc 139 on both backends), not an oversight.
+/// RED on the pre-fix compiler at this commit's parent: `rc 99`,
+/// `AddressSanitizer`, measured on linux/amd64.
+///
+/// ⊕ It does NOT pin the slot's TYPE, which is still `Option[int64]` rather
+/// than the receiver's `Option[String]`. That stays an open design question
+/// (`t0729`); nothing is written into the slot now, so the program is
+/// well-defined either way, and a future ruling must leave this cell green.
 #[test]
-#[ignore = "KNOWN GAP t0729: Option.map with a void-returning Callable PARAM \
-allocates the result slot as Option[i64] and copies the receiver's real \
-payload into it — a 24-byte stack OOB write (ASan: memcpy-param-overlap) on \
-the LLVM lane. Intended stdout on both lanes is hello%."]
-fn llvm_option_map_void_callable_no_oob_memcpy() {
+fn option_map_void_callable_param_no_slot_overrun() {
     assert_llvm_sanitize_clean_stdout(
-        "known_gaps/llvm_option_map_void_callable_result_slot_oob.gg",
-        "t0729_void_map",
+        "option_map_void_callable_param_no_slot_overrun.gg",
+        "void_map_no_overrun",
         "hello%",
     );
 }
@@ -65663,17 +65658,16 @@ true",
 /// top-level-function spelling of the same cell IS a top-level fixture
 /// (`combinator_callable_param_same_type.gg`).
 ///
-/// ⛔ CORRECTION — that sentence used to end "and is ASan-clean", which is TRUE
-/// ON C AND FALSE ON LLVM. Measured: `gg build --sanitize --backend=llvm` on
-/// `combinator_callable_param_same_type.gg`, run under
-/// `detect_leaks=1:halt_on_error=1:exitcode=99` → rc 99,
-/// `AddressSanitizer: memcpy-param-overlap`, `#1 void_map`. That fixture's
-/// `void_map` cell — a VOID-returning `Callable` PARAM — allocates the `map`
-/// result as `Option[int64]` and copies the receiver's 32-byte `GorgetString`
-/// into its 8-byte payload field: a 24-byte stack OOB write, filed as
-/// `todo/t0729` with the minimised repro
-/// `known_gaps/llvm_option_map_void_callable_result_slot_oob.gg`. The claim was
-/// never measured on the LLVM lane; a leak sweep on the C lane cannot see it.
+/// ⛔ CORRECTION — that sentence used to end "and is ASan-clean", which was TRUE
+/// ON C AND FALSE ON LLVM: `gg build --sanitize --backend=llvm` on
+/// `combinator_callable_param_same_type.gg` under
+/// `detect_leaks=1:halt_on_error=1:exitcode=99` measured rc 99,
+/// `AddressSanitizer`, `#1 void_map`. The overrun is gone — a `void` callee is
+/// called through a `void` function pointer now, so the aggregate copy that
+/// overran the `map` result slot has no source — and the cell it was minimised
+/// from is pinned live by `option_map_void_callable_param_no_slot_overrun`.
+/// Regenerate rather than trusting this line: `cargo test --test integration
+/// --release option_map_void_callable_param_no_slot_overrun`.
 #[test]
 fn combinator_callable_param_result_type_erased_sbo() {
     run_gg(
@@ -65707,6 +65701,35 @@ filtered
 default
 bad^
 hello%",
+    );
+}
+
+/// The VOID-returning callable at a combinator, across EVERY SPELLING of the
+/// callee (`todo/t1652`). An indirect call's fn-pointer CAST *is* the callee's
+/// signature; the adapter typed it from the RECEIVER, so a `Callable[void(T)]`
+/// at `Option[String].map` was called through a `Str(*)(void*, void*)`
+/// pointer. Under SysV x86_64 the hidden `sret` pointer takes the first
+/// integer register and every declared argument shifts one slot.
+///
+/// ⚠ ARCHITECTURE IS THE DISCRIMINATOR — AArch64 returns a large composite
+/// through the dedicated `x8` register, so these cells are green there
+/// whatever the cast says. Every figure below is linux/amd64, the
+/// architecture CI runs.
+///
+/// MEASURED PRE-FIX by reverting the fix and rebuilding: the C lane is
+/// BUILD-FAIL (`error: void value not ignored as it ought to be`, the
+/// top-level-function cell) and the LLVM lane is `rc 139`. The three cells pin
+/// the two PARTIAL reverts separately — dropping the `unit` branch from the
+/// `CallableParam` arm reddens the callable-param and closure-value cells,
+/// dropping it from the `FuncRef` arm reddens the top-level-function cell.
+#[test]
+fn combinator_void_callable_spelling_axis() {
+    run_gg(
+        "combinator_void_callable_spelling_axis.gg",
+        "\
+param!
+value!
+funcref!",
     );
 }
 

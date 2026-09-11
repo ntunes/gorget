@@ -1,3 +1,33 @@
+- [2026-09-11] **`t1652` — a live, non-`#[ignore]`d, TOP-LEVEL fixture segfaulted at plain `gg build` on x86_64, on the
+  default C backend, with no sanitizer. An indirect call's fn-pointer cast was typed from the RECEIVER instead of the
+  CALLEE, and SysV's `sret` register turned that into an argument-register shift.**
+  `call_closure_in_adapter`'s `Callable`-PARAMETER arm read `callable_param_return_type(..).unwrap_or(fallback_ret_type)`,
+  and `fallback_ret_type` is RECEIVER-derived (`some_ok_type` for `map`). A `Callable[void(T)]` at `Option[String].map`
+  was therefore called through a `Str(*)(void*, void*)` pointer against a `void` adapter. Under the SysV x86_64
+  large-struct return convention the hidden `sret` pointer occupies the first integer register, so the callee read
+  `(env=sret, __p0=env)` — and a top-level-function adapter's env is `NULL`, so the string constructor dereferenced
+  null. **AArch64 returns a large composite through the dedicated `x8` register and cannot see this class at all**,
+  which is why it sat unseen on dev boxes while the architecture CI runs was red.
+  The fix is the branch the SIBLING arms of the same enumerated set already had (Core #4): the closure-TYPE arm
+  emits `call_void` on a `UNIT_TYPE` `fn_sigs` answer and the direct callable-call arm in `exprs/calls.rs` emits
+  `call_indirect_void`. Both the `CallableParam` and the `FuncRef` arms now branch the same way, reading the callee's
+  DECLARED return through one sidecar accessor (`callable_param_declared_return_type`, Layering rule 3).
+  `callable_param_return_type` stays that accessor's `unit`-DROPPING wrapper, because the two readers must disagree
+  about exactly that one value: a recovered `unit` must not become a result PAYLOAD, and must not be lost from a
+  fn-pointer CAST. The census lint's claim that the two readers "can never disagree" was corrected in place.
+  **Measured pre-fix on linux/amd64 by reverting the patch and rebuilding**, three cells failing in two different ways:
+  the callable-param and closure-value spellings `rc 139` SIGSEGV at a plain `gg build`; the top-level-function
+  spelling BUILD-FAIL, `error: void value not ignored as it ought to be` — which a crash-shaped search would have
+  missed. `tests/fixtures/combinator_void_callable_spelling_axis.gg` pins all three, and its two cells split the two
+  partial reverts.
+  ⊕ **It retired `t0729`'s second instance as a side effect.** The 32-byte `GorgetString` copied into an
+  `Option[int64]`'s 8-byte payload field had no source once the `void` call stopped pretending to return one:
+  `known_gaps/llvm_option_map_void_callable_result_slot_oob.gg` went from `rc 99` + `AddressSanitizer` to clean and
+  GRADUATED to `tests/fixtures/option_map_void_callable_param_no_slot_overrun.gg`, keeping its LLVM+`--sanitize`
+  instrument, which is the only one in the tree that can see the class. `t0729` is re-scoped to the CLASS
+  (LLVM sizes an aggregate copy from the SOURCE, C from the DESTINATION) with **`repro` deliberately empty** — it has
+  no reproducing witness at HEAD, and the remaining slot-TYPE disagreement is an owner question, not a defect.
+
 - [2026-09-09] **`t1642` — the leak burn-down channel was computed every round and thrown away; now it is persisted, and something consumes it.**
   `scripts/sanitize_sweep.sh`'s `adjudicate_leaks` already named, per row, which allowlist entries had stopped
   leaking and which had shed classes — and `OUT` defaulted to an ephemeral `/tmp` dir that CI and the round-close

@@ -1,0 +1,74 @@
+# ⭐ THE VOID-RETURNING CALLABLE AT A COMBINATOR, ACROSS EVERY SPELLING OF THE
+# CALLEE. An indirect call's fn-pointer CAST *is* the callee's signature. When
+# the combinator adapter typed that cast from the RECEIVER instead, a
+# `Callable[void(T)]` at `Option[String].map` was called through a
+# `Str(*)(void*, void*)` pointer; under the SysV x86_64 large-struct return
+# convention the hidden `sret` pointer takes the first integer register and
+# every declared argument shifts one slot, so the adapter received the
+# environment where its first user argument belongs.
+#
+# ⚠ ARCHITECTURE IS THE DISCRIMINATOR AND IT IS WHY THE CLASS SAT UNSEEN.
+# AArch64 returns a large composite through the DEDICATED `x8` register, so a
+# sret pointer never displaces `x0`/`x1` and these cells are green there
+# whatever the cast says. Every measurement below is linux/amd64 — the
+# architecture CI runs.
+#
+# AXIS SAMPLED — how the void callee is SPELLED at the combinator argument.
+# The adapter has one arm per spelling and they are an enumerated set, so one
+# cell is an anecdote (Core #12): the `Callable` PARAM spelling was the only
+# one covered, and the two siblings failed in two DIFFERENT ways.
+#
+#   MEASURED PRE-FIX, per cell, by reverting the fix and rebuilding:
+#     callable param   (`combinator_callable_param_same_type.gg`'s `void_map`)
+#                      rc 139, SIGSEGV, plain `gg build`, no sanitizer
+#     closure value    rc 139, SIGSEGV, plain `gg build`, no sanitizer
+#     top-level fn ref BUILD-FAIL, `error: void value not ignored as it ought
+#                      to be` — a C-compile failure, not a crash, which is why
+#                      a crash-shaped search would have missed it
+#
+# The three cells therefore pin three distinct PARTIAL reverts: dropping the
+# `unit` branch from the `CallableParam` arm reddens cells 1 and 2, and
+# dropping it from the `FuncRef` arm reddens cell 3.
+#
+# ⊕ WHAT THIS FIXTURE DOES NOT DECIDE. What a void `map` EVALUATES to is an
+# open owner question (`todo/t0729`) — these cells discard the result, exactly
+# as `void_map` does, so they pin the CALL and not the result type. Calling a
+# `void` function through a `Str`-returning function pointer is undefined
+# behaviour under every answer to that question.
+#
+# Spelled with TOP-LEVEL functions and a `String` built at runtime: a closure
+# literal leaks its 8-byte environment (`todo/t0526`) and this is a top-level
+# fixture, so `scripts/sanitize_sweep.sh` sweeps it and its leak allowlist is
+# shrink-only. Cell 2 needs a closure VALUE, so it binds the top-level `shout`
+# by name rather than writing a literal.
+
+String mk(String a, String b):
+    return a + b
+
+void shout(String s):
+    print(mk(s, "!"))
+
+# Cell 1 — the callable PARAMETER spelling: the local's type is erased, and the
+# declared return lives on the callable sidecar.
+void via_callable_param(Callable[void(String)] f):
+    Option[String] o = Some(mk("par", "am"))
+    o.map(f)
+
+# Cell 2 — the closure VALUE spelling: a `Callable[T]` local bound to a
+# function reference. Same erased local type, reached through the same arm.
+void via_closure_value():
+    Callable[void(String)] f = shout
+    Option[String] o = Some(mk("val", "ue"))
+    o.map(f)
+
+# Cell 3 — the top-level FUNCTION REFERENCE spelling: the callee is a
+# `FuncRef` constant, so its signature is in `fn_sigs` and the arm that reads
+# it must still branch on `unit`.
+void via_func_ref():
+    Option[String] o = Some(mk("fun", "cref"))
+    o.map(shout)
+
+void main():
+    via_callable_param(shout)
+    via_closure_value()
+    via_func_ref()

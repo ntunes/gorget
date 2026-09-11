@@ -38,9 +38,9 @@
 # invisible here unless it trips the memcpy interceptor's OVERLAP check — which
 # needs the overrun to land EXACTLY on the source buffer. This defect was found
 # by that accident. ASan-clean on this lane is therefore not evidence that no
-# overrunning aggregate copy exists; surviving members of the class are filed
-# under `todo/t0729`, whose repro is
-# `tests/fixtures/known_gaps/llvm_option_map_void_callable_result_slot_oob.gg`.
+# overrunning aggregate copy exists; the class is filed under `todo/t0729`,
+# which has NO reproducing witness today — its last one graduated to
+# `tests/fixtures/option_map_void_callable_param_no_slot_overrun.gg`.
 #
 # Expected on both backends, sanitized: stdout `inner-none`, exit 0, no ASan
 # report.
