@@ -36733,3 +36733,129 @@ fn debt_ledger_rule_script_and_baseline_agree() {
         );
     }
 }
+
+/// The `test` job's checkout must be UNSHALLOW, because the clone-meter guards
+/// adjudicate COMMITS and a shallow clone has none.
+///
+/// `actions/checkout` defaults to `fetch-depth: 1`: one commit, no parents, no
+/// tags. Three lints in this file read history rather than the tree —
+/// `clone_meter_check_refuses_an_unattributed_track` walks `git log` over the
+/// declared closure and diffs `<sha>~1..<sha>`, `clone_meter_pin_provenance_shas_resolve`
+/// resolves every `// PINNED-BY:` sha, and `clone_meter_pins_carry_their_provenance`
+/// asks whether the band anchor is an ancestor of HEAD. Under depth 1 all three
+/// answer `fatal: bad revision`, and the FIRST of them then reports
+/// `NO MEASUREMENT REQUIRED — the diff touches nothing in the declared closure`
+/// and PASSES the unattributed track it exists to refuse. That is the Six
+/// Questions' #2 failure shape — a guard green-lighting its own class — reached
+/// not through the guard's logic but through its environment.
+///
+/// MEASURED, run 34215947450 (`gh run view --job 102027601156 --log-failed`):
+/// the three lints red, `Structural guard ratchets` is step 2 of 12, so the ten
+/// gates behind it — the robustness map, the census, both burn-downs, the C
+/// runtime, integration, both conformance lanes, the five-lane map and the
+/// security suite — never ran at all.
+///
+/// The subject is the JOB THAT RUNS `--test lints`, not a hardcoded job name:
+/// move the target to another job and the requirement moves with it.
+///
+/// Regenerate: `grep -n 'fetch-depth' .github/workflows/ci.yml`
+#[test]
+fn ci_checkout_for_lints_is_unshallow() {
+    let ci = fs::read_to_string(".github/workflows/ci.yml").expect("ci.yml");
+    let lines: Vec<&str> = ci.lines().collect();
+    let indent = |l: &str| l.len() - l.trim_start().len();
+
+    // ---- Split the file into JOB blocks: the keys at indent 2 under `jobs:`.
+    let jobs_at = lines
+        .iter()
+        .position(|l| l.trim_end() == "jobs:")
+        .expect("ci.yml has no `jobs:` key — this lint's subject is gone.");
+    let mut jobs: Vec<(String, usize, usize)> = Vec::new();
+    for i in (jobs_at + 1)..lines.len() {
+        let l = lines[i];
+        if l.trim().is_empty() || l.trim_start().starts_with('#') {
+            continue;
+        }
+        if indent(l) == 2 && l.trim_end().ends_with(':') {
+            if let Some(prev) = jobs.last_mut() {
+                prev.2 = i;
+            }
+            jobs.push((l.trim().trim_end_matches(':').to_string(), i, lines.len()));
+        }
+    }
+    assert!(
+        jobs.len() >= 3,
+        "the ci.yml job scanner found {} job(s) — it stopped parsing, and a scanner that \
+         sees no jobs cannot see a shallow checkout either.",
+        jobs.len()
+    );
+
+    // ---- Per job: does it run `--test lints`, and is its checkout unshallow?
+    let mut checkouts_seen = 0usize;
+    let mut lints_jobs: Vec<&str> = Vec::new();
+    let mut shallow: Vec<String> = Vec::new();
+    for (name, start, end) in &jobs {
+        let body: Vec<&str> = lines[*start..*end].to_vec();
+        // The checkout STEP: from its `uses: actions/checkout` line to the next
+        // step boundary (`- name:` at the same indent or shallower).
+        let mut unshallow = false;
+        for (k, l) in body.iter().enumerate() {
+            if !l.trim_start().starts_with("uses: actions/checkout@") {
+                continue;
+            }
+            checkouts_seen += 1;
+            let step_indent = indent(l);
+            for m in (k + 1)..body.len() {
+                let t = body[m].trim_start();
+                if !body[m].trim().is_empty()
+                    && indent(body[m]) < step_indent
+                    && !t.starts_with('#')
+                {
+                    break;
+                }
+                if t.starts_with("- name:") && indent(body[m]) < step_indent {
+                    break;
+                }
+                if t.starts_with("fetch-depth:") {
+                    unshallow = t.split_once(':').map(|(_, v)| v.trim()) == Some("0");
+                    break;
+                }
+            }
+        }
+        if body.iter().any(|l| l.contains("--test lints")) {
+            lints_jobs.push(name.as_str());
+            if !unshallow {
+                shallow.push(name.clone());
+            }
+        }
+    }
+
+    // ---- Non-vacuity, BOTH directions. A scan that matched nothing is not a
+    //      pass: it is the same green as a correct file, and this lint exists
+    //      precisely because an environment can silence a guard.
+    assert!(
+        checkouts_seen >= jobs.len(),
+        "the checkout scanner matched {checkouts_seen} `actions/checkout` step(s) across \
+         {} job(s). Every job checks the repo out, so a smaller count means the scanner \
+         stopped seeing steps — it would report `unshallow` for a job it never read.",
+        jobs.len()
+    );
+    assert!(
+        !lints_jobs.is_empty(),
+        "no ci.yml job runs `cargo test --test lints`. Either the structural-guard ratchets \
+         left CI — in which case none of them gate anything — or the spelling this lint \
+         matches on changed. Both need a human."
+    );
+    assert!(
+        shallow.is_empty(),
+        "ci.yml job(s) {shallow:?} run `--test lints` behind a SHALLOW checkout \
+         (`actions/checkout` defaults to `fetch-depth: 1`). The clone-meter guards read \
+         git HISTORY — `git log` over the declared closure, `<sha>~1..<sha>` diffs, \
+         `// PINNED-BY:` shas, the band anchor's ancestry — and every one of those reads \
+         answers `fatal: bad revision` with one commit in the clone. \
+         `clone_meter_check_refuses_an_unattributed_track` then PASSES an unattributed \
+         track, which is the class it exists to refuse. Add\n  \
+         with:\n    fetch-depth: 0\n\
+         to that job's Checkout step."
+    );
+}

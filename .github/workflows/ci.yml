@@ -11,8 +11,21 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
+      # FULL HISTORY, not the default depth-1 shallow clone. The clone-meter
+      # guards in `tests/lints.rs` adjudicate COMMITS, not just the tree: they
+      # walk `git log` over the declared closure, diff `<sha>~1..<sha>`, and
+      # resolve the `// PINNED-BY:` and band-anchor shas against this history.
+      # Under a shallow clone every one of those reads answers
+      # `fatal: bad revision` — and the guard that exists to refuse an
+      # unattributed track then PASSES one, which is exactly the class it
+      # exists to refuse. Measured on run 34215947450: three clone-meter
+      # lints red, the whole `test` job stopped at step 2, so the ten gates
+      # after it never ran at all. Pinned by
+      # `ci_checkout_for_lints_is_unshallow` in `tests/lints.rs`.
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
