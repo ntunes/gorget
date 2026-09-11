@@ -1,3 +1,36 @@
+- [2026-09-11] **`t1653` — a second live, non-`#[ignore]`d fixture segfaulted on x86_64 for the same REASON as `t1652` at a
+  different SITE: an indirect call's ABI taken from the argument because the arm discarded the signature it was
+  holding. Found by running the CI battery, not by a report.**
+  `h4("hi")` where `h4` is bound by `case Ok(h4)` out of a `Result[Callable[String(String)], String]`. The
+  `FnPtr`-typed-local call arm in `exprs/calls.rs` read the callee's declared parameter ABI from
+  `ctx.callable_param_types` — a SIDECAR keyed on the local, written where a `Callable[..]` is SPELLED. A local bound
+  by `enum_field_load` in a match arm never passed such a site, so the arm fell through to a legacy argument loop that
+  forwards the argument raw. The C backend then typed the fn-pointer cast from the ARGUMENT's own type —
+  `Str(*)(void*, Str)` — and passed a 32-byte `GorgetString` BY VALUE to a `__Closure_N__call` declaring
+  `const void*`; the callee's `*(Str*)__p1` read a register holding nothing.
+  ⭐ **THE ARM HAD THE ANSWER IN SCOPE AND THREW IT AWAY WITH `..`.** It matched `GirType::FnPtr { return_type, .. }`
+  to get there, and the enum payload keeps the full signature in the GIR type table
+  (`Ok { _0: fn(GorgetString) -> GorgetString }`). The SIBLING non-identifier-callee arm one screen below already
+  reads `params` / `param_ownerships` off that same type. Core #4 again: the fix is the sibling's shape, not a new rule.
+  ⛔ **TWO AXES, AND THE FIRST DRAFT OF THE FIXTURE SAMPLED ONLY ONE AND WAS GREEN ON THE PRE-FIX COMPILER.** Provenance
+  decides whether the sidecar is consulted; OPERAND KIND decides whether the miss is visible. A runtime-built `String`
+  reaches the legacy loop already behind a pointer, so the cast comes out `void*` and the cell passes on a compiler
+  that has lost the signature — only a STATIC STRING LITERAL stays a `Str` value and exposes it. Both kinds ship, per
+  provenance, in `self_host_gaps/callable_undeclared_binding_abi_axis.gg`.
+  ⚠ **THE C LANE WAS THE SOLE ADJUDICATOR:** measured pre-fix on linux/amd64, C `rc 139` and LLVM `rc 0` with correct
+  output, so "both backends agree" would have reported nothing (Core #8). AArch64 is green on both, because AAPCS64
+  passes a >16-byte composite by reference to a caller-made copy — the same architecture blindness as `t1652`.
+  ⊕ **THE INDEPENDENT WITNESS CAME FROM THE TREE'S OWN GUARD.** `closure_abi_declared_signature_census`'s G2 list
+  (indirect calls taking the legacy fallback) shrank from 4 rows to 1 — `closure_escape`, `closure_partial_application`
+  and `closure_returning_closure` left it — which is the blast radius measured by something other than the fix's author.
+  The guard's own comment naming those as the "G2-only" cell is corrected in place rather than left true-sounding.
+  ⊕ It also corrects `[[t0969]]`, whose *"Rust gg prints `hi!` on C and LLVM"* was measured on aarch64 and was false on
+  the architecture CI runs.
+  ⚠ **AN HONEST NEGATIVE:** the arity guard that keeps `t0406`'s erased zero-parameter signatures on the legacy path is
+  **not distinguished by any cell in the suite** — measured by forcing it true and rebuilding, with `callable_*`,
+  `closure_*`, `vector_callable*` and `hof_*` all still green, the ABI census included. It is kept as a scope limit and
+  says so in its own comment instead of claiming a coverage it does not have.
+
 - [2026-09-11] **`t1652` — a live, non-`#[ignore]`d, TOP-LEVEL fixture segfaulted at plain `gg build` on x86_64, on the
   default C backend, with no sanitizer. An indirect call's fn-pointer cast was typed from the RECEIVER instead of the
   CALLEE, and SysV's `sret` register turned that into an argument-register shift.**

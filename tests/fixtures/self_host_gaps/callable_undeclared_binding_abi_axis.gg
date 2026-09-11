@@ -1,0 +1,103 @@
+# ⭐ CALLING A `Callable` LOCAL THAT WAS NEVER *DECLARED* — the binding-
+# PROVENANCE axis of the indirect-call ABI, crossed with the OPERAND-KIND axis.
+#
+# The lowering arm for an `FnPtr`-typed local read the callable's declared
+# parameter ABI from a SIDECAR keyed on the local, and that sidecar is written
+# where a `Callable[..]` is SPELLED. A local bound some other way — out of an
+# enum payload in a match arm — never passed such a site, so the arm fell
+# through to a legacy argument loop. The C backend then typed the fn-pointer
+# cast from the ARGUMENT's own type and passed a 32-byte `GorgetString` BY
+# VALUE to a `__Closure_N__call` declaring `const void*`.
+#
+# ⛔ TWO AXES, AND EITHER ONE ALONE IS AN ANECDOTE — this was MEASURED, not
+# reasoned: the first draft of this fixture sampled only the provenance axis,
+# passed every argument as `mk(..)`, and was GREEN ON THE PRE-FIX COMPILER.
+#   * PROVENANCE decides whether the sidecar is consulted at all.
+#   * OPERAND KIND decides whether the miss is VISIBLE. A runtime-built
+#     `String` reaches the legacy loop already materialised behind a pointer,
+#     so the cast comes out `void*` and the cell is green on a compiler that
+#     has lost the signature. A STATIC STRING LITERAL stays a `Str` VALUE, the
+#     cast comes out `Str`, and the callee's `*(Str*)__p1` deref reads a
+#     register holding nothing.
+# So the literal cells are the ones that fail, and the `mk(..)` cells are kept
+# BESIDE them as the control that shows the axis is real rather than dropped
+# as redundant.
+#
+# ⚠ ARCHITECTURE HIDES IT, AND THE SIGNATURE SELECTS IT — two further
+# discriminators, which is why every cell here is `String(String)`:
+#   * AAPCS64 passes a >16-byte composite by REFERENCE to a caller-made copy,
+#     so the callee's deref finds a valid `Str` and every cell is GREEN on
+#     aarch64. SysV x86_64 puts it on the STACK and the register the callee
+#     reads holds nothing.
+#   * An `int(int)` cell cannot fail this way at all: a scalar travels in a
+#     register under both conventions whether the callee spells it `int64_t`
+#     or `void*`. A net of `int(int)` cells would be green on a compiler that
+#     gets every one of these wrong.
+#
+# MEASURED PRE-FIX on linux/amd64 (revert the fix, rebuild): `rc 139`, a null
+# deref inside a `__Closure_N__call`, no output at all. The LLVM lane is GREEN
+# pre-fix — it does not take the cast from the argument — so the C lane is the
+# adjudicator and a two-lane "both backends agree" check would have seen
+# nothing (Core #8).
+#
+# ⛔ NOT COVERED, AND NAMED RATHER THAN OMITTED SILENTLY: `auto f = bump`
+# registers no signature anywhere AND its local type carries no `FnPtr` params,
+# so no type-read can answer it; it stays on the legacy path and stays the last
+# row of `closure_abi_declared_signature_census`'s G2 list. The
+# container-element provenances (`Vector[Callable[..]]`, `Dict[..]`) collapse to
+# the zero-parameter fallback `fn() -> i64` (`todo/t0406`); the arity guard
+# deliberately leaves them on the legacy path and they stay pinned in that same
+# census's G1 list.
+#
+# ⚠ PARKED IN `self_host_gaps/`, NOT AT TOP LEVEL, for the same mechanical
+# reason as its neighbour `callable_literal_signature_axis.gg`: every top-level
+# fixture is auto-scanned into `runtime_parity_corpus`, the self-host lane
+# SEGVs on a `Callable[String(String)]` (`todo/t0969`), and Core #9 ⊕ forbids
+# raising `RUNTIME_DIFF_NONMATCH_CEILING` for a round's own inflow. Rust-lane
+# coverage (C and LLVM) is identical to a top-level fixture.
+
+String mk(String a, String b):
+    return a + b
+
+Result[Callable[String(String)], String] res_callable():
+    return Ok((String x): x + "!")
+
+Option[Callable[String(String)]] opt_callable():
+    return Some((String x): x + "?")
+
+enum Holder:
+    Held(Callable[String(String)])
+    Empty()
+
+Holder held_callable():
+    return Holder.Held((String x): x + "#")
+
+void main():
+    # --- bound from a Result payload -------------------------------------
+    match res_callable():
+        case Ok(f1):
+            print(f1("lit"))                    # lit!
+            print(f1(mk("re", "s")))            # res!
+        case Error(e1):
+            print(e1)
+
+    # --- bound from an Option payload ------------------------------------
+    match opt_callable():
+        case Some(f2):
+            print(f2("lit"))                    # lit?
+            print(f2(mk("o", "pt")))            # opt?
+        case None():
+            print("none")
+
+    # --- bound from a USER enum's payload --------------------------------
+    match held_callable():
+        case Holder.Held(f3):
+            print(f3("lit"))                    # lit#
+            print(f3(mk("us", "er")))           # user#
+        case Holder.Empty():
+            print("empty")
+
+    # --- NEGATIVE CONTROL: the declared spelling, which always worked -----
+    Callable[String(String)] f4 = (String x): x + "%"
+    print(f4("lit"))                            # lit%
+    print(f4(mk("de", "cl")))                   # decl%

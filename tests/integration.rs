@@ -8792,6 +8792,38 @@ fn callable_literal_signature_axis() {
     );
 }
 
+/// ⭐ THE BINDING-PROVENANCE AXIS of the indirect-call ABI, crossed with the
+/// OPERAND-KIND axis (`t1653`).
+///
+/// The `FnPtr`-local call arm read the callee's declared parameter ABI from a
+/// SIDECAR keyed on the local, and that sidecar is written where a
+/// `Callable[..]` is SPELLED. A local bound out of an enum payload in a match
+/// arm never passed such a site, so the arm fell through to a legacy argument
+/// loop; the C backend then typed the fn-pointer cast from the ARGUMENT's own
+/// type and passed a 32-byte `GorgetString` BY VALUE to a `__Closure_N__call`
+/// declaring `const void*`. The arm had `params` / `param_ownerships` in scope
+/// on the local's own `GirType::FnPtr` the whole time and discarded them with
+/// `..`; the sibling non-identifier-callee arm below it already reads them.
+///
+/// ⛔ EITHER AXIS ALONE IS AN ANECDOTE, and that is MEASURED rather than
+/// argued: the first draft of this fixture sampled only the provenance axis,
+/// passed every argument as `mk(..)`, and was GREEN ON THE PRE-FIX COMPILER. A
+/// runtime-built `String` reaches the legacy loop already behind a pointer, so
+/// the cast comes out `void*` anyway. Only a STATIC STRING LITERAL stays a
+/// `Str` VALUE and exposes the miss.
+///
+/// ⚠ THE C LANE IS THE SOLE ADJUDICATOR HERE. Measured pre-fix on linux/amd64:
+/// C `rc 139`, LLVM `rc 0` with correct output — so "both backends agree" would
+/// have reported nothing (Core #8). AArch64 is green on both, because AAPCS64
+/// passes a >16-byte composite by reference to a caller-made copy.
+#[test]
+fn callable_undeclared_binding_abi_axis() {
+    run_gg(
+        "self_host_gaps/callable_undeclared_binding_abi_axis.gg",
+        "lit!\nres!\nlit?\nopt?\nlit#\nuser#\nlit%\ndecl%",
+    );
+}
+
 /// KNOWN SELF-HOST GAP (`todo/t0969`) — the self-host lane SEGVs on a
 /// `Callable[String(String)]` struct field where Rust gg prints `hi!`.
 ///
@@ -63097,14 +63129,23 @@ fn known_gap_callable_amp_dict_element_struct_segv() {
 ///     ARGUMENT LOOP, so the sigil is dropped and the arg is lowered as a
 ///     value. No downstream ABI tag can repair that.
 ///
-/// ⚠ THE TWO ARMS ARE NOT REDUNDANT, and this test is what proves it — each
-/// list below contains a fixture the OTHER arm does not see:
-///   G1-only: the container-element fixtures (their element signature is
-///            present but EMPTY, so the arg loop takes the sidecar path and
-///            only the write site notices the fact is missing).
-///   G2-only: the escaped-closure fixtures (their `FnPtr` type DOES carry
-///            params, so G1 is satisfied, while the sidecar miss still sends
-///            the args down the legacy path).
+/// ⚠ THE TWO ARMS ARE NOT REDUNDANT. G1 still holds five rows G2 does not
+/// see: the container-element fixtures, whose element signature is present
+/// but EMPTY, so the arg loop takes the sidecar path and only the write site
+/// notices the fact is missing.
+///
+/// ⛔ G2 NO LONGER HAS A ROW OF ITS OWN, and that is a MEASURED CHANGE, not a
+/// weakening — this comment used to name the escaped-closure fixtures as the
+/// G2-only cell and that sentence is now FALSE. `closure_escape.gg`,
+/// `closure_partial_application.gg` and `closure_returning_closure.gg` left
+/// the list when the `FnPtr`-local arm stopped reading the sidecar ALONE
+/// (`t1653`): an escaped-closure local's own `GirType::FnPtr` carries
+/// `params` / `param_ownerships`, the arm had them in scope, and it was
+/// discarding them with `..` and falling through to the legacy loop. The one
+/// remaining G2 row is `auto f = bump`, which trips BOTH arms because no
+/// signature is registered for it anywhere. ⚠ So G2 reaching EMPTY is the
+/// target state, and a future reader must not restore a row to make the two
+/// lists look symmetric again.
 ///
 /// ⚠ SHRINK-ONLY. A row may be REMOVED when its underlying gap is fixed —
 /// never added. A new reporting site means a new provenance lost the declared
@@ -63136,9 +63177,9 @@ fn closure_abi_declared_signature_census() {
     ];
     // Fixtures that take a legacy fallback in the GIR argument loop.
     const G2_EXPECTED: &[&str] = &[
-        "closure_escape.gg",
-        "closure_partial_application.gg",
-        "closure_returning_closure.gg",
+        // `auto f = bump` — no signature registered at all for an inferred
+        // binding, and no `FnPtr` params on the local's type either, so it is
+        // the one provenance the `t1653` type-read fallback cannot answer.
         "known_gaps/callable_amp_auto_local_lost_write.gg",
     ];
     // Controls: these MUST stay silent on both arms. They are the cells the

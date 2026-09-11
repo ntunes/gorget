@@ -2261,7 +2261,12 @@ pub(super) fn lower_call(
             // FnPtr-typed local: escaped closure returned from a function, stored as
             // GorgetClosure. Same runtime-value callee, different layout — the
             // `ClosureDispatchKind` on the instruction is what says which.
-            if let Some(GirType::FnPtr { return_type: fn_ret, .. }) = ctx.type_registry.get(local_type_id).cloned() {
+            if let Some(GirType::FnPtr {
+                return_type: fn_ret,
+                params: fn_params,
+                param_ownerships: fn_owns,
+            }) = ctx.type_registry.get(local_type_id).cloned()
+            {
                 let dispatch_kind = crate::ir::abi::ClosureDispatchKind::EscapedClosure;
                 // TRACK B1 SIGSEGV FIX (write-site, LOCAL cell). Same class as
                 // the UNIT_TYPE arm above; same fix. This arm used to lower
@@ -2271,8 +2276,63 @@ pub(super) fn lower_call(
                 // `Callable[void(&int)] cb = bump; cb(&a)` LOCAL forwarded the
                 // VALUE of `a` and the closure body's write-through
                 // segfaulted on it.
-                let sig_params: Option<Vec<TypeId>> = ctx.callable_param_types(local_id).map(|s| s.to_vec());
-                let sig_owns: Option<Vec<Ownership>> = ctx.callable_param_ownerships(local_id).map(|s| s.to_vec());
+                // ⚠ THE SIDECAR IS KEYED ON THE LOCAL, AND NOT EVERY CALLABLE
+                // LOCAL WAS DECLARED. `ctx.callable_param_types` is written
+                // where a `Callable[..]` is SPELLED; a local bound by
+                // `enum_field_load` in a match arm — `case Ok(h4): h4("hi")` —
+                // never passed such a site, so it carries no entry. Its TYPE
+                // still does: this arm matched `GirType::FnPtr` to get here,
+                // and the enum's payload field keeps the full signature
+                // (`Ok { _0: fn(GorgetString) -> GorgetString }` in the GIR
+                // type table). Falling through to the legacy path instead
+                // DROPS the declared ABI: the argument is forwarded raw, the
+                // C backend then types the fn-pointer cast from the
+                // ARGUMENT's own type (`Str(*)(void*, Str)`) and passes a
+                // 32-byte `GorgetString` BY VALUE to a `__Closure_N__call`
+                // that declares `const void*`.
+                //
+                // ⚠ ARCHITECTURE HIDES THIS ONE (`t1652`'s family). AAPCS64
+                // passes a >16-byte composite by REFERENCE to a caller-made
+                // copy, so the callee's `*(Str*)__p1` deref happens to find a
+                // valid `Str` and the cell is GREEN on aarch64. SysV x86_64
+                // puts it on the STACK and the register the callee reads holds
+                // nothing — measured `rc 139`, null deref in
+                // `__Closure_0__call`.
+                //
+                // ⭐ THE CORRECT SHAPE IS ALREADY WRITTEN IN THE SIBLING ARM
+                // BELOW (Core #4): the non-identifier callee path reads
+                // `params` / `param_ownerships` straight off the callee local's
+                // `GirType::FnPtr`. This arm had them in scope all along and
+                // discarded them with `..`.
+                //
+                // ARITY IS THE SCOPE LIMIT. A `Vector`/`Dict` element or
+                // `Option` payload whose `Callable` signature collapsed to the
+                // zero-parameter fallback `fn() -> i64` (`t0406`) is not a
+                // declared signature, and treating it as one would hand
+                // `lower_call_arg` a `param_type: None` for every argument and
+                // an EMPTY `arg_abis` — a different lowering from the legacy
+                // fallback, on exactly the cells `t0406` says are green by
+                // accident. Keeping those on the path they are green on is a
+                // deliberate scope limit, not part of this fix.
+                //
+                // ⚠ NO CELL IN THE SUITE CURRENTLY DISTINGUISHES THE TWO —
+                // MEASURED, not assumed: forcing `arity_ok = true` and
+                // rebuilding leaves `callable_*`, `closure_*`, `vector_callable*`
+                // and `hof_*` all green, the ABI census included. So this
+                // reads as untested today; it is kept because widening the
+                // blast radius to the erased-signature provenances is a
+                // separate change that owes its own measurement, and it is
+                // recorded here rather than left as a silent `if`.
+                let arity_ok =
+                    fn_params.len() == args.len() && fn_owns.len() == args.len();
+                let (sig_params, sig_owns): (Option<Vec<TypeId>>, Option<Vec<Ownership>>) = match (
+                    ctx.callable_param_types(local_id).map(|s| s.to_vec()),
+                    ctx.callable_param_ownerships(local_id).map(|s| s.to_vec()),
+                ) {
+                    (Some(p), Some(o)) => (Some(p), Some(o)),
+                    _ if arity_ok => (Some(fn_params.clone()), Some(fn_owns.clone())),
+                    _ => (None, None),
+                };
                 let callee_op = FunctionBuilder::copy(local_id);
                 let mut call_args: Vec<Operand> = Vec::new();
                 let mut arg_abis: Vec<ParamABI> = Vec::new();
