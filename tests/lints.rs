@@ -15273,6 +15273,99 @@ fn walk_files(root: &str, ext: &str) -> Vec<String> {
 /// NEXT top-level `fn`). Boundary-based rather than brace-counted so the
 /// `writeln!(out, "...{{...}}")` string-literal braces in the C emitters don't
 /// throw the scan off. Nested fns (indented) don't terminate the scan.
+/// Class guard (Core #6) for THE INDIRECT CALL WHOSE SIGNATURE CAME FROM
+/// SOMEWHERE OTHER THAN THE CALLEE — measured twice, at two sites, in one
+/// session.
+///
+/// An indirect call's fn-pointer CAST *is* the callee's signature. Build it
+/// from anything else and the two sides of the call disagree about the ABI:
+///
+///   * `t1652` took the RETURN type from the RECEIVER. A `Callable[void(T)]`
+///     at `Option[String].map` was called through a `Str(*)(void*, void*)`
+///     pointer; SysV x86_64 puts a large struct's hidden `sret` pointer in the
+///     first integer register, so every declared argument shifted one slot.
+///   * `t1653` took an ARGUMENT's ABI from the ARGUMENT. A 32-byte
+///     `GorgetString` went BY VALUE to a `__Closure_N__call` declaring
+///     `const void*`.
+///
+/// ⚠ BOTH WERE GREEN ON aarch64 AND FATAL ON x86_64, which is why neither was
+/// caught by review or by a dev-box run: AAPCS64 returns a large composite
+/// through the dedicated `x8` register and passes one by REFERENCE to a
+/// caller-made copy, so neither mistake displaces anything there. **A reviewer
+/// cannot see this class by reading, and a single-architecture run cannot
+/// measure it.** That is the whole argument for a count.
+///
+/// ## What this pins
+///
+/// `call_closure_in_adapter` dispatches the Option/Result combinator's closure
+/// operand, and its arms are an ENUMERATED SET — one per spelling of the
+/// callee (closure TYPE, `Callable` PARAMETER, top-level `FuncRef`). Each arm
+/// must handle a `unit`-returning callee by emitting a VOID call, because a
+/// void callee called through a value-returning pointer is undefined behaviour
+/// whatever the combinator evaluates to. `t1652` was two of the three arms
+/// missing that branch while the third had it.
+///
+/// So this is an AGREEMENT COUNT, not a debt magnitude: it asserts the number
+/// of value-returning call sites EQUALS the number of void-returning ones, arm
+/// for arm. Per Core #6 an agreement count is PINNED and never `--bless`ed —
+/// its improvement moves the number UP, and a drop is the defect.
+///
+/// ## What it cannot do (Core #12: name the omitted cells)
+///
+/// It counts; it cannot tell a CORRECT branch from an incorrect one, and it
+/// cannot see an arm that reads the callee's signature from the wrong place
+/// while still branching on `unit`. It also governs ONE function: the sibling
+/// dispatchers in `exprs/calls.rs` are pinned by
+/// `closure_abi_declared_signature_census` (tests/integration.rs) on the
+/// ARGUMENT axis instead. What it DOES do is make a fourth arm impossible to
+/// add silently — the next person to add one has to change this number with
+/// this comment in front of them.
+#[test]
+fn adapter_indirect_call_arms_pair_value_with_void() {
+    /// One per spelling of the combinator's closure operand: the closure TYPE
+    /// arm (`closure_call_fn_for_type`), the `Callable` PARAMETER arm, and the
+    /// top-level `FuncRef` arm. PINNED, never blessed — see the doc comment.
+    const EXPECTED_ARMS: usize = 3;
+
+    let methods = fs::read_to_string("src/ir/lowering/exprs/methods.rs")
+        .expect("read src/ir/lowering/exprs/methods.rs");
+    let body = rust_fn_body(&methods, "call_closure_in_adapter");
+    assert!(
+        !body.is_empty(),
+        "`fn call_closure_in_adapter` not found in src/ir/lowering/exprs/methods.rs — \
+         this guard reads it by name and has gone inert. Re-point it or delete it."
+    );
+    // Comments state the rule in prose all over this function; only code counts.
+    let code = strip_rust_comments_and_strings(&body);
+
+    let value_calls = code.matches("ctx.call_indirect_tracked(").count();
+    let void_calls = code.matches("builder.call_void(").count()
+        + code.matches("builder.call_indirect_void(").count();
+
+    assert_eq!(
+        (value_calls, void_calls),
+        (EXPECTED_ARMS, EXPECTED_ARMS),
+        "INDIRECT-CALL ARM PAIRING DRIFTED in `call_closure_in_adapter`.\n\
+         value-returning sites (`ctx.call_indirect_tracked`): {value_calls}\n\
+         void-returning sites (`call_void` / `call_indirect_void`): {void_calls}\n\
+         expected {EXPECTED_ARMS} of each.\n\n\
+         Every arm that builds an indirect call must ALSO handle a `unit`-returning \
+         callee by emitting a void call. Calling a `void` function through a \
+         value-returning function pointer is undefined behaviour: on SysV x86_64 the \
+         hidden `sret` pointer takes the first integer register and shifts every \
+         declared argument one slot (`t1652`, measured rc 139 at a plain `gg build`). \
+         It is SILENT on aarch64, so a green local run proves nothing.\n\n\
+         Added an arm? Give it the `unit` branch and bump EXPECTED_ARMS.\n\
+         Removed one? Lower it in the same commit.\n\
+         Fewer void sites than value sites is the defect this exists to refuse — \
+         it is an AGREEMENT COUNT (Core #6), so it is pinned and never `--bless`ed.\n\n\
+         Regression fixtures: tests/fixtures/combinator_void_callable_spelling_axis.gg \
+         (all three spellings, both partial reverts) and \
+         tests/fixtures/option_map_void_callable_param_no_slot_overrun.gg (the \
+         LLVM+`--sanitize` instrument)."
+    );
+}
+
 fn rust_fn_body(content: &str, fn_name: &str) -> String {
     let needle = format!("fn {fn_name}(");
     let mut in_fn = false;
