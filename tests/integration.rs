@@ -21229,6 +21229,48 @@ fn closure_literal_ambient_return_at_call_arg() {
     );
 }
 
+/// KNOWN GAP `todo/t1655` — the SELF-HOST sibling of `t0021`.
+///
+/// A list comprehension over `String.bytes()` pushes a 1-BYTE element into an
+/// accumulator whose element size is 8 BYTES, so the push over-reads seven
+/// bytes of adjacent stack. The emitted C states it: `uint8_t __s14`, an
+/// accumulator built with `gorget_array_new(sizeof(int64_t))`, and a
+/// `gorget_array_push(__v34, &__s14)` that copies the DESTINATION's width from
+/// the address it is handed.
+///
+/// ⛔ THIS WAS A LIVE, GREEN CELL OF `self_host_comprehension/` UNTIL
+/// 2026-09-12, ASSERTING THAT THE SELF-HOST IS THE *CORRECT* LANE HERE. That
+/// claim was measured on aarch64 and is FALSE on x86_64: the over-read is the
+/// same on both, but on AAPCS64 the seven following bytes happened to be zero,
+/// so the value read back as 65. The cell was green by luck of stack contents
+/// — it was written expressly to stop both lanes agreeing on a wrong answer,
+/// and was itself an instance of the thing it guarded against.
+///
+/// ⚠ DISCRIMINATOR, as on the Rust lane: COMPREHENSION-vs-STATEMENT. `for b in
+/// s0.bytes(): v.push(b)` prints 65 correctly on the self-host, because a
+/// DECLARED accumulator coerces the push. A comprehension's accumulator is
+/// deferred-minted — the push lowers before the accumulator's type is emitted
+/// — so there is no declared destination type to coerce against at that
+/// moment. That is why this is not a one-line widening at the push site.
+///
+/// Asserts the INTENDED `3` / `65`, derived by hand from the definition:
+/// `"ABC"` is three ASCII codepoints, so `.bytes()` yields 65, 66, 67.
+/// Neither lane adjudicates — both are wrong.
+#[test]
+#[ignore = "KNOWN GAP t1655: a comprehension over String.bytes() pushes a \
+1-byte element into an 8-byte-element accumulator, over-reading seven bytes of \
+adjacent stack. SELF-HOST lane (Rust half is t0021). rc 0, no crash, no \
+sanitizer report — it stays inside the allocation. Green on aarch64 only \
+because the following bytes happened to be zero. Asserts the INTENDED 3 / 65."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_sh_comprehension_bytes_narrow_elem_overread() {
+    sh_lane_expect(
+        "known_gaps/sh_comprehension_bytes_narrow_elem_overread.gg",
+        "sh_comp_bytes_narrow",
+        "3\n65",
+    );
+}
+
 /// The same cell on the SELF-HOST lane — KNOWN GAP `todo/t1654`.
 ///
 /// ⚠ THIS TEST WAS LIVE AND RED ON x86_64 FROM THE COMMIT THAT ADDED IT
@@ -42660,7 +42702,30 @@ fn assert_self_host_stdout(fixture_rel: &str, tag: &str, expected: &str) {
 /// enforced: a floor catches only the DELETION half, because adding a cell
 /// makes `len() >= FLOOR` MORE true. The pin enforces BOTH halves, which is why
 /// the comment no longer describes a direction.
-const SELF_HOST_COMPREHENSION_CELL_FLOOR: usize = 39;
+/// ⛔ LOWERED 39 -> 38 ON 2026-09-12, AND THE COMMENT ABOVE FORBIDS EXACTLY
+/// THAT, SO HERE IS THE JUSTIFICATION IN FULL. `list_bytessrc_narrow_elem`
+/// did not go away: it MOVED to
+/// `tests/fixtures/known_gaps/sh_comprehension_bytes_narrow_elem_overread.gg`,
+/// and its assertion moved with it, unchanged, to the `#[ignore]`d
+/// `known_gap_sh_comprehension_bytes_narrow_elem_overread` — same INTENDED
+/// `3` / `65`, derived by hand from the definition. Nothing stopped being
+/// asserted; one assertion changed net.
+///
+/// WHY IT HAD TO LEAVE THIS NET. The cell existed to pin the SELF-HOST's
+/// CORRECT answer on the narrow-result-element axis, as a succession
+/// datapoint — self-host ahead, Rust lagging (`t0021`). Measured on x86_64,
+/// the self-host is NOT correct here: it prints a multi-byte garbage value.
+/// Its header's "the self-host lane prints the CORRECT 3 / 65" was measured on
+/// aarch64, where the seven bytes following the 1-byte element happened to be
+/// zero. The cell was green by luck of stack contents, so it could not pin
+/// what it claimed to pin, and this net's contract is that every cell passes.
+/// Filed as `todo/t1655`.
+///
+/// ⚠ THE PROHIBITION STILL STANDS FOR ITS OWN CASE: do not lower this to make
+/// a red go away. Lower it ONLY together with a commit that relocates the
+/// cell's assertion somewhere it is still checked, and name that destination
+/// here, as this note does.
+const SELF_HOST_COMPREHENSION_CELL_FLOOR: usize = 38;
 
 /// The self-host COMPREHENSION net, stage 0.
 ///

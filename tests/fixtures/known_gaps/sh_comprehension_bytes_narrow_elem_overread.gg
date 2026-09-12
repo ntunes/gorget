@@ -1,0 +1,53 @@
+# KNOWN GAP (todo/t1655): a list comprehension over `String.bytes()` pushes a
+# 1-BYTE element into an accumulator whose element size is 8 BYTES, so the push
+# over-reads seven bytes of adjacent stack. SELF-HOST lane. The Rust lane has
+# the same defect under `todo/t0021`.
+#
+# MEASURED at HEAD on linux/amd64, self-host `--emit-c` + `cc` + run:
+#   3
+#   9222246136947933505      <- expected 65
+# The emitted C says it in three lines:
+#   uint8_t __s14 = 0;                       <- the loop element, ONE byte
+#   __v8 = gorget_array_new(sizeof(int64_t)); <- the accumulator, EIGHT bytes
+#   __v35 = &__s14; gorget_array_push(__v34, __v35);
+# `gorget_array_push` copies the destination's element width from the address
+# it is handed, so it reads `__s14` plus the seven bytes that follow it.
+#
+# ⛔ THIS FILE USED TO LIVE IN `tests/fixtures/self_host_comprehension/` AS A
+# LIVE CELL ASSERTING `3` / `65`, AND ITS HEADER CLAIMED THE SELF-HOST WAS THE
+# *CORRECT* LANE ON THIS AXIS — a succession datapoint, self-host ahead of
+# Rust. THAT CLAIM WAS MEASURED ON aarch64 AND IS FALSE ON x86_64. The
+# over-read is the same on both architectures; what differs is what follows the
+# byte on the stack. On AAPCS64 those seven bytes happened to be zero, so the
+# value read back as 65 and the lane looked correct. On SysV x86_64 they are
+# not, and the cell prints a multi-byte garbage value at rc 0 with no crash and
+# no sanitizer report (it stays inside the allocation).
+#
+# ⚠ SO THE CELL WAS NOT PINNING WHAT IT SAID IT PINNED. It was written
+# explicitly to stop both lanes from ever agreeing on the wrong answer — Core
+# #8's trap — and it was itself green only by luck of stack contents. A value
+# that depends on uninitialised memory is not an oracle on any architecture;
+# it was nondeterministic-by-construction and happened to be stable on the
+# author's box.
+#
+# ⚠ WHAT DISCRIMINATES IT: COMPREHENSION-vs-STATEMENT, exactly as on the Rust
+# lane. `for b in s0.bytes(): v.push(b)` on the identical input prints 65
+# correctly on the self-host, because a declared accumulator coerces the push.
+# The comprehension's accumulator is DEFERRED-MINTED — the push lowers before
+# the accumulator's type is emitted — so there is no declared destination type
+# for the coercion to key on at that moment. That is why this is not a
+# one-line widening at the push site.
+#
+# INTENDED: `3` then `65`. `"ABC"` is three ASCII codepoints, so `.bytes()`
+# yields 65, 66, 67; `v.len()` is 3 and `v[0]` is 65 = 'A'. Derived by hand
+# from the definition, not from either lane — neither adjudicates here.
+# Asserted by the `#[ignore]`d `known_gap_sh_comprehension_bytes_narrow_elem_overread`.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s0 = mk("AB", "C")
+    Vector[int] v = [b for b in s0.bytes()]
+    print(v.len())
+    print(v.get(0).unwrap())
